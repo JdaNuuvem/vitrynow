@@ -58,9 +58,12 @@ describe("confirmação de segurança (MFA)", () => {
     const verify = await app.inject({ method: "POST", url: "/api/mfa/verify", headers: { cookie: cookie! }, payload: { challengeId, code } });
     expect(verify.statusCode).toBe(200);
 
-    expect((await changePassword(cookie!, challengeId)).statusCode).toBe(200);
+    const first = await changePassword(cookie!, challengeId);
+    expect(first.statusCode).toBe(200);
+    // Trocar a senha encerra a sessão antiga (ADR-0008); o dispositivo atual recebe cookie novo.
+    const renewed = (first.headers["set-cookie"] as string).split(";")[0];
     // segundo uso do mesmo comprovante é recusado
-    expect((await changePassword(cookie!, challengeId)).statusCode).toBe(403);
+    expect((await changePassword(renewed, challengeId)).statusCode).toBe(403);
   });
 
   it("código errado bloqueia o desafio após 5 tentativas", async () => {

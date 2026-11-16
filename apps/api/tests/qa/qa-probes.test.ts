@@ -316,7 +316,7 @@ describe("QA probes — API", () => {
     expect(second.response.statusCode).toBe(409);
   });
 
-  bug("D06 usuário removido perde o acesso imediatamente (sessão antiga não vale)", async () => {
+  it("D06 usuário removido perde o acesso imediatamente (sessão antiga não vale)", async () => {
     const owner = await setupStore();
     const invite = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: owner.cookie }, payload: { email: "staff@teste.com", password: "senha123" } });
     expect(invite.statusCode).toBe(201);
@@ -330,7 +330,7 @@ describe("QA probes — API", () => {
     expect(after.statusCode).toBe(401);
   });
 
-  bug("D06b sessão antiga é invalidada após troca de senha", async () => {
+  it("D06b sessão antiga é invalidada após troca de senha", async () => {
     const { cookie } = await registerStore(app, { email: "troca@teste.com", password: "senha123" });
     const change = await app.inject({ method: "POST", url: "/auth/change-password", headers: { cookie: cookie! }, payload: { currentPassword: "senha123", newPassword: "novaSenha456" } });
     expect(change.statusCode).toBe(200);
@@ -338,17 +338,21 @@ describe("QA probes — API", () => {
     expect(stolen.statusCode).toBe(401);
   });
 
-  bug("D07 o JWT de sessão tem expiração (exp)", async () => {
+  it("D07 o JWT de sessão tem expiração (exp)", async () => {
     const { cookie } = await registerStore(app);
     const payload = JSON.parse(Buffer.from(cookie!.split("=")[1].split(".")[1], "base64url").toString());
     expect(payload.exp).toBeTypeOf("number");
   });
 
-  bug("D15 rate-limit de login conta por cliente real (X-Forwarded-For), não pelo IP do proxy", async () => {
+  it("D15 rate-limit de login conta por cliente real (X-Forwarded-For), não pelo IP do proxy", async () => {
+    // B04: o proxy (Caddy) é declarado em TRUST_PROXY_CIDR; sem isso X-Forwarded-For é ignorado.
     await registerStore(app, { email: "rl@teste.com" });
+    process.env.TRUST_PROXY_CIDR = "127.0.0.1";
+    const proxied = makeApp();
+    await proxied.ready();
     const statuses: number[] = [];
     for (let i = 0; i < 12; i++) {
-      const res = await app.inject({
+      const res = await proxied.inject({
         method: "POST",
         url: "/auth/login",
         headers: { "x-forwarded-for": `203.0.113.${i + 1}` },
@@ -356,6 +360,8 @@ describe("QA probes — API", () => {
       });
       statuses.push(res.statusCode);
     }
+    delete process.env.TRUST_PROXY_CIDR;
+    await proxied.close();
     // 12 clientes diferentes errando 1 vez cada: nenhum deveria tomar 429.
     expect(statuses.filter((s) => s === 429)).toEqual([]);
   });
