@@ -154,10 +154,24 @@ export async function getEntitlements(storeId: string, now: Date = new Date()): 
   return { phase: view.phase, readOnlyEndsAt: view.readOnlyEndsAt, features: view.features, limits: view.limits, access: view.access };
 }
 
+// Uma consulta por requisição: o portão de assinatura (plugins/subscriptionGate.ts), requireFeature e
+// requireLimit compartilham o mesmo resultado. Vive só durante a requisição (nada de cache entre
+// requisições: reativar a loja libera na hora).
+const requestEntitlements = new WeakMap<FastifyRequest, Promise<Entitlements>>();
+
+export function getRequestEntitlements(request: FastifyRequest, storeId: string): Promise<Entitlements> {
+  let pending = requestEntitlements.get(request);
+  if (!pending) {
+    pending = getEntitlements(storeId);
+    requestEntitlements.set(request, pending);
+  }
+  return pending;
+}
+
 // preHandler: encadear depois de requirePanelAuth. Recurso fora do plano → 402 FEATURE_LOCKED.
 export function requireFeature(feature: Feature) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    const entitlements = await getEntitlements(request.user.storeId);
+    const entitlements = await getRequestEntitlements(request, request.user.storeId);
     if (!entitlements.features.includes(feature)) {
       reply
         .code(402)
@@ -234,7 +248,7 @@ async function acquireLimitWindow(storeId: string, limit: LimitKey): Promise<() 
 export function requireLimit(limit: LimitKey, countCurrent: (request: FastifyRequest) => Promise<number>) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const { storeId } = request.user;
-    const max = (await getEntitlements(storeId)).limits[limit];
+    const max = (await getRequestEntitlements(request, storeId)).limits[limit];
     if (max === null) return;
 
     const release = await acquireLimitWindow(storeId, limit);

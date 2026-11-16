@@ -132,9 +132,10 @@ describe("assinatura (integração)", () => {
     const { cookie } = await registerStore(app);
     await prisma.subscription.updateMany({ data: { trialEndsAt: new Date(Date.now() - DAY) } });
 
+    // Teste vencido há 1 dia = Consulta: o portão da assinatura barra a escrita antes do recurso (RN-A-01).
     const locked = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: cookie! }, payload: staffPayload });
-    expect(locked.statusCode).toBe(402);
-    expect(JSON.parse(locked.body).code).toBe("FEATURE_LOCKED");
+    expect(locked.statusCode).toBe(403);
+    expect(JSON.parse(locked.body).code).toBe("READ_ONLY");
 
     const checkout = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: cookie! }, payload: { planCode: "PRO" } });
     expect(checkout.statusCode).toBe(201);
