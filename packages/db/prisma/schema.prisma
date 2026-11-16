@@ -127,6 +127,7 @@ model Store {
   printMode    PrintMode @default(LEGACY) // modo de impressão decidido pelo SERVIDOR por loja (ADR-0004 §8.12)
   manualDiscountStaffLimitPercent Int @default(10) // desconto manual do pedido lançado no painel: STAFF até este %, acima só o OWNER (RN-B2-06)
   cashStaffWithdrawalLimitCents Int @default(0) // limite de sangria do STAFF por lançamento (RN-CX-09); 0 = toda sangria exige o dono
+  featureInterests FeatureInterest[]
 }
 
 // Contador atômico por loja (hoje: sequência do código do pedido). Incrementado com
@@ -552,7 +553,8 @@ model Plan {
   code       String   @unique // ex.: "BASICO", "PRO"
   name       String
   priceCents Int // cobrança mensal
-  features   String[] // chaves de recurso liberadas (ver lib/subscription.ts)
+  features   String[] // chaves de recurso liberadas (só chaves "entregues": lib/features.ts)
+  limits     Json     @default("{}") // { maxUsers, maxPrinters }; null = sem limite (ADR-0003 §2.1)
   active     Boolean  @default(true)
   position   Int      @default(0)
   createdAt  DateTime @default(now())
@@ -574,6 +576,19 @@ model Subscription {
   updatedAt        DateTime           @updatedAt
 
   payments SubscriptionPayment[]
+}
+
+// "Quero ser avisado" (RN-B10-05): lojista tentou usar recurso que o plano não tem. Um registro por
+// loja e recurso; só mede demanda, não promete data nem preço.
+model FeatureInterest {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  feature   String
+  createdAt DateTime @default(now())
+
+  @@unique([storeId, feature])
+  @@unique([id, storeId]) // ADR-0009: base das FKs compostas por loja
 }
 
 // Cobrança PIX de uma assinatura (conta Mercado Pago da plataforma).

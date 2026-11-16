@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { storeAvailabilitySchema, updateStoreSettingsSchema } from "@meucardapio/shared-types";
 import { logAudit } from "../lib/audit";
-import { bannerStateOf, getStoreSubscription, resolveSubscription } from "../lib/subscription";
+import { bannerStateOf, getSubscriptionView } from "../lib/subscription";
 
 // Conta/personalização da loja (nome, logo, cor, domínio) — autenticado pelo painel.
 const storeRoutes: FastifyPluginAsync = async (app) => {
@@ -36,7 +36,7 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
   // Estado do período de teste/assinatura no formato do banner do painel; o detalhe completo
   // (plano, recursos, vencimento) fica em GET /api/store/subscription.
   app.get("/api/store/plan", { preHandler: app.requirePanelAuth }, async (request) => {
-    const view = resolveSubscription(await getStoreSubscription(request.user.storeId));
+    const view = await getSubscriptionView(request.user.storeId);
     return { plan: { trialEndsAt: view.trialEndsAt, daysLeft: view.daysLeft, state: bannerStateOf(view) } };
   });
 
