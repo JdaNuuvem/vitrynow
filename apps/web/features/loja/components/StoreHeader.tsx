@@ -18,17 +18,23 @@ export function StoreHeader({
   children?: React.ReactNode;
 }) {
   const [showHours, setShowHours] = useState(false);
+  // URL de capa/logo pode estar quebrada (loja digitou errado, arquivo saiu do ar): some o ícone
+  // de imagem quebrada e fica o fundo neutro.
+  const [coverFailed, setCoverFailed] = useState(false);
+  const [logoFailed, setLogoFailed] = useState(false);
   const whatsappLink = store.whatsapp ? `https://wa.me/${store.whatsapp}` : null;
   const minOrderCents = store.minOrderCents;
 
   return (
     <div>
-      <div className="loja__cover">{store.coverImageUrl && <img src={store.coverImageUrl} alt="" />}</div>
+      <div className="loja__cover">
+        {store.coverImageUrl && !coverFailed && <img src={store.coverImageUrl} alt="" onError={() => setCoverFailed(true)} />}
+      </div>
 
       <div className="loja__card">
         <div className="loja__card-top">
           <div className="loja__identity">
-            <div className="loja__logo">{store.logoUrl && <img src={store.logoUrl} alt={store.name} />}</div>
+            <div className="loja__logo">{store.logoUrl && !logoFailed && <img src={store.logoUrl} alt={store.name} onError={() => setLogoFailed(true)} />}</div>
             <div className="loja__info">
               <h1 className="loja__name">{store.name}</h1>
               {store.address && (
@@ -45,7 +51,7 @@ export function StoreHeader({
             </div>
           </div>
           {whatsappLink && (
-            <a href={whatsappLink} target="_blank" rel="noreferrer" className="loja__whatsapp" title="Falar no WhatsApp">
+            <a href={whatsappLink} target="_blank" rel="noreferrer" className="loja__whatsapp" title="Falar no WhatsApp" aria-label="Falar com a loja no WhatsApp (abre em outra aba)">
               <ChatIcon />
             </a>
           )}
@@ -64,14 +70,14 @@ export function StoreHeader({
                 <span className="loja__dot loja__dot--closed" /> Fechado agora
               </span>
             )}
-            <button onClick={() => setShowHours((v) => !v)} className="loja__link">
+            <button type="button" onClick={() => setShowHours((v) => !v)} className="loja__link" aria-expanded={showHours}>
               Ver horários {showHours ? "▲" : "▼"}
             </button>
           </div>
         )}
         {showHours && store.openingHours && <p className="loja__hours">{store.openingHours}</p>}
 
-        <button onClick={onOpenSearch} className="loja__search">
+        <button type="button" onClick={onOpenSearch} className="loja__search">
           <span className="loja__search-icon">
             <SearchIcon />
           </span>

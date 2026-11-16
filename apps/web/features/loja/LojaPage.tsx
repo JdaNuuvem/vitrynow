@@ -20,6 +20,7 @@ import { useCart } from "./hooks/useCart";
 import { useMenu } from "./hooks/useMenu";
 import { useOrderFlow } from "./hooks/useOrderFlow";
 import { useOrderHistory } from "./hooks/useOrderHistory";
+import { scrollBehavior } from "@/lib/motion";
 import "./loja.css";
 
 // Orquestra as telas da loja pública: decide qual aparece e liga carrinho e pedido.
@@ -58,7 +59,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
     setTab("itens");
     setShowCategories(false);
     setSelectedCategoryId(id);
-    setTimeout(() => document.getElementById(`categoria-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+    setTimeout(() => document.getElementById(`categoria-${id}`)?.scrollIntoView({ behavior: scrollBehavior(), block: "start" }), 0);
   }
 
   async function submitOrder(form: CheckoutForm, totals: CheckoutTotals) {

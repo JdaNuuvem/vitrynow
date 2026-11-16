@@ -201,6 +201,8 @@
 }
 .loja__link {
   color: var(--loja-link);
+  min-height: 2.75rem;
+  padding: 0 0.25rem;
 }
 .loja__hours {
   margin-top: 0.25rem;
@@ -222,6 +224,7 @@
   border: 1px solid var(--loja-line);
   background: var(--loja-surface);
   padding: 0.5rem 1rem 0.5rem 2.25rem;
+  min-height: 2.75rem;
   text-align: left;
   font-size: 0.875rem;
   line-height: 1.25rem;
@@ -366,6 +369,10 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
+  /* alvo de toque mínimo de 44 px (WCAG 2.5.8 / checklist UX-07) */
+  min-width: 2.75rem;
+  min-height: 2.75rem;
   font-size: 0.75rem;
   line-height: 1rem;
   color: var(--loja-ink-2);
@@ -961,4 +968,15 @@
 .loja__result-link--back-lg {
   margin-top: 1rem;
   color: var(--loja-link);
+}
+
+/* Quem pediu menos movimento no sistema não recebe animação nem rolagem suave. */
+@media (prefers-reduced-motion: reduce) {
+  .loja,
+  .loja * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

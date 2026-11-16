@@ -11,10 +11,14 @@ const TABS: { id: NavTab; label: string; icon: React.ReactNode }[] = [
 // Barra inferior fixa de navegação. Só renderiza as abas e avisa qual foi tocada.
 export function BottomNav({ active, onSelect }: { active: NavTab; onSelect: (tab: NavTab) => void }) {
   return (
-    <nav className="loja__nav">
+    <nav className="loja__nav" aria-label="Navegação do cardápio">
       {TABS.map((tab) => (
         <button
           key={tab.id}
+          type="button"
+          // Só a aba ativa mostra o texto; as outras são só ícone, então o nome vai no aria-label.
+          aria-label={tab.label}
+          aria-current={active === tab.id ? "page" : undefined}
           onClick={() => onSelect(tab.id)}
           className={`loja__nav-tab${active === tab.id ? " loja__nav-tab--active" : ""}`}
         >
