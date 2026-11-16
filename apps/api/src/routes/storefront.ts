@@ -18,7 +18,8 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       orderBy: { position: "asc" },
       include: {
         products: {
-          where: { active: true },
+          // SEC-11: nunca confiar só na categoria — o produto precisa ser DESTA loja.
+          where: { active: true, storeId: store.id },
           orderBy: { position: "asc" },
           include: { additionals: true },
         },
