@@ -11,14 +11,20 @@ export function useImpressoras() {
   const router = useRouter();
   const { deviceTokens } = usePanelServices();
   const [tokens, setTokens] = useState<DeviceToken[] | null>(null);
-  const [forbidden, setForbidden] = useState(false);
+  // Dois motivos independentes: a lista recusada (STAFF) e uma ação recusada (criar/revogar).
+  // Separados para um reload tardio não apagar o aviso de uma ação.
+  const [listForbidden, setListForbidden] = useState(false);
+  const [actionForbidden, setActionForbidden] = useState(false);
 
   const reload = useCallback(async () => {
     const result = await deviceTokens.list();
     if (!result.ok) {
       if (result.status === 401) router.push("/login");
+      // 403: a lista é restrita ao dono (NG-06). Mostra o aviso em vez de "nenhuma chave".
+      if (result.status === 403) setListForbidden(true);
       return;
     }
+    setListForbidden(false);
     setTokens(result.data.tokens);
   }, [deviceTokens, router]);
 
@@ -28,17 +34,20 @@ export function useImpressoras() {
 
   const create = useCallback(
     async (label: string): Promise<CreateOutcome> => {
-      setForbidden(false);
+      setActionForbidden(false);
       const result = await deviceTokens.create(label);
       if (!result.ok) {
         if (result.status === 403) {
-          setForbidden(true);
+          setActionForbidden(true);
           return { status: "forbidden" };
         }
         return { status: "error", message: result.error };
       }
       reload();
-      return { status: "created", token: result.data.token.token };
+      const value = result.data.token.token;
+      // A chave só aparece nesta resposta; sem ela não há o que copiar.
+      if (!value) return { status: "error", message: "A chave foi criada, mas o servidor não a devolveu. Revogue e gere outra." };
+      return { status: "created", token: value };
     },
     [deviceTokens, reload],
   );
@@ -46,11 +55,12 @@ export function useImpressoras() {
   const revoke = useCallback(
     async (id: string) => {
       const result = await deviceTokens.revoke(id);
-      if (!result.ok && result.status === 403) return setForbidden(true);
+      if (!result.ok && result.status === 403) return setActionForbidden(true);
+      setActionForbidden(false);
       reload();
     },
     [deviceTokens, reload],
   );
 
-  return { tokens, forbidden, create, revoke };
+  return { tokens, forbidden: listForbidden || actionForbidden, create, revoke };
 }
