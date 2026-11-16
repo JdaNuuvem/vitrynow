@@ -23,7 +23,8 @@ export function ImpressorasPage() {
 
       {forbidden && <p className="impressoras__error impressoras__error--block">Essa ação é restrita ao dono da loja.</p>}
 
-      <NewTokenCard onCreate={create} />
+      {/* Sem lista (403) o usuário não é o dono: nada de formulário que também seria recusado. */}
+      {(tokens !== null || !forbidden) && <NewTokenCard onCreate={create} />}
 
       <div className="impressoras__list">
         {tokens?.map((token) => <TokenRow key={token.id} token={token} onRevoke={confirmRevoke} />)}

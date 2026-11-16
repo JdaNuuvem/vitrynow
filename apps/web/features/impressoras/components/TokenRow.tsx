@@ -13,6 +13,7 @@ export function TokenRow({ token, onRevoke }: { token: DeviceToken; onRevoke: (i
     <div className="impressoras-row">
       <div>
         <strong>{token.label || "(sem nome)"}</strong> <StatusBadge token={token} />
+        {token.tokenPreview && <span className="impressoras-row__seen">chave {token.tokenPreview}</span>}
         {token.lastSeenAt && (
           <span className="impressoras-row__seen">última vez vista: {new Date(token.lastSeenAt).toLocaleString("pt-BR")}</span>
         )}
