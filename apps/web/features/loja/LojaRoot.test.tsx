@@ -39,6 +39,35 @@ describe("LojaRoot com o menu vindo do servidor (ADR-0013)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("tem o link 'Ir para o cardápio' como primeiro foco, apontando para o conteúdo", () => {
+    const { container } = render(<LojaRoot slug="boa-massa" initialMenu={menu} />);
+    const skip = screen.getByRole("link", { name: "Ir para o cardápio" });
+    expect(skip).toHaveAttribute("href", "#cardapio-conteudo");
+    expect(container.querySelector("#cardapio-conteudo")).toBeInTheDocument();
+    expect(container.querySelector("a, button")).toBe(skip);
+  });
+
+  it("cardápio sem nenhum produto mostra a mensagem neutra e o contato, e esconde a categoria vazia", () => {
+    const empty = {
+      ...menu,
+      store: { ...menu.store, whatsapp: "5521999999999" },
+      categories: [{ id: "c1", name: "Vazia", icon: null, products: [] }],
+    } as unknown as Menu;
+    render(<LojaRoot slug="boa-massa" initialMenu={empty} />);
+    expect(screen.getByText("Este cardápio ainda não tem produtos.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Falar com a loja" })).toHaveAttribute("href", "https://wa.me/5521999999999");
+    expect(screen.queryByText("Vazia")).not.toBeInTheDocument();
+  });
+
+  it("categoria vazia some, mas as categorias com produto continuam", () => {
+    const base = menu as unknown as { categories: unknown[] };
+    const mixed = { ...menu, categories: [{ id: "c0", name: "Sem produtos", icon: null, products: [] }, ...base.categories] } as unknown as Menu;
+    render(<LojaRoot slug="boa-massa" initialMenu={mixed} />);
+    expect(screen.queryByText("Sem produtos")).not.toBeInTheDocument();
+    expect(screen.getByText("Calabresa Especial")).toBeInTheDocument();
+    expect(screen.queryByText("Este cardápio ainda não tem produtos.")).not.toBeInTheDocument();
+  });
+
   it("sem menu inicial (API fora do ar no SSR) mostra 'Carregando' e busca no navegador", () => {
     const fetchMock = vi.fn().mockReturnValue(new Promise(() => {}));
     vi.stubGlobal("fetch", fetchMock);

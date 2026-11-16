@@ -9,11 +9,13 @@ import { ProductListItem } from "./ProductListItem";
 export function SearchScreen({
   categories,
   quantityByProduct,
+  closed = false,
   onClose,
   onOpenProduct,
   onQuickAdd,
 }: {
   categories: Category[];
+  closed?: boolean;
   quantityByProduct: Record<string, number>;
   onClose: () => void;
   onOpenProduct: (product: Product) => void;
@@ -34,9 +36,10 @@ export function SearchScreen({
           value={term}
           onChange={(e) => setTerm(e.target.value)}
           placeholder="Pesquisar..."
+          aria-label="Pesquisar no cardápio"
           className="loja__search-input"
         />
-        <button onClick={onClose} className="loja__close">
+        <button type="button" onClick={onClose} className="loja__close" aria-label="Fechar a busca e voltar ao cardápio">
           <CloseIcon />
         </button>
       </div>
@@ -52,6 +55,7 @@ export function SearchScreen({
             <ProductListItem
               key={product.id}
               product={product}
+              closed={closed}
               quantityInCart={quantityByProduct[product.id] ?? 0}
               onOpen={onOpenProduct}
               onQuickAdd={onQuickAdd}

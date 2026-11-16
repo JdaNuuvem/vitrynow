@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { Menu, Product } from "@/core/domain/storefront";
-import { isStoreOpenNow } from "@/lib/openingHours";
 import { formatCents } from "@/shared/format/money";
 import { BottomNav, type NavTab } from "./components/BottomNav";
 import { CartDrawer } from "./components/CartDrawer";
@@ -15,11 +14,13 @@ import { ProductDetailScreen } from "./components/ProductDetailScreen";
 import { ProductListItem } from "./components/ProductListItem";
 import { SearchScreen } from "./components/SearchScreen";
 import { StoreHeader } from "./components/StoreHeader";
-import { STORE_CLOSED_MESSAGE, type CheckoutForm, type CheckoutTotals } from "./checkoutForm";
+import { STORE_CLOSED_MESSAGE, buildOrderSummary, type CheckoutForm, type CheckoutTotals } from "./checkoutForm";
+import { InfoIcon } from "./icons";
 import { useCart } from "./hooks/useCart";
 import { useMenu } from "./hooks/useMenu";
 import { useOrderFlow } from "./hooks/useOrderFlow";
 import { useOrderHistory } from "./hooks/useOrderHistory";
+import { scrollBehavior } from "@/lib/motion";
 import "./loja.css";
 
 // Orquestra as telas da loja pública: decide qual aparece e liga carrinho e pedido.
@@ -58,11 +59,12 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
     setTab("itens");
     setShowCategories(false);
     setSelectedCategoryId(id);
-    setTimeout(() => document.getElementById(`categoria-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+    setTimeout(() => document.getElementById(`categoria-${id}`)?.scrollIntoView({ behavior: scrollBehavior(), block: "start" }), 0);
   }
 
   async function submitOrder(form: CheckoutForm, totals: CheckoutTotals) {
-    const placed = await order.submit(form, cart.cart, totals.totalCents);
+    const summary = buildOrderSummary(form, cart.cart, productsById, totals.totalCents);
+    const placed = await order.submit(form, cart.cart, totals.totalCents, summary);
     if (!placed) return;
     cart.clear();
     setCheckoutOpen(false);
@@ -73,6 +75,9 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
     if (!menu) return <main className="loja__message">Carregando...</main>;
 
     const { store, categories } = menu;
+    // Categoria sem produto não aparece para o cliente (spec 09 §6).
+    const visibleCategories = categories.filter((category) => category.products.length > 0);
+    const hasProducts = visibleCategories.length > 0;
     const activeCategoryId = selectedCategoryId ?? categories[0]?.id ?? null;
     const closed = !store.acceptingOrders;
 
@@ -85,6 +90,8 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
           paymentConfirmed={order.placed.paymentConfirmed}
           paymentFailedMessage={order.placed.paymentFailedMessage}
           cancelError={order.placed.cancelError}
+          summary={order.placed.summary}
+          whatsapp={store.whatsapp}
           onCancel={order.cancel}
           onBack={order.back}
         />
@@ -95,6 +102,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
       return (
         <ProductDetailScreen
           product={detailProduct}
+          closed={closed}
           logoUrl={store.logoUrl}
           onClose={() => setDetailProduct(null)}
           onConfirm={({ quantity, additionalIds, notes }) => {
@@ -109,6 +117,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
       return (
         <SearchScreen
           categories={categories}
+          closed={closed}
           quantityByProduct={cart.quantityByProduct}
           onClose={() => setTab("itens")}
           onOpenProduct={setDetailProduct}
@@ -118,7 +127,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
     }
 
     if (showCategories) {
-      return <CategoriesScreen categories={categories} onClose={() => setShowCategories(false)} onSelect={scrollToCategory} />;
+      return <CategoriesScreen categories={visibleCategories} onClose={() => setShowCategories(false)} onSelect={scrollToCategory} />;
     }
 
     return (
@@ -127,28 +136,41 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
           <OrdersScreen orders={history.orders} storeName={store.name} />
         ) : (
           <>
-            <StoreHeader store={store} isOpenNow={isStoreOpenNow(store.openingHours)} onOpenSearch={() => setTab("pesquisa")}>
+            <StoreHeader store={store} onOpenSearch={() => setTab("pesquisa")}>
               <CategoryChips
-                categories={categories}
+                categories={visibleCategories}
                 activeCategoryId={activeCategoryId}
                 onSelect={scrollToCategory}
                 onViewAll={() => setShowCategories(true)}
               />
             </StoreHeader>
 
-            <div className="loja__content">
+            {/* Destino do link "Ir para o cardápio" (primeiro foco da página). */}
+            <div className="loja__content" id="cardapio-conteudo" tabIndex={-1}>
               {closed && (
                 <div className="loja__closed" role="status">
-                  {STORE_CLOSED_MESSAGE}
+                  <InfoIcon />
+                  <span>{STORE_CLOSED_MESSAGE}.</span>
                 </div>
               )}
-              {categories.map((category) => (
+              {!hasProducts && (
+                <div className="loja__empty-menu" role="status">
+                  <p>Este cardápio ainda não tem produtos.</p>
+                  {store.whatsapp && (
+                    <a href={`https://wa.me/${store.whatsapp}`} target="_blank" rel="noreferrer" className="loja__empty-menu-link">
+                      Falar com a loja
+                    </a>
+                  )}
+                </div>
+              )}
+              {visibleCategories.map((category) => (
                 <section key={category.id} id={`categoria-${category.id}`} className="loja__section">
                   <CategorySectionHeading category={category} />
                   <div className="loja__list">
                     {category.products.map((product) => (
                       <ProductListItem
                         key={product.id}
+                        closed={closed}
                         product={product}
                         quantityInCart={cart.quantityByProduct[product.id] ?? 0}
                         onOpen={setDetailProduct}
@@ -205,7 +227,10 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
   }
 
   return (
-    <div className="loja" style={rootStyle}>
+    <div className="loja" style={rootStyle} data-brand={menu?.store.primaryColor ? "" : undefined}>
+      <a href="#cardapio-conteudo" className="loja__skip">
+        Ir para o cardápio
+      </a>
       {renderScreen()}
     </div>
   );

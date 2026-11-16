@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { CartLine, PixPayment } from "@/core/domain/storefront";
 import { useStorefrontServices } from "@/core/services/StorefrontServices";
-import { STORE_CLOSED_MESSAGE, toPlaceOrderInput, type CheckoutForm } from "../checkoutForm";
+import { STORE_CLOSED_MESSAGE, toPlaceOrderInput, type CheckoutForm, type OrderSummary } from "../checkoutForm";
 import { interpretPaymentStatus } from "../paymentStatus";
 import type { PlacedOrder } from "./useOrderHistory";
 
@@ -14,6 +14,8 @@ export type PlacedOrderState = {
   paymentFailedMessage: string | null;
   cancelled: boolean;
   cancelError: string | null;
+  // O que o cliente pediu, para mostrar no resultado. Opcional: quem chama pode não ter montado.
+  summary: OrderSummary | null;
 };
 
 export const PAYMENT_POLL_MS = 3000;
@@ -66,7 +68,7 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
   }, [storefront, slug, orderId, watching]);
 
   // Devolve true se o pedido foi criado (quem chamou limpa o carrinho e fecha o checkout).
-  async function submit(form: CheckoutForm, cart: CartLine[], totalCents: number): Promise<boolean> {
+  async function submit(form: CheckoutForm, cart: CartLine[], totalCents: number, summary: OrderSummary | null = null): Promise<boolean> {
     if (submitting) return false;
     if (form.deliveryType === "DELIVERY" && !form.address.trim()) {
       setError("informe o endereço de entrega");
@@ -93,12 +95,14 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
       paymentFailedMessage: null,
       cancelled: false,
       cancelError: null,
+      summary,
     });
     return true;
   }
 
+  // A confirmação é da tela (folha que escreve o efeito); aqui só executa. Nunca confirm() nativo.
   async function cancel() {
-    if (!placed || !confirm("Cancelar este pedido?")) return;
+    if (!placed) return;
     const result = await storefront.cancelOrder(slug, placed.orderId);
     const failure = result.ok ? null : result.error;
     setPlaced((prev) => (prev ? { ...prev, cancelError: failure, cancelled: failure === null } : prev));

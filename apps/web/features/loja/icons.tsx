@@ -9,8 +9,9 @@ const SIZE_CLASS: Record<IconSize, string> = {
 };
 
 function Svg({ size, strokeWidth, children }: { size: IconSize; strokeWidth: number; children: React.ReactNode }) {
+  // Ícones são decorativos: o nome vem do texto ao lado (ou do aria-label do botão).
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} className={SIZE_CLASS[size]}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} className={SIZE_CLASS[size]} aria-hidden="true" focusable="false">
       {children}
     </svg>
   );
@@ -73,6 +74,40 @@ export function CloseIcon() {
   return (
     <Svg size="lg" strokeWidth={2}>
       <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+export function ClockIcon() {
+  return (
+    <Svg size="md" strokeWidth={1.8}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+export function ChevronIcon() {
+  return (
+    <Svg size="md" strokeWidth={2}>
+      <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+export function TrashIcon() {
+  return (
+    <Svg size="md" strokeWidth={1.8}>
+      <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+export function InfoIcon() {
+  return (
+    <Svg size="md" strokeWidth={1.8}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5M12 8h.01" strokeLinecap="round" />
     </Svg>
   );
 }

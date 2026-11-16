@@ -1,34 +1,53 @@
 import { useState } from "react";
+import { useBrokenImage } from "../hooks/useBrokenImage";
 import type { StoreInfo } from "@/core/domain/storefront";
 import { formatCents } from "@/shared/format/money";
-import { ChatIcon, CoinIcon, PinIcon, SearchIcon } from "../icons";
+import { storeInitials } from "@/lib/storeInitials";
+import { ChatIcon, ChevronIcon, ClockIcon, CoinIcon, PinIcon, SearchIcon } from "../icons";
 
 // Cabeçalho da loja: banner, logo, dados de contato, status de funcionamento e a barra que
 // abre a busca (a busca em si é outra tela — ver SearchScreen). Única responsabilidade aqui
 // é mostrar "quem é a loja" e dar entrada pra busca/categorias.
 export function StoreHeader({
   store,
-  isOpenNow,
   onOpenSearch,
   children,
 }: {
   store: StoreInfo;
-  isOpenNow: boolean | null;
   onOpenSearch: () => void;
   children?: React.ReactNode;
 }) {
   const [showHours, setShowHours] = useState(false);
+  // URL de capa/logo pode estar quebrada (loja digitou errado, arquivo saiu do ar): some o ícone
+  // de imagem quebrada e fica o fundo neutro. Inclui a que falhou antes da hidratação (SSR).
+  const cover = useBrokenImage(store.coverImageUrl);
+  const logo = useBrokenImage(store.logoUrl);
+  const hasCover = Boolean(store.coverImageUrl) && !cover.failed;
+  const hasLogo = Boolean(store.logoUrl) && !logo.failed;
   const whatsappLink = store.whatsapp ? `https://wa.me/${store.whatsapp}` : null;
   const minOrderCents = store.minOrderCents;
 
   return (
     <div>
-      <div className="loja__cover">{store.coverImageUrl && <img src={store.coverImageUrl} alt="" />}</div>
+      {/* Spec 09 §2.1: sem capa (ou capa quebrada) vira um bloco liso mais baixo, sem ícone. */}
+      <div className={`loja__cover${hasCover ? "" : " loja__cover--empty"}`}>
+        {hasCover && <img ref={cover.ref} src={store.coverImageUrl as string} alt="" onError={cover.onError} />}
+      </div>
 
       <div className="loja__card">
         <div className="loja__card-top">
           <div className="loja__identity">
-            <div className="loja__logo">{store.logoUrl && <img src={store.logoUrl} alt={store.name} />}</div>
+            {hasLogo ? (
+              <div className="loja__logo">
+                {/* alt vazio: o nome da loja já está no título ao lado (revisão da Da Vinci, N1) */}
+                <img ref={logo.ref} src={store.logoUrl as string} alt="" onError={logo.onError} />
+              </div>
+            ) : (
+              // Iniciais (spec 09 §2.2): decorativo, o nome da loja vem logo ao lado.
+              <div className="loja__logo loja__logo--initials" aria-hidden="true">
+                {storeInitials(store.name)}
+              </div>
+            )}
             <div className="loja__info">
               <h1 className="loja__name">{store.name}</h1>
               {store.address && (
@@ -45,33 +64,36 @@ export function StoreHeader({
             </div>
           </div>
           {whatsappLink && (
-            <a href={whatsappLink} target="_blank" rel="noreferrer" className="loja__whatsapp" title="Falar no WhatsApp">
+            <a href={whatsappLink} target="_blank" rel="noreferrer" className="loja__whatsapp" title="Falar no WhatsApp" aria-label="Falar com a loja no WhatsApp (abre em outra aba)">
               <ChatIcon />
             </a>
           )}
         </div>
 
         {store.openingHours && (
-          <div className="loja__status">
-            {isOpenNow === null ? (
-              <span className="loja__status-muted">Horário de funcionamento</span>
-            ) : isOpenNow ? (
-              <span className="loja__status-state loja__status-state--open">
-                <span className="loja__dot loja__dot--open" /> Aberto agora
+          <>
+            {/* Spec 09 §2.4: a linha inteira é o botão. Até o B5 existir o servidor não sabe se está
+                aberto, então não afirmamos "aberto agora": só o texto cadastrado pela loja. */}
+            <button
+              type="button"
+              className="loja__hours-row"
+              aria-expanded={showHours}
+              aria-controls="loja-horarios"
+              onClick={() => setShowHours((v) => !v)}
+            >
+              <ClockIcon />
+              <span className="loja__hours-label">Horário de funcionamento</span>
+              <span className={`loja__hours-chevron${showHours ? " loja__hours-chevron--open" : ""}`}>
+                <ChevronIcon />
               </span>
-            ) : (
-              <span className="loja__status-state loja__status-state--closed">
-                <span className="loja__dot loja__dot--closed" /> Fechado agora
-              </span>
-            )}
-            <button onClick={() => setShowHours((v) => !v)} className="loja__link">
-              Ver horários {showHours ? "▲" : "▼"}
             </button>
-          </div>
+            <p id="loja-horarios" className="loja__hours" hidden={!showHours}>
+              {store.openingHours}
+            </p>
+          </>
         )}
-        {showHours && store.openingHours && <p className="loja__hours">{store.openingHours}</p>}
 
-        <button onClick={onOpenSearch} className="loja__search">
+        <button type="button" onClick={onOpenSearch} className="loja__search">
           <span className="loja__search-icon">
             <SearchIcon />
           </span>
