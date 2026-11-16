@@ -25,8 +25,11 @@ namespace MeuCardapio.PrintClient.Services
     //
     // PC-02 (B06, B28): polling e WS passam pelo MESMO portão (um ciclo por vez), o dedupe por
     // orderId e o ack persistido ficam no PrintLedger, e toda chamada de rede tem timeout.
-    // PC-05 (R2 Nightingale): 401/403 repetidos pausam polling e WS ("chave revogada"), em vez de
-    // martelar a API para sempre.
+    // PC-05 (R2 Nightingale, V1): 401/403 SEGUIDOS por pelo menos AuthFailureWindow pausam a impressão
+    // ("chave revogada"), em vez de martelar a API. A pausa NÃO é definitiva: uma sonda lenta
+    // (RevokedProbeMs) retoma sozinha quando a API voltar a aceitar a chave (proxy/WAF/portal cativo
+    // que devolveu 401/403 por engano, ou chave nova gravada em "Configurar chave..."). Fechamento do WS
+    // com 4401 (servidor revogou a chave, NG-06) pausa na hora.
     // PC-06 (Deming a/b/d): MarkPrinted síncrono, watchdog de impressão travada e lista de pedidos
     // "sem imprimir" publicada só quando muda (sem repetir alerta).
     public class DeviceClient : IDisposable
@@ -37,8 +40,14 @@ namespace MeuCardapio.PrintClient.Services
 
         public int PollIntervalMs { get; set; } = 15000;
         public int WsRetryMs { get; set; } = 5000;
-        // Recusas seguidas (sem nenhuma resposta boa no meio) até declarar a chave revogada.
+        // Chave declarada revogada só com >= AuthFailureLimit recusas seguidas ABRANGENDO AuthFailureWindow
+        // (um 401 de proxy/portal cativo que dura segundos não pausa a cozinha).
         public int AuthFailureLimit { get; set; } = 3;
+        public TimeSpan AuthFailureWindow { get; set; } = TimeSpan.FromMinutes(2);
+        // Com a impressão pausada, de quanto em quanto tempo testa se a chave voltou a valer.
+        public int RevokedProbeMs { get; set; } = 5 * 60 * 1000;
+        // Código de fechamento do WS quando o servidor revoga a sessão/chave (hub.ts, NG-06).
+        public const int WsCloseRevoked = 4401;
 
         public event Action OrderPending;
         public event Action<PrintableOrder> TicketReady;
@@ -47,6 +56,7 @@ namespace MeuCardapio.PrintClient.Services
         // (inclusive para vazia). A UI mostra um indicador fixo, sem repetir som ou popup.
         public event Action<IList<string>> PrintProblemsChanged;
         public event Action KeyRevoked;
+        public event Action KeyRestored;
 
         public bool IsRevoked => _revoked;
 
@@ -58,6 +68,7 @@ namespace MeuCardapio.PrintClient.Services
         readonly object _problemsLock = new object();
         string _lastProblemsKey = "";
         int _authFailures;
+        DateTime _authFirstFailureUtc;
         volatile bool _revoked;
         CancellationTokenSource _cts;
         Task _pollTask;
@@ -81,8 +92,6 @@ namespace MeuCardapio.PrintClient.Services
             }
             _cts = new CancellationTokenSource();
             _http.BaseAddress = new Uri(_settings.ApiBaseUrl);
-            _http.DefaultRequestHeaders.Authorization =
-                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _settings.DeviceToken);
             _ledger.Prune();
 
             _pollTask = Task.Run(() => PollLoopAsync(_cts.Token));
@@ -93,6 +102,13 @@ namespace MeuCardapio.PrintClient.Services
         {
             while (!token.IsCancellationRequested)
             {
+                if (_revoked)
+                {
+                    // Pausado: nada de impressão nem ack; só uma sonda lenta para saber se a chave voltou.
+                    try { await Task.Delay(RevokedProbeMs, token); } catch (OperationCanceledException) { }
+                    if (!token.IsCancellationRequested) await ProbeAsync(token);
+                    continue;
+                }
                 await RunCycleAsync(token, "polling");
                 try { await Task.Delay(PollIntervalMs, token); } catch (OperationCanceledException) { }
             }
@@ -102,6 +118,7 @@ namespace MeuCardapio.PrintClient.Services
         {
             while (!token.IsCancellationRequested)
             {
+                if (_revoked) { try { await Task.Delay(WsRetryMs, token); } catch (OperationCanceledException) { } continue; }
                 try
                 {
                     using (var ws = new ClientWebSocket())
@@ -121,7 +138,12 @@ namespace MeuCardapio.PrintClient.Services
                         while (ws.State == WebSocketState.Open && !token.IsCancellationRequested)
                         {
                             var result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), token);
-                            if (result.MessageType == WebSocketMessageType.Close) break;
+                            if (result.MessageType == WebSocketMessageType.Close)
+                            {
+                                // O servidor revogou a chave (NG-06): pausa na hora, sem esperar a janela.
+                                if ((int?)result.CloseStatus == WsCloseRevoked) NoteAuthFailure(401, true);
+                                break;
+                            }
                             // Qualquer mensagem é só um "cheque agora"; o REST é a fonte de verdade.
                             await RunCycleAsync(token, "tempo real");
                         }
@@ -130,7 +152,7 @@ namespace MeuCardapio.PrintClient.Services
                 catch (Exception ex) when (!token.IsCancellationRequested)
                 {
                     int auth = AuthStatusOf(ex);
-                    if (auth != 0) NoteAuthFailure(auth);
+                    if (auth != 0) NoteAuthFailure(auth, false);
                     else StatusChanged?.Invoke("Tempo real indisponível, usando polling (" + ex.Message + ")");
                 }
 
@@ -149,7 +171,7 @@ namespace MeuCardapio.PrintClient.Services
                 finally { _cycleGate.Release(); }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-            catch (DeviceAuthException ex) { NoteAuthFailure(ex.StatusCode); }
+            catch (DeviceAuthException ex) { NoteAuthFailure(ex.StatusCode, false); }
             catch (Exception ex) { StatusChanged?.Invoke("Erro (" + origin + "): " + Describe(ex)); }
             finally { PublishProblems(); }
         }
@@ -228,10 +250,11 @@ namespace MeuCardapio.PrintClient.Services
             try
             {
                 using (var content = new StringContent("{}", Encoding.UTF8, "application/json"))
-                using (var response = await _http.PostAsync("/api/device/orders/" + Uri.EscapeDataString(orderId) + "/printed", content, token))
+                using (var request = NewRequest(HttpMethod.Post, "/api/device/orders/" + Uri.EscapeDataString(orderId) + "/printed", content))
+                using (var response = await _http.SendAsync(request, token))
                 {
                     var code = (int)response.StatusCode;
-                    if (code == 401 || code == 403) { NoteAuthFailure(code); return; }
+                    if (code == 401 || code == 403) { NoteAuthFailure(code, false); return; }
                     // 2xx: confirmado. 404: o pedido não existe mais na API; não há o que repetir.
                     if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.NotFound)
                     {
@@ -248,7 +271,8 @@ namespace MeuCardapio.PrintClient.Services
 
         async Task<string> GetStringAsync(string path, CancellationToken token)
         {
-            using (var response = await _http.GetAsync(path, token))
+            using (var request = NewRequest(HttpMethod.Get, path, null))
+            using (var response = await _http.SendAsync(request, token))
             {
                 int code = (int)response.StatusCode;
                 if (code >= 300 && code < 400)
@@ -261,24 +285,63 @@ namespace MeuCardapio.PrintClient.Services
             }
         }
 
-        // PC-05: conta recusas SEGUIDAS; qualquer resposta boa zera. No limite, para tudo.
-        void NoteAuthFailure(int status)
+        // O token é lido a cada requisição: uma chave nova gravada em "Configurar chave..." vale na hora.
+        HttpRequestMessage NewRequest(HttpMethod method, string path, HttpContent content)
         {
-            if (_revoked) return;
-            int n = Interlocked.Increment(ref _authFailures);
-            if (n < AuthFailureLimit)
-            {
-                StatusChanged?.Invoke("Chave de impressora recusada pela API (" + status + "), tentativa " + n + " de " + AuthFailureLimit);
-                return;
-            }
+            var req = new HttpRequestMessage(method, path) { Content = content };
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _settings.DeviceToken);
+            return req;
+        }
+
+        // PC-05: conta recusas SEGUIDAS; qualquer resposta boa zera. Só declara revogada com o mínimo de
+        // recusas E a janela de tempo (ou direct: o servidor disse que revogou). A pausa é reversível.
+        void NoteAuthFailure(int status, bool direct)
+        {
             lock (_problemsLock)
             {
                 if (_revoked) return;
+                var now = DateTime.UtcNow;
+                if (_authFailures == 0) _authFirstFailureUtc = now;
+                int n = ++_authFailures;
+                if (!direct && (n < AuthFailureLimit || now - _authFirstFailureUtc < AuthFailureWindow))
+                {
+                    StatusChanged?.Invoke("Chave de impressora recusada pela API (" + status + "), tentativa " + n + "; vou insistir antes de pausar");
+                    return;
+                }
                 _revoked = true;
             }
-            try { _cts?.Cancel(); } catch { }
-            StatusChanged?.Invoke("Chave de impressora revogada ou inválida (" + status + "). A impressão automática foi PAUSADA. Gere uma nova chave no painel e use \"Configurar chave...\".");
+            StatusChanged?.Invoke("Chave de impressora revogada ou inválida (" + status + "). A impressão automática foi PAUSADA. Gere uma nova chave no painel e use \"Configurar chave...\" (vale na hora; se mudar a URL da API, reabra o app). O app testa de novo a cada " + Math.Max(1, RevokedProbeMs / 60000) + " min.");
             KeyRevoked?.Invoke();
+        }
+
+        // Sonda da pausa: uma chamada leve com a chave ATUAL. 200 retoma; qualquer outra coisa mantém a pausa.
+        async Task ProbeAsync(CancellationToken token)
+        {
+            if (!_revoked) return;
+            try
+            {
+                using (var request = NewRequest(HttpMethod.Get, "/api/device/orders/pending", null))
+                using (var response = await _http.SendAsync(request, token))
+                {
+                    if (!response.IsSuccessStatusCode) return;
+                }
+            }
+            catch { return; }
+            lock (_problemsLock)
+            {
+                if (!_revoked) return;
+                _revoked = false;
+                _authFailures = 0;
+            }
+            StatusChanged?.Invoke("A chave de impressora voltou a ser aceita. Impressão retomada.");
+            KeyRestored?.Invoke();
+        }
+
+        // Depois de "Configurar chave...": testa já, sem esperar a sonda lenta.
+        public void RetryNow()
+        {
+            var t = _cts?.Token ?? CancellationToken.None;
+            if (_revoked) Task.Run(() => ProbeAsync(t));
         }
 
         // 401/403 vindo do handshake do WebSocket (a exceção traz o WebException por dentro).

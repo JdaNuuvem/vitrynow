@@ -109,8 +109,11 @@ namespace MeuCardapio.PrintClient.UI
             using (var setup = new SetupForm())
             {
                 if (setup.ShowDialog(this) == DialogResult.OK)
-                    MessageBox.Show(this, "Configuração salva. Feche e abra o aplicativo para usar a nova chave.",
+                {
+                    App.Device.RetryNow(); // chave nova vale na hora (se estava pausada, testa já)
+                    MessageBox.Show(this, "Configuração salva. A nova chave já está em uso. Se você mudou a URL da API, feche e abra o aplicativo.",
                         "MeuCardapio - Impressão", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
             }
         }
 
@@ -124,6 +127,7 @@ namespace MeuCardapio.PrintClient.UI
             App.Device.OrderPending += () => BeginInvoke(new Action(OnOrderPending));
             App.Device.PrintProblemsChanged += list => BeginInvoke(new Action(() => ShowPrintProblems(list)));
             App.Device.KeyRevoked += () => BeginInvoke(new Action(ShowKeyRevoked));
+            App.Device.KeyRestored += () => BeginInvoke(new Action(() => { _revokedText = null; RefreshProblemLabel(); }));
             App.Device.TicketReady += order => BeginInvoke(new Action(() => PrintAndAck(order)));
         }
 
@@ -141,7 +145,7 @@ namespace MeuCardapio.PrintClient.UI
 
         void ShowKeyRevoked()
         {
-            _revokedText = "CHAVE DE IMPRESSORA REVOGADA. A impressão está PAUSADA. Gere uma chave nova no painel e use \"Configurar chave...\" na bandeja.";
+            _revokedText = "CHAVE DE IMPRESSORA RECUSADA. A impressão está PAUSADA. Gere uma chave nova no painel e use \"Configurar chave...\" na bandeja. O app volta sozinho quando a chave valer.";
             RefreshProblemLabel();
             if (_tray.Visible) _tray.ShowBalloonTip(10000, "MeuCardapio - Impressão", "Chave de impressora revogada: impressão pausada.", ToolTipIcon.Error);
         }

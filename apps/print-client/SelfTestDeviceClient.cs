@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using MeuCardapio.PrintClient.Models;
 using MeuCardapio.PrintClient.Services;
 
@@ -31,6 +33,8 @@ namespace MeuCardapio.PrintClient
             public int AckFailFirst;                                   // primeiros N acks respondem AckStatus; depois 200
             public int WsStatus = 404;                                 // /ws/device (sem upgrade real)
             public bool RemoveOnAck = true;
+            public string WsMode = "status";                           // "status" (responde WsStatus) | "accept" | "close4401"
+            readonly List<WebSocket> _sockets = new List<WebSocket>();
             int _pendingCalls, _ackCalls;
             public int Count(string needle) { lock (Lock) return Requests.Count(r => r.Contains(needle)); }
             public int AckCalls { get { lock (Lock) return _ackCalls; } }
@@ -75,7 +79,29 @@ namespace MeuCardapio.PrintClient
             {
                 var path = c.Request.Url.AbsolutePath;
                 lock (Lock) Requests.Add(c.Request.HttpMethod + " " + path + " auth=" + (c.Request.Headers["Authorization"] ?? ""));
-                if (path == "/ws/device") { Reply(c, WsStatus, "{}"); return; }
+                if (path == "/ws/device")
+                {
+                    if (WsMode == "status" || !c.Request.IsWebSocketRequest) { Reply(c, WsStatus, "{}"); return; }
+                    var mode = WsMode;
+                    Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var wc = await c.AcceptWebSocketAsync(null);
+                            var ws = wc.WebSocket;
+                            lock (Lock) _sockets.Add(ws);
+                            if (mode == "close4401") { await ws.CloseAsync((WebSocketCloseStatus)4401, "revogada", CancellationToken.None); return; }
+                            var buf = new byte[256];
+                            while (ws.State == WebSocketState.Open)
+                            {
+                                var r = await ws.ReceiveAsync(new ArraySegment<byte>(buf), CancellationToken.None);
+                                if (r.MessageType == WebSocketMessageType.Close) break;
+                            }
+                        }
+                        catch { }
+                    });
+                    return;
+                }
                 if (path == "/api/device/orders/pending")
                 {
                     int n; lock (Lock) n = ++_pendingCalls;
@@ -107,6 +133,16 @@ namespace MeuCardapio.PrintClient
                 Reply(c, 404, "{}");
             }
 
+            public int OpenSockets { get { lock (Lock) return _sockets.Count(x => x.State == WebSocketState.Open); } }
+
+            // Aviso "acorde e peca job" pelo WS (como print.available da API).
+            public void SendWs(string text)
+            {
+                WebSocket[] open; lock (Lock) open = _sockets.Where(x => x.State == WebSocketState.Open).ToArray();
+                foreach (var w in open)
+                    try { w.SendAsync(new ArraySegment<byte>(Encoding.UTF8.GetBytes(text)), WebSocketMessageType.Text, true, CancellationToken.None).Wait(2000); } catch { }
+            }
+
             public void Dispose() { try { _l.Stop(); _l.Close(); } catch { } }
         }
 
@@ -123,6 +159,9 @@ namespace MeuCardapio.PrintClient
             Dedupe();
             PrintProblems();
             Revoked();
+            RevokedWindowAndRecovery();
+            WsRealtime();
+            WsRevoked4401();
             AuthRecovers();
             Redirect();
         }
@@ -223,7 +262,7 @@ namespace MeuCardapio.PrintClient
             }
         }
 
-        // ---- PC-05: 401/403 repetidos => para e avisa ----
+        // ---- PC-05 (V1): 401/403 por tempo suficiente => pausa e avisa; pouco tempo NAO pausa ----
         static void Revoked()
         {
             foreach (var code in new[] { 401, 403 })
@@ -234,6 +273,8 @@ namespace MeuCardapio.PrintClient
                     PrintLedger led; int revoked = 0; var status = new List<string>();
                     using (var dc = Client(api, out led, 80))
                     {
+                        dc.AuthFailureWindow = TimeSpan.FromMilliseconds(700);
+                        dc.RevokedProbeMs = 600000; // sem sonda neste teste
                         dc.KeyRevoked += () => Interlocked.Increment(ref revoked);
                         dc.StatusChanged += s => { lock (status) status.Add(s); };
                         dc.Start();
@@ -241,10 +282,97 @@ namespace MeuCardapio.PrintClient
                         Thread.Sleep(300);
                         int atRevoke = api.Total;
                         Thread.Sleep(900);
-                        Check("chave revogada (" + code + "): detecta e dispara KeyRevoked 1 vez", got && Volatile.Read(ref revoked) == 1);
-                        Check("chave revogada (" + code + "): para de chamar a API (sem novos pedidos depois)", api.Total == atRevoke);
-                        lock (status) Check("chave revogada (" + code + "): mensagem explica e pede nova chave", status.Any(s => s.Contains("revogada") && s.Contains("Configurar chave")));
+                        Check("chave recusada (" + code + ") por mais que a janela: pausa e dispara KeyRevoked 1 vez", got && Volatile.Read(ref revoked) == 1);
+                        Check("chave recusada (" + code + "): pausado nao chama a API (sem sonda no periodo)", api.Total == atRevoke);
+                        lock (status) Check("chave recusada (" + code + "): mensagem explica, pede chave nova e diz que volta sozinho", status.Any(s => s.Contains("PAUSADA") && s.Contains("Configurar chave") && s.Contains("testa de novo")));
                     }
+                }
+            }
+
+            // recusas por MENOS que a janela (proxy/portal cativo passageiro) nao pausam a cozinha
+            using (var api = new FakeApi())
+            {
+                api.PendingStatus = 401; api.WsStatus = 401;
+                PrintLedger led;
+                using (var dc = Client(api, out led, 80))
+                {
+                    dc.AuthFailureWindow = TimeSpan.FromSeconds(30);
+                    dc.Start();
+                    bool many = WaitFor(() => api.Total >= 12, 8000); // bem mais que 3 recusas seguidas
+                    Check("401 passageiro: muitas recusas seguidas dentro da janela NAO pausam", many && !dc.IsRevoked);
+                }
+            }
+        }
+
+        // ---- pausa reversivel: a sonda retoma sozinha quando a chave volta a valer ----
+        static void RevokedWindowAndRecovery()
+        {
+            using (var api = new FakeApi())
+            {
+                api.PendingStatus = 401; api.WsStatus = 401;
+                PrintLedger led; int revoked = 0, restored = 0, ready = 0; var status = new List<string>();
+                using (var dc = Client(api, out led, 80))
+                {
+                    dc.AuthFailureWindow = TimeSpan.FromMilliseconds(400);
+                    dc.RevokedProbeMs = 300;
+                    dc.KeyRevoked += () => Interlocked.Increment(ref revoked);
+                    dc.KeyRestored += () => Interlocked.Increment(ref restored);
+                    dc.StatusChanged += s => { lock (status) status.Add(s); };
+                    dc.TicketReady += o => { Interlocked.Increment(ref ready); dc.RecordPrinted(o.OrderId); dc.AckPrintedAsync(o.OrderId).Wait(); };
+                    dc.Start();
+                    bool paused = WaitFor(() => dc.IsRevoked, 8000);
+                    Check("retomada: pausa por recusas alem da janela", paused && Volatile.Read(ref revoked) == 1);
+                    int probes0 = api.PendingCalls;
+                    Thread.Sleep(900);
+                    Check("retomada: pausado so sonda (poucas chamadas), nao faz polling normal", api.PendingCalls - probes0 <= 5);
+                    api.Pending.Add(new[] { "R", "321" });
+                    api.PendingStatus = 200; api.WsStatus = 404; // o proxy/chave voltou ao normal
+                    bool back = WaitFor(() => !dc.IsRevoked && Volatile.Read(ref restored) == 1, 5000);
+                    Check("retomada: sonda com 200 retoma sozinha e dispara KeyRestored", back);
+                    bool printed = WaitFor(() => Volatile.Read(ref ready) == 1 && led.IsPrinted("R"), 5000);
+                    Check("retomada: volta a imprimir o pedido pendente (1 vez)", printed);
+                    lock (status) Check("retomada: avisa que a impressao foi retomada", status.Any(s => s.Contains("voltou a ser aceita")));
+                }
+            }
+        }
+
+        // ---- WS com upgrade REAL: o aviso do servidor acorda o ciclo (polling longo) ----
+        static void WsRealtime()
+        {
+            using (var api = new FakeApi())
+            {
+                api.WsMode = "accept";
+                PrintLedger led; int ready = 0;
+                using (var dc = Client(api, out led, 600000))
+                {
+                    dc.TicketReady += o => { Interlocked.Increment(ref ready); dc.RecordPrinted(o.OrderId); dc.AckPrintedAsync(o.OrderId).Wait(); };
+                    dc.Start();
+                    bool connected = WaitFor(() => api.OpenSockets == 1, 8000);
+                    Thread.Sleep(300); // 1o ciclo do polling (vazio) ja passou
+                    api.Pending.Add(new[] { "W", "88" });
+                    api.SendWs("{\"type\":\"print.available\"}");
+                    bool got = WaitFor(() => Volatile.Read(ref ready) == 1, 5000);
+                    Check("ws real: conecta com upgrade e Bearer", connected && api.Requests.Any(r => r.Contains("/ws/device") && r.EndsWith("auth=Bearer mcd_teste_segredo")));
+                    Check("ws real: aviso do servidor acorda o ciclo sem esperar o polling", got && api.PendingCalls >= 2);
+                }
+            }
+        }
+
+        // ---- servidor fecha o WS com 4401 (chave revogada, NG-06): pausa na hora ----
+        static void WsRevoked4401()
+        {
+            using (var api = new FakeApi())
+            {
+                api.WsMode = "close4401";
+                PrintLedger led; int revoked = 0;
+                using (var dc = Client(api, out led, 600000))
+                {
+                    dc.AuthFailureWindow = TimeSpan.FromMinutes(10); // a janela NAO vale para o 4401
+                    dc.RevokedProbeMs = 600000;
+                    dc.KeyRevoked += () => Interlocked.Increment(ref revoked);
+                    dc.Start();
+                    bool got = WaitFor(() => dc.IsRevoked, 8000);
+                    Check("ws 4401: fechamento por revogacao pausa na hora, sem esperar a janela", got && Volatile.Read(ref revoked) == 1);
                 }
             }
         }

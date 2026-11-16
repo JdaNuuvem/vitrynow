@@ -140,10 +140,7 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 
 ## Resiliência (PC-05, PC-06)
 
-- **Chave revogada (PC-05):** 3 recusas **seguidas** (401/403 no polling, no WS ou no ack; qualquer resposta boa zera a conta)
-  pausam polling e WS, mostram faixa vermelha "CHAVE DE IMPRESSORA REVOGADA" e um balão no ícone. O app não fica martelando
-  a API. Para voltar: gerar chave nova no painel, "Configurar chave..." e reabrir o app. Redirecionamento (30x) não é seguido
-  e não conta como revogação.
+- **Chave recusada (PC-05, V1 da Nightingale):** só vira "PAUSADA" com 3+ recusas 401/403 **seguidas que abranjam 2 min** (polling, WS ou ack; qualquer resposta boa zera), para que um 401 de proxy/WAF/portal cativo da loja não pare a cozinha. Fechamento do WS com código **4401** (servidor revogou a chave, NG-06) pausa na hora. Pausado: faixa vermelha + balão e **sonda a cada 5 min**; com 200 volta sozinho (`KeyRestored`). "Configurar chave..." vale na hora (o token é lido a cada requisição) e dispara uma sonda imediata; só mudança de **URL** da API exige reabrir o app. Redirecionamento (30x) não é seguido e não conta como recusa.
 - **Gravação antes de tudo (PC-06 a):** depois de imprimir, `RecordPrinted` grava no disco de forma síncrona, antes de toast,
   log ou rede; só o aviso à API roda em outra thread. Queda do app entre imprimir e avisar não reimprime.
 - **Watchdog (PC-06 b):** pedido "em impressão" há mais de 2 min (ciclo da UI perdido) vira falha com recuo e passa a aparecer
