@@ -1,6 +1,8 @@
 import type { FastifyPluginAsync } from "fastify";
 import { changePasswordSchema, createStaffUserSchema } from "@meucardapio/shared-types";
 import { requireMfa } from "../../lib/mfaGate";
+import { SESSION_COOKIE, sessionCookieOptions, signSession } from "../../lib/session";
+import { disconnectUser } from "../../realtime/hub";
 import { requireFeature } from "../../lib/subscription";
 import { useDomainErrors } from "../../shared/errors";
 import type { UsersService } from "./users.service";
@@ -32,6 +34,7 @@ export function buildUserRoutes(service: UsersService): FastifyPluginAsync {
       async (request) => {
         const { id } = request.params as { id: string };
         await service.remove(request.user, id);
+        disconnectUser(id); // a linha sumiu: o JWT já morre, aqui fecha também o WebSocket aberto
         return { ok: true };
       },
     );
@@ -42,7 +45,10 @@ export function buildUserRoutes(service: UsersService): FastifyPluginAsync {
       async (request, reply) => {
         const parsed = changePasswordSchema.safeParse(request.body);
         if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
-        await service.changePassword(request.user.userId, parsed.data);
+        const { tokenVersion } = await service.changePassword(request.user.userId, parsed.data);
+        // Derruba as OUTRAS sessões e sockets; este dispositivo recebe cookie na versão nova.
+        disconnectUser(request.user.userId);
+        reply.setCookie(SESSION_COOKIE, signSession(app, { id: request.user.userId, tokenVersion }), sessionCookieOptions());
         return { ok: true };
       },
     );
