@@ -60,7 +60,7 @@ describe("tech.cleanup — comportamento (Postgres)", () => {
     const result = await runner().run("tech.cleanup");
 
     expect(result).toMatchObject({ status: "ok", processed: 2 });
-    expect((await prisma.passwordResetToken.findMany()).map((t) => t.token).sort()).toEqual(["recente", "valido"]);
+    expect((await prisma.passwordResetToken.findMany()).map((t) => t.tokenHash).sort()).toEqual(["recente", "valido"]);
     expect(await prisma.mfaChallenge.count()).toBe(1);
   });
 
