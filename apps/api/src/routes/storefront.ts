@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { createOrderSchema } from "@meucardapio/shared-types";
-import { nextOrderCode } from "../lib/order-code";
+import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
 import { publishToStore } from "../realtime/hub";
 import { createPixPayment, cancelPayment } from "../lib/mercadopago";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
@@ -140,9 +140,12 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       }
     }
     const usePix = paymentMethod === "PIX";
-    const code = await nextOrderCode(store.id);
 
-    const order = await prisma.order.create({
+    // Código e pedido na MESMA transação: o contador da loja fica travado até o commit, então
+    // pedidos simultâneos são serializados e nunca colidem (B01).
+    const order = await prisma.$transaction(async (tx) => {
+      const code = await nextOrderCode(tx, store.id);
+      return tx.order.create({
       data: {
         storeId: store.id,
         code,
@@ -174,7 +177,8 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
           })),
         },
       },
-    });
+      });
+    }, ORDER_TX_OPTIONS);
 
     if (coupon) {
       await prisma.coupon.update({ where: { id: coupon.id }, data: { usedCount: { increment: 1 } } });
