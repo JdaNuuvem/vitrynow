@@ -236,7 +236,12 @@ export function CheckoutDrawer({
             <label className="loja__label" htmlFor={FIELD_ID.changeFor}>
               Troco para (opcional)
             </label>
-            <div className="loja__money" data-invalid={errors.changeFor ? "true" : undefined}>
+            {/* A moldura inteira leva o foco ao campo (alvo de 44 px, não só o miolo do input). */}
+            <div
+              className="loja__money"
+              data-invalid={errors.changeFor ? "true" : undefined}
+              onClick={() => document.getElementById(FIELD_ID.changeFor)?.focus()}
+            >
               <span aria-hidden="true">R$</span>
               <input
                 {...fieldProps("changeFor")}

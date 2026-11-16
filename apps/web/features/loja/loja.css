@@ -921,6 +921,8 @@
   color: var(--loja-ink-3);
 }
 .loja__money {
+  min-height: 2.75rem; /* 44 px (revisão rev3, ajuste 1) */
+  cursor: text;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -1200,6 +1202,7 @@
   font-size: 0.875rem;
   font-weight: 600;
   color: var(--loja-danger-ink);
+  margin-bottom: 0.5rem; /* respiro antes do primeiro grupo (revisão rev3, ajuste 2) */
 }
 .loja__radio-card {
   display: flex;
@@ -1323,4 +1326,12 @@
 .loja__sheet-panel .loja__result-secondary {
   display: flex;
   width: 100%;
+}
+
+/* caixa de marcar dos adicionais com 24 px; a linha inteira já é o rótulo clicável */
+.loja__additional input[type="checkbox"] {
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-right: 0.5rem;
+  accent-color: var(--loja-ink);
 }
