@@ -8,8 +8,24 @@ import { newTrialEndsAt } from "../lib/subscription";
 import { SESSION_COOKIE, revokeSession, sessionCookieOptions, signSession } from "../lib/session";
 import { disconnectSession, disconnectUser } from "../realtime/hub";
 import { hashToken } from "../lib/tokenHash";
+import { LoginThrottle } from "../lib/loginThrottle";
+
+// Hash de uma senha que ninguém conhece, no mesmo custo dos hashes reais: login com e-mail inexistente
+// gasta o mesmo tempo do login com senha errada (ST-05, sem enumeração de contas por tempo).
+const DUMMY_HASH = bcrypt.hashSync(`nao-existe-${Math.random()}-${Date.now()}`, 10);
+
+type PrismaKnownError = { code?: string; meta?: { target?: string[] | string } };
+function uniqueTarget(error: unknown): string | null {
+  const e = error as PrismaKnownError;
+  if (e?.code !== "P2002") return null;
+  const t = e.meta?.target;
+  return Array.isArray(t) ? t.join(",") : (t ?? "");
+}
 
 const authRoutes: FastifyPluginAsync = async (app) => {
+  // Uma instância por app: cada teste (e cada processo) tem os seus contadores.
+  const throttle = new LoginThrottle();
+
   // Bootstrap de uma loja nova + usuário dono. Em produção isso vira o fluxo de
   // cadastro self-service da plataforma.
   app.post("/auth/register", { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } }, async (request, reply) => {
@@ -21,20 +37,32 @@ const authRoutes: FastifyPluginAsync = async (app) => {
 
     const existing = await prisma.store.findFirst({ where: { OR: [{ slug }, { code }] } });
     if (existing) {
-      return reply.code(409).send({ error: "slug ou código já em uso" });
+      return reply.code(409).send({ error: "slug ou código já em uso", code: "STORE_IN_USE" });
+    }
+    if (await prisma.user.findUnique({ where: { email }, select: { id: true } })) {
+      return reply.code(409).send({ error: "este e-mail já está cadastrado", code: "EMAIL_IN_USE" });
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const store = await prisma.store.create({
-      data: {
-        name: storeName,
-        slug,
-        code,
-        users: { create: { email, passwordHash, role: "OWNER" } },
-        subscription: { create: { trialEndsAt: newTrialEndsAt() } },
-      },
-      include: { users: true },
-    });
+    let store;
+    try {
+      store = await prisma.store.create({
+        data: {
+          name: storeName,
+          slug,
+          code,
+          users: { create: { email, passwordHash, role: "OWNER" } },
+          subscription: { create: { trialEndsAt: newTrialEndsAt() } },
+        },
+        include: { users: true },
+      });
+    } catch (error) {
+      // Corrida: dois cadastros iguais passaram pelas checagens acima ao mesmo tempo (B21).
+      const target = uniqueTarget(error);
+      if (target === null) throw error;
+      if (target.includes("email")) return reply.code(409).send({ error: "este e-mail já está cadastrado", code: "EMAIL_IN_USE" });
+      return reply.code(409).send({ error: "slug ou código já em uso", code: "STORE_IN_USE" });
+    }
 
     const user = store.users[0];
     reply.setCookie(SESSION_COOKIE, signSession(app, user), sessionCookieOptions());
@@ -48,10 +76,21 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     }
     const { email, password } = parsed.data;
 
+    // Bloqueio progressivo por conta e por conta+IP (ST-03). A resposta é a mesma exista a conta ou não.
+    const decision = throttle.check(email, request.ip);
+    if (!decision.allowed) {
+      reply.header("Retry-After", String(decision.retryAfterSeconds));
+      return reply.code(429).send({ error: "muitas tentativas de login; tente de novo em alguns minutos", code: "LOGIN_LOCKED" });
+    }
+
     const user = await prisma.user.findUnique({ where: { email } });
-    if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+    // Sempre compara com algum hash (o falso, se a conta não existe): mesmo tempo nos dois casos (ST-05).
+    const passwordOk = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
+    if (!user || !passwordOk) {
+      throttle.fail(email, request.ip);
       return reply.code(401).send({ error: "credenciais inválidas" });
     }
+    throttle.succeed(email, request.ip);
 
     reply.setCookie(SESSION_COOKIE, signSession(app, user), sessionCookieOptions());
     return { ok: true };
