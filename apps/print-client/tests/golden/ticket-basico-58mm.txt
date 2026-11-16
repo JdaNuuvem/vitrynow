@@ -1,0 +1,18 @@
+         Pizzaria do Zé
+     Pedido #1042 - ENTREGA
+--------------------------------
+2x Pizza Calabresa G    R$ 35,00
+  + Borda catupiry       R$ 8,00
+  obs: sem cebola
+1x Refrigerante 2L       R$ 8,50
+--------------------------------
+TOTAL                   R$ 86,50
+
+Cliente: Maria da Silva
+Telefone: (11) 91234-5678
+Endereço: Rua das Flores, 123,
+apto 45 - Jardim Paulista, São
+Paulo
+Obs: Tocar o interfone
+
+        16/11/2026 20:31

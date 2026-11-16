@@ -3,26 +3,23 @@
 App WinForms (.NET Framework 4.7.2) que roda no PC do estabelecimento e imprime os pedidos vindos
 da **nossa** API (`apps/api`), não do cardapio.ai.
 
-## O que vem da engenharia reversa (reaproveitado) vs. o que é novo
+## Origem do código (PC-12)
 
-- **Reaproveitado quase integralmente** (técnica genérica, sem marca de terceiros):
-  `Printing/TicketRenderer.cs` (parser do subconjunto HTML → linhas), `Printing/ThermalPrinter.cs`
-  (impressão GDI+ via `PrintDocument`), `Services/AudioPlayer.cs` (alerta sonoro via COM
-  WindowsMediaPlayer). Copiados de `reconstruction/src/CardapioClone` só com o namespace trocado.
-- **Novo**: `Services/DeviceClient.cs` (uma única conexão WS com a nossa API + fallback de polling
-  REST — substitui a dupla WS 43218/43219 + Cloud Functions do original), `Services/TicketTemplate.cs`
-  (nosso próprio layout de tíquete, construído a partir do JSON `PrintableOrder` da API, não do HTML
-  do cardapio.ai), `UI/SetupForm.cs` (cola URL da API + "chave de impressora" em vez de login
-  email/senha), `Services/AppSettings.cs` (aponta para a nossa API).
-- **Não reaproveitado**: nenhuma string/ícone/áudio do binário original. `Audios/` está vazio por
-  enquanto — ver Fase 5 do plano para sons/ícone próprios.
+- **Próprio, sem derivar do `reconstruction/`:** o modelo do tíquete (`Printing/TicketDocument.cs`), o montador a partir do
+  `PrintableOrder` (`TicketBuilder.cs`), a quebra de linha e a sanitização (`TicketText.cs`), o desenho em colunas
+  (`TextTicketWriter.cs`), o desenho GDI+ (`GdiTicketPainter.cs`, `GdiPrintTarget.cs`), a impressora virtual
+  (`VirtualPrintTarget.cs`), `PrintCoordinator`, `DeviceClient`, `PrintLedger`, `Updater`. O tíquete **não é mais HTML**: sumiram o
+  parser, o HtmlAgilityPack e os comandos embutidos no texto (`LARGURA`, `--QUEBRA--`) que vinham do módulo do terceiro.
+- **Ainda derivado do `reconstruction/` (pendente, PC-14):** `Services/AudioPlayer.cs` (alerta sonoro via Windows Media Player COM).
+  Decisão de marca/origem é do Claudio (CL-05); até lá não distribuir instalador.
+- `Services/DeviceClient.cs` + `UI/SetupForm.cs` + `Services/AppSettings.cs`: conexão (WS + polling) e configuração com a **nossa** API.
 
 ## Build
 
 Sem dotnet SDK: MSBuild 4.0 do .NET Framework (já presente no Windows) + compilador Roslyn **4.8.0
 oficial da Microsoft**, baixado do NuGet na primeira execução para `tools\roslyn` (ignorado pelo git),
 com o SHA-256 do pacote fixado em `tools\toolchain.ps1` e a assinatura Authenticode do `csc.exe`
-conferida. Bibliotecas (HtmlAgilityPack, Newtonsoft.Json) ficam em `libs\` com hashes em
+conferida. Biblioteca (Newtonsoft.Json) ficam em `libs\` com hashes em
 `libs\SHA256SUMS` (conferidos a cada build). **Nada depende de `reconstruction/`.**
 
 ```powershell
@@ -33,16 +30,29 @@ conferida. Bibliotecas (HtmlAgilityPack, Newtonsoft.Json) ficam em `libs\` com h
 **Build reprodutível:** `/deterministic` + `/pathmap` (via `obj\pathmap.rsp`). A mesma fonte gera o mesmo
 SHA-256 em qualquer pasta (verificado: duas pastas diferentes, mesmo hash).
 
-## Teste de renderização
+## Testes e harness SEM impressora (QA-06 / PC-12)
 
-Smart App Control bloqueia a execução de EXEs recém-compilados nesta máquina (mesmo problema do
-`reconstruction`), então o self-test roda em memória via PowerShell, sem executar o EXE:
+O Smart App Control bloqueia EXE novo, então tudo roda em memória via PowerShell, sem abrir o EXE:
 
 ```powershell
-.\run-selftest.ps1     # compila o núcleo testável + SelfTest numa DLL e roda Run() (124 checagens)
+.\run-selftest.ps1          # compila o núcleo + testes em DLL e roda (230 checagens)
+.\tools\preview-ticket.ps1 -OutDir $env:TEMP\previa    # grava tíquetes de exemplo (.txt + .png) em 58 e 80 mm na impressora virtual
 ```
 
-O próprio EXE também expõe o teste quando a execução não está bloqueada: `--selftest`.
+O que o selftest cobre:
+- **Tíquete:** modelo, quebra de linha (palavra gigante, emoji, acento combinado, recuo), sanitização (ESC/GS/BEL/bidi nunca viram comando;
+  emoji não sai no papel), 32 colunas (58 mm) e 48 (80 mm), PNG da impressora virtual, e **golden files** em `tests\golden\`
+  (3 pedidos × 58/80 mm). Mudou o layout de propósito? `$env:PC_UPDATE_GOLDEN = "1"; .\run-selftest.ps1` e **revise o diff no git**.
+- **Harness do pipeline inteiro** (`SelfTestHarness.cs`): `DeviceClient` real → `PrintCoordinator` → `VirtualPrintTarget`, contra uma API
+  falsa em loopback (inclui WebSocket de verdade): impressora **offline**, **sem papel**, **queda no meio do tíquete** (sobra um pedaço
+  parcial, como no papel), **polling + WS** ao mesmo tempo com impressora lenta (1 tíquete), **app fechado entre imprimir e avisar a API**
+  (reabre, não reimprime, envia o aviso), API fora do ar (503), pedido cancelado durante a falha, bobina de 80 mm.
+- **Não cobre** (roteiro manual em `docs\roteiro-impressora-real.md`, item de aceite pendente do G3): spooler/driver reais, papel,
+  guilhotina, fonte da impressora, instalador/SmartScreen.
+
+**Impressora virtual no app:** preencha `VirtualPrinterFolder` no `settings.json` e os tíquetes vão para essa pasta (`.txt` + `.png`) em vez
+da impressora, para conferir o layout sem gastar bobina. Antes de imprimir de verdade o app pergunta ao Windows (WMI) se a impressora
+escolhida está offline/sem papel/tampa aberta e, se estiver, trata como falha (o pedido volta pelo recuo e aparece em "sem imprimir").
 
 ## Configuração
 
@@ -135,7 +145,7 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 - Servidor de downloads para o auto-update (`UpdateBaseUrl`) e a **chave de release** (custódia) ainda não existem:
   o mecanismo está pronto e testado, mas recusa tudo sem chave embutida.
 - Tela de configuração para `UpdateBaseUrl` (hoje só via edição manual do `settings.json`).
-- Ícone/sons são placeholders — troque antes de distribuir pra clientes de verdade.
+- Ícone/sons são placeholders — troque antes de distribuir pra clientes de verdade. `AudioPlayer.cs` ainda deriva do `reconstruction/` (PC-14).
 - Teste real com impressora térmica física (só validado até aqui via self-test + payload JSON da API).
 
 ## Resiliência (PC-05, PC-06)

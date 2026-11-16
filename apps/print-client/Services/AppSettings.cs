@@ -62,6 +62,8 @@ namespace MeuCardapio.PrintClient.Services
         public int FontSize { get; set; } = 12;
         public int PaperWidthMm { get; set; } = 57;
         public string SelectedPrinter { get; set; } = "";
+        // Se preenchida, os tíquetes vão para esta pasta (txt + png) em vez da impressora: conferir o layout sem gastar bobina.
+        public string VirtualPrinterFolder { get; set; } = "";
         public int DropdownPrintIndex { get; set; } = 0;
         public int SoundVolume { get; set; } = 100;
         public int DropdownIndex { get; set; } = 1; // 1=Sino 2=Padrão 3=Custom
