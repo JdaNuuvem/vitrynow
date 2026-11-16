@@ -7,6 +7,7 @@ import { sendPasswordResetEmail } from "../lib/email";
 import { newTrialEndsAt } from "../lib/subscription";
 import { SESSION_COOKIE, sessionCookieOptions, signSession } from "../lib/session";
 import { disconnectUser } from "../realtime/hub";
+import { hashToken } from "../lib/tokenHash";
 
 const authRoutes: FastifyPluginAsync = async (app) => {
   // Bootstrap de uma loja nova + usuário dono. Em produção isso vira o fluxo de
@@ -91,7 +92,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       if (user) {
         const token = nanoid(32);
         await prisma.passwordResetToken.create({
-          data: { userId: user.id, token, expiresAt: new Date(Date.now() + 60 * 60 * 1000) },
+          data: { userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + 60 * 60 * 1000) },
         });
         const resetUrl = `${process.env.WEB_ORIGIN ?? "http://localhost:3000"}/reset-senha?token=${token}`;
         await sendPasswordResetEmail({ to: user.email, resetUrl });
@@ -108,7 +109,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       const parsed = resetPasswordSchema.safeParse(request.body);
       if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
 
-      const resetToken = await prisma.passwordResetToken.findUnique({ where: { token: parsed.data.token } });
+      const resetToken = await prisma.passwordResetToken.findUnique({ where: { tokenHash: hashToken(parsed.data.token) } });
       if (!resetToken || resetToken.usedAt || resetToken.expiresAt < new Date()) {
         return reply.code(400).send({ error: "token inválido ou expirado" });
       }

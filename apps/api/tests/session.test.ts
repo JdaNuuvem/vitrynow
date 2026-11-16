@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
 import bcrypt from "bcryptjs";
 import { makeApp, registerStore, login, resetDb } from "./helpers";
+import { hashToken } from "../src/lib/tokenHash";
 
 // NG-01 / ADR-0008: sessão com exp, tokenVersion, releitura por requisição, sid, Origin.
 describe("sessão do painel (ADR-0008)", () => {
@@ -119,7 +120,7 @@ describe("sessão do painel (ADR-0008)", () => {
   it("redefinição de senha derruba sessões abertas", async () => {
     const { cookie, credentials, user } = await ownerWithId();
     const token = "t".repeat(32);
-    await prisma.passwordResetToken.create({ data: { userId: user.id, token, expiresAt: new Date(Date.now() + 3600_000) } });
+    await prisma.passwordResetToken.create({ data: { userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + 3600_000) } });
     const reset = await app.inject({ method: "POST", url: "/auth/reset-password", payload: { token, newPassword: "outra-senha-123" } });
     expect(reset.statusCode).toBe(200);
     expect((await me(cookie)).statusCode).toBe(401);

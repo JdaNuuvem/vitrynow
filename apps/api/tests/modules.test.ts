@@ -86,9 +86,11 @@ describe("módulos em camadas — contrato HTTP", () => {
 
   it("chave de impressora: cria, aparece offline, revoga; revogar inexistente é 404", async () => {
     const created = json(await call("POST", "/api/device-tokens", { label: "PC do balcão" })).token;
-    expect(created.token).toHaveLength(32);
+    expect(created.token).toMatch(/^mcd_[A-Za-z0-9_-]{43}$/); // 256 bits, mostrado só nesta resposta
     const listed = json(await call("GET", "/api/device-tokens")).tokens;
-    expect(listed[0]).toMatchObject({ id: created.id, online: false, revokedAt: null });
+    expect(listed[0]).toMatchObject({ id: created.id, online: false, revokedAt: null, tokenPreview: created.token.slice(-4) });
+    expect(listed[0]).not.toHaveProperty("token");
+    expect(listed[0]).not.toHaveProperty("tokenHash");
 
     expect((await call("POST", `/api/device-tokens/${created.id}/revoke`)).statusCode).toBe(200);
     expect(json(await call("GET", "/api/device-tokens")).tokens[0].revokedAt).not.toBeNull();
