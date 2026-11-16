@@ -1,6 +1,9 @@
 export type OrderType = "MESA" | "DELIVERY" | "BALCAO";
 
-export type OrderStatus = "PENDENTE" | "CONFIRMADO" | "EM_PREPARO" | "PRONTO" | "CONCLUIDO" | "CANCELADO";
+// Lista como valor de execução: os testes percorrem o enum inteiro para garantir que nenhum pedido
+// some do quadro (contrato B3 §10). SAIU_PARA_ENTREGA entra com a API-02 (contrato B3 §7 item 8).
+export const ORDER_STATUSES = ["PENDENTE", "CONFIRMADO", "EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA", "CONCLUIDO", "CANCELADO"] as const;
+export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
 export type OrderItem = { id: string; quantity: number; productName: string };
 
