@@ -16,6 +16,8 @@ rnd() { node -e "process.stdout.write(require('crypto').randomBytes(24).toString
 cat > "$ENVF" <<EOF
 POSTGRES_PASSWORD=$(rnd)
 JWT_SECRET=$(rnd)$(rnd)
+MFA_HMAC_KEY=$(rnd)$(rnd)
+COOKIE_SECURE=false   # o smoke é http (sem TLS)
 WEB_ORIGIN=http://localhost:$PORT
 NEXT_PUBLIC_API_URL=http://localhost:$PORT
 DOMAIN=:80
@@ -76,11 +78,34 @@ r="$(curl -s -H 'X-Forwarded-For: 6.6.6.6, 7.7.7.7' "http://127.0.0.1:$PORT/__xf
 echo "   backend recebeu: $r"
 case "$r" in *6.6.6.6*|*7.7.7.7*) check fail "XFF forjado chegou ao backend";; *'"xff":"'*) check ok "XFF do cliente descartado; Caddy envia o IP real da conexão";; *) check fail "resposta inesperada: $r";; esac
 
+echo "== 6b trustProxy: CIDR confiável = IP real do Caddy; XFF forjado não escapa do limite de login"
+CIP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$("${DC[@]}" ps -q caddy)")"
+TPC="$("${DC[@]}" exec -T api printenv TRUST_PROXY_CIDR | tr -d '\r')"
+echo "   caddy=$CIP  TRUST_PROXY_CIDR(api)=$TPC"
+if [ -n "$CIP" ] && [ "$TPC" = "$CIP/32" ]; then check ok "a API confia só no IP do Caddy ($TPC)"
+else check fail "TRUST_PROXY_CIDR ($TPC) não é o IP do Caddy ($CIP/32): rate limit compartilhado ou forjável (ST-02c)"; fi
+got429=0
+for i in $(seq 1 14); do
+  c="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H "X-Forwarded-For: 10.9.$i.$i" \
+       -d '{"email":"nao@existe.invalid","password":"errada-errada"}' "http://127.0.0.1:$PORT/auth/login")"
+  [ "$c" = 429 ] && got429=1
+done
+if [ "$got429" = 1 ]; then check ok "14 logins, cada um com X-Forwarded-For diferente, bateram no limite (429): cabeçalho forjado não burla o rate limit"
+else check fail "nenhum 429 em 14 logins com XFF forjado: o limite pode ser burlado (B04)"; fi
+
 echo "== 7 backup verificado"
 for i in $(seq 1 30); do [ -s "$ROOT/infra/backups/LAST_OK" ] && break; sleep 2; done
 f="$(ls -1 "$ROOT"/infra/backups/*.dump 2>/dev/null | tail -1)"
 if [ -n "$f" ]; then sz="$(wc -c < "$f" | tr -d ' ')"; [ "$sz" -gt 20000 ] && check ok "dump $(basename "$f") com $sz bytes" || check fail "dump pequeno: $sz bytes"; else check fail "nenhum dump gerado"; fi
 bh="$("${DC[@]}" exec -T postgres-backup /bin/sh /scripts/healthcheck.sh >/dev/null 2>&1 && echo ok || echo no)"; [ "$bh" = ok ] && check ok "healthcheck do backup saudável" || check fail "healthcheck do backup falhou"
+
+echo "== 8 compose recusa .env sem segredos"
+for v in JWT_SECRET MFA_HMAC_KEY POSTGRES_PASSWORD WEB_ORIGIN; do
+  grep -v "^$v=" "$ENVF" > "$ENVF.sem"
+  out="$(docker compose -p "$PROJ-neg" -f "$ROOTW/infra/docker-compose.yml" --env-file "$(cygpath -m "$ENVF.sem")" config -q 2>&1)"
+  case "$out" in *"$v"*) check ok "sem $v o compose recusa: $(echo "$out" | head -1 | cut -c1-90)";; *) check fail "compose aceitou .env sem $v";; esac
+done
+rm -f "$ENVF.sem"
 
 echo; echo "RESULTADO: $PASS ok, $FAILS falhas"
 [ "$FAILS" -eq 0 ]

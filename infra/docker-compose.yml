@@ -62,7 +62,12 @@ services:
       JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no .env}
       PORT: 3001
       WEB_ORIGIN: ${WEB_ORIGIN:?defina WEB_ORIGIN no .env, com https e sem barra final}
-      TRUST_PROXY: ${TRUST_PROXY:-true}
+      MFA_HMAC_KEY: ${MFA_HMAC_KEY:?defina MFA_HMAC_KEY no .env, 32 ou mais caracteres e diferente do JWT_SECRET}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      # Só o Caddy (IP fixo, ver networks) pode ditar o IP do cliente via X-Forwarded-For (B04/ST-02).
+      TRUST_PROXY_CIDR: ${TRUST_PROXY_CIDR:-172.29.250.10/32}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
+      SESSION_ABSOLUTE_DAYS: ${SESSION_ABSOLUTE_DAYS:-14}
       MP_ACCESS_TOKEN: ${MP_ACCESS_TOKEN:-}
       MP_WEBHOOK_SECRET: ${MP_WEBHOOK_SECRET:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
@@ -113,6 +118,9 @@ services:
     depends_on:
       - api
       - web
+    networks:
+      default:
+        ipv4_address: ${CADDY_IP:-172.29.250.10}   # fixo: é o único IP em que a API confia (TRUST_PROXY_CIDR)
     environment:
       DOMAIN: ${DOMAIN:?defina DOMAIN no .env}
       ACME_EMAIL: ${ACME_EMAIL:?defina ACME_EMAIL no .env}
@@ -154,6 +162,12 @@ services:
       timeout: 10s
       start_period: 5m
       retries: 1
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${INTERNAL_SUBNET:-172.29.250.0/24}   # troque (e CADDY_IP/TRUST_PROXY_CIDR) se colidir com outra rede Docker do servidor
 
 volumes:
   postgres_data:
