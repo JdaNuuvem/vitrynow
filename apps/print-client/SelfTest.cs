@@ -104,6 +104,7 @@ namespace MeuCardapio.PrintClient
 
             SelfTestDevice.Run();
             SelfTestUpdater.Run();
+            SelfTestDeviceClient.Run();
 
             Console.WriteLine(Failures == 0 ? "ALL OK" : "FAILURES=" + Failures);
             return Failures == 0 ? 0 : 1;

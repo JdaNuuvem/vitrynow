@@ -52,6 +52,7 @@
     <Compile Include="SelfTest.cs" />
     <Compile Include="SelfTestDevice.cs" />
     <Compile Include="SelfTestUpdater.cs" />
+    <Compile Include="SelfTestDeviceClient.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Models\PrintableOrder.cs" />
     <Compile Include="Services\AppContext.cs" />

@@ -18,11 +18,11 @@ $hap  = Join-Path $libs "HtmlAgilityPack.dll"
 $json = Join-Path $libs "Newtonsoft.Json.dll"
 $srcs = @(
   "Printing\TicketRenderer.cs", "SelfTest.cs", "Models\PrintableOrder.cs", "Services\TicketTemplate.cs",
-  "SelfTestDevice.cs", "SelfTestUpdater.cs", "Services\PrintLedger.cs", "Services\SecretStore.cs",
+  "SelfTestDevice.cs", "SelfTestUpdater.cs", "SelfTestDeviceClient.cs", "Services\DeviceClient.cs", "Services\PrintLedger.cs", "Services\SecretStore.cs",
   "Services\AppSettings.cs", "Services\ApiUrlPolicy.cs",
   "Services\Updater.cs", "Services\UpdateTransport.cs", "Services\UpdateVerifier.cs", "Services\Logger.cs"
 ) | ForEach-Object { Join-Path $base $_ }
-$o = & $csc /nologo /target:library "/out:$outD" /r:mscorlib.dll /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Security.dll "/r:$hap" "/r:$json" @srcs 2>&1 | Out-String
+$o = & $csc /nologo /target:library "/out:$outD" /r:mscorlib.dll /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Security.dll /r:System.Net.Http.dll "/r:$hap" "/r:$json" @srcs 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) { Write-Error "csc falhou:`n$o"; exit 1 }
 [Reflection.Assembly]::LoadFrom($hap) | Out-Null
 [Reflection.Assembly]::LoadFrom($json) | Out-Null

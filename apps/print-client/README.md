@@ -138,6 +138,19 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 - Ícone/sons são placeholders — troque antes de distribuir pra clientes de verdade.
 - Teste real com impressora térmica física (só validado até aqui via self-test + payload JSON da API).
 
+## Resiliência (PC-05, PC-06)
+
+- **Chave recusada (PC-05, V1 da Nightingale):** só vira "PAUSADA" com 3+ recusas 401/403 **seguidas que abranjam 2 min** (polling, WS ou ack; qualquer resposta boa zera), para que um 401 de proxy/WAF/portal cativo da loja não pare a cozinha. Fechamento do WS com código **4401** (servidor revogou a chave, NG-06) pausa na hora. Pausado: faixa vermelha + balão e **sonda a cada 5 min**; com 200 volta sozinho (`KeyRestored`). "Configurar chave..." vale na hora (o token é lido a cada requisição) e dispara uma sonda imediata; só mudança de **URL** da API exige reabrir o app. Redirecionamento (30x) não é seguido e não conta como recusa.
+- **Gravação antes de tudo (PC-06 a):** depois de imprimir, `RecordPrinted` grava no disco de forma síncrona, antes de toast,
+  log ou rede; só o aviso à API roda em outra thread. Queda do app entre imprimir e avisar não reimprime.
+- **Watchdog (PC-06 b):** pedido "em impressão" há mais de 2 min (ciclo da UI perdido) vira falha com recuo e passa a aparecer
+  como "sem imprimir"; não fica preso até reiniciar.
+- **Indicador "N pedidos sem imprimir" (PC-06 d):** faixa fixa na janela e texto do ícone, com os números dos pedidos. O balão
+  aparece só quando entra um pedido **novo** com problema (nunca a cada tentativa). Some quando o pedido é impresso ou quando a
+  API deixa de listá-lo (cancelado/impresso em outro PC). Sobrevive ao reinício do app.
+- Testes: `SelfTestDeviceClient.cs` roda o `DeviceClient` real contra uma API falsa em loopback (dedupe, ack que falha e repete,
+  indicador sem repetição, 401/403, 401 isolado, redirecionamento).
+
 ## Confiabilidade e segredos (PC-02)
 
 - **Dedupe e ack persistido** (`Services/PrintLedger.cs`, arquivo `%LOCALAPPDATA%\MeuCardapioPrintClient\printed.json`): polling e WS passam pelo mesmo portão, um pedido nunca é impresso duas vezes, e se o aviso à API falhar o ack é repetido sem reimprimir. Falha de impressão volta com recuo (15 s até 5 min) e sem novo alerta sonoro.
