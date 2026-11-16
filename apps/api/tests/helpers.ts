@@ -48,6 +48,8 @@ export async function registerStore(
     password: overrides.password ?? "senha123",
   };
   const response = await app.inject({ method: "POST", url: "/auth/register", payload: body });
+  // Diagnóstico do flake de cadastro (QA-14): se vier 5xx ou 429, registra o corpo para achar a causa.
+  if (response.statusCode >= 500 || response.statusCode === 429) console.error("[registerStore] resposta inesperada", response.statusCode, response.body.slice(0, 300));
   const cookie = (response.headers["set-cookie"] as string | undefined)?.split(";")[0];
   return { response, cookie, credentials: body };
 }
