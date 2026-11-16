@@ -108,3 +108,10 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 - Tela de configuração para `UpdateBaseUrl` (hoje só via edição manual do `settings.json`).
 - Ícone/sons são placeholders — troque antes de distribuir pra clientes de verdade.
 - Teste real com impressora térmica física (só validado até aqui via self-test + payload JSON da API).
+
+## Confiabilidade e segredos (PC-02)
+
+- **Dedupe e ack persistido** (`Services/PrintLedger.cs`, arquivo `%LOCALAPPDATA%\MeuCardapioPrintClient\printed.json`): polling e WS passam pelo mesmo portão, um pedido nunca é impresso duas vezes, e se o aviso à API falhar o ack é repetido sem reimprimir. Falha de impressão volta com recuo (15 s até 5 min) e sem novo alerta sonoro.
+- **Timeouts:** HTTP 15 s, conexão WS 10 s, keep-alive do WS 20 s.
+- **Chave de impressora protegida por DPAPI** (`Services/SecretStore.cs`): o `settings.json` guarda só `DeviceTokenProtected`. Settings antigos com `DeviceToken` em texto puro são migrados e regravados na primeira abertura. Se o arquivo for copiado para outro usuário/PC, a chave não abre e o app pede a chave de novo.
+- Teste em worktree: `.\run-selftest.ps1 -ReconRoot "<caminho>\reconstruction"`.

@@ -93,21 +93,23 @@ namespace MeuCardapio.PrintClient.UI
             {
                 string html = TicketTemplate.Build(order);
                 App.Printer.PrintTicket(html);
-                Toast("Impresso: pedido #" + order.Code);
-                Logger.Info("Impresso: pedido #" + order.Code);
-                // Só marca como impresso quando a impressão realmente deu certo. Se cair no
-                // catch, o pedido continua pendente e volta a aparecer no próximo poll
-                // (CheckPendingAsync em DeviceClient.cs) — antes disso, o `finally` chamava
-                // MarkPrintedAsync sempre, então uma impressora sem papel/desconectada fazia
-                // o pedido desaparecer da fila pra sempre, sem nunca chegar na cozinha.
-                Task.Run(() => App.Device.MarkPrintedAsync(order.OrderId));
             }
             catch (Exception ex)
             {
+                // Falhou: o pedido continua pendente na API e volta depois do recuo do ledger
+                // (15 s, 30 s, ... 5 min), sem novo alerta sonoro.
+                App.Device.ReportPrintFailed(order.OrderId);
                 string msg = "Erro na impressão do pedido #" + order.Code + ": " + ex.Message;
                 Toast(msg);
                 Logger.Error(msg, ex);
+                return;
             }
+
+            // Imprimiu. ConfirmPrintedAsync grava no disco ANTES de avisar a API; se o aviso
+            // falhar, o ack é repetido no próximo ciclo e o pedido NÃO é reimpresso.
+            Toast("Impresso: pedido #" + order.Code);
+            Logger.Info("Impresso: pedido #" + order.Code);
+            Task.Run(() => App.Device.ConfirmPrintedAsync(order.OrderId));
         }
 
         void ReloadPrinters()

@@ -6,9 +6,9 @@ namespace MeuCardapio.PrintClient
     // Teste de fumaça do pipeline de renderização: .exe --selftest
     static class SelfTest
     {
-        static int Failures;
+        internal static int Failures;
 
-        static void Check(string label, bool cond)
+        internal static void Check(string label, bool cond)
         {
             Console.WriteLine((cond ? "PASS " : "FAIL ") + label);
             if (!cond) Failures++;
@@ -101,6 +101,8 @@ namespace MeuCardapio.PrintClient
             }
             Check("template proprio: TOTAL formatado", hasTotal);
             Check("template proprio: item com quantidade", hasItem);
+
+            SelfTestDevice.Run();
 
             Console.WriteLine(Failures == 0 ? "ALL OK" : "FAILURES=" + Failures);
             return Failures == 0 ? 0 : 1;
