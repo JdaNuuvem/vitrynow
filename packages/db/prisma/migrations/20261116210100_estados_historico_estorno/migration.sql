@@ -23,6 +23,20 @@ UPDATE "Order" o SET "canceledAt" = h."createdAt"
 FROM (SELECT "orderId", MAX("createdAt") AS "createdAt" FROM "OrderStatusHistory" WHERE "status" = 'CANCELADO' GROUP BY "orderId") h
 WHERE h."orderId" = o."id" AND o."status" = 'CANCELADO';
 
+-- Pedido cancelado antes desta migração: o cupom já foi tratado pelo fluxo antigo. Marca como tratado
+-- (couponReleasedAt é a trava de idempotência da devolução; NULL aqui permitiria devolver em dobro).
+UPDATE "Order" SET "couponReleasedAt" = "canceledAt"
+WHERE "status" = 'CANCELADO' AND "couponId" IS NOT NULL AND "canceledAt" IS NOT NULL;
+
+-- Backfill determinístico do seq: ordem do tempo (createdAt, id). Sem isto o SERIAL numera pela ordem
+-- física das linhas, que pode divergir do histórico real. Depois, a sequência continua do maior valor.
+UPDATE "OrderStatusHistory" h SET "seq" = r.rn
+FROM (SELECT "id", row_number() OVER (ORDER BY "createdAt", "id") AS rn FROM "OrderStatusHistory") r
+WHERE r."id" = h."id";
+SELECT setval(pg_get_serial_sequence('"OrderStatusHistory"', 'seq'),
+              GREATEST((SELECT COALESCE(max("seq"), 0) FROM "OrderStatusHistory"), 1),
+              (SELECT count(*) > 0 FROM "OrderStatusHistory"));
+
 ALTER TABLE "Payment"
   ADD COLUMN "refundAttempts" INTEGER NOT NULL DEFAULT 0,
   ADD COLUMN "refundLastError" TEXT,

@@ -314,6 +314,31 @@ describe("API-02 — estados do pedido", () => {
     expect(codes.slice(10)).toEqual([429, 429]);
   });
 
+  it("cupom: devolução uma única vez mesmo com a conclusão do estorno repetida; pedido cancelado antes da migração (marcado tratado) não devolve", async () => {
+    const ctx = await setup();
+    await app.inject({ method: "POST", url: "/api/coupons", headers: { cookie: ctx.cookie }, payload: { code: "DEZ", discountType: "FIXED", discountValue: 100 } });
+    const couponId = (await prisma.coupon.findFirst({ where: { storeId: ctx.storeId } }))!.id;
+
+    // Pedido pago com cupom + outro uso do mesmo cupom: usedCount = 2. Devolver em dobro deixaria 0 em vez de 1.
+    const id = await paidOrder(ctx, { couponCode: "DEZ" });
+    await prisma.coupon.update({ where: { id: couponId }, data: { usedCount: 2 } });
+    refundPayment.mockRejectedValueOnce(new Error("timeout"));
+    await cancel(ctx.cookie, id, { code: "ITEM_EM_FALTA" });
+    await Promise.all([
+      app.inject({ method: "POST", url: `/api/orders/${id}/refund/retry`, headers: { cookie: ctx.cookie } }),
+      app.inject({ method: "POST", url: `/api/orders/${id}/refund/retry`, headers: { cookie: ctx.cookie } }),
+    ]);
+    expect((await prisma.order.findUnique({ where: { id } }))?.status).toBe("CANCELADO");
+    expect((await prisma.coupon.findUnique({ where: { id: couponId } }))?.usedCount).toBe(1);
+
+    // Simula pedido legado cancelado ANTES da migração: couponReleasedAt já preenchido pelo backfill.
+    const legacy = await newOrder(ctx, { couponCode: "DEZ" });
+    await prisma.coupon.update({ where: { id: couponId }, data: { usedCount: 5 } });
+    await prisma.order.update({ where: { id: legacy }, data: { couponReleasedAt: new Date() } });
+    expect((await cancel(ctx.cookie, legacy, { code: "CLIENTE_DESISTIU" })).statusCode).toBe(200);
+    expect((await prisma.coupon.findUnique({ where: { id: couponId } }))?.usedCount).toBe(5); // trava já marcada: não devolve de novo
+  });
+
   it("refund/retry: só OWNER, só com estorno pendente (NOT_REFUND_PENDING)", async () => {
     const ctx = await setup();
     const staff = await staffCookie(ctx);
