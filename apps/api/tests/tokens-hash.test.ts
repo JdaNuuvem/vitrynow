@@ -59,24 +59,24 @@ describe("tokens com hash e sockets revogáveis", () => {
     expect(raw[0].n).toBe(0); // o valor em si não é o que está guardado
   });
 
-  it("a listagem não devolve token nem hash — nem para STAFF (ST-12)", async () => {
+  it("a listagem não devolve token nem hash ao dono, e STAFF nem a vê (ST-12)", async () => {
     const { cookie, user } = await owner();
     const created = await newDeviceToken(cookie);
     await prisma.user.create({ data: { storeId: user.storeId, email: "func@teste.com", passwordHash: await bcrypt.hash("senha123", 4), role: "STAFF" } });
     const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "func@teste.com", password: "senha123" } });
     const staffCookie = (login.headers["set-cookie"] as string).split(";")[0];
 
-    for (const c of [cookie, staffCookie]) {
-      const res = await app.inject({ method: "GET", url: "/api/device-tokens", headers: { cookie: c } });
-      expect(res.statusCode).toBe(200);
-      expect(res.body).not.toContain(created.token);
-      expect(res.body).not.toContain(hashToken(created.token));
-      const item = JSON.parse(res.body).tokens[0];
-      expect(item).not.toHaveProperty("token");
-      expect(item).not.toHaveProperty("tokenHash");
-      expect(item.tokenPreview).toBe(created.tokenPreview);
-    }
-    // criar e revogar seguem restritos ao dono
+    const res = await app.inject({ method: "GET", url: "/api/device-tokens", headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).not.toContain(created.token);
+    expect(res.body).not.toContain(hashToken(created.token));
+    const item = JSON.parse(res.body).tokens[0];
+    expect(item).not.toHaveProperty("token");
+    expect(item).not.toHaveProperty("tokenHash");
+    expect(item.tokenPreview).toBe(created.tokenPreview);
+
+    // STAFF: listar, criar e revogar são ações de dono (403)
+    expect((await app.inject({ method: "GET", url: "/api/device-tokens", headers: { cookie: staffCookie } })).statusCode).toBe(403);
     expect((await app.inject({ method: "POST", url: "/api/device-tokens", headers: { cookie: staffCookie }, payload: {} })).statusCode).toBe(403);
     expect((await app.inject({ method: "POST", url: `/api/device-tokens/${created.id}/revoke`, headers: { cookie: staffCookie } })).statusCode).toBe(403);
   });

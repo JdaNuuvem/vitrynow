@@ -7,10 +7,10 @@ import type { DeviceTokensService } from "./deviceTokens.service";
 export function buildDeviceTokenRoutes(service: DeviceTokensService): FastifyPluginAsync {
   return async (app) => {
     useDomainErrors(app);
-    const auth = { preHandler: app.requirePanelAuth };
     const ownerOnly = { preHandler: [app.requirePanelAuth, app.requireOwner] };
 
-    app.get("/api/device-tokens", auth, async (request) => {
+    // NG-06: só o dono vê as chaves de impressora (rótulo, 4 últimos caracteres, status), como criar e revogar.
+    app.get("/api/device-tokens", ownerOnly, async (request) => {
       return { tokens: await service.list(request.user.storeId) };
     });
 
