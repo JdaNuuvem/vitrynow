@@ -3,7 +3,7 @@ import { prisma } from "@meucardapio/db";
 import { checkoutPlanSchema } from "@meucardapio/shared-types";
 import { logAudit } from "../lib/audit";
 import { createPixPayment } from "../lib/mercadopago";
-import { isFeature } from "../lib/features";
+import { isFeature, isProFeature } from "../lib/features";
 import { getEntitlements, getStoreSubscription, getSubscriptionView } from "../lib/subscription";
 
 // Planos e assinatura da loja. Cobrança por PIX (Mercado Pago, conta da plataforma);
@@ -33,7 +33,8 @@ const subscriptionRoutes: FastifyPluginAsync = async (app) => {
       if (typeof feature !== "string" || !isFeature(feature)) {
         return reply.code(400).send({ error: "recurso desconhecido", code: "VALIDATION_ERROR", details: { field: "feature" } });
       }
-      if ((await getEntitlements(storeId)).features.includes(feature)) {
+      // Recurso do BASICO (ex.: QR de mesa) já é do plano do lojista: não há o que "ser avisado" sobre upgrade.
+      if (!isProFeature(feature) || (await getEntitlements(storeId)).features.includes(feature)) {
         return reply.code(409).send({ error: "seu plano já inclui esse recurso", code: "FEATURE_ALREADY_AVAILABLE" });
       }
 

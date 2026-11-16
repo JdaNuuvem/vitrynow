@@ -4,14 +4,17 @@
 // nunca é liberado a plano algum, mesmo que a chave esteja gravada em `Plan.features`: o
 // `planFeatures` o ignora e o teste de contrato (tests/entitlements.test.ts, CA-B10-08) falha
 // se alguém o gravar. Quem entrega o recurso troca `released` para `true` na mesma branch.
+//
+// `tier` diz em que plano o recurso nasce: "BASICO" (já faz parte do plano de entrada, mesmo que
+// ainda não entregue) ou "PRO". Só recurso do PRO aceita "Quero ser avisado" (RN-B10-05).
 export const FEATURE_REGISTRY = {
-  multi_user: { released: true }, // equipe (já existe: modules/users)
-  table_qr: { released: false }, // QR de mesa — libera com API-22
-  tab_service: { released: false }, // comanda e pagamento dividido (PRO) — API-42/43
-  scheduled_orders: { released: false }, // pedido agendado (PRO) — API-40
-  whatsapp_auto: { released: false }, // WhatsApp automático (PRO) — API-41
-  advanced_reports: { released: false }, // relatórios avançados (PRO) — API-45
-} as const;
+  multi_user: { released: true, tier: "PRO" }, // equipe (já existe: modules/users)
+  table_qr: { released: false, tier: "BASICO" }, // QR de mesa — libera com API-22
+  tab_service: { released: false, tier: "PRO" }, // comanda e pagamento dividido — API-42/43
+  scheduled_orders: { released: false, tier: "PRO" }, // pedido agendado — API-40
+  whatsapp_auto: { released: false, tier: "PRO" }, // WhatsApp automático — API-41
+  advanced_reports: { released: false, tier: "PRO" }, // relatórios avançados — API-45
+} as const satisfies Record<string, { released: boolean; tier: "BASICO" | "PRO" }>;
 
 export type Feature = keyof typeof FEATURE_REGISTRY;
 
@@ -25,4 +28,8 @@ export function isFeature(value: string): value is Feature {
 
 export function isReleased(feature: Feature): boolean {
   return FEATURE_REGISTRY[feature].released;
+}
+
+export function isProFeature(feature: Feature): boolean {
+  return FEATURE_REGISTRY[feature].tier === "PRO";
 }
