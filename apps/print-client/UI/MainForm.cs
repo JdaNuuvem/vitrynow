@@ -128,6 +128,7 @@ namespace MeuCardapio.PrintClient.UI
             App.Device.PrintProblemsChanged += list => BeginInvoke(new Action(() => ShowPrintProblems(list)));
             App.Device.KeyRevoked += () => BeginInvoke(new Action(ShowKeyRevoked));
             App.Device.KeyRestored += () => BeginInvoke(new Action(() => { _revokedText = null; RefreshProblemLabel(); }));
+            App.Coordinator.Message += msg => BeginInvoke(new Action(() => { Toast(msg); Logger.Info(msg); }));
             App.Device.TicketReady += order => BeginInvoke(new Action(() => PrintAndAck(order)));
         }
 
@@ -168,29 +169,8 @@ namespace MeuCardapio.PrintClient.UI
 
         void PrintAndAck(PrintableOrder order)
         {
-            try
-            {
-                string html = TicketTemplate.Build(order);
-                App.Printer.PrintTicket(html);
-            }
-            catch (Exception ex)
-            {
-                // Falhou: o pedido continua pendente na API e volta depois do recuo do ledger
-                // (15 s, 30 s, ... 5 min), sem novo alerta sonoro.
-                App.Device.ReportPrintFailed(order.OrderId, order.Code);
-                string msg = "Erro na impressão do pedido #" + order.Code + ": " + ex.Message;
-                Toast(msg);
-                Logger.Error(msg, ex);
-                return;
-            }
-
-            // Imprimiu. RecordPrinted grava no disco AGORA, síncrono, antes de toast, log ou rede (PC-06 a):
-            // se o processo cair a seguir, o pedido NÃO é reimpresso. Só o aviso à API vai para outra
-            // thread; se falhar, o ack é repetido no próximo ciclo.
-            App.Device.RecordPrinted(order.OrderId);
-            Task.Run(() => App.Device.AckPrintedAsync(order.OrderId));
-            Toast("Impresso: pedido #" + order.Code);
-            Logger.Info("Impresso: pedido #" + order.Code);
+            // Tudo (montar, imprimir, gravar no ledger, avisar a API) está em PrintCoordinator, testado sem tela.
+            App.Coordinator.Handle(order);
         }
 
         void ReloadPrinters()

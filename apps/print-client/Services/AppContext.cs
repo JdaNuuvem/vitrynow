@@ -9,7 +9,11 @@ namespace MeuCardapio.PrintClient.Services
         public static bool AutoStart { get; private set; }
         public static AudioPlayer Audio { get; private set; }
         public static DeviceClient Device { get; private set; }
-        public static ThermalPrinter Printer { get; private set; }
+        // Impressora Windows (GDI+). Em modo impressora virtual (VirtualPrinterFolder nas settings) o destino real
+        // é VirtualPrintTarget e Printer só guarda a escolha da lista da tela.
+        public static GdiPrintTarget Printer { get; private set; }
+        public static IPrintTarget Target { get; private set; }
+        public static PrintCoordinator Coordinator { get; private set; }
 
         public static void Init(string[] args)
         {
@@ -20,15 +24,19 @@ namespace MeuCardapio.PrintClient.Services
             Audio = new AudioPlayer();
             Audio.Init();
 
-            Printer = new ThermalPrinter
+            Printer = new GdiPrintTarget
             {
                 FontPoints = AppSettings.Current.FontSize,
-                PageSizeMm = AppSettings.Current.PaperWidthMm,
+                PaperMm = AppSettings.Current.PaperWidthMm,
             };
             if (!string.IsNullOrEmpty(AppSettings.Current.SelectedPrinter))
                 SelectPrinterByName(AppSettings.Current.SelectedPrinter);
 
             Device = new DeviceClient { PollIntervalMs = 15000 };
+            Target = string.IsNullOrWhiteSpace(AppSettings.Current.VirtualPrinterFolder)
+                ? (IPrintTarget)Printer
+                : new VirtualPrintTarget(AppSettings.Current.VirtualPrinterFolder, true) { FontPoints = AppSettings.Current.FontSize };
+            Coordinator = new PrintCoordinator(Device, Target, () => AppSettings.Current.PaperWidthMm);
         }
 
         public static void SelectPrinterByName(string name)

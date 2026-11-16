@@ -1,5 +1,5 @@
 # Cadeia de build do print-client SEM depender de reconstruction/ (PC-04, R14).
-#  - libs/ (HtmlAgilityPack, Newtonsoft.Json) versionadas aqui, conferidas por libs/SHA256SUMS.
+#  - libs/ (Newtonsoft.Json) versionadas aqui, conferidas por libs/SHA256SUMS.
 #  - Compilador C# (Roslyn 4.8.0, pacote oficial Microsoft.Net.Compilers.Toolset) baixado do NuGet
 #    para tools/roslyn (ignorado pelo git), com o SHA-256 do .nupkg fixado abaixo e a assinatura
 #    Authenticode da Microsoft conferida no csc.exe.
