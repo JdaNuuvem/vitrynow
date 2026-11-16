@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Collections.Generic;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -18,14 +20,36 @@ namespace MeuCardapio.PrintClient.Services
         [JsonProperty("file")] public string File { get; set; }
         [JsonProperty("sha256")] public string Sha256 { get; set; }
         [JsonProperty("size")] public long Size { get; set; }
+        // PC-11 (Nightingale R1/R2): quem assinou, frescor, versão mínima e revogação de chaves antigas.
+        [JsonProperty("keyId")] public string KeyId { get; set; }
+        [JsonProperty("issuedAt")] public string IssuedAt { get; set; }       // 2026-11-16T12:00:00Z
+        [JsonProperty("validUntil")] public string ValidUntil { get; set; }   // janela generosa (ex.: 60 dias)
+        [JsonProperty("minVersion")] public string MinVersion { get; set; }   // abaixo dela o app avisa que precisa atualizar
+        [JsonProperty("revokeKeys")] public List<string> RevokeKeys { get; set; }
+        [JsonIgnore] public DateTime IssuedAtUtc { get; set; }
+        [JsonIgnore] public DateTime ValidUntilUtc { get; set; }
     }
 
-    // Chave PÚBLICA de release embutida no binário (nunca vem do settings.json: quem edita o
-    // arquivo não pode trocar a chave). Vazia = auto-update recusa tudo até a chave de release
-    // ser provisionada (tools\new-update-key.ps1). A chave privada NUNCA entra no repositório.
+    public sealed class TrustedKey
+    {
+        public readonly string KeyId;
+        public readonly string PublicKeyXml;
+        public TrustedKey(string keyId, string publicKeyXml) { KeyId = keyId; PublicKeyXml = publicKeyXml; }
+    }
+
+    // Chaves PÚBLICAS de release embutidas no binário (nunca vêm do settings.json: quem edita o arquivo
+    // não troca a chave). A ORDEM importa: a 1ª é a primária (assina o dia a dia); as seguintes são
+    // reservas guardadas offline. Uma chave só pode revogar chaves ANTERIORES na lista (a reserva revoga
+    // a primária; a primária nunca revoga a reserva). Lista vazia = auto-update recusa tudo até a chave de
+    // release ser provisionada (tools\new-update-key.ps1; custódia: Claudio, CL-10). A chave privada NUNCA
+    // entra no repositório. Exemplo (cole a saída do script):
+    //   new TrustedKey("k1", "<RSAKeyValue>...</RSAKeyValue>"),   // primária
+    //   new TrustedKey("k2", "<RSAKeyValue>...</RSAKeyValue>"),   // reserva offline
     public static class UpdateKeys
     {
-        public const string PublicKeyXml = "";
+        public static readonly TrustedKey[] Trusted = new TrustedKey[]
+        {
+        };
     }
 
     public static class UpdateVerifier
@@ -36,6 +60,20 @@ namespace MeuCardapio.PrintClient.Services
 
         static readonly Regex VersionRx = new Regex(@"^\d{1,5}(\.\d{1,5}){1,3}$", RegexOptions.Compiled);
         static readonly Regex Sha256Rx = new Regex(@"^[0-9a-fA-F]{64}$", RegexOptions.Compiled);
+        static readonly Regex KeyIdRx = new Regex(@"^[A-Za-z0-9_-]{1,32}$", RegexOptions.Compiled);
+        public const string TimeFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'";
+        public static readonly TimeSpan MaxValidity = TimeSpan.FromDays(400);
+        // Relógio de PC de restaurante erra; só desconfia do relógio acima disso.
+        public static readonly TimeSpan ClockTolerance = TimeSpan.FromDays(1);
+
+        public static bool IsValidKeyId(string id) { return id != null && KeyIdRx.IsMatch(id); }
+
+        static bool TryTime(string text, out DateTime utc)
+        {
+            return DateTime.TryParseExact(text ?? "", TimeFormat, CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out utc);
+        }
+
         static readonly Regex FileRx = new Regex(@"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}\.exe$", RegexOptions.Compiled);
 
         // null = aceita; senão, o motivo. https:// sempre; http:// só em loopback (testes locais).
@@ -99,6 +137,16 @@ namespace MeuCardapio.PrintClient.Services
             if (m.File == null || !FileRx.IsMatch(m.File) || m.File.Contains("..") || IsReservedName(m.File)) { error = "nome de arquivo inválido no manifesto"; return null; }
             if (m.Sha256 == null || !Sha256Rx.IsMatch(m.Sha256)) { error = "hash inválido no manifesto"; return null; }
             if (m.Size <= 0 || m.Size > MaxInstallerBytes) { error = "tamanho inválido no manifesto"; return null; }
+            if (!IsValidKeyId(m.KeyId)) { error = "keyId inválido no manifesto"; return null; }
+            DateTime issued, until;
+            if (!TryTime(m.IssuedAt, out issued) || !TryTime(m.ValidUntil, out until)) { error = "datas inválidas no manifesto (use yyyy-MM-ddTHH:mm:ssZ)"; return null; }
+            if (until <= issued || until - issued > MaxValidity) { error = "janela de validade inválida no manifesto"; return null; }
+            m.IssuedAtUtc = issued; m.ValidUntilUtc = until;
+            if (m.MinVersion != null && (!IsValidVersion(m.MinVersion) || CompareVersions(m.MinVersion, m.Version) > 0)) { error = "minVersion inválida no manifesto"; return null; }
+            if (m.RevokeKeys != null)
+            {
+                if (m.RevokeKeys.Count > 8 || m.RevokeKeys.Exists(k => !IsValidKeyId(k)) || m.RevokeKeys.Contains(m.KeyId)) { error = "revokeKeys inválido no manifesto"; return null; }
+            }
             m.Sha256 = m.Sha256.ToUpperInvariant();
             return m;
         }

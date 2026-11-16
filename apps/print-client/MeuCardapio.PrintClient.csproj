@@ -68,6 +68,7 @@
     <Compile Include="UI\MainForm.cs" />
     <Compile Include="UI\NotifyForm.cs" />
     <Compile Include="Services\Updater.cs" />
+    <Compile Include="Services\UpdateState.cs" />
     <Compile Include="Services\UpdateTransport.cs" />
     <Compile Include="Services\UpdateVerifier.cs" />
     <Compile Include="Services\Logger.cs" />

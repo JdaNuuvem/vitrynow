@@ -63,39 +63,46 @@ o arquivo por um ícone de verdade quando a identidade visual for decidida e rod
 .\generate-icon.ps1    # regera Resources\icon.ico
 ```
 
-## Auto-update (PC-04, B17)
+## Auto-update (PC-04, PC-11, B17)
 
-`Services/Updater.cs` + `UpdateVerifier.cs` + `UpdateTransport.cs`. Desligado quando `UpdateBaseUrl`
+`Services/Updater.cs` + `UpdateVerifier.cs` + `UpdateState.cs` + `UpdateTransport.cs`. Desligado quando `UpdateBaseUrl`
 (settings.json) está vazio. Servidor de downloads **nosso**, três arquivos lado a lado:
 
 | Arquivo | Conteúdo |
 |---|---|
-| `latest.json` | `{"version","file","sha256","size"}` |
+| `latest.json` | `version`, `file`, `sha256`, `size`, **`keyId`**, **`issuedAt`**, **`validUntil`**, `minVersion` (opcional), `revokeKeys` (opcional) |
 | `latest.json.sig` | assinatura RSA-SHA256 (base64) dos bytes exatos do `latest.json` |
 | `<file>` | o instalador `.exe` citado no manifesto |
 
 O app só executa o instalador se **todas** as regras valerem; qualquer falha descarta tudo e nada roda:
 - URL `https://` (`http://` só em localhost, para teste); sem usuário/senha/query; sem seguir redirecionamento.
-- Assinatura do manifesto confere com a **chave pública embutida no binário** (`UpdateKeys.PublicKeyXml`,
-  RSA ≥ 3072). Não existe chave no `settings.json`: quem edita o arquivo não troca a chave.
-  **Sem chave embutida o app recusa tudo** (padrão atual até o Claudio decidir a custódia da chave).
-- Versão do manifesto **estritamente maior** que a do app (manifesto antigo/replay não faz downgrade).
-- Nome do arquivo `[A-Za-z0-9._-]+.exe`, sem caminho; tamanho ≤ 200 MB; SHA-256 e tamanho do arquivo baixado
-  conferem com o manifesto assinado. Baixa para `%LOCALAPPDATA%\MeuCardapioPrintClient\updates\` (pasta do
-  usuário, não `%TEMP%`); `.part` apagado em qualquer falha.
+- **Duas chaves públicas embutidas** (`UpdateKeys.Trusted`: `k1` primária, `k2` reserva guardada offline); o `keyId` do manifesto
+  escolhe a chave e a assinatura tem de conferir com ela (RSA ≥ 3072). Não existe chave no `settings.json`. **Sem chave embutida o
+  app recusa tudo** (estado atual; a custódia das chaves é do Claudio, CL-10, ver `nightingale\guia-chave-release.md`).
+- **Revogação:** um manifesto assinado pela reserva pode trazer `revokeKeys` (ex.: `["k1"]`); o app grava em
+  `update-state.json` e nunca mais aceita aquela chave. Uma chave só revoga chaves **anteriores** da lista (a reserva revoga a
+  primária; a primária não revoga a reserva) e nunca a si mesma. Perdeu/vazou a primária: assine com a reserva.
+- **Frescor:** `issuedAt` nunca menor que o último aceito (anti-replay de manifesto antigo, mesmo assinado). Passou de
+  `validUntil` (janela de 60 dias por padrão, máx. 400) ou o relógio do PC está atrasado em mais de 1 dia ⇒ "não consegui confirmar
+  atualizações": **não instala e não mexe na impressão**. Datas só no formato `2026-11-16T12:00:00Z`.
+- **`minVersion`:** app abaixo dela recebe "atualização obrigatória" (e, se o download falhar, o aviso de que a versão não é mais
+  suportada); `Required` fica disponível para a UI.
+- Versão do manifesto **estritamente maior** que a do app (sem downgrade). Nome do arquivo `[A-Za-z0-9._-]+.exe`, sem caminho nem nome
+  reservado do Windows; tamanho ≤ 200 MB; SHA-256 e tamanho conferidos **antes** de executar e **de novo** pelo handle aberto
+  (`FileShare.Read`) no instante do `Process.Start`. Baixa para `%LOCALAPPDATA%\MeuCardapioPrintClient\updates\`.
 
-Publicar um release (a chave privada fica **fora do repositório**; o script recusa caminho dentro dele):
+Publicar um release (**só o Claudio**, na máquina dele; a chave privada fica fora do repositório e o script recusa caminho dentro dele):
 
 ```powershell
-.\tools\new-update-key.ps1 -OutPrivate D:\segredos\mc-release.updkey.xml   # uma vez; cole a chave pública em UpdateKeys.cs
-.\tools\sign-update.ps1 -Installer .\bin\Installer\MeuCardapio-PrintClient-Setup.exe -Version 1.1.0 `
-    -PrivateKeyFile D:\segredos\mc-release.updkey.xml -OutDir .\bin\release-1.1.0   # suba os 3 arquivos para UpdateBaseUrl
+.\tools\new-update-key.ps1 -OutPrivate C:\Cofre\k1.updkey.xml -KeyId k1    # uma vez; idem k2 (reserva). Cole a linha impressa em UpdateKeys.cs
+.\tools\sign-update.ps1 -Installer .\bin\release\MeuCardapioPrintClient-1.1.0.exe -Version 1.1.0 -KeyId k1 `
+    -PrivateKeyFile C:\Temp\k1.updkey.xml -OutDir .\bin\release-1.1.0 [-ValidDays 60] [-MinVersion 1.0.0]   # revoga: -KeyId k2 -RevokeKeys k1
+.\tools\verify-release.ps1 -ReleaseDir .\bin\release-1.1.0                  # roda o MESMO código de decisão do app; exit 0 = o app aceitaria
 ```
 
-Limites conhecidos: não há expiração do manifesto (um servidor malicioso pode *congelar* o cliente servindo um
-manifesto antigo, mas não instalar nada); a assinatura do instalador pelo Windows (Authenticode/SmartScreen) é
-outra camada (PC-09, só com build final e aval do Claudio); `CurrentVersion` está em `Updater.cs`, em
-`installer.iss` e no csproj (manter juntos até haver fonte única).
+Limites conhecidos: a assinatura do instalador pelo Windows (Authenticode/SmartScreen) é outra camada (PC-09, só com build final e
+aval do Claudio); a chave privada não é cifrada pelo script (proteja o arquivo conforme o guia); o app não pergunta antes de instalar
+(instalação fora do expediente/confirmação fica como melhoria).
 
 ## Instalador (Inno Setup)
 

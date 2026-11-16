@@ -1,11 +1,15 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace MeuCardapio.PrintClient.Services
 {
-    public enum UpdateOutcome { NotConfigured, UpToDate, Failed, Rejected, Ready }
+    // Unconfirmed: o manifesto é autêntico mas venceu (ou o relógio do PC está muito errado): não instala
+    // nada, não bloqueia a impressão e pede para tentar de novo / acertar o relógio.
+    public enum UpdateOutcome { NotConfigured, UpToDate, Failed, Rejected, Unconfirmed, Ready }
 
     public sealed class UpdateResult
     {
@@ -15,12 +19,16 @@ namespace MeuCardapio.PrintClient.Services
         public string InstallerPath; // só em Ready: arquivo JÁ verificado
         public string ExpectedSha256; // do manifesto assinado (só em Ready)
         public long ExpectedSize;
+        // A versão atual é menor que a minVersion do manifesto assinado: o app avisa que precisa atualizar.
+        public bool Required;
     }
 
     // Auto-update seguro (PC-04, B17). Servidor NOSSO, em {UpdateBaseUrl}:
     //   latest.json + latest.json.sig + <file do manifesto>
-    // Regras: https obrigatório (http só em localhost); manifesto com assinatura RSA válida contra a
-    // chave embutida (UpdateKeys); versão estritamente maior que a atual (sem downgrade/replay);
+    // Regras: https obrigatório (http só em localhost); manifesto com assinatura RSA válida contra uma das
+    // chaves embutidas (UpdateKeys, escolhida pelo keyId do manifesto; chave revogada = recusa);
+    // versão estritamente maior que a atual; issuedAt nunca menor que o último aceito (anti-replay);
+    // manifesto vencido = "não consegui confirmar" (sem bloquear a impressão); minVersion sinaliza obrigatória;
     // instalador baixado numa pasta privada do usuário, com tamanho e SHA-256 do manifesto
     // conferidos ANTES de qualquer execução; nada é executado se algo falhar. Sem chave de release
     // provisionada, recusa tudo (fecha por padrão).
@@ -40,6 +48,8 @@ namespace MeuCardapio.PrintClient.Services
 
         public static string UpdatesDirectory => Path.Combine(AppSettings.BaseDirectory, "updates");
 
+        public static string StatePath => Path.Combine(AppSettings.BaseDirectory, "update-state.json");
+
         static int _running;
 
         public static void CheckForUpdate()
@@ -48,8 +58,8 @@ namespace MeuCardapio.PrintClient.Services
             if (System.Threading.Interlocked.Exchange(ref _running, 1) == 1) return;
             try
             {
-                var r = Evaluate(AppSettings.Current.UpdateBaseUrl, CurrentVersion, UpdateKeys.PublicKeyXml,
-                    new HttpUpdateTransport(), UpdatesDirectory);
+                var r = Evaluate(AppSettings.Current.UpdateBaseUrl, CurrentVersion, UpdateKeys.Trusted,
+                    new HttpUpdateTransport(), UpdatesDirectory, StatePath);
                 if (r.Outcome == UpdateOutcome.Rejected) Logger.Error("Atualização recusada: " + r.Message);
                 else Logger.Info("Atualização: " + r.Outcome + " — " + r.Message);
                 StatusChanged?.Invoke(r.Message);
@@ -63,16 +73,17 @@ namespace MeuCardapio.PrintClient.Services
             finally { System.Threading.Interlocked.Exchange(ref _running, 0); }
         }
 
-        // Toda a decisão, sem executar nada (testável com transporte falso).
-        public static UpdateResult Evaluate(string baseUrl, string currentVersion, string publicKeyXml,
-            IUpdateTransport transport, string updatesDir)
+        // Toda a decisão, sem executar nada (testável com transporte falso e relógio injetado).
+        public static UpdateResult Evaluate(string baseUrl, string currentVersion, IList<TrustedKey> keys,
+            IUpdateTransport transport, string updatesDir, string statePath = null, Func<DateTime> utcNow = null)
         {
             if (string.IsNullOrWhiteSpace(baseUrl))
                 return Res(UpdateOutcome.NotConfigured, "Auto-update não configurado.");
             var urlError = UpdateVerifier.ValidateBaseUrl(baseUrl);
             if (urlError != null) return Res(UpdateOutcome.Rejected, urlError);
-            if (string.IsNullOrWhiteSpace(publicKeyXml))
+            if (keys == null || !keys.Any(k => k != null && !string.IsNullOrWhiteSpace(k.PublicKeyXml)))
                 return Res(UpdateOutcome.Rejected, "Auto-update desligado: chave de assinatura de release não provisionada neste build.");
+            var now = (utcNow ?? (() => DateTime.UtcNow))();
 
             var root = new Uri(baseUrl.Trim().TrimEnd('/') + "/");
             byte[] manifestBytes, sigBytes;
@@ -83,16 +94,53 @@ namespace MeuCardapio.PrintClient.Services
             }
             catch (Exception ex) { return Res(UpdateOutcome.Failed, "Não foi possível verificar atualização: " + ex.Message); }
 
-            var sig = Encoding.ASCII.GetString(sigBytes ?? new byte[0]);
-            if (!UpdateVerifier.VerifySignature(manifestBytes, sig, publicKeyXml))
-                return Res(UpdateOutcome.Rejected, "Assinatura do manifesto de atualização inválida. Nada foi baixado.");
-
+            // 1) forma do manifesto (só leitura, sem efeito) -> escolhe a chave pelo keyId -> confere a assinatura
             string err;
             var m = UpdateVerifier.ParseManifest(manifestBytes, out err);
             if (m == null) return Res(UpdateOutcome.Rejected, "Manifesto de atualização inválido: " + err);
 
+            var state = statePath == null ? new UpdateState() : UpdateState.Load(statePath);
+            if (state.RevokedKeys.Contains(m.KeyId))
+                return Res(UpdateOutcome.Rejected, "Manifesto assinado por uma chave revogada (" + m.KeyId + "). Nada foi baixado.");
+            int keyIndex = -1;
+            for (int i = 0; i < keys.Count; i++) if (keys[i] != null && keys[i].KeyId == m.KeyId) { keyIndex = i; break; }
+            if (keyIndex < 0 || string.IsNullOrWhiteSpace(keys[keyIndex].PublicKeyXml))
+                return Res(UpdateOutcome.Rejected, "Manifesto assinado por uma chave desconhecida (" + m.KeyId + ").");
+            var sig = Encoding.ASCII.GetString(sigBytes ?? new byte[0]);
+            if (!UpdateVerifier.VerifySignature(manifestBytes, sig, keys[keyIndex].PublicKeyXml))
+                return Res(UpdateOutcome.Rejected, "Assinatura do manifesto de atualização inválida. Nada foi baixado.");
+
+            // 2) a partir daqui o manifesto é AUTÊNTICO. Revogação: só de chaves anteriores na lista.
+            if (m.RevokeKeys != null)
+            {
+                foreach (var rk in m.RevokeKeys)
+                {
+                    int ri = -1;
+                    for (int i = 0; i < keys.Count; i++) if (keys[i] != null && keys[i].KeyId == rk) { ri = i; break; }
+                    if (ri < 0 || ri >= keyIndex)
+                        return Res(UpdateOutcome.Rejected, "Revogação não permitida: a chave " + m.KeyId + " só revoga chaves anteriores da lista.");
+                }
+            }
+            // Anti-replay: não aceita manifesto mais antigo que o último já aceito (mesmo assinado e válido).
+            if (state.MaxIssuedAtUtc.HasValue && m.IssuedAtUtc < state.MaxIssuedAtUtc.Value)
+                return Res(UpdateOutcome.Rejected, "Manifesto mais antigo que o último aceito (reenvio de versão antiga). Ignorado.");
+            // Frescor: janela generosa; vencido/relógio errado = "não consegui confirmar", sem bloquear a impressão.
+            if (now > m.ValidUntilUtc)
+                return Res(UpdateOutcome.Unconfirmed, "Não consegui confirmar atualizações: o manifesto publicado venceu em " + m.ValidUntilUtc.ToString("yyyy-MM-dd") + ". Confira o relógio do computador ou tente mais tarde.");
+            if (now < m.IssuedAtUtc - UpdateVerifier.ClockTolerance)
+                return Res(UpdateOutcome.Unconfirmed, "Não consegui confirmar atualizações: o relógio do computador parece atrasado. Acerte data e hora.");
+
+            // Aceito: grava o que aprendeu (maior issuedAt e chaves revogadas) mesmo que não haja versão nova.
+            if (statePath != null)
+            {
+                state.MaxIssuedAtUtc = m.IssuedAtUtc;
+                if (m.RevokeKeys != null) foreach (var rk in m.RevokeKeys) if (!state.RevokedKeys.Contains(rk)) state.RevokedKeys.Add(rk);
+                state.Save(statePath);
+            }
+
             int cmp = UpdateVerifier.CompareVersions(m.Version, currentVersion);
             if (cmp == -2) return Res(UpdateOutcome.Rejected, "Versão do manifesto ou do app inválida.");
+            bool required = m.MinVersion != null && UpdateVerifier.CompareVersions(currentVersion, m.MinVersion) < 0;
             if (cmp <= 0) return Res(UpdateOutcome.UpToDate, "Você já está na versão mais recente (" + currentVersion + ").");
 
             string part = null;
@@ -110,13 +158,16 @@ namespace MeuCardapio.PrintClient.Services
                 var final = Path.Combine(updatesDir, m.File);
                 File.Move(part, final);
                 return new UpdateResult { Outcome = UpdateOutcome.Ready, Version = m.Version, InstallerPath = final,
-                    ExpectedSha256 = m.Sha256, ExpectedSize = m.Size,
-                    Message = "Atualização " + m.Version + " verificada." };
+                    ExpectedSha256 = m.Sha256, ExpectedSize = m.Size, Required = required,
+                    Message = (required ? "Atualização obrigatória " : "Atualização ") + m.Version + " verificada." };
             }
             catch (Exception ex)
             {
                 TryDelete(part);
-                return Res(UpdateOutcome.Failed, "Falha ao baixar a atualização: " + ex.Message);
+                var r = Res(UpdateOutcome.Failed, "Falha ao baixar a atualização: " + ex.Message);
+                r.Required = required;
+                if (required) r.Message += " Esta versão do app não é mais suportada; atualize assim que possível.";
+                return r;
             }
         }
 
