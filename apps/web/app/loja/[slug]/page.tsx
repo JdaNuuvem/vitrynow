@@ -1,5 +1,35 @@
+import type { Metadata } from "next";
+import { notFound } from "next/navigation";
 import { LojaRoot } from "@/features/loja/LojaRoot";
+import { absoluteImageUrl, fetchMenuOnServer, storeDescription } from "@/lib/serverMenu";
 
-export default function Page({ params }: { params: { slug: string } }) {
-  return <LojaRoot slug={params.slug} />;
+// Cardápio público renderizado no servidor (ADR-0013): o HTML inicial já traz nome, categorias e
+// produtos, e as tags Open Graph para o link compartilhado no WhatsApp/Instagram. O fetch usa
+// cache ISR curto (ver lib/serverMenu.ts); o carrinho e o checkout hidratam no navegador.
+type PageProps = { params: { slug: string } };
+
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const result = await fetchMenuOnServer(params.slug);
+  if (result.status !== "ok") return { title: "Cardápio", robots: { index: false } };
+
+  const { store } = result.menu;
+  const image = absoluteImageUrl(store.coverImageUrl) ?? absoluteImageUrl(store.logoUrl);
+  const description = storeDescription(result.menu);
+  return {
+    title: `${store.name} — Cardápio`,
+    description,
+    openGraph: {
+      type: "website",
+      title: store.name,
+      description,
+      ...(image ? { images: [{ url: image }] } : {}),
+    },
+    twitter: { card: image ? "summary_large_image" : "summary", title: store.name, description },
+  };
+}
+
+export default async function Page({ params }: PageProps) {
+  const result = await fetchMenuOnServer(params.slug);
+  if (result.status === "not-found") notFound();
+  return <LojaRoot slug={params.slug} initialMenu={result.status === "ok" ? result.menu : undefined} />;
 }
