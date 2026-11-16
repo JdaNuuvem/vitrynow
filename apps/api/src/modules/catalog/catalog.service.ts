@@ -1,7 +1,7 @@
 import type { CreateCategoryInput, CreateProductInput, UpdateProductInput } from "@meucardapio/shared-types";
 import type { Actor, AuditLogger } from "../../shared/audit";
 import { ConflictError, NotFoundError } from "../../shared/errors";
-import type { CatalogRepository } from "./catalog.repository";
+import { AdditionalNotInProductError, type CatalogRepository } from "./catalog.repository";
 
 // Regras do catálogo (categorias, produtos, adicionais). Não conhece HTTP nem Prisma.
 export class CatalogService {
@@ -38,15 +38,24 @@ export class CatalogService {
     this.audit.log({ ...actor, action: "category.delete", targetType: "Category", targetId: id });
   }
 
-  createProduct(storeId: string, input: CreateProductInput) {
+  async createProduct(storeId: string, input: CreateProductInput) {
     const { additionals, ...data } = input;
+    // SEC-11: categoryId vem do cliente; categoria de outra loja injetaria o produto no cardápio dela.
+    if (data.categoryId) await this.requireCategory(storeId, data.categoryId);
     return this.repo.createProduct(storeId, data, additionals);
   }
 
   async updateProduct(storeId: string, id: string, input: UpdateProductInput) {
     await this.requireProduct(storeId, id);
     const { additionals, ...data } = input;
-    return this.repo.updateProduct(id, data, additionals);
+    if (data.categoryId) await this.requireCategory(storeId, data.categoryId);
+    try {
+      return await this.repo.updateProduct(id, data, additionals);
+    } catch (error) {
+      // SEC-10: adicional que não é deste produto (inclusive de outra loja) => 404, nada alterado.
+      if (error instanceof AdditionalNotInProductError) throw new NotFoundError("adicional não encontrado neste produto");
+      throw error;
+    }
   }
 
   async deleteProduct(actor: Actor, id: string) {

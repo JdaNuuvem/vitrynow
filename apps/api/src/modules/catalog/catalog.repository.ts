@@ -16,6 +16,14 @@ export type ProductData = {
   featured?: boolean;
   position?: number;
 };
+// Adicional informado que não pertence ao produto (id de outro produto/loja ou inexistente).
+export class AdditionalNotInProductError extends Error {
+  constructor(readonly additionalId: string) {
+    super("adicional não pertence ao produto");
+    this.name = "AdditionalNotInProductError";
+  }
+}
+
 export type AdditionalData = { id?: string; name: string; priceCents: number };
 
 // Tudo que o catálogo precisa do armazenamento. O serviço só conhece esta interface.
@@ -87,10 +95,13 @@ export class PrismaCatalogRepository implements CatalogRepository {
         await tx.productAdditional.deleteMany({ where: { productId: id, id: { notIn: keepIds } } });
         for (const additional of additionals) {
           if (additional.id) {
-            await tx.productAdditional.update({
-              where: { id: additional.id },
+            // SEC-10: o id vem do cliente e é público no cardápio; só vale se o adicional é DESTE
+            // produto (que já foi conferido como da loja). Senão aborta e desfaz a transação.
+            const result = await tx.productAdditional.updateMany({
+              where: { id: additional.id, productId: id },
               data: { name: additional.name, priceCents: additional.priceCents },
             });
+            if (result.count !== 1) throw new AdditionalNotInProductError(additional.id);
           } else {
             await tx.productAdditional.create({
               data: { productId: id, name: additional.name, priceCents: additional.priceCents },
