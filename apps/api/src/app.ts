@@ -8,7 +8,7 @@ import authPlugin from "./plugins/auth";
 import healthRoutes from "./routes/health";
 import authRoutes from "./routes/auth";
 import storefrontRoutes from "./routes/storefront";
-import orderRoutes from "./routes/orders";
+import orderRoutes from "./modules/orders/orders.module";
 import deviceRoutes from "./routes/device";
 import deviceTokenRoutes from "./modules/deviceTokens/deviceTokens.module";
 import realtimeRoutes from "./routes/realtime";

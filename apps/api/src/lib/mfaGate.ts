@@ -6,11 +6,16 @@ import { mfaEnforced, spendProof } from "./mfa";
 // com o header x-mfa-challenge apontando para um código verificado (uso único, 10 min).
 export function requireMfa(purpose: MfaPurpose) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    if (!mfaEnforced()) return;
-    const challengeId = request.headers["x-mfa-challenge"];
-    const accepted = typeof challengeId === "string" && (await spendProof(request.user.userId, challengeId, purpose));
-    if (!accepted) {
+    if (!(await mfaProofAccepted(request, purpose))) {
       reply.code(403).send({ error: "Confirmação de segurança necessária.", code: "MFA_REQUIRED", purpose });
     }
   };
+}
+
+// Versão para decisão dentro da rota (ex.: cancelamento só exige MFA quando precisa estornar).
+// Com MFA_ENFORCED desligado sempre aceita; ligado, gasta a prova de uso único.
+export async function mfaProofAccepted(request: FastifyRequest, purpose: MfaPurpose): Promise<boolean> {
+  if (!mfaEnforced()) return true;
+  const challengeId = request.headers["x-mfa-challenge"];
+  return typeof challengeId === "string" && (await spendProof(request.user.userId, challengeId, purpose));
 }

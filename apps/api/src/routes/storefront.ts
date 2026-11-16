@@ -3,7 +3,9 @@ import { prisma } from "@meucardapio/db";
 import { createOrderSchema } from "@meucardapio/shared-types";
 import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
 import { publishToStore } from "../realtime/hub";
-import { createPixPayment, cancelPayment } from "../lib/mercadopago";
+import { createPixPayment } from "../lib/mercadopago";
+import { orderService } from "../modules/orders/orders.module";
+import { DomainError } from "../shared/errors";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
 
 // Rotas públicas do cardápio (sem autenticação) — equivalente ao /online/{slug} do original.
@@ -232,43 +234,38 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     });
     if (!order) return reply.code(404).send({ error: "pedido não encontrado" });
 
+    // `terminal`: o polling do checkout para (pedido cancelado ou pagamento em estado final).
+    const paymentStatus = order.payment?.status ?? null;
+    const terminal =
+      order.status === "CANCELADO" ||
+      (paymentStatus !== null && ["APROVADO", "REJEITADO", "EXPIRADO", "CANCELADO", "REEMBOLSADO", "CONTESTADO"].includes(paymentStatus));
+    const cancelRow =
+      order.status === "CANCELADO"
+        ? await prisma.orderStatusHistory.findFirst({ where: { orderId: order.id, kind: "CANCEL" }, orderBy: { seq: "desc" } })
+        : null;
     return {
       awaitingPayment: order.awaitingPayment,
-      paymentStatus: order.payment?.status ?? null,
+      paymentStatus,
       orderStatus: order.status,
+      terminal,
+      cancelReason: cancelRow ? { customerMessage: cancelRow.customerMessage ?? null } : null,
     };
   });
 
-  // Cliente só pode cancelar enquanto a loja ainda não confirmou o pedido (PENDENTE) —
-  // depois disso (em preparo etc.) o cancelamento é uma decisão da loja, via painel.
+  // Cliente só cancela enquanto a loja não aceitou (PENDENTE); vence quem chegar primeiro.
+  // Com PIX já aprovado, o estorno roda automaticamente (ADR-0007 §5.3).
   app.post("/stores/:slug/orders/:orderId/cancel", async (request, reply) => {
     const { slug, orderId } = request.params as { slug: string; orderId: string };
     const store = await prisma.store.findUnique({ where: { slug } });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });
-
-    const order = await prisma.order.findFirst({
-      where: { id: orderId, storeId: store.id },
-      include: { payment: true },
-    });
-    if (!order) return reply.code(404).send({ error: "pedido não encontrado" });
-    if (order.status !== "PENDENTE") {
-      return reply.code(409).send({ error: "pedido já está em preparo ou finalizado — fale com a loja" });
-    }
-
-    if (order.payment && order.payment.status === "PENDENTE" && order.payment.providerPaymentId) {
-      try {
-        await cancelPayment(order.payment.providerPaymentId);
-      } catch (error) {
-        app.log.warn(`falha ao cancelar pagamento ${order.payment.providerPaymentId} no Mercado Pago: ${error}`);
+    try {
+      return await orderService.cancelByCustomer(store.id, orderId);
+    } catch (error) {
+      if (error instanceof DomainError) {
+        return reply.code(error.statusCode).send({ error: error.message, ...(error.code ? { code: error.code } : {}), ...error.extra });
       }
+      throw error;
     }
-
-    await prisma.order.update({
-      where: { id: order.id },
-      data: { status: "CANCELADO", statusHistory: { create: { status: "CANCELADO" } } },
-    });
-    publishToStore(store.id, { type: "order.updated", orderId: order.id });
-    return { ok: true };
   });
 };
 

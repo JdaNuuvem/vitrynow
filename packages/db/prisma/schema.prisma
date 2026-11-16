@@ -27,6 +27,7 @@ enum OrderStatus {
   CONFIRMADO
   EM_PREPARO
   PRONTO
+  SAIU_PARA_ENTREGA // só DELIVERY (ADR-0007)
   CONCLUIDO
   CANCELADO
 }
@@ -47,6 +48,24 @@ enum PaymentStatus {
   REJEITADO
   EXPIRADO
   REEMBOLSADO
+  EM_ANALISE // MP in_process/authorized
+  CANCELADO // cobrança cancelada por nós
+  ESTORNO_PENDENTE // estorno pedido, ainda não confirmado
+  CONTESTADO // MP charged_back
+}
+
+enum HistorySource {
+  PANEL
+  CUSTOMER
+  SYSTEM
+  WEBHOOK
+}
+
+enum HistoryKind {
+  ADVANCE
+  UNDO
+  CANCEL
+  SYSTEM
 }
 
 enum OrderPaymentMethod {
@@ -217,6 +236,8 @@ model Order {
   tipCents       Int        @default(0) // gorjeta — já incluída em totalCents
   awaitingPayment Boolean   @default(false) // true enquanto espera confirmação de pagamento online (ex. PIX) — não entra no kanban/impressão até confirmar
   printedAt     DateTime?
+  canceledAt        DateTime?
+  couponReleasedAt  DateTime? // idempotência da devolução do cupom (ADR-0007)
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
@@ -264,8 +285,15 @@ model OrderStatusHistory {
   order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
   status    OrderStatus
   createdAt DateTime    @default(now())
+  userId          String? // quem fez (painel); null = cliente/sistema
+  source          HistorySource @default(SYSTEM)
+  kind            HistoryKind   @default(ADVANCE)
+  reasonCode      String?
+  reasonText      String?
+  customerMessage String?
+  seq             Int           @default(autoincrement()) // ordem total das mudanças (createdAt pode empatar no mesmo ms)
 
-  @@index([orderId])
+  @@index([orderId, seq])
 }
 
 model CashSession {
@@ -333,6 +361,12 @@ model Payment {
   pixQrCode         String? // payload "copia e cola"
   pixQrCodeBase64   String? // imagem do QR em base64
   expiresAt         DateTime?
+  refundAttempts    Int           @default(0)
+  refundLastError   String? // texto curto, sem dados sensíveis
+  refundRequestedAt DateTime?
+  refundContext     Json? // {reason, source, userId} para concluir o cancelamento depois do estorno
+  lastRawStatus     String?
+  lastCheckedAt     DateTime?
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
