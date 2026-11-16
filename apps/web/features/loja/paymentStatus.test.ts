@@ -50,4 +50,19 @@ describe("interpretPaymentStatus (B15)", () => {
     const outcome = interpretPaymentStatus({ awaitingPayment: true, paymentStatus: "PENDENTE", terminal: true });
     expect(outcome.kind).toBe("FAILED");
   });
+
+  it("estado final que a tela não conhece: texto neutro, sem afirmar pagamento nem que a loja cancelou", () => {
+    const outcome = interpretPaymentStatus({ awaitingPayment: false, orderStatus: "ESTADO_DO_FUTURO", paymentStatus: "OUTRO_ESTADO", terminal: true });
+    expect(outcome).toEqual({ kind: "FAILED", message: "Não foi possível confirmar este pedido. Fale com a loja." });
+  });
+
+  it("status de pedido ou de pagamento novo e não final não trava nem afirma nada: segue consultando", () => {
+    for (const paymentStatus of ["EM_ANALISE", "ESTORNO_PENDENTE", "QUALQUER_COISA"]) {
+      expect(interpretPaymentStatus({ awaitingPayment: true, orderStatus: "SAIU_PARA_ENTREGA", paymentStatus })).toEqual({ kind: "PENDING" });
+    }
+  });
+
+  it("pedido novo (SAIU_PARA_ENTREGA) com pagamento aprovado continua contando como pago", () => {
+    expect(interpretPaymentStatus({ awaitingPayment: false, orderStatus: "SAIU_PARA_ENTREGA", paymentStatus: "APROVADO" })).toEqual({ kind: "PAID" });
+  });
 });

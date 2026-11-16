@@ -14,7 +14,9 @@
 
 .pedidos__board {
   display: grid;
-  grid-template-columns: repeat(5, minmax(200px, 1fr));
+  /* uma coluna por status conhecido, mais "Outros" quando houver (WEB-21) */
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(200px, 1fr);
   gap: 16px;
   overflow-x: auto;
 }
@@ -91,4 +93,11 @@
   .pedidos {
     padding: 24px 16px 120px;
   }
+}
+
+.pedidos__column-hint {
+  margin-bottom: 8px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 16px;
 }

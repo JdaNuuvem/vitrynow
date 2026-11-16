@@ -16,6 +16,7 @@ const FAILED_PAYMENT_MESSAGES: Record<string, string> = {
 };
 
 const ORDER_CANCELLED_MESSAGE = "A loja cancelou este pedido.";
+const UNKNOWN_STATE_MESSAGE = "Não foi possível confirmar este pedido. Fale com a loja.";
 
 // Decide o que a tela mostra. Regras (B15):
 //  - falha SEMPRE vence "awaitingPayment=false": um pedido cancelado ou um PIX expirado também
@@ -34,8 +35,9 @@ export function interpretPaymentStatus(status: PaymentStatusResponse): PaymentOu
   if (status.paymentStatus === "APROVADO") return { kind: "PAID" };
   if (status.paymentStatus == null && status.awaitingPayment === false) return { kind: "PAID" }; // API antiga
   if (status.terminal === true) {
-    // Terminal sem motivo conhecido: não afirmar pagamento.
-    return { kind: "FAILED", message: customerMessage ?? ORDER_CANCELLED_MESSAGE };
+    // Terminal sem motivo conhecido (a API ganhou um estado novo antes da tela): não afirmar pagamento
+    // e não afirmar que a loja cancelou. Texto neutro.
+    return { kind: "FAILED", message: customerMessage ?? UNKNOWN_STATE_MESSAGE };
   }
   return { kind: "PENDING" };
 }
