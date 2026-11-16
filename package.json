@@ -1,0 +1,17 @@
+{
+  "name": "meucardapio-platform",
+  "private": true,
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev:api": "pnpm --filter @meucardapio/api dev",
+    "dev:web": "pnpm --filter @meucardapio/web dev",
+    "db:generate": "pnpm --filter @meucardapio/db generate",
+    "db:migrate": "pnpm --filter @meucardapio/db migrate",
+    "db:seed": "pnpm --filter @meucardapio/db seed",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test"
+  }
+}

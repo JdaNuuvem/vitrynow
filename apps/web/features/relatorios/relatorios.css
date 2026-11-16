@@ -1,0 +1,100 @@
+.relatorios {
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 40px 24px;
+  color: var(--ink);
+}
+
+.relatorios h1 {
+  margin-bottom: 24px;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 32px;
+}
+
+.relatorios__filter {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.relatorios__filter label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.relatorios__filter input {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.relatorios__cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.relatorios__card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.relatorios__card span {
+  color: var(--ink-soft);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.relatorios__card strong {
+  font-size: 24px;
+  line-height: 32px;
+}
+
+.relatorios__section {
+  margin-bottom: 24px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 14px;
+}
+
+.relatorios__section h2 {
+  margin-bottom: 8px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.relatorios__row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.relatorios__empty {
+  color: var(--ink-soft);
+}
+
+@media (max-width: 800px) {
+  .relatorios {
+    padding: 24px 16px 120px;
+  }
+
+  .relatorios__cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

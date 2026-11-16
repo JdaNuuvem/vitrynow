@@ -1,0 +1,270 @@
+import type { FastifyPluginAsync } from "fastify";
+import { prisma } from "@meucardapio/db";
+import { createOrderSchema } from "@meucardapio/shared-types";
+import { nextOrderCode } from "../lib/order-code";
+import { publishToStore } from "../realtime/hub";
+import { createPixPayment, cancelPayment } from "../lib/mercadopago";
+import { toOrderPaymentMethod } from "../lib/paymentMethod";
+
+// Rotas públicas do cardápio (sem autenticação) — equivalente ao /online/{slug} do original.
+const storefrontRoutes: FastifyPluginAsync = async (app) => {
+  app.get("/stores/:slug/menu", async (request, reply) => {
+    const { slug } = request.params as { slug: string };
+    const store = await prisma.store.findUnique({ where: { slug } });
+    if (!store) return reply.code(404).send({ error: "loja não encontrada" });
+
+    const categories = await prisma.category.findMany({
+      where: { storeId: store.id },
+      orderBy: { position: "asc" },
+      include: {
+        products: {
+          where: { active: true },
+          orderBy: { position: "asc" },
+          include: { additionals: true },
+        },
+      },
+    });
+
+    return {
+      store: {
+        name: store.name,
+        slug: store.slug,
+        logoUrl: store.logoUrl,
+        coverImageUrl: store.coverImageUrl,
+        primaryColor: store.primaryColor,
+        address: store.address,
+        whatsapp: store.whatsapp,
+        openingHours: store.openingHours,
+        minOrderCents: store.minOrderCents,
+        deliveryEnabled: store.deliveryEnabled,
+        pickupEnabled: store.pickupEnabled,
+        acceptingOrders: store.acceptingOrders,
+        deliveryFeeCents: store.deliveryFeeCents,
+      },
+      categories,
+    };
+  });
+
+  app.post(
+    "/stores/:slug/orders",
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+    const { slug } = request.params as { slug: string };
+    const store = await prisma.store.findUnique({ where: { slug } });
+    if (!store) return reply.code(404).send({ error: "loja não encontrada" });
+    if (!store.acceptingOrders) {
+      return reply.code(409).send({ error: "A loja não está aceitando pedidos no momento.", code: "STORE_CLOSED" });
+    }
+
+    const parsed = createOrderSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    const input = parsed.data;
+
+    const products = await prisma.product.findMany({
+      where: { storeId: store.id, id: { in: input.items.map((i) => i.productId) } },
+      include: { additionals: true },
+    });
+    const productById = new Map(products.map((p) => [p.id, p]));
+    if (products.length !== new Set(input.items.map((i) => i.productId)).size) {
+      return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja" });
+    }
+
+    let itemsData;
+    try {
+      itemsData = input.items.map((item) => {
+        const product = productById.get(item.productId)!;
+        const additionalsByProduct = new Map(product.additionals.map((a) => [a.id, a]));
+        const chosenAdditionals = (item.additionalIds ?? []).map((id) => {
+          const additional = additionalsByProduct.get(id);
+          if (!additional) throw new Error(`adicional ${id} não pertence ao produto ${product.id}`);
+          return additional;
+        });
+        const additionalsCents = chosenAdditionals.reduce((sum, a) => sum + a.priceCents, 0);
+        return {
+          productId: item.productId,
+          productName: product.name,
+          quantity: item.quantity,
+          unitPriceCents: product.priceCents,
+          notes: item.notes,
+          lineTotalCents: (product.priceCents + additionalsCents) * item.quantity,
+          additionals: chosenAdditionals,
+        };
+      });
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "pedido inválido" });
+    }
+
+    const subtotalCents = itemsData.reduce((sum, item) => sum + item.lineTotalCents, 0);
+
+    if (store.minOrderCents !== null && subtotalCents < store.minOrderCents) {
+      return reply.code(400).send({ error: `pedido mínimo é R$ ${(store.minOrderCents / 100).toFixed(2)}` });
+    }
+
+    let coupon = null;
+    let discountCents = 0;
+    if (input.couponCode) {
+      coupon = await prisma.coupon.findUnique({
+        where: { storeId_code: { storeId: store.id, code: input.couponCode.trim().toUpperCase() } },
+      });
+      if (!coupon || !coupon.active) {
+        return reply.code(400).send({ error: "cupom inválido" });
+      }
+      if (coupon.expiresAt && coupon.expiresAt < new Date()) {
+        return reply.code(400).send({ error: "cupom expirado" });
+      }
+      if (coupon.maxUses !== null && coupon.usedCount >= coupon.maxUses) {
+        return reply.code(400).send({ error: "cupom esgotado" });
+      }
+      if (coupon.minOrderCents !== null && subtotalCents < coupon.minOrderCents) {
+        return reply.code(400).send({ error: `pedido mínimo para este cupom é R$ ${(coupon.minOrderCents / 100).toFixed(2)}` });
+      }
+      discountCents =
+        coupon.discountType === "PERCENT"
+          ? Math.round((subtotalCents * coupon.discountValue) / 100)
+          : coupon.discountValue;
+      discountCents = Math.min(discountCents, subtotalCents);
+    }
+
+    const deliveryFeeCents = input.type === "DELIVERY" ? store.deliveryFeeCents : 0;
+    const tipCents = input.tipCents ?? 0;
+    const totalCents = subtotalCents - discountCents + deliveryFeeCents + tipCents;
+
+    const paymentMethod = toOrderPaymentMethod(input.paymentMethod);
+    if (input.changeForCents !== undefined) {
+      if (paymentMethod !== "DINHEIRO") {
+        return reply.code(400).send({ error: "troco só se aplica a pagamento em dinheiro" });
+      }
+      if (input.changeForCents < totalCents) {
+        return reply.code(400).send({ error: "o valor para troco deve cobrir o total do pedido" });
+      }
+    }
+    const usePix = paymentMethod === "PIX";
+    const code = await nextOrderCode(store.id);
+
+    const order = await prisma.order.create({
+      data: {
+        storeId: store.id,
+        code,
+        type: input.type,
+        customerName: input.customerName,
+        customerPhone: input.customerPhone,
+        address: input.address,
+        notes: input.notes,
+        subtotalCents,
+        discountCents,
+        deliveryFeeCents,
+        tipCents,
+        totalCents,
+        paymentMethod,
+        changeForCents: input.changeForCents,
+        couponId: coupon?.id,
+        awaitingPayment: usePix,
+        statusHistory: { create: { status: "PENDENTE" } },
+        items: {
+          create: itemsData.map((item) => ({
+            productId: item.productId,
+            productName: item.productName,
+            quantity: item.quantity,
+            unitPriceCents: item.unitPriceCents,
+            notes: item.notes,
+            additionals: {
+              create: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })),
+            },
+          })),
+        },
+      },
+    });
+
+    if (coupon) {
+      await prisma.coupon.update({ where: { id: coupon.id }, data: { usedCount: { increment: 1 } } });
+    }
+
+    if (!usePix) {
+      publishToStore(store.id, { type: "order.created", orderId: order.id });
+      return reply.code(201).send({ orderId: order.id, code: order.code });
+    }
+
+    try {
+      const pix = await createPixPayment({
+        orderId: order.id,
+        amountCents: totalCents,
+        description: `Pedido #${order.code} — ${store.name}`,
+        payerEmail: `cliente-${order.id}@checkout.meucardapio.local`,
+      });
+      await prisma.payment.create({
+        data: {
+          orderId: order.id,
+          providerPaymentId: pix.providerPaymentId,
+          amountCents: totalCents,
+          pixQrCode: pix.pixQrCode,
+          pixQrCodeBase64: pix.pixQrCodeBase64,
+          expiresAt: pix.expiresAt,
+        },
+      });
+      return reply.code(201).send({
+        orderId: order.id,
+        code: order.code,
+        payment: { pixQrCode: pix.pixQrCode, pixQrCodeBase64: pix.pixQrCodeBase64, expiresAt: pix.expiresAt },
+      });
+    } catch (error) {
+      app.log.error(error);
+      await prisma.order.delete({ where: { id: order.id } });
+      if (coupon) await prisma.coupon.update({ where: { id: coupon.id }, data: { usedCount: { decrement: 1 } } });
+      return reply.code(502).send({ error: "não foi possível gerar o pagamento PIX, tente novamente" });
+    }
+    },
+  );
+
+  // Consultado pela tela de checkout enquanto aguarda a confirmação do PIX.
+  app.get("/stores/:slug/orders/:orderId/payment-status", async (request, reply) => {
+    const { slug, orderId } = request.params as { slug: string; orderId: string };
+    const store = await prisma.store.findUnique({ where: { slug } });
+    if (!store) return reply.code(404).send({ error: "loja não encontrada" });
+
+    const order = await prisma.order.findFirst({
+      where: { id: orderId, storeId: store.id },
+      include: { payment: true },
+    });
+    if (!order) return reply.code(404).send({ error: "pedido não encontrado" });
+
+    return {
+      awaitingPayment: order.awaitingPayment,
+      paymentStatus: order.payment?.status ?? null,
+      orderStatus: order.status,
+    };
+  });
+
+  // Cliente só pode cancelar enquanto a loja ainda não confirmou o pedido (PENDENTE) —
+  // depois disso (em preparo etc.) o cancelamento é uma decisão da loja, via painel.
+  app.post("/stores/:slug/orders/:orderId/cancel", async (request, reply) => {
+    const { slug, orderId } = request.params as { slug: string; orderId: string };
+    const store = await prisma.store.findUnique({ where: { slug } });
+    if (!store) return reply.code(404).send({ error: "loja não encontrada" });
+
+    const order = await prisma.order.findFirst({
+      where: { id: orderId, storeId: store.id },
+      include: { payment: true },
+    });
+    if (!order) return reply.code(404).send({ error: "pedido não encontrado" });
+    if (order.status !== "PENDENTE") {
+      return reply.code(409).send({ error: "pedido já está em preparo ou finalizado — fale com a loja" });
+    }
+
+    if (order.payment && order.payment.status === "PENDENTE" && order.payment.providerPaymentId) {
+      try {
+        await cancelPayment(order.payment.providerPaymentId);
+      } catch (error) {
+        app.log.warn(`falha ao cancelar pagamento ${order.payment.providerPaymentId} no Mercado Pago: ${error}`);
+      }
+    }
+
+    await prisma.order.update({
+      where: { id: order.id },
+      data: { status: "CANCELADO", statusHistory: { create: { status: "CANCELADO" } } },
+    });
+    publishToStore(store.id, { type: "order.updated", orderId: order.id });
+    return { ok: true };
+  });
+};
+
+export default storefrontRoutes;

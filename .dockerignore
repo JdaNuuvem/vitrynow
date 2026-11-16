@@ -1,0 +1,13 @@
+# Contexto de build (infra/docker-compose.yml usa context: ..) — nunca deixar segredos ou
+# lixo local entrar na imagem. Os Dockerfiles fazem COPY explícito de pastas inteiras
+# (ex. "COPY apps/api apps/api"), então sem isso o .env real do host ia pra dentro da imagem.
+**/.env
+**/.env.*.local
+!**/.env.example
+**/node_modules
+**/.next
+**/dist
+**/bin
+**/obj
+.git
+**/*.log

@@ -1,0 +1,171 @@
+using System;
+using System.Drawing;
+using System.Drawing.Printing;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using MeuCardapio.PrintClient.Models;
+using MeuCardapio.PrintClient.Services;
+
+namespace MeuCardapio.PrintClient.UI
+{
+    // Status dos listeners, combos de impressora/som/volume, toast e tray.
+    public class MainForm : Form
+    {
+        readonly Label _statusLabel = new Label { AutoSize = true, Font = new Font("Segoe UI", 9f) };
+        readonly ComboBox _printers = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
+        readonly ComboBox _sounds = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 140 };
+        readonly TrackBar _volume = new TrackBar { Minimum = 0, Maximum = 100, TickFrequency = 10, Width = 180 };
+        readonly Label _toast = new Label { AutoSize = true, ForeColor = Color.DarkGreen, Location = new Point(16, 190), MaximumSize = new Size(380, 0) };
+        readonly NotifyIcon _tray = new NotifyIcon();
+
+        public MainForm()
+        {
+            Text = "MeuCardapio - Impressão";
+            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { /* sem ícone embutido no EXE atual */ }
+            ClientSize = new Size(420, 230);
+            FormBorderStyle = FormBorderStyle.FixedSingle;
+            MaximizeBox = false;
+            StartPosition = FormStartPosition.CenterScreen;
+
+            var lc1 = new Label { Text = "Impressora:", AutoSize = true, Location = new Point(16, 20) };
+            _printers.Location = new Point(16, 40);
+            var lc2 = new Label { Text = "Som de alerta:", AutoSize = true, Location = new Point(240, 20) };
+            _sounds.Location = new Point(240, 40);
+            var lv = new Label { Text = "Volume:", AutoSize = true, Location = new Point(240, 80) };
+            _volume.Location = new Point(240, 100);
+            _volume.Value = Math.Max(_volume.Minimum, Math.Min(_volume.Maximum, AppSettings.Current.SoundVolume));
+
+            _statusLabel.Text = "Conectando...";
+            _statusLabel.Location = new Point(16, 80);
+
+            Controls.AddRange(new Control[] { lc1, _printers, lc2, _sounds, lv, _volume, _statusLabel, _toast });
+
+            ReloadPrinters();
+            _sounds.Items.AddRange(new object[] { "Sino", "Padrão", "Som personalizado..." });
+            _sounds.SelectedIndex = Math.Max(0, AppSettings.Current.DropdownIndex - 1);
+
+            _printers.SelectedIndexChanged += OnPrinterChanged;
+            _sounds.SelectedIndexChanged += OnSoundChanged;
+            _volume.Scroll += OnVolumeChanged;
+
+            WireAppEvents();
+
+            _tray.Icon = Icon ?? SystemIcons.Application;
+            _tray.Visible = !App.AutoStart;
+            var menu = new ContextMenuStrip();
+            menu.Items.Add(App.AutoStart ? "Mostrar" : "Minimizar", null, (s, e) => Show());
+            menu.Items.Add("Verificar atualizações", null, (s, e) => Updater.CheckForUpdate());
+            menu.Items.Add("Sair", null, (s, e) => Close());
+            _tray.ContextMenuStrip = menu;
+
+            Updater.StatusChanged += text => BeginInvoke(new Action(() => Toast(text)));
+
+            if (App.AutoStart) WindowState = FormWindowState.Minimized;
+
+            Shown += (s, e) =>
+            {
+                App.StartListeners();
+                if (Updater.IsConfigured) Task.Run(() => Updater.CheckForUpdate());
+            };
+        }
+
+        void WireAppEvents()
+        {
+            App.Device.StatusChanged += text =>
+            {
+                Logger.Info(text);
+                BeginInvoke(new Action(() => { _statusLabel.Text = text; Toast(text); }));
+            };
+            App.Device.OrderPending += () => BeginInvoke(new Action(OnOrderPending));
+            App.Device.TicketReady += order => BeginInvoke(new Action(() => PrintAndAck(order)));
+        }
+
+        void OnOrderPending()
+        {
+            if (!AppSettings.Current.ReceiveAlerts) return;
+            using (var n = new NotifyForm()) n.Show();
+            App.Audio.Play(AppSettings.Current.DropdownIndex, AppSettings.Current.CustomSound, AppSettings.Current.SoundVolume);
+        }
+
+        void PrintAndAck(PrintableOrder order)
+        {
+            try
+            {
+                string html = TicketTemplate.Build(order);
+                App.Printer.PrintTicket(html);
+                Toast("Impresso: pedido #" + order.Code);
+                Logger.Info("Impresso: pedido #" + order.Code);
+                // Só marca como impresso quando a impressão realmente deu certo. Se cair no
+                // catch, o pedido continua pendente e volta a aparecer no próximo poll
+                // (CheckPendingAsync em DeviceClient.cs) — antes disso, o `finally` chamava
+                // MarkPrintedAsync sempre, então uma impressora sem papel/desconectada fazia
+                // o pedido desaparecer da fila pra sempre, sem nunca chegar na cozinha.
+                Task.Run(() => App.Device.MarkPrintedAsync(order.OrderId));
+            }
+            catch (Exception ex)
+            {
+                string msg = "Erro na impressão do pedido #" + order.Code + ": " + ex.Message;
+                Toast(msg);
+                Logger.Error(msg, ex);
+            }
+        }
+
+        void ReloadPrinters()
+        {
+            var prev = AppSettings.Current.SelectedPrinter;
+            _printers.Items.Clear();
+            var col = PrinterSettings.InstalledPrinters;
+            var names = new string[col.Count];
+            for (int p = 0; p < col.Count; p++) names[p] = col[p];
+            _printers.Items.AddRange(names);
+            int idx = !string.IsNullOrEmpty(prev) ? Array.IndexOf(names, prev) : -1;
+            _printers.SelectedIndex = idx >= 0 ? idx : (names.Length > 0 ? 0 : -1);
+        }
+
+        void OnPrinterChanged(object sender, EventArgs e)
+        {
+            AppSettings.Current.DropdownPrintIndex = _printers.SelectedIndex;
+            AppSettings.Current.SelectedPrinter = _printers.SelectedItem as string ?? "";
+            AppSettings.Save();
+            App.Printer.SelectPrinter(_printers.SelectedIndex);
+            Toast("Impressora: " + AppSettings.Current.SelectedPrinter);
+        }
+
+        void OnSoundChanged(object sender, EventArgs e)
+        {
+            AppSettings.Current.DropdownIndex = _sounds.SelectedIndex + 1;
+            if (_sounds.SelectedIndex == 2)
+            {
+                using (var ofd = new OpenFileDialog { Title = "Som personalizado", Filter = "Áudio|*.wav;*.mp3;*.wma" })
+                {
+                    if (ofd.ShowDialog(this) == DialogResult.OK)
+                        AppSettings.Current.CustomSound = ofd.FileName;
+                }
+            }
+            AppSettings.Save();
+            App.Audio.Play(AppSettings.Current.DropdownIndex, AppSettings.Current.CustomSound, _volume.Value);
+        }
+
+        void OnVolumeChanged(object sender, EventArgs e)
+        {
+            AppSettings.Current.SoundVolume = _volume.Value;
+            AppSettings.Save();
+        }
+
+        void Toast(string msg) => _toast.Text = msg;
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (!App.AutoStart && e.CloseReason == CloseReason.UserClosing)
+            {
+                e.Cancel = true;
+                Hide();
+                _tray.Visible = true;
+                return;
+            }
+            App.Shutdown();
+            _tray.Visible = false;
+            base.OnFormClosing(e);
+        }
+    }
+}

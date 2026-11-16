@@ -1,0 +1,12 @@
+{
+	email {$ACME_EMAIL:contato@exemplo.com}
+}
+
+{$DOMAIN:localhost} {
+	reverse_proxy /api/* api:3001
+	reverse_proxy /auth/* api:3001
+	reverse_proxy /stores/* api:3001
+	reverse_proxy /ws/* api:3001
+	reverse_proxy /health api:3001
+	reverse_proxy web:3000
+}

@@ -1,0 +1,143 @@
+.conta {
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 40px 24px;
+  color: var(--ink);
+}
+
+.conta h1 {
+  margin-bottom: 24px;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 32px;
+}
+
+.conta__card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 448px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.conta__card--spaced {
+  margin-top: 24px;
+}
+
+.conta__card h2 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.conta__meta {
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+.conta__meta span {
+  font-family: ui-monospace, monospace;
+}
+
+.conta__field label {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.conta__field-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.conta__field input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.conta__field input:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.conta__swatch {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.conta .money-input {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.conta .money-input:focus-within {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.conta .money-input input {
+  border: none;
+  outline: none;
+  padding: 10px 0;
+  background: transparent;
+}
+
+.conta__switches {
+  display: flex;
+  gap: 24px;
+}
+
+.conta__switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.conta__ok {
+  color: var(--ok);
+  font-size: 14px;
+}
+
+.conta__error {
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.conta__primary {
+  align-self: flex-start;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  background: var(--color-primary);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+@media (max-width: 800px) {
+  .conta {
+    padding: 24px 16px 120px;
+  }
+}
