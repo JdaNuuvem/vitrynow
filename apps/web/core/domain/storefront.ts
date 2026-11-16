@@ -36,6 +36,16 @@ export type PaymentMethod = "PIX" | "DINHEIRO" | "CREDITO" | "DEBITO" | "VR" | "
 
 export type PixPayment = { pixQrCode: string | null; pixQrCodeBase64: string | null };
 
+// GET /stores/:slug/orders/:orderId/payment-status (ADR-0007 §3.2). `terminal` e `cancelReason`
+// só existem depois do API-02; até lá o front deduz dos estados.
+export type PaymentStatusResponse = {
+  awaitingPayment: boolean;
+  orderStatus?: string;
+  paymentStatus?: string | null;
+  terminal?: boolean;
+  cancelReason?: { customerMessage?: string | null } | null;
+};
+
 export type PlaceOrderInput = {
   type: DeliveryType;
   customerName: string;
