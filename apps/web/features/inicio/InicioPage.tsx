@@ -7,7 +7,6 @@ import { MobileHome } from "./components/MobileHome";
 import { OrderTypesCard } from "./components/OrderTypesCard";
 import { PromoCard } from "./components/PromoCard";
 import { RevenueCard } from "./components/RevenueCard";
-import { SavingsCard } from "./components/SavingsCard";
 import { StatCard } from "./components/StatCard";
 import { TopProductsCard } from "./components/TopProductsCard";
 import { useHiddenValues } from "./hooks/useHiddenValues";
@@ -44,7 +43,6 @@ export function InicioPage() {
           {PROMO_CARDS.map((config) => (
             <PromoCard key={config.id} config={config} />
           ))}
-          <SavingsCard savingsCents={metrics?.feeSavingsCents ?? null} hidden={hidden} />
           <StatCard title="Pedidos - 7 dias" value={metrics ? String(metrics.week.orderCount) : null} />
           <StatCard title="Receita - 7 dias" value={money(metrics?.week.revenueCents)} />
           <OrderTypesCard orderTypes={metrics?.orderTypes ?? null} />

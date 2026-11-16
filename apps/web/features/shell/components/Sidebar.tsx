@@ -2,7 +2,7 @@
 
 import { Icon } from "@/shared/icons/Icon";
 import { CaixaWidget } from "@/features/caixa/CaixaWidget";
-import { useStore } from "../StoreProvider";
+import { useHasProducts, useStore } from "../StoreProvider";
 import { computeOnboarding } from "../onboarding";
 import { OnboardingWidget } from "./OnboardingWidget";
 import { SidebarFooter } from "./SidebarFooter";
@@ -22,6 +22,7 @@ type SidebarProps = {
 
 export function Sidebar({ collapsed, mobileOpen, onToggle, onNavigate }: SidebarProps) {
   const store = useStore();
+  const hasProducts = useHasProducts();
   const classes = ["shell-sidebar", collapsed ? "is-collapsed" : "", mobileOpen ? "is-mobile-open" : ""].filter(Boolean).join(" ");
 
   return (
@@ -36,7 +37,7 @@ export function Sidebar({ collapsed, mobileOpen, onToggle, onNavigate }: Sidebar
         {store && !collapsed && (
           <>
             <StoreHoursCard openingHours={store.openingHours} settingsHref={SETTINGS_HREF} acceptingOrders={store.acceptingOrders} />
-            <OnboardingWidget progress={computeOnboarding(store)} href={SETTINGS_HREF} />
+            {hasProducts !== null && <OnboardingWidget progress={computeOnboarding(store, hasProducts)} href={SETTINGS_HREF} />}
             <CaixaWidget reportsHref={REPORTS_HREF} />
           </>
         )}

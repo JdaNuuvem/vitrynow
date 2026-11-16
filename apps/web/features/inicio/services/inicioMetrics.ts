@@ -1,7 +1,5 @@
 import type { ReportDay, ReportRange, ReportSummary, ReportTopProduct } from "@/core/domain/reports";
 
-export const PLATFORM_FEE_RATE = 0.25;
-
 export type DayPoint = { day: number; revenueCents: number };
 
 export type InicioMetrics = {
@@ -9,7 +7,6 @@ export type InicioMetrics = {
   orderCount: number;
   customerCount: number;
   averageTicketCents: number;
-  feeSavingsCents: number;
   week: { orderCount: number; revenueCents: number };
   orderTypes: { delivery: number; table: number; pickup: number };
   topProducts: ReportTopProduct[];
@@ -44,7 +41,6 @@ export function buildInicioMetrics(month: ReportSummary, week: ReportSummary, no
     orderCount: month.orderCount,
     customerCount: month.customerCount,
     averageTicketCents: month.averageTicketCents,
-    feeSavingsCents: Math.round(month.revenueCents * PLATFORM_FEE_RATE),
     week: { orderCount: week.orderCount, revenueCents: week.revenueCents },
     orderTypes: { delivery: countOf("DELIVERY"), table: countOf("MESA"), pickup: countOf("BALCAO") },
     topProducts: month.topProducts,

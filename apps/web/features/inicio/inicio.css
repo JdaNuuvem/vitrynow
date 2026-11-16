@@ -178,34 +178,6 @@
   white-space: nowrap;
 }
 
-.inicio-stat__row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.inicio-stat__note {
-  color: var(--ok);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 16px;
-}
-
-.inicio-stat__note--large {
-  font-size: 16px;
-  line-height: 24px;
-}
-
-.inicio-stat--green {
-  background: var(--ok-bg);
-}
-
-.inicio-stat--green .inicio-stat__title,
-.inicio-stat--green .inicio-stat__value {
-  color: var(--ok);
-}
-
 .inicio-top__header {
   display: flex;
   align-items: center;
