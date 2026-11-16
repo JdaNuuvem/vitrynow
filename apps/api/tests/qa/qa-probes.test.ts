@@ -295,7 +295,7 @@ describe("QA probes — API", () => {
     const ctx = await setupStore();
     const pix = fakePix();
     createPix.mockResolvedValueOnce(pix);
-    const checkout = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: ctx.cookie }, payload: { planCode: "PRO" } });
+    const checkout = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: ctx.cookie }, payload: { planCode: "BASICO" } });
     expect(checkout.statusCode).toBe(201);
     getPayment.mockResolvedValue(await remoteFor(pix.providerPaymentId, "approved"));
     await Promise.all([webhook(pix.providerPaymentId), webhook(pix.providerPaymentId), webhook(pix.providerPaymentId)]);

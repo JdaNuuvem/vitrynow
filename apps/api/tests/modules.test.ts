@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { activateSubscription } from "../src/lib/subscription";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
 // Contrato HTTP dos módulos refatorados em camadas (catálogo, cupons, entregadores,
@@ -114,6 +115,8 @@ describe("módulos em camadas — contrato HTTP", () => {
   });
 
   it("equipe: convida, e-mail duplicado é 409, remove; não remove a si mesmo nem o último dono", async () => {
+    // Equipe é recurso do PRO (D2); o teste vale só o BASICO, então ativamos o PRO nesta loja.
+    await activateSubscription({ subscriptionId: (await prisma.subscription.findFirstOrThrow()).id, planCode: "PRO" });
     const invited = await call("POST", "/api/users", { email: "func@teste.com", password: "provisoria1" });
     expect(invited.statusCode).toBe(201);
     const staffId = json(invited).user.id;
