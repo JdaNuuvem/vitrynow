@@ -143,7 +143,7 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 - **Dedupe e ack persistido** (`Services/PrintLedger.cs`, arquivo `%LOCALAPPDATA%\MeuCardapioPrintClient\printed.json`): polling e WS passam pelo mesmo portão, um pedido nunca é impresso duas vezes, e se o aviso à API falhar o ack é repetido sem reimprimir. Falha de impressão volta com recuo (15 s até 5 min) e sem novo alerta sonoro.
 - **Timeouts:** HTTP 15 s, conexão WS 10 s, keep-alive do WS 20 s.
 - **Chave de impressora protegida por DPAPI** (`Services/SecretStore.cs`): o `settings.json` guarda só `DeviceTokenProtected`. Settings antigos com `DeviceToken` em texto puro são migrados e regravados na primeira abertura. Se o arquivo for copiado para outro usuário/PC, a chave não abre e o app pede a chave de novo.
-- Teste em worktree: `.\run-selftest.ps1 (sem parâmetros; `-ReconRoot` foi aposentado, o build não usa mais `reconstruction/`)`.
+- Teste em worktree: `.\run-selftest.ps1` (sem parâmetros; `-ReconRoot` foi aposentado, o build não usa mais `reconstruction/`).
 - **URL da API:** `http://` só para `localhost`, `127.0.0.1` e `::1`; qualquer outro servidor exige `https://` (`Services/ApiUrlPolicy.cs`). Settings antigos com URL insegura caem em "não configurado". Sem redirecionamento automático (o Bearer não segue para outro host).
 - **Gravação de `settings.json` atômica** (`.tmp` + `File.Replace`). Se a migração do token em texto puro não puder regravar, o app avisa e tenta de novo a cada abertura; se migrar, avisa para gerar uma chave nova no painel (a antiga já ficou em texto puro).
 - **Tela de configuração:** a chave é mascarada e nunca preenchida com o valor salvo; campo em branco mantém a chave atual. Menu da bandeja: "Configurar chave...".
