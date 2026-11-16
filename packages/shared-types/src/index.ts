@@ -93,6 +93,7 @@ export const wsServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("order.cancel_notice"), orderId: z.string() }),
   z.object({ type: z.literal("payment.refund_pending"), orderId: z.string() }),
   z.object({ type: z.literal("payment.refund_done"), orderId: z.string() }),
+  z.object({ type: z.literal("payment.reconcile_needed"), orderId: z.string() }),
   z.object({ type: z.literal("ping") }),
 ]);
 export type WsServerMessage = z.infer<typeof wsServerMessageSchema>;

@@ -241,6 +241,7 @@ model Order {
   printedAt     DateTime?
   canceledAt        DateTime?
   couponReleasedAt  DateTime? // idempotência da devolução do cupom (ADR-0007)
+  refundLockedAt    DateTime? // estorno em curso: congela o pedido NA PRÓPRIA linha (ver ADR-0007 §11); nula = livre
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
@@ -370,6 +371,7 @@ model Payment {
   refundContext     Json? // {reason, source, userId} para concluir o cancelamento depois do estorno
   lastRawStatus     String?
   lastCheckedAt     DateTime?
+  reconcileNote     String? // estorno feito mas o pedido já estava finalizado: conciliação manual (nunca silencioso)
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 

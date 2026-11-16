@@ -101,6 +101,7 @@ export class OrderService {
       payment: order.payment && {
         ...order.payment,
         refundPending: order.payment.status === "ESTORNO_PENDENTE",
+        reconcileRequired: !!order.payment.reconcileNote,
       },
       allowedTransitions: allowedTransitions(order, role),
       blocked: [...blockedTransitions(order, role), ...this.undoBlocked(order, history, role)],
@@ -148,7 +149,7 @@ export class OrderService {
 
     await this.db.$transaction(async (tx) => {
       const moved = await tx.order.updateMany({
-        where: { id: order.id, storeId: actor.storeId, status: order.status, NOT: { payment: { is: { status: "ESTORNO_PENDENTE" } } } },
+        where: { id: order.id, storeId: actor.storeId, status: order.status, refundLockedAt: null },
         data: { status: to },
       });
       if (moved.count !== 1) throw STATE_CHANGED();
@@ -176,7 +177,7 @@ export class OrderService {
 
     await this.db.$transaction(async (tx) => {
       const moved = await tx.order.updateMany({
-        where: { id: order.id, storeId: actor.storeId, status: order.status, NOT: { payment: { is: { status: "ESTORNO_PENDENTE" } } } },
+        where: { id: order.id, storeId: actor.storeId, status: order.status, refundLockedAt: null },
         data: { status: prev.status },
       });
       if (moved.count !== 1) throw STATE_CHANGED();
@@ -284,7 +285,7 @@ export class OrderService {
         id: order.id,
         storeId: order.storeId,
         status: opts.expected === "ANY_ACTIVE" ? { notIn: [...FINAL_STATUSES] } : opts.expected,
-        ...(opts.noMoney ? { NOT: { payment: { is: { status: { in: ["APROVADO", "ESTORNO_PENDENTE"] } } } } } : {}),
+        ...(opts.noMoney ? { refundLockedAt: null, NOT: { payment: { is: { status: { in: ["APROVADO", "ESTORNO_PENDENTE"] } } } } } : {}),
       },
       data: { status: "CANCELADO", canceledAt: now, delivererId: null },
     });
@@ -328,13 +329,23 @@ export class OrderService {
     const payment = order.payment;
     if (!payment || !payment.providerPaymentId) throw err(409, "INVALID_TRANSITION", "Pagamento sem identificador no provedor; não é possível estornar.");
 
-    // Tx 1: APROVADO → ESTORNO_PENDENTE (condicional). O pedido ainda não muda.
+    // Tx 1: trava o PEDIDO (na própria linha) + APROVADO → ESTORNO_PENDENTE, na mesma transação.
+    // O guard vale para TODOS os atores (C5): se o pedido já é final, nada é tocado (409). Cliente: só PENDENTE.
+    // A única exceção é o estorno de pagamento tardio de pedido já CANCELADO (nada a proteger no pedido).
     const context = JSON.parse(JSON.stringify(origin)) as Prisma.InputJsonValue;
+    const lateRefund = origin.reason.code === "PAGAMENTO_APOS_CANCELAMENTO";
     await this.db.$transaction(async (tx) => {
-      if (origin.actor === "CUSTOMER") {
-        // Trava o "aceitar" da loja: só segue se o pedido ainda é PENDENTE.
-        const guard = await tx.order.updateMany({ where: { id: order.id, storeId: order.storeId, status: "PENDENTE" }, data: { updatedAt: this.now() } });
-        if (guard.count !== 1) throw err(409, "ORDER_ALREADY_ACCEPTED", "A loja já aceitou o pedido. Fale com ela.");
+      const guard = await tx.order.updateMany({
+        where: {
+          id: order.id,
+          storeId: order.storeId,
+          ...(origin.actor === "CUSTOMER" ? { status: "PENDENTE" } : lateRefund ? {} : { status: { notIn: [...FINAL_STATUSES] } }),
+        },
+        data: { refundLockedAt: this.now() },
+      });
+      if (guard.count !== 1) {
+        if (origin.actor === "CUSTOMER") throw err(409, "ORDER_ALREADY_ACCEPTED", "A loja já aceitou o pedido. Fale com ela.");
+        throw err(409, "INVALID_TRANSITION", "Este pedido já foi finalizado ou cancelado.");
       }
       const flipped = await tx.payment.updateMany({
         where: { id: payment.id, status: "APROVADO" },
@@ -370,18 +381,35 @@ export class OrderService {
     // Tx 2: ESTORNO_PENDENTE → REEMBOLSADO + cancelar o pedido (qualquer estado ativo: o dinheiro já voltou).
     // Só quem vence a troca de estado do pagamento conclui (e emite os efeitos): chamadas simultâneas
     // (retry manual + job) terminam todas em "DONE", mas os efeitos rodam uma única vez.
+    // Se o pedido NÃO pôde ser cancelado e não está cancelado (ex.: já concluído), o dinheiro voltou mesmo assim:
+    // fica marcado para conciliação manual, com alerta — nunca REEMBOLSADO em silêncio.
     const concluded = await this.db.$transaction(async (tx) => {
       const flipped = await tx.payment.updateMany({
         where: { id: payment.id, status: "ESTORNO_PENDENTE" },
         data: { status: "REEMBOLSADO", refundLastError: null },
       });
-      if (flipped.count !== 1) return false;
-      await this.applyCancel(tx, order, origin, { expected: "ANY_ACTIVE" });
-      return true;
+      if (flipped.count !== 1) return null;
+      const orderCancelled = await this.applyCancel(tx, order, origin, { expected: "ANY_ACTIVE" });
+      let reconcile = false;
+      if (!orderCancelled) {
+        const current = await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { status: true } });
+        if (current.status !== "CANCELADO") {
+          reconcile = true;
+          await tx.payment.update({
+            where: { id: payment.id },
+            data: { reconcileNote: `Estorno feito, mas o pedido já estava ${current.status}. Conferir com o cliente.` },
+          });
+        }
+      }
+      return { orderCancelled, reconcile };
     });
     if (concluded) {
-      await this.afterCancelCommitted(order, origin);
+      if (concluded.orderCancelled) await this.afterCancelCommitted(order, origin);
       this.publish(order.storeId, { type: "payment.refund_done", orderId: order.id });
+      if (concluded.reconcile) {
+        this.publish(order.storeId, { type: "payment.reconcile_needed", orderId: order.id });
+        this.audit.log({ storeId: order.storeId, userId: origin.userId, action: "order.refund_reconcile", targetType: "Order", targetId: order.id });
+      }
       this.audit.log({ storeId: order.storeId, userId: origin.userId, action: "order.refund", targetType: "Order", targetId: order.id });
     }
     return "DONE";
