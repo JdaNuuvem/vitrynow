@@ -95,6 +95,15 @@ model Store {
   deliverers   Deliverer[]
   auditLogs    AuditLog[]
   subscription Subscription?
+  counter      StoreCounter?
+}
+
+// Contador atômico por loja (hoje: sequência do código do pedido). Incrementado com
+// INSERT ... ON CONFLICT DO UPDATE ... RETURNING dentro da transação do pedido (B01).
+model StoreCounter {
+  storeId  String @id
+  store    Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  orderSeq Int    @default(0)
 }
 
 model User {
