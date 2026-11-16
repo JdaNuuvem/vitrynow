@@ -223,7 +223,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
   );
 
   // Consultado pela tela de checkout enquanto aguarda a confirmação do PIX.
-  app.get("/stores/:slug/orders/:orderId/payment-status", async (request, reply) => {
+  app.get("/stores/:slug/orders/:orderId/payment-status", { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } }, async (request, reply) => {
     const { slug, orderId } = request.params as { slug: string; orderId: string };
     const store = await prisma.store.findUnique({ where: { slug } });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });
@@ -254,7 +254,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
 
   // Cliente só cancela enquanto a loja não aceitou (PENDENTE); vence quem chegar primeiro.
   // Com PIX já aprovado, o estorno roda automaticamente (ADR-0007 §5.3).
-  app.post("/stores/:slug/orders/:orderId/cancel", async (request, reply) => {
+  app.post("/stores/:slug/orders/:orderId/cancel", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
     const { slug, orderId } = request.params as { slug: string; orderId: string };
     const store = await prisma.store.findUnique({ where: { slug } });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });

@@ -3,6 +3,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { login, makeApp, registerStore, resetDb } from "./helpers";
+import { subscribe } from "../src/realtime/hub";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -11,6 +12,7 @@ vi.mock("../src/lib/mercadopago", async (importOriginal) => {
 import * as mp from "../src/lib/mercadopago";
 const refundPayment = vi.mocked(mp.refundPayment);
 const cancelPayment = vi.mocked(mp.cancelPayment);
+const getPayment = vi.mocked(mp.getPayment);
 
 type App = ReturnType<typeof makeApp>;
 
@@ -228,7 +230,8 @@ describe("API-02 — estados do pedido", () => {
     expect(res.statusCode).toBe(200);
     expect(json(res).refund).toBe("DONE");
     expect(refundPayment).toHaveBeenCalledTimes(1);
-    expect(refundPayment).toHaveBeenCalledWith(`mp-${id}`);
+    const paymentId = (await prisma.payment.findUnique({ where: { orderId: id } }))!.id;
+    expect(refundPayment).toHaveBeenCalledWith(`mp-${id}`, `refund-${paymentId}`); // chave idempotente deterministica
     const order = await prisma.order.findUnique({ where: { id }, include: { payment: true } });
     expect({ status: order?.status, payment: order?.payment?.status }).toEqual({ status: "CANCELADO", payment: "REEMBOLSADO" });
   });
@@ -254,6 +257,61 @@ describe("API-02 — estados do pedido", () => {
     const after = await prisma.order.findUnique({ where: { id }, include: { payment: true, statusHistory: { orderBy: { seq: "desc" }, take: 1 } } });
     expect({ status: after?.status, payment: after?.payment?.status, attempts: after?.payment?.refundAttempts }).toEqual({ status: "CANCELADO", payment: "REEMBOLSADO", attempts: 1 });
     expect(after?.statusHistory[0]).toMatchObject({ kind: "CANCEL", reasonCode: "ITEM_EM_FALTA", source: "PANEL" });
+  });
+
+  it("C1 (Nightingale): provedor já estornou mas a resposta se perdeu ⇒ a nova tentativa consulta o provedor e conclui (nunca fica preso)", async () => {
+    const ctx = await setup();
+    const id = await paidOrder(ctx);
+    refundPayment.mockRejectedValueOnce(new Error("conexão caiu depois do aceite")); // MP estornou, nós não soubemos
+    expect((await cancel(ctx.cookie, id, { code: "ITEM_EM_FALTA" })).statusCode).toBe(202);
+
+    refundPayment.mockRejectedValueOnce(new Error("already refunded"));
+    getPayment.mockResolvedValueOnce({ providerPaymentId: `mp-${id}`, status: "refunded" });
+    const retry = await app.inject({ method: "POST", url: `/api/orders/${id}/refund/retry`, headers: { cookie: ctx.cookie } });
+    expect(retry.statusCode).toBe(200);
+    expect(json(retry).refund).toBe("DONE");
+    const o = await prisma.order.findUnique({ where: { id }, include: { payment: true } });
+    expect({ status: o?.status, payment: o?.payment?.status }).toEqual({ status: "CANCELADO", payment: "REEMBOLSADO" });
+  });
+
+  it("estorno recusado e provedor ainda 'approved' (ou a consulta falha) ⇒ continua pendente, sem concluir", async () => {
+    const ctx = await setup();
+    const id = await paidOrder(ctx);
+    refundPayment.mockRejectedValue(new Error("saldo insuficiente"));
+    getPayment.mockResolvedValueOnce({ providerPaymentId: `mp-${id}`, status: "approved" });
+    expect((await cancel(ctx.cookie, id, { code: "ITEM_EM_FALTA" })).statusCode).toBe(202);
+    getPayment.mockRejectedValueOnce(new Error("MP fora"));
+    const retry = await app.inject({ method: "POST", url: `/api/orders/${id}/refund/retry`, headers: { cookie: ctx.cookie } });
+    expect(retry.statusCode).toBe(202);
+    const o = await prisma.order.findUnique({ where: { id }, include: { payment: true } });
+    expect({ status: o?.status, payment: o?.payment?.status, attempts: o?.payment?.refundAttempts }).toEqual({ status: "PENDENTE", payment: "ESTORNO_PENDENTE", attempts: 2 });
+  });
+
+  it("duas tentativas de estorno simultâneas (retry manual + job): sem 5xx e efeitos uma única vez", async () => {
+    const ctx = await setup();
+    const id = await paidOrder(ctx);
+    refundPayment.mockRejectedValueOnce(new Error("timeout"));
+    await cancel(ctx.cookie, id, { code: "ITEM_EM_FALTA" });
+    const sent: string[] = [];
+    const socket = { readyState: 1, OPEN: 1, send: (m: string) => sent.push(m), on: vi.fn() };
+    subscribe(ctx.storeId, socket as never);
+
+    const [a, b] = await Promise.all([
+      app.inject({ method: "POST", url: `/api/orders/${id}/refund/retry`, headers: { cookie: ctx.cookie } }),
+      app.inject({ method: "POST", url: `/api/orders/${id}/refund/retry`, headers: { cookie: ctx.cookie } }),
+    ]);
+    for (const r of [a, b]) expect([200, 409]).toContain(r.statusCode); // a segunda pode chegar com o estorno já concluído
+    expect(await prisma.orderStatusHistory.count({ where: { orderId: id, kind: "CANCEL" } })).toBe(1);
+    expect(sent.filter((m) => m.includes("payment.refund_done"))).toHaveLength(1);
+    expect((await prisma.payment.findUnique({ where: { orderId: id } }))?.status).toBe("REEMBOLSADO");
+  });
+
+  it("C2 (Nightingale): cancelar pelo cardápio tem limite por IP (10/min)", async () => {
+    const ctx = await setup();
+    const codes: number[] = [];
+    for (let i = 0; i < 12; i++) codes.push((await customerCancel(ctx.slug, `inexistente-${i}`)).statusCode);
+    expect(codes.slice(0, 10).every((c) => c === 404)).toBe(true);
+    expect(codes.slice(10)).toEqual([429, 429]);
   });
 
   it("refund/retry: só OWNER, só com estorno pendente (NOT_REFUND_PENDING)", async () => {
