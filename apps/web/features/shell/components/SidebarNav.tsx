@@ -32,6 +32,8 @@ export function SidebarNav({ onNavigate }: { onNavigate: () => void }) {
               className={`shell-nav__item${active ? " is-active" : ""}`}
               aria-current={active ? "page" : undefined}
               title={route.tooltip}
+              // Com o menu recolhido o texto some (display:none); o nome acessível precisa continuar.
+              aria-label={badge ? `${route.label}, ${badge}` : route.label}
               onClick={onNavigate}
             >
               <Icon name={route.icon} size={18} />

@@ -1,7 +1,9 @@
 "use client";
 
+import { useRef } from "react";
 import { Icon } from "@/shared/icons/Icon";
 import { CaixaWidget } from "@/features/caixa/CaixaWidget";
+import { useMobileMenuFocus } from "../hooks/useMobileMenuFocus";
 import { useHasProducts, useStore } from "../StoreProvider";
 import { computeOnboarding } from "../onboarding";
 import { OnboardingWidget } from "./OnboardingWidget";
@@ -23,10 +25,12 @@ type SidebarProps = {
 export function Sidebar({ collapsed, mobileOpen, onToggle, onNavigate }: SidebarProps) {
   const store = useStore();
   const hasProducts = useHasProducts();
+  const asideRef = useRef<HTMLElement>(null);
+  useMobileMenuFocus(mobileOpen, asideRef, onNavigate);
   const classes = ["shell-sidebar", collapsed ? "is-collapsed" : "", mobileOpen ? "is-mobile-open" : ""].filter(Boolean).join(" ");
 
   return (
-    <aside className={classes} aria-label="Menu do painel">
+    <aside ref={asideRef} id="shell-sidebar" tabIndex={-1} className={classes} aria-label="Menu do painel">
       <button type="button" className="shell-sidebar__toggle" onClick={onToggle} aria-label={collapsed ? "Expandir menu" : "Recolher menu"}>
         <Icon name="sidebarToggle" size={18} />
       </button>

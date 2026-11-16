@@ -7,7 +7,7 @@ import { Icon } from "@/shared/icons/Icon";
 
 const TAB_IDS = ["inicio", "pedidos", "catalogo"] as const;
 
-export function Bottombar({ onOpenMenu, onNavigate }: { onOpenMenu: () => void; onNavigate: () => void }) {
+export function Bottombar({ onOpenMenu, onNavigate, menuOpen = false }: { onOpenMenu: () => void; onNavigate: () => void; menuOpen?: boolean }) {
   const pathname = usePathname();
   const tabs = TAB_IDS.map((id) => PANEL_ROUTES.find((route) => route.id === id)).filter((route) => route !== undefined);
 
@@ -19,7 +19,7 @@ export function Bottombar({ onOpenMenu, onNavigate }: { onOpenMenu: () => void; 
           {route.label}
         </Link>
       ))}
-      <button type="button" onClick={onOpenMenu}>
+      <button type="button" onClick={onOpenMenu} aria-expanded={menuOpen} aria-controls="shell-sidebar">
         <Icon name="menu" size={22} />
         Mais
       </button>

@@ -476,6 +476,20 @@
     transform: translateX(0);
   }
 
+  /* O menu recebe o foco por código ao abrir (useMobileMenuFocus); o anel vai nos itens, não no painel inteiro. */
+  .shell-sidebar:focus {
+    outline: none;
+  }
+
+  /* Fechado, o menu sai da tela E da árvore de acessibilidade: sem isto o Tab passava por mais de 13
+     controles invisíveis antes do conteúdo (UX-17). O visibility só muda DEPOIS da animação ao fechar. */
+  .shell-sidebar:not(.is-mobile-open) {
+    visibility: hidden;
+    transition:
+      transform 0.3s var(--ease-smooth-out),
+      visibility 0s linear 0.3s;
+  }
+
   .shell-sidebar__toggle {
     display: none;
   }
