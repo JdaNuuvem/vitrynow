@@ -4,6 +4,7 @@ import fastifyJwt from "@fastify/jwt";
 import fastifyCookie from "@fastify/cookie";
 import { prisma } from "@meucardapio/db";
 import { allowedOrigin, getJwtSecret, getMfaKey } from "../lib/securityConfig";
+import { hashToken } from "../lib/tokenHash";
 import { sessionAbsoluteLimit, sessionCookieOptions, signSession, sessionNeedsRenewal, SESSION_COOKIE } from "../lib/session";
 
 // O token carrega só identidade e versão (ADR-0008); `storeId`/`role` vêm SEMPRE do banco,
@@ -34,6 +35,7 @@ declare module "@fastify/jwt" {
 declare module "fastify" {
   interface FastifyRequest {
     deviceStoreId?: string;
+    deviceTokenId?: string;
   }
   interface FastifyInstance {
     requirePanelAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
@@ -115,12 +117,14 @@ const authPlugin: FastifyPluginAsync = async (app) => {
       reply.code(401).send({ error: "token de dispositivo ausente" });
       return;
     }
-    const deviceToken = await prisma.deviceToken.findUnique({ where: { token } });
+    // NG-06: o banco guarda só o hash; busca por índice único do hash do que chegou.
+    const deviceToken = await prisma.deviceToken.findUnique({ where: { tokenHash: hashToken(token) } });
     if (!deviceToken || deviceToken.revokedAt) {
       reply.code(401).send({ error: "token de dispositivo inválido" });
       return;
     }
     request.deviceStoreId = deviceToken.storeId;
+    request.deviceTokenId = deviceToken.id;
 
     // Heartbeat: não bloqueia a resposta — serve só pro painel saber se a impressora está
     // online (last seen), não é crítico se uma atualização ocasional se perder.

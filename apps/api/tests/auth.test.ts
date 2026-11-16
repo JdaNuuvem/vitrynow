@@ -1,13 +1,20 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { makeApp, registerStore, login, resetDb } from "./helpers";
+import * as emailLib from "../src/lib/email";
+import { hashToken } from "../src/lib/tokenHash";
 
 describe("auth", () => {
   // Instância nova por teste: evita que o rate limit (estado em memória por instância)
   // vaze de um teste para o outro.
   let app: ReturnType<typeof makeApp>;
 
+  const sentResetUrls: string[] = [];
   beforeEach(async () => {
+    sentResetUrls.length = 0;
+    vi.spyOn(emailLib, "sendPasswordResetEmail").mockImplementation(async ({ resetUrl }) => {
+      sentResetUrls.push(resetUrl);
+    });
     app = makeApp();
     await app.ready();
   });
@@ -120,11 +127,17 @@ describe("auth", () => {
     const user = await prisma.user.findUnique({ where: { email: credentials.email } });
     const resetToken = await prisma.passwordResetToken.findFirst({ where: { userId: user!.id } });
     expect(resetToken).toBeTruthy();
+    // NG-06: o banco guarda só o hash; o valor só existe no link enviado por e-mail.
+    const sentUrl = sentResetUrls.at(-1)!;
+    const plainToken = new URL(sentUrl).searchParams.get("token")!;
+    expect(plainToken).toHaveLength(32);
+    expect(resetToken!.tokenHash).not.toBe(plainToken);
+    expect(resetToken!.tokenHash).toBe(hashToken(plainToken));
 
     const reset = await app.inject({
       method: "POST",
       url: "/auth/reset-password",
-      payload: { token: resetToken!.token, newPassword: "outraSenha123" },
+      payload: { token: plainToken, newPassword: "outraSenha123" },
     });
     expect(reset.statusCode).toBe(200);
 
@@ -135,7 +148,7 @@ describe("auth", () => {
     const reuse = await app.inject({
       method: "POST",
       url: "/auth/reset-password",
-      payload: { token: resetToken!.token, newPassword: "maisUmaSenha123" },
+      payload: { token: plainToken, newPassword: "maisUmaSenha123" },
     });
     expect(reuse.statusCode).toBe(400);
   });

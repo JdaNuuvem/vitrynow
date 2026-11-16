@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import type { WebSocket } from "ws";
 import { prisma } from "@meucardapio/db";
 import { allowedOrigin } from "../lib/securityConfig";
-import { subscribe, trackUserSocket, WS_CLOSE_SESSION_REVOKED } from "../realtime/hub";
+import { subscribe, trackDeviceSocket, trackUserSocket, WS_CLOSE_SESSION_REVOKED } from "../realtime/hub";
 
 // Revalida a sessão do painel enquanto o socket está aberto: cobre falha de entrega do
 // fechamento imediato (disconnectUser) e outras instâncias da API.
@@ -54,7 +54,22 @@ const realtimeRoutes: FastifyPluginAsync = async (app) => {
     "/ws/device",
     { websocket: true, preHandler: app.requireDeviceAuth },
     (socket, request) => {
-      subscribe(request.deviceStoreId!, socket as unknown as WebSocket);
+      const ws = socket as unknown as WebSocket;
+      const deviceTokenId = request.deviceTokenId!;
+      subscribe(request.deviceStoreId!, ws);
+      trackDeviceSocket(deviceTokenId, ws);
+
+      // Revalida a chave enquanto o socket está aberto (cobre outra instância da API ou falha de entrega).
+      const timer = setInterval(async () => {
+        try {
+          const token = await prisma.deviceToken.findUnique({ where: { id: deviceTokenId }, select: { revokedAt: true } });
+          if (!token || token.revokedAt) ws.close(WS_CLOSE_SESSION_REVOKED, "chave revogada");
+        } catch {
+          // falha transitória do banco: tenta de novo no próximo ciclo
+        }
+      }, REVALIDATE_MS);
+      timer.unref();
+      ws.on("close", () => clearInterval(timer));
     },
   );
 };

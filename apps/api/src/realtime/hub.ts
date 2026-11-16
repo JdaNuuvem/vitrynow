@@ -11,7 +11,29 @@ const channels = new Map<string, Set<WebSocket>>();
 // (troca/reset de senha, "sair de todos", remoção) — ADR-0008 §1.4.
 const userSockets = new Map<string, Set<WebSocket>>();
 
+// Sockets do print-client por chave de impressora: revogar a chave fecha a conexão na hora.
+const deviceSockets = new Map<string, Set<WebSocket>>();
+
 export const WS_CLOSE_SESSION_REVOKED = 4401;
+
+export function trackDeviceSocket(deviceTokenId: string, socket: WebSocket): void {
+  let set = deviceSockets.get(deviceTokenId);
+  if (!set) {
+    set = new Set();
+    deviceSockets.set(deviceTokenId, set);
+  }
+  set.add(socket);
+  socket.on("close", () => {
+    set?.delete(socket);
+    if (set && set.size === 0) deviceSockets.delete(deviceTokenId);
+  });
+}
+
+export function disconnectDevice(deviceTokenId: string): void {
+  const set = deviceSockets.get(deviceTokenId);
+  if (!set) return;
+  for (const socket of [...set]) socket.close(WS_CLOSE_SESSION_REVOKED, "chave revogada");
+}
 
 export function trackUserSocket(userId: string, socket: WebSocket): void {
   let set = userSockets.get(userId);

@@ -126,7 +126,8 @@ model User {
 model PasswordResetToken {
   id        String    @id @default(cuid())
   userId    String
-  token     String    @unique
+  // NG-06: hash SHA-256 do token enviado por e-mail (o valor em si nunca é gravado).
+  tokenHash String    @unique
   expiresAt DateTime
   usedAt    DateTime?
   createdAt DateTime  @default(now())
@@ -140,7 +141,9 @@ model DeviceToken {
   id        String    @id @default(cuid())
   storeId   String
   store     Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  token      String    @unique
+  // NG-06: só o hash SHA-256 do token vai para o banco; o valor aparece UMA vez, ao criar.
+  tokenHash    String    @unique
+  tokenPreview String // últimos 4 caracteres, só para o dono reconhecer a chave na lista
   label      String? // ex.: "PC do balcão"
   revokedAt  DateTime?
   lastSeenAt DateTime? // atualizado a cada chamada autenticada (heartbeat) — ver plugins/auth.ts

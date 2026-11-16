@@ -136,7 +136,7 @@ describe("QA isolamento entre lojas", () => {
     return (login.headers["set-cookie"] as string).split(";")[0];
   }
 
-  bug("D27 (ST-12) STAFF não consegue listar as chaves de impressora", async () => {
+  it("D27 (ST-12) STAFF não consegue listar as chaves de impressora", async () => {
     const owner = await storeWithProduct("a");
     await app.inject({ method: "POST", url: "/api/device-tokens", headers: { cookie: owner.cookie }, payload: { label: "balcão" } });
     const staffCookie = await inviteStaff(owner, "staff-a@teste.com");
@@ -144,7 +144,7 @@ describe("QA isolamento entre lojas", () => {
     expect(res.statusCode).toBe(403);
   });
 
-  bug("D27b (ST-12/NG-06) a listagem de chaves nunca devolve o token em texto (só quando é criado)", async () => {
+  it("D27b (ST-12/NG-06) a listagem de chaves nunca devolve o token em texto (só quando é criado)", async () => {
     const owner = await storeWithProduct("a");
     const created = JSON.parse((await app.inject({ method: "POST", url: "/api/device-tokens", headers: { cookie: owner.cookie }, payload: { label: "balcão" } })).body);
     const full = created.token.token as string;
