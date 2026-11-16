@@ -54,6 +54,7 @@ namespace MeuCardapio.PrintClient.UI
             _tray.Visible = !App.AutoStart;
             var menu = new ContextMenuStrip();
             menu.Items.Add(App.AutoStart ? "Mostrar" : "Minimizar", null, (s, e) => Show());
+            menu.Items.Add("Configurar chave...", null, (s, e) => OpenSetup());
             menu.Items.Add("Verificar atualizações", null, (s, e) => Updater.CheckForUpdate());
             menu.Items.Add("Sair", null, (s, e) => Close());
             _tray.ContextMenuStrip = menu;
@@ -64,9 +65,43 @@ namespace MeuCardapio.PrintClient.UI
 
             Shown += (s, e) =>
             {
+                WarnAboutTokenMigration();
                 App.StartListeners();
                 if (Updater.IsConfigured) Task.Run(() => Updater.CheckForUpdate());
             };
+        }
+
+        // Parecer Nightingale (C2): a migração da chave em texto puro precisa ser visível.
+        void WarnAboutTokenMigration()
+        {
+            switch (AppSettings.Current.Migration)
+            {
+                case TokenMigration.SaveFailed:
+                    Logger.Error("Chave de impressora ainda em texto puro em settings.json: não foi possível regravar");
+                    _statusLabel.Text = "ATENÇÃO: a chave de impressora ainda não está protegida neste computador.";
+                    MessageBox.Show(this,
+                        "Não foi possível proteger a chave de impressora neste computador (o arquivo de configuração não pôde ser gravado)." + Environment.NewLine + Environment.NewLine
+                        + "Verifique as permissões da pasta " + AppSettings.BaseDirectory + ". O aplicativo tentará de novo na próxima abertura.",
+                        "MeuCardapio - Impressão", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    break;
+                case TokenMigration.Protected:
+                    Logger.Info("Chave de impressora migrada de texto puro para proteção do Windows");
+                    MessageBox.Show(this,
+                        "A chave de impressora agora fica protegida neste computador." + Environment.NewLine + Environment.NewLine
+                        + "Como a chave anterior estava salva em texto puro, gere uma nova chave no painel (Impressoras) e troque-a pelo menu da bandeja (\"Configurar chave...\").",
+                        "MeuCardapio - Impressão", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    break;
+            }
+        }
+
+        void OpenSetup()
+        {
+            using (var setup = new SetupForm())
+            {
+                if (setup.ShowDialog(this) == DialogResult.OK)
+                    MessageBox.Show(this, "Configuração salva. Feche e abra o aplicativo para usar a nova chave.",
+                        "MeuCardapio - Impressão", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
         }
 
         void WireAppEvents()

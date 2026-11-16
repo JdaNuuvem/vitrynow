@@ -15,7 +15,7 @@ $hap  = Join-Path $libs "HtmlAgilityPack.dll"
 $json = Join-Path $libs "Newtonsoft.Json.dll"
 $srcs = @(
   "Printing\TicketRenderer.cs", "SelfTest.cs", "Models\PrintableOrder.cs", "Services\TicketTemplate.cs",
-  "SelfTestDevice.cs", "Services\PrintLedger.cs", "Services\SecretStore.cs", "Services\AppSettings.cs"
+  "SelfTestDevice.cs", "Services\PrintLedger.cs", "Services\SecretStore.cs", "Services\AppSettings.cs", "Services\ApiUrlPolicy.cs"
 ) | ForEach-Object { Join-Path $base $_ }
 $o = & $csc /nologo /target:library "/out:$outD" /r:mscorlib.dll /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Security.dll "/r:$hap" "/r:$json" @srcs 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) { Write-Error "csc falhou:`n$o"; exit 1 }

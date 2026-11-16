@@ -28,7 +28,8 @@ namespace MeuCardapio.PrintClient.Services
         public event Action<PrintableOrder> TicketReady;
         public event Action<string> StatusChanged;
 
-        readonly HttpClient _http = new HttpClient { Timeout = HttpTimeout };
+        // AllowAutoRedirect=false: a API nunca redireciona, e o Bearer não pode seguir para outro host.
+        readonly HttpClient _http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = HttpTimeout };
         readonly SemaphoreSlim _cycleGate = new SemaphoreSlim(1, 1);
         readonly PrintLedger _ledger;
         CancellationTokenSource _cts;
@@ -41,6 +42,12 @@ namespace MeuCardapio.PrintClient.Services
 
         public void Start()
         {
+            var urlProblem = ApiUrlPolicy.Validate(AppSettings.Current.ApiBaseUrl);
+            if (urlProblem != null)
+            {
+                StatusChanged?.Invoke("Configuração recusada: " + urlProblem);
+                return; // nem conecta: a chave não vai por canal inseguro
+            }
             _cts = new CancellationTokenSource();
             _http.BaseAddress = new Uri(AppSettings.Current.ApiBaseUrl);
             _http.DefaultRequestHeaders.Authorization =
@@ -179,6 +186,8 @@ namespace MeuCardapio.PrintClient.Services
         {
             using (var response = await _http.GetAsync(path, token))
             {
+                if ((int)response.StatusCode >= 300 && (int)response.StatusCode < 400)
+                    throw new InvalidOperationException("a API respondeu com redirecionamento (" + (int)response.StatusCode + "); confira a URL");
                 if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
                     throw new InvalidOperationException("chave de impressora recusada pela API (" + (int)response.StatusCode + ")");
                 response.EnsureSuccessStatusCode();

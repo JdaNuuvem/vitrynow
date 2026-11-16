@@ -4,6 +4,14 @@ using Newtonsoft.Json;
 
 namespace MeuCardapio.PrintClient.Services
 {
+    // Como terminou a migração do token em texto puro (settings.json de versões antigas).
+    public enum TokenMigration
+    {
+        None,        // nada a migrar
+        Protected,   // migrou e regravou o arquivo já protegido (a chave antiga circulou em texto puro: girar)
+        SaveFailed,  // não conseguiu regravar: o texto puro CONTINUA no disco; tenta de novo no próximo início
+    }
+
     // Settings locais do print-client — nada aqui aponta para o cardapio.ai: ApiBaseUrl é a URL
     // do NOSSO backend (apps/api) e DeviceToken é a "chave de impressora" emitida no NOSSO painel.
     public class AppSettings
@@ -17,11 +25,19 @@ namespace MeuCardapio.PrintClient.Services
         public string DeviceTokenProtected
         {
             get { return SecretStore.Protect(DeviceToken); }
-            set { DeviceToken = SecretStore.Unprotect(value); }
+            set
+            {
+                // Valor vazio/ilegível (outro usuário, arquivo editado) não apaga um token legado
+                // que já foi lido, qualquer que seja a ordem das propriedades no JSON.
+                var token = SecretStore.Unprotect(value);
+                if (string.IsNullOrEmpty(token)) return;
+                DeviceToken = token;
+                MigratedFromPlaintext = false; // o protegido vale mais que o legado
+            }
         }
 
         // Migração: settings.json antigos tinham "DeviceToken" em texto puro. Só leitura; ao
-        // carregar, o valor entra em memória e o arquivo é regravado já protegido (Load).
+        // carregar, o valor entra em memória e o arquivo é regravado já protegido (LoadFrom).
         [JsonProperty("DeviceToken")]
         string LegacyDeviceToken
         {
@@ -36,6 +52,8 @@ namespace MeuCardapio.PrintClient.Services
         }
 
         [JsonIgnore] public bool MigratedFromPlaintext { get; private set; }
+        [JsonIgnore] public TokenMigration Migration { get; private set; }
+
         // URL do servidor de downloads (nosso, não cardapio.ai) onde version.txt + instalador
         // ficam publicados. Vazio = auto-update desligado (padrão até você publicar isso).
         public string UpdateBaseUrl { get; set; } = "";
@@ -57,18 +75,17 @@ namespace MeuCardapio.PrintClient.Services
         static AppSettings _current;
         public static AppSettings Current => _current ?? (_current = Load());
 
-        public static AppSettings Load()
+        public static AppSettings Load() { return LoadFrom(FilePath); }
+
+        public static AppSettings LoadFrom(string path)
         {
             try
             {
-                if (File.Exists(FilePath))
+                if (File.Exists(path))
                 {
-                    var loaded = JsonConvert.DeserializeObject<AppSettings>(File.ReadAllText(FilePath)) ?? new AppSettings();
+                    var loaded = JsonConvert.DeserializeObject<AppSettings>(File.ReadAllText(path)) ?? new AppSettings();
                     if (loaded.MigratedFromPlaintext)
-                    {
-                        _current = loaded;
-                        Save(); // regrava sem o token em texto puro
-                    }
+                        loaded.Migration = SaveTo(path, loaded) ? TokenMigration.Protected : TokenMigration.SaveFailed;
                     return loaded;
                 }
             }
@@ -76,16 +93,34 @@ namespace MeuCardapio.PrintClient.Services
             return new AppSettings();
         }
 
-        public static void Save()
+        // Devolve false se não conseguiu gravar (quem chama avisa o usuário).
+        public static bool Save() { return SaveTo(FilePath, _current); }
+
+        // Escrita atômica: grava um .tmp completo e só então troca o arquivo. Uma queda no meio
+        // deixa o settings.json anterior intacto (antes, WriteAllText direto podia truncá-lo e
+        // perder a chave).
+        public static bool SaveTo(string path, AppSettings settings)
         {
+            if (settings == null) return false;
+            var tmp = path + ".tmp";
             try
             {
-                Directory.CreateDirectory(BaseDirectory);
-                File.WriteAllText(FilePath, JsonConvert.SerializeObject(_current, Formatting.Indented));
+                var dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                File.WriteAllText(tmp, JsonConvert.SerializeObject(settings, Formatting.Indented));
+                if (File.Exists(path)) File.Replace(tmp, path, null);
+                else File.Move(tmp, path);
+                return true;
             }
-            catch { /* sem permissão -> mantém em memória */ }
+            catch
+            {
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+                return false;
+            }
         }
 
-        public bool IsConfigured => !string.IsNullOrWhiteSpace(ApiBaseUrl) && !string.IsNullOrWhiteSpace(DeviceToken);
+        // Configurado = tem chave E uma URL aceita pela política (http só para localhost).
+        // Settings antigos com URL insegura caem em "não configurado" e pedem a configuração.
+        public bool IsConfigured => ApiUrlPolicy.IsAllowed(ApiBaseUrl) && !string.IsNullOrWhiteSpace(DeviceToken);
     }
 }
