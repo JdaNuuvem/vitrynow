@@ -54,11 +54,13 @@
     <Compile Include="SelfTestFakeApi.cs" />
     <Compile Include="SelfTestPrint.cs" />
     <Compile Include="SelfTestHarness.cs" />
+    <Compile Include="SelfTestAudio.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Models\PrintableOrder.cs" />
     <Compile Include="Services\AppContext.cs" />
     <Compile Include="Services\ApiUrlPolicy.cs" />
     <Compile Include="Services\AppSettings.cs" />
+    <Compile Include="Services\AlertSounds.cs" />
     <Compile Include="Services\AudioPlayer.cs" />
     <Compile Include="Services\DeviceClient.cs" />
     <Compile Include="Services\PrintLedger.cs" />
@@ -81,11 +83,5 @@
     <Compile Include="Services\UpdateVerifier.cs" />
     <Compile Include="Services\Logger.cs" />
   </ItemGroup>
-  <ItemGroup>
-    <AudioWav Include="Audios\*.wav" Condition="Exists('Audios')" />
-  </ItemGroup>
-  <Target Name="CopyAudioFiles" AfterTargets="Build">
-    <Copy SourceFiles="@(AudioWav)" DestinationFolder="$(OutDir)Audios\" SkipUnchangedFiles="true" Condition="'@(AudioWav)' != ''" />
-  </Target>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

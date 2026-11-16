@@ -29,7 +29,6 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 [Files]
 Source: "bin\Release\MeuCardapio - Impressao.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "bin\Release\*.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
-Source: "bin\Release\Audios\*"; DestDir: "{app}\Audios"; Flags: ignoreversion recursesubdirs skipifsourcedoesntexist
 
 [Tasks]
 Name: "autostart"; Description: "Iniciar automaticamente com o Windows"; GroupDescription: "Opções adicionais:"; Flags: checkedonce

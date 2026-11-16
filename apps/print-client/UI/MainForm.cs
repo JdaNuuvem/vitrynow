@@ -199,7 +199,7 @@ namespace MeuCardapio.PrintClient.UI
             AppSettings.Current.DropdownIndex = _sounds.SelectedIndex + 1;
             if (_sounds.SelectedIndex == 2)
             {
-                using (var ofd = new OpenFileDialog { Title = "Som personalizado", Filter = "Áudio|*.wav;*.mp3;*.wma" })
+                using (var ofd = new OpenFileDialog { Title = "Som personalizado", Filter = "Áudio WAV|*.wav" })
                 {
                     if (ofd.ShowDialog(this) == DialogResult.OK)
                         AppSettings.Current.CustomSound = ofd.FileName;
