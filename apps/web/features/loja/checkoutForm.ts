@@ -41,8 +41,8 @@ export const PAYMENT_GROUPS: { legend: string; online: boolean; options: { value
 export const TIP_OPTIONS_CENTS = [0, 200, 500, 1000];
 
 export const CHANGE_TOO_LOW_MESSAGE = "o valor do troco precisa cobrir o total";
-// Texto T-09 da spec 09 §2.4. Sem ponto final aqui: quem mostra acrescenta.
-export const STORE_CLOSED_MESSAGE = "A loja não está recebendo pedidos agora";
+// Texto oficial T-09 (ogilvypy-textos-verdadeiros.md; spec 09 §2.4). Sem ponto final aqui: quem mostra acrescenta.
+export const STORE_CLOSED_MESSAGE = "Esta loja não está recebendo pedidos agora";
 
 export type CheckoutTotals = {
   subtotalCents: number;

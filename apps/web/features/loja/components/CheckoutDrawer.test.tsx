@@ -163,7 +163,7 @@ describe("CheckoutDrawer: erros do servidor e rede (UI-V-06)", () => {
 
   it("loja fechada avisa e bloqueia o envio", () => {
     setup({ closed: true });
-    expect(screen.getByRole("alert")).toHaveTextContent("A loja não está recebendo pedidos agora.");
+    expect(screen.getByRole("alert")).toHaveTextContent("Esta loja não está recebendo pedidos agora.");
     expect(screen.getByRole("button", { name: /Finalizar pedido/ })).toBeDisabled();
   });
 
