@@ -103,6 +103,7 @@ namespace MeuCardapio.PrintClient
             Check("template proprio: item com quantidade", hasItem);
 
             SelfTestDevice.Run();
+            SelfTestUpdater.Run();
 
             Console.WriteLine(Failures == 0 ? "ALL OK" : "FAILURES=" + Failures);
             return Failures == 0 ? 0 : 1;
