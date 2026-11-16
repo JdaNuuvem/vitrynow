@@ -9,6 +9,9 @@
 # Variáveis: PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE (padrão libpq), BACKUP_DIR (/backups),
 # KEEP_DAYS (14), KEEP_MIN (3 = nunca apaga os 3 mais recentes), MIN_TABLES (1).
 set -eu
+# Os dumps têm dados de clientes e hashes de senha: só o dono lê (H1-C1). Vale para arquivos novos
+# (.dump, .sha256, LAST_OK) e para a pasta.
+umask 077
 
 BACKUP_DIR="${BACKUP_DIR:-/backups}"
 KEEP_DAYS="${KEEP_DAYS:-14}"
@@ -20,6 +23,7 @@ log() { printf '%s backup: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 fail() { log "FALHA: $*"; rm -f "$TMP" "$TMP.sha256" 2>/dev/null || true; exit 1; }
 
 mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
 STAMP="$(date -u +%Y%m%d_%H%M%S)"
 FINAL="$BACKUP_DIR/${PGDATABASE}_${STAMP}.dump"
 TMP="$FINAL.partial"
