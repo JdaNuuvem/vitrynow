@@ -171,3 +171,18 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 - **Gravação de `settings.json` atômica** (`.tmp` + `File.Replace`). Se a migração do token em texto puro não puder regravar, o app avisa e tenta de novo a cada abertura; se migrar, avisa para gerar uma chave nova no painel (a antiga já ficou em texto puro).
 - **Tela de configuração:** a chave é mascarada e nunca preenchida com o valor salvo; campo em branco mantém a chave atual. Menu da bandeja: "Configurar chave...".
 - **Limite da proteção DPAPI:** protege contra **cópia do arquivo** para outro usuário/PC. Não protege contra malware rodando na própria conta do Windows.
+
+## Conteúdo do tíquete (PC-07, B4)
+
+Ordem da spec B4.1: loja, `PEDIDO #código`, tipo em destaque (ENTREGA/RETIRADA/MESA), "2ª VIA (n)" quando `reprintCount > 0`, data e hora
+(a API manda ISO em UTC; sai `dd/MM/aaaa HH:mm` no fuso do computador até a API informar o da loja), cliente, itens, observação,
+valores e bloco de pagamento (B4.2). O item mostra o valor da **linha** = (unitário + adicionais) x quantidade; o adicional mostra o extra por unidade (`+R$ 8,00`).
+
+- **Já com o contrato de hoje:** taxa de entrega, gorjeta, forma de pagamento (DINHEIRO, PIX, CREDITO, DEBITO, VR, VA ou nula), desconto **derivado**
+  (soma das linhas + taxa + gorjeta - total, sem código de cupom). PIX no tíquete significa pago online: hoje só existe PIX online e o pedido só imprime depois de pago.
+- **Opcionais que a API-14 vai enviar** (já aceitos pelo `PrintableOrder`): `subtotalCents`, `discountCents`, `couponCode` (vira "Desconto (BEM10)"),
+  `changeForCents` (vira "TROCO PARA / LEVAR DE TROCO"), `reprintCount`.
+- Bloco de pagamento: PIX => `PAGO ONLINE (PIX) - NÃO COBRAR`; dinheiro => `COBRAR R$ X EM DINHEIRO` (+ troco em linhas separadas); cartão (crédito/débito/VR/VA);
+  balcão sem forma => `COBRAR NO CAIXA`; mesa => `PAGAMENTO NA MESA`; sem forma => `FORMA DE PAGAMENTO NÃO INFORMADA`.
+- **Ainda não:** aviso "PEDIDO #xxxx CANCELADO" e o trabalho de reimpressão (precisam do `PrintJob`, PC-03/API-12/API-14), número da mesa ("MESA 12" não vem no contrato),
+  bairro/referência separados do endereço, opções agrupadas (B8).

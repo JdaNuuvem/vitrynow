@@ -14,13 +14,15 @@ namespace MeuCardapio.PrintClient.Services
         readonly DeviceClient _device;
         readonly IPrintTarget _target;
         readonly Func<int> _paperMm;
+        readonly TimeZoneInfo _timeZone;
 
         // Mensagem curta para o lojista (toast) e para o log.
         public event Action<string> Message;
 
-        public PrintCoordinator(DeviceClient device, IPrintTarget target, Func<int> paperMm)
+        // timeZone: fuso para a data do tíquete (null = o do computador; a API ainda não informa o da loja).
+        public PrintCoordinator(DeviceClient device, IPrintTarget target, Func<int> paperMm, TimeZoneInfo timeZone = null)
         {
-            _device = device; _target = target; _paperMm = paperMm;
+            _device = device; _target = target; _paperMm = paperMm; _timeZone = timeZone;
         }
 
         // Chamar quando o DeviceClient entrega um pedido (TicketReady). Síncrono até o papel sair.
@@ -29,7 +31,7 @@ namespace MeuCardapio.PrintClient.Services
             if (order == null) return;
             try
             {
-                var doc = TicketBuilder.Build(order, _paperMm());
+                var doc = TicketBuilder.Build(order, _paperMm(), _timeZone);
                 _target.Print(doc);
             }
             catch (Exception ex)

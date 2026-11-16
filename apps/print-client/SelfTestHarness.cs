@@ -39,7 +39,7 @@ namespace MeuCardapio.PrintClient
                 Ledger = new PrintLedger(ledgerPath, () => Now);
                 var settings = new AppSettings { ApiBaseUrl = "http://127.0.0.1:" + api.Port, DeviceToken = "mcd_harness_segredo" };
                 Device = new DeviceClient(Ledger, settings) { PollIntervalMs = pollMs, WsRetryMs = 120, RevokedProbeMs = 600000 };
-                Coordinator = new PrintCoordinator(Device, printer, () => paperMm);
+                Coordinator = new PrintCoordinator(Device, printer, () => paperMm, SelfTestPrint.Tz);
                 Coordinator.Message += m => { lock (Messages) Messages.Add(m); };
                 Device.PrintProblemsChanged += l => { lock (Problems) Problems.Add(string.Join(",", l)); };
                 Device.TicketReady += o => Coordinator.Handle(o);
@@ -74,7 +74,7 @@ namespace MeuCardapio.PrintClient
             return api;
         }
 
-        static string Expected(PrintableOrder o, int mm = 58) { return TextTicketWriter.RenderText(TicketBuilder.Build(o, mm), TicketText.ColumnsFor(mm)); }
+        static string Expected(PrintableOrder o, int mm = 58) { return TextTicketWriter.RenderText(TicketBuilder.Build(o, mm, SelfTestPrint.Tz), TicketText.ColumnsFor(mm)); }
 
         // Conteudo do i-esimo arquivo da lista, ou null (teste nao estoura se o tiquete nao saiu).
         static string Read(List<string> files, int i = 0) { lock (files) return i < files.Count ? File.ReadAllText(files[i]) : null; }

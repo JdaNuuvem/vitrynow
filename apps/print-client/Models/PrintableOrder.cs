@@ -30,6 +30,16 @@ namespace MeuCardapio.PrintClient.Models
         [JsonProperty("address")] public string Address { get; set; }
         [JsonProperty("notes")] public string Notes { get; set; }
         [JsonProperty("totalCents")] public int TotalCents { get; set; }
+        // Já entregues pela API (printable.ts): taxa, gorjeta e forma de pagamento (DINHEIRO, PIX, CREDITO, DEBITO, VR, VA ou null).
+        [JsonProperty("deliveryFeeCents")] public int DeliveryFeeCents { get; set; }
+        [JsonProperty("tipCents")] public int TipCents { get; set; }
+        [JsonProperty("paymentMethod")] public string PaymentMethod { get; set; }
+        // OPCIONAIS (API-14, B4): se a API passar a enviar, o tíquete usa; senão deriva ou omite.
+        [JsonProperty("subtotalCents")] public int? SubtotalCents { get; set; }
+        [JsonProperty("discountCents")] public int? DiscountCents { get; set; }
+        [JsonProperty("couponCode")] public string CouponCode { get; set; }
+        [JsonProperty("changeForCents")] public int? ChangeForCents { get; set; }
+        [JsonProperty("reprintCount")] public int? ReprintCount { get; set; }
         [JsonProperty("createdAt")] public string CreatedAt { get; set; }
         [JsonProperty("items")] public List<PrintableOrderItem> Items { get; set; } = new List<PrintableOrderItem>();
     }

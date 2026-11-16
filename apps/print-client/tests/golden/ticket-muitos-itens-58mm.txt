@@ -1,21 +1,25 @@
           Lanches 24h
-    Pedido #3001 - RETIRADA
+          PEDIDO #3001
+            RETIRADA
+        17/11/2026 00:12
+--------------------------------
+Cliente: Cliente balcão
 --------------------------------
 1x X-Burger              R$ 5,90
-2x X-Salada              R$ 7,20
-3x X-Bacon               R$ 8,50
+2x X-Salada             R$ 14,40
+3x X-Bacon              R$ 25,50
 1x Batata M              R$ 9,80
-2x Batata G             R$ 11,10
-3x Onion rings          R$ 12,40
+2x Batata G             R$ 22,20
+3x Onion rings          R$ 37,20
 1x Coca 350             R$ 13,70
-2x Guaraná 350          R$ 15,00
-3x Suco laranja         R$ 16,30
+2x Guaraná 350          R$ 30,00
+3x Suco laranja         R$ 48,90
 1x Água s/ gás          R$ 17,60
-2x Brownie              R$ 18,90
-3x Sorvete 2 bolas      R$ 20,20
+2x Brownie              R$ 37,80
+3x Sorvete 2 bolas      R$ 60,60
 --------------------------------
-TOTAL                  R$ 209,90
-
-Cliente: Cliente balcão
-
-        17/11/2026 00:12
+TOTAL                  R$ 323,60
+--------------------------------
+   COBRAR R$ 323,60 NO CARTÃO
+           (crédito)
+--------------------------------
