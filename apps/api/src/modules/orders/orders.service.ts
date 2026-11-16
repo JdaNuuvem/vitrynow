@@ -2,7 +2,7 @@ import { type Prisma, type prisma as prismaClient, type Order, type OrderStatus,
 import type { WsServerMessage } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
 import type { AuditLogger } from "../../shared/audit";
-import { cancelPayment, refundPayment } from "../../lib/mercadopago";
+import { cancelPayment, getPayment, refundPayment } from "../../lib/mercadopago";
 import {
   FINAL_STATUSES,
   HUMAN_REASON_CODES,
@@ -343,9 +343,7 @@ export class OrderService {
     const origin = payment.refundContext as unknown as CancelOrigin | null;
     if (!origin) throw err(409, "NOT_REFUND_PENDING", "Estorno sem contexto de cancelamento.");
 
-    try {
-      await refundPayment(payment.providerPaymentId);
-    } catch {
+    if (!(await this.providerRefund(payment.id, payment.providerPaymentId))) {
       await this.db.payment.updateMany({
         where: { id: payment.id, status: "ESTORNO_PENDENTE" },
         data: { refundAttempts: { increment: 1 }, refundLastError: "Não foi possível estornar no Mercado Pago. Tentaremos novamente." },
@@ -355,14 +353,38 @@ export class OrderService {
     }
 
     // Tx 2: ESTORNO_PENDENTE → REEMBOLSADO + cancelar o pedido (qualquer estado ativo: o dinheiro já voltou).
-    await this.db.$transaction(async (tx) => {
-      await tx.payment.updateMany({ where: { id: payment.id, status: "ESTORNO_PENDENTE" }, data: { status: "REEMBOLSADO", refundLastError: null } });
+    // Só quem vence a troca de estado do pagamento conclui (e emite os efeitos): chamadas simultâneas
+    // (retry manual + job) terminam todas em "DONE", mas os efeitos rodam uma única vez.
+    const concluded = await this.db.$transaction(async (tx) => {
+      const flipped = await tx.payment.updateMany({
+        where: { id: payment.id, status: "ESTORNO_PENDENTE" },
+        data: { status: "REEMBOLSADO", refundLastError: null },
+      });
+      if (flipped.count !== 1) return false;
       await this.applyCancel(tx, order, origin, { expected: "ANY_ACTIVE" });
+      return true;
     });
-    await this.afterCancelCommitted(order, origin);
-    this.publish(order.storeId, { type: "payment.refund_done", orderId: order.id });
-    this.audit.log({ storeId: order.storeId, userId: origin.userId, action: "order.refund", targetType: "Order", targetId: order.id });
+    if (concluded) {
+      await this.afterCancelCommitted(order, origin);
+      this.publish(order.storeId, { type: "payment.refund_done", orderId: order.id });
+      this.audit.log({ storeId: order.storeId, userId: origin.userId, action: "order.refund", targetType: "Order", targetId: order.id });
+    }
     return "DONE";
+  }
+
+  // Pede o estorno ao provedor com chave idempotente. Se der erro, consulta o pagamento: "refunded" no
+  // provedor significa que o dinheiro JÁ voltou (queda entre o aceite e a nossa gravação) ⇒ sucesso.
+  private async providerRefund(paymentId: string, providerPaymentId: string): Promise<boolean> {
+    try {
+      await refundPayment(providerPaymentId, `refund-${paymentId}`);
+      return true;
+    } catch {
+      try {
+        return (await getPayment(providerPaymentId)).status === "refunded";
+      } catch {
+        return false;
+      }
+    }
   }
 
   async retryRefund(actor: PanelActor, orderId: string) {
