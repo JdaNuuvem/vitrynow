@@ -55,7 +55,7 @@ namespace MeuCardapio.PrintClient.UI
             var menu = new ContextMenuStrip();
             menu.Items.Add(App.AutoStart ? "Mostrar" : "Minimizar", null, (s, e) => Show());
             menu.Items.Add("Configurar chave...", null, (s, e) => OpenSetup());
-            menu.Items.Add("Verificar atualizações", null, (s, e) => Updater.CheckForUpdate());
+            menu.Items.Add("Verificar atualizações", null, (s, e) => Task.Run(() => Updater.CheckForUpdate()));
             menu.Items.Add("Sair", null, (s, e) => Close());
             _tray.ContextMenuStrip = menu;
 

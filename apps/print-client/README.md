@@ -19,13 +19,19 @@ da **nossa** API (`apps/api`), não do cardapio.ai.
 
 ## Build
 
-Sem dotnet SDK instalado nesta máquina — usa o mesmo truque do `reconstruction/build.ps1`: MSBuild
-4.0 do .NET Framework (já presente no Windows) + compilador Roslyn vendorizado em
-`../../../reconstruction/tools/roslyn` (reaproveitado, não duplicado).
+Sem dotnet SDK: MSBuild 4.0 do .NET Framework (já presente no Windows) + compilador Roslyn **4.8.0
+oficial da Microsoft**, baixado do NuGet na primeira execução para `tools\roslyn` (ignorado pelo git),
+com o SHA-256 do pacote fixado em `tools\toolchain.ps1` e a assinatura Authenticode do `csc.exe`
+conferida. Bibliotecas (HtmlAgilityPack, Newtonsoft.Json) ficam em `libs\` com hashes em
+`libs\SHA256SUMS` (conferidos a cada build). **Nada depende de `reconstruction/`.**
 
 ```powershell
-.\build.ps1            # Release -> bin\Release\MeuCardapio - Impressao.exe
+.\build.ps1                          # Release -> bin\Release\MeuCardapio - Impressao.exe (+ SHA256)
+.\build.ps1 -RoslynDir <pasta>       # offline: pasta que contenha tasks\net472\csc.exe
 ```
+
+**Build reprodutível:** `/deterministic` + `/pathmap` (via `obj\pathmap.rsp`). A mesma fonte gera o mesmo
+SHA-256 em qualquer pasta (verificado: duas pastas diferentes, mesmo hash).
 
 ## Teste de renderização
 
@@ -33,7 +39,7 @@ Smart App Control bloqueia a execução de EXEs recém-compilados nesta máquina
 `reconstruction`), então o self-test roda em memória via PowerShell, sem executar o EXE:
 
 ```powershell
-.\run-selftest.ps1     # compila TicketRenderer+TicketTemplate+SelfTest numa DLL e roda Run()
+.\run-selftest.ps1     # compila o núcleo testável + SelfTest numa DLL e roda Run() (124 checagens)
 ```
 
 O próprio EXE também expõe o teste quando a execução não está bloqueada: `--selftest`.
@@ -57,16 +63,39 @@ o arquivo por um ícone de verdade quando a identidade visual for decidida e rod
 .\generate-icon.ps1    # regera Resources\icon.ico
 ```
 
-## Auto-update
+## Auto-update (PC-04, B17)
 
-`Services/Updater.cs` verifica `AppSettings.Current.UpdateBaseUrl` (vazio = desligado, padrão).
-Quando configurado, compara `CurrentVersion` (constante em `Updater.cs`, hoje `1.0.0`) contra
-`{UpdateBaseUrl}/version.txt`; se houver versão nova, baixa `{UpdateBaseUrl}/MeuCardapio-PrintClient-Setup.exe`
-e executa. Checagem roda ao abrir o app (silenciosa) e também pelo menu da bandeja
-("Verificar atualizações"). **Isso aponta para um servidor de downloads NOSSO** — não existe
-ainda; para ativar, publique os dois arquivos (instalador + `version.txt` com a versão) em algum
-domínio/CDN próprio e grave a URL em `UpdateBaseUrl` nas settings (ou exponha um campo na tela de
-configuração, hoje só editável manualmente no `settings.json`).
+`Services/Updater.cs` + `UpdateVerifier.cs` + `UpdateTransport.cs`. Desligado quando `UpdateBaseUrl`
+(settings.json) está vazio. Servidor de downloads **nosso**, três arquivos lado a lado:
+
+| Arquivo | Conteúdo |
+|---|---|
+| `latest.json` | `{"version","file","sha256","size"}` |
+| `latest.json.sig` | assinatura RSA-SHA256 (base64) dos bytes exatos do `latest.json` |
+| `<file>` | o instalador `.exe` citado no manifesto |
+
+O app só executa o instalador se **todas** as regras valerem; qualquer falha descarta tudo e nada roda:
+- URL `https://` (`http://` só em localhost, para teste); sem usuário/senha/query; sem seguir redirecionamento.
+- Assinatura do manifesto confere com a **chave pública embutida no binário** (`UpdateKeys.PublicKeyXml`,
+  RSA ≥ 3072). Não existe chave no `settings.json`: quem edita o arquivo não troca a chave.
+  **Sem chave embutida o app recusa tudo** (padrão atual até o Claudio decidir a custódia da chave).
+- Versão do manifesto **estritamente maior** que a do app (manifesto antigo/replay não faz downgrade).
+- Nome do arquivo `[A-Za-z0-9._-]+.exe`, sem caminho; tamanho ≤ 200 MB; SHA-256 e tamanho do arquivo baixado
+  conferem com o manifesto assinado. Baixa para `%LOCALAPPDATA%\MeuCardapioPrintClient\updates\` (pasta do
+  usuário, não `%TEMP%`); `.part` apagado em qualquer falha.
+
+Publicar um release (a chave privada fica **fora do repositório**; o script recusa caminho dentro dele):
+
+```powershell
+.\tools\new-update-key.ps1 -OutPrivate D:\segredos\mc-release.updkey.xml   # uma vez; cole a chave pública em UpdateKeys.cs
+.\tools\sign-update.ps1 -Installer .\bin\Installer\MeuCardapio-PrintClient-Setup.exe -Version 1.1.0 `
+    -PrivateKeyFile D:\segredos\mc-release.updkey.xml -OutDir .\bin\release-1.1.0   # suba os 3 arquivos para UpdateBaseUrl
+```
+
+Limites conhecidos: não há expiração do manifesto (um servidor malicioso pode *congelar* o cliente servindo um
+manifesto antigo, mas não instalar nada); a assinatura do instalador pelo Windows (Authenticode/SmartScreen) é
+outra camada (PC-09, só com build final e aval do Claudio); `CurrentVersion` está em `Updater.cs`, em
+`installer.iss` e no csproj (manter juntos até haver fonte única).
 
 ## Instalador (Inno Setup)
 
@@ -103,8 +132,8 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 
 ## Pendências conhecidas
 
-- Servidor de downloads para o auto-update (`UpdateBaseUrl`) ainda não existe — hoje é só o mecanismo
-  cliente, testado com a checagem desligada (URL vazia).
+- Servidor de downloads para o auto-update (`UpdateBaseUrl`) e a **chave de release** (custódia) ainda não existem:
+  o mecanismo está pronto e testado, mas recusa tudo sem chave embutida.
 - Tela de configuração para `UpdateBaseUrl` (hoje só via edição manual do `settings.json`).
 - Ícone/sons são placeholders — troque antes de distribuir pra clientes de verdade.
 - Teste real com impressora térmica física (só validado até aqui via self-test + payload JSON da API).
@@ -114,7 +143,7 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 - **Dedupe e ack persistido** (`Services/PrintLedger.cs`, arquivo `%LOCALAPPDATA%\MeuCardapioPrintClient\printed.json`): polling e WS passam pelo mesmo portão, um pedido nunca é impresso duas vezes, e se o aviso à API falhar o ack é repetido sem reimprimir. Falha de impressão volta com recuo (15 s até 5 min) e sem novo alerta sonoro.
 - **Timeouts:** HTTP 15 s, conexão WS 10 s, keep-alive do WS 20 s.
 - **Chave de impressora protegida por DPAPI** (`Services/SecretStore.cs`): o `settings.json` guarda só `DeviceTokenProtected`. Settings antigos com `DeviceToken` em texto puro são migrados e regravados na primeira abertura. Se o arquivo for copiado para outro usuário/PC, a chave não abre e o app pede a chave de novo.
-- Teste em worktree: `.\run-selftest.ps1 -ReconRoot "<caminho>\reconstruction"`.
+- Teste em worktree: `.\run-selftest.ps1` (sem parâmetros; `-ReconRoot` foi aposentado, o build não usa mais `reconstruction/`).
 - **URL da API:** `http://` só para `localhost`, `127.0.0.1` e `::1`; qualquer outro servidor exige `https://` (`Services/ApiUrlPolicy.cs`). Settings antigos com URL insegura caem em "não configurado". Sem redirecionamento automático (o Bearer não segue para outro host).
 - **Gravação de `settings.json` atômica** (`.tmp` + `File.Replace`). Se a migração do token em texto puro não puder regravar, o app avisa e tenta de novo a cada abertura; se migrar, avisa para gerar uma chave nova no painel (a antiga já ficou em texto puro).
 - **Tela de configuração:** a chave é mascarada e nunca preenchida com o valor salvo; campo em branco mantém a chave atual. Menu da bandeja: "Configurar chave...".

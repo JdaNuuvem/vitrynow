@@ -16,3 +16,9 @@ infra/backups/*
 !infra/backups/.gitkeep
 *.tsbuildinfo
 coverage/
+
+# print-client: compilador baixado por apps/print-client/tools/toolchain.ps1 (hash fixado)
+apps/print-client/tools/roslyn/
+# chaves de assinatura de release NUNCA no repositorio
+*.updkey
+*.updkey.xml
