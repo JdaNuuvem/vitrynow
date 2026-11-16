@@ -54,6 +54,7 @@ namespace MeuCardapio.PrintClient.UI
             _tray.Visible = !App.AutoStart;
             var menu = new ContextMenuStrip();
             menu.Items.Add(App.AutoStart ? "Mostrar" : "Minimizar", null, (s, e) => Show());
+            menu.Items.Add("Configurar chave...", null, (s, e) => OpenSetup());
             menu.Items.Add("Verificar atualizações", null, (s, e) => Updater.CheckForUpdate());
             menu.Items.Add("Sair", null, (s, e) => Close());
             _tray.ContextMenuStrip = menu;
@@ -64,9 +65,43 @@ namespace MeuCardapio.PrintClient.UI
 
             Shown += (s, e) =>
             {
+                WarnAboutTokenMigration();
                 App.StartListeners();
                 if (Updater.IsConfigured) Task.Run(() => Updater.CheckForUpdate());
             };
+        }
+
+        // Parecer Nightingale (C2): a migração da chave em texto puro precisa ser visível.
+        void WarnAboutTokenMigration()
+        {
+            switch (AppSettings.Current.Migration)
+            {
+                case TokenMigration.SaveFailed:
+                    Logger.Error("Chave de impressora ainda em texto puro em settings.json: não foi possível regravar");
+                    _statusLabel.Text = "ATENÇÃO: a chave de impressora ainda não está protegida neste computador.";
+                    MessageBox.Show(this,
+                        "Não foi possível proteger a chave de impressora neste computador (o arquivo de configuração não pôde ser gravado)." + Environment.NewLine + Environment.NewLine
+                        + "Verifique as permissões da pasta " + AppSettings.BaseDirectory + ". O aplicativo tentará de novo na próxima abertura.",
+                        "MeuCardapio - Impressão", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    break;
+                case TokenMigration.Protected:
+                    Logger.Info("Chave de impressora migrada de texto puro para proteção do Windows");
+                    MessageBox.Show(this,
+                        "A chave de impressora agora fica protegida neste computador." + Environment.NewLine + Environment.NewLine
+                        + "Como a chave anterior estava salva em texto puro, gere uma nova chave no painel (Impressoras) e troque-a pelo menu da bandeja (\"Configurar chave...\").",
+                        "MeuCardapio - Impressão", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    break;
+            }
+        }
+
+        void OpenSetup()
+        {
+            using (var setup = new SetupForm())
+            {
+                if (setup.ShowDialog(this) == DialogResult.OK)
+                    MessageBox.Show(this, "Configuração salva. Feche e abra o aplicativo para usar a nova chave.",
+                        "MeuCardapio - Impressão", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
         }
 
         void WireAppEvents()
@@ -93,21 +128,23 @@ namespace MeuCardapio.PrintClient.UI
             {
                 string html = TicketTemplate.Build(order);
                 App.Printer.PrintTicket(html);
-                Toast("Impresso: pedido #" + order.Code);
-                Logger.Info("Impresso: pedido #" + order.Code);
-                // Só marca como impresso quando a impressão realmente deu certo. Se cair no
-                // catch, o pedido continua pendente e volta a aparecer no próximo poll
-                // (CheckPendingAsync em DeviceClient.cs) — antes disso, o `finally` chamava
-                // MarkPrintedAsync sempre, então uma impressora sem papel/desconectada fazia
-                // o pedido desaparecer da fila pra sempre, sem nunca chegar na cozinha.
-                Task.Run(() => App.Device.MarkPrintedAsync(order.OrderId));
             }
             catch (Exception ex)
             {
+                // Falhou: o pedido continua pendente na API e volta depois do recuo do ledger
+                // (15 s, 30 s, ... 5 min), sem novo alerta sonoro.
+                App.Device.ReportPrintFailed(order.OrderId);
                 string msg = "Erro na impressão do pedido #" + order.Code + ": " + ex.Message;
                 Toast(msg);
                 Logger.Error(msg, ex);
+                return;
             }
+
+            // Imprimiu. ConfirmPrintedAsync grava no disco ANTES de avisar a API; se o aviso
+            // falhar, o ack é repetido no próximo ciclo e o pedido NÃO é reimpresso.
+            Toast("Impresso: pedido #" + order.Code);
+            Logger.Info("Impresso: pedido #" + order.Code);
+            Task.Run(() => App.Device.ConfirmPrintedAsync(order.OrderId));
         }
 
         void ReloadPrinters()

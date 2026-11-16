@@ -13,7 +13,8 @@ namespace MeuCardapio.PrintClient.UI
     public class SetupForm : Form
     {
         readonly TextBox _apiUrl = new TextBox { Width = 320 };
-        readonly TextBox _token = new TextBox { Width = 320 };
+        // Máscara: a chave nunca aparece na tela (nem a digitada, nem a já salva).
+        readonly TextBox _token = new TextBox { Width = 320, UseSystemPasswordChar = true };
         readonly Label _status = new Label { AutoSize = true, ForeColor = Color.DarkRed, MaximumSize = new Size(320, 0) };
         readonly Button _connectBtn = new Button { Text = "Conectar", Width = 100 };
 
@@ -31,7 +32,9 @@ namespace MeuCardapio.PrintClient.UI
 
             var l2 = new Label { Text = "Chave de impressora (gerada no painel):", AutoSize = true, Location = new Point(16, 70) };
             _token.Location = new Point(16, 90);
-            _token.Text = AppSettings.Current.DeviceToken;
+            // Não preenche o valor salvo: só indica que existe. Em branco = manter a chave atual.
+            bool hasToken = !string.IsNullOrEmpty(AppSettings.Current.DeviceToken);
+            if (hasToken) l2.Text = "Chave de impressora (já configurada; deixe em branco para manter):";
 
             _connectBtn.Location = new Point(16, 130);
             _connectBtn.Click += OnConnectClick;
@@ -48,17 +51,27 @@ namespace MeuCardapio.PrintClient.UI
 
             string apiUrl = _apiUrl.Text.Trim().TrimEnd('/');
             string token = _token.Text.Trim();
+            if (string.IsNullOrEmpty(token)) token = AppSettings.Current.DeviceToken ?? "";
 
-            if (string.IsNullOrEmpty(apiUrl) || string.IsNullOrEmpty(token))
+            string urlProblem = ApiUrlPolicy.Validate(apiUrl);
+            if (urlProblem != null)
             {
-                _status.Text = "Informe a URL e a chave.";
+                _status.Text = urlProblem;
+                _connectBtn.Enabled = true;
+                return;
+            }
+            if (string.IsNullOrEmpty(token))
+            {
+                _status.Text = "Informe a chave de impressora.";
                 _connectBtn.Enabled = true;
                 return;
             }
 
             try
             {
-                using (var http = new HttpClient { BaseAddress = new Uri(apiUrl) })
+                // Sem redirecionamento (o Bearer nunca sai para outro host) e com timeout de 15 s.
+                using (var handler = new HttpClientHandler { AllowAutoRedirect = false })
+                using (var http = new HttpClient(handler) { BaseAddress = new Uri(apiUrl), Timeout = DeviceClient.HttpTimeout })
                 {
                     http.DefaultRequestHeaders.Authorization =
                         new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
@@ -73,7 +86,12 @@ namespace MeuCardapio.PrintClient.UI
 
                 AppSettings.Current.ApiBaseUrl = apiUrl;
                 AppSettings.Current.DeviceToken = token;
-                AppSettings.Save();
+                if (!AppSettings.Save())
+                {
+                    _status.Text = "Conectou, mas não foi possível salvar a configuração neste computador. Verifique as permissões da pasta do aplicativo.";
+                    _connectBtn.Enabled = true;
+                    return;
+                }
 
                 DialogResult = DialogResult.OK;
                 Close();
