@@ -240,7 +240,7 @@ describe("QA probes — API", () => {
     expect({ usedCount: coupon?.usedCount, canceladoNoHistorico: history.length }).toEqual({ usedCount: 0, canceladoNoHistorico: 1 });
   });
 
-  bug("D12 cliente NÃO cancela (sem estorno) um pedido cujo PIX já foi APROVADO", async () => {
+  it("D12 cliente NÃO cancela (sem estorno) um pedido cujo PIX já foi APROVADO", async () => {
     const ctx = await setupStore();
     const { orderId, providerPaymentId } = await pixOrder(ctx);
     getPayment.mockResolvedValue({ providerPaymentId, status: "approved" });
@@ -292,7 +292,7 @@ describe("QA probes — API", () => {
   });
 
   // ───────────── Painel: máquina de estados ─────────────
-  bug("D14 pedido CANCELADO não pode voltar a CONCLUIDO/EM_PREPARO pelo painel", async () => {
+  it("D14 pedido CANCELADO não pode voltar a CONCLUIDO/EM_PREPARO pelo painel", async () => {
     const ctx = await setupStore();
     const res0 = await order(ctx.slug, { type: "BALCAO", items: [{ productId: ctx.productId, quantity: 1 }] });
     const orderId = JSON.parse(res0.body).orderId;
@@ -301,7 +301,7 @@ describe("QA probes — API", () => {
     expect(back.statusCode).toBeGreaterThanOrEqual(400);
   });
 
-  bug("D14b painel não cancela manualmente pedido PIX já pago sem estornar", async () => {
+  it("D14b painel não cancela manualmente pedido PIX já pago sem estornar", async () => {
     const ctx = await setupStore();
     const { orderId, providerPaymentId } = await pixOrder(ctx);
     getPayment.mockResolvedValue({ providerPaymentId, status: "approved" });

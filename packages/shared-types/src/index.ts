@@ -15,6 +15,7 @@ export const orderStatusSchema = z.enum([
   "CONFIRMADO",
   "EM_PREPARO",
   "PRONTO",
+  "SAIU_PARA_ENTREGA",
   "CONCLUIDO",
   "CANCELADO",
 ]);
@@ -89,6 +90,9 @@ export type RegisterStoreInput = z.infer<typeof registerStoreSchema>;
 export const wsServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("order.created"), orderId: z.string() }),
   z.object({ type: z.literal("order.updated"), orderId: z.string() }),
+  z.object({ type: z.literal("order.cancel_notice"), orderId: z.string() }),
+  z.object({ type: z.literal("payment.refund_pending"), orderId: z.string() }),
+  z.object({ type: z.literal("payment.refund_done"), orderId: z.string() }),
   z.object({ type: z.literal("ping") }),
 ]);
 export type WsServerMessage = z.infer<typeof wsServerMessageSchema>;
