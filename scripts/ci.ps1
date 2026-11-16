@@ -37,7 +37,7 @@ function Step([string]$name, [scriptblock]$body) {
   $ok = $true; $note = ''
   try {
     $global:LASTEXITCODE = 0
-    & $body
+    & $body | Out-Host   # só o booleano pode sair de Step; a saída dos comandos vai para a tela
     if ($LASTEXITCODE -ne 0) { $ok = $false; $note = "exit $LASTEXITCODE" }
   } catch { $ok = $false; $note = $_.Exception.Message }
   $sw.Stop()
