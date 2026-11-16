@@ -2,7 +2,7 @@
 # na rede interna do compose — não há como contornar TLS/proxy acessando 3000/3001 direto.
 # Acesso administrativo ao banco: `docker compose exec postgres psql -U meucardapio`.
 #
-# Deploy: infra/deploy.sh (valida .env, constrói, aplica migrações, sobe e confere /health).
+# Subir (dev/staging): docker compose --env-file .env up -d --build  (veja infra/.env.example). Runbook e validação do .env: INF-11.
 
 x-logging: &default-logging
   driver: json-file
@@ -19,6 +19,8 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
     environment:
       POSTGRES_USER: meucardapio
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
@@ -65,7 +67,7 @@ services:
       MFA_HMAC_KEY: ${MFA_HMAC_KEY:?defina MFA_HMAC_KEY no .env, 32 ou mais caracteres e diferente do JWT_SECRET}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       # Só o Caddy (IP fixo, ver networks) pode ditar o IP do cliente via X-Forwarded-For (B04/ST-02).
-      TRUST_PROXY_CIDR: ${TRUST_PROXY_CIDR:-172.29.250.10/32}
+      TRUST_PROXY_CIDR: ${CADDY_IP:-172.29.250.10}/32   # derivado do IP fixo do Caddy: não há como divergir
       SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
       SESSION_ABSOLUTE_DAYS: ${SESSION_ABSOLUTE_DAYS:-14}
       JOBS_ENABLED: ${JOBS_ENABLED:-true}   # jobs no processo da API (ADR-0011); false só para depurar
@@ -116,6 +118,8 @@ services:
     image: caddy:2-alpine
     restart: unless-stopped
     logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       - api
       - web
@@ -135,7 +139,7 @@ services:
   # Backup lógico do Postgres, verificado a cada execução (scripts/backup/backup.sh): dump vazio ou
   # sem as tabelas é recusado e o healthcheck acusa. Guarda ./backups (host). ATENÇÃO: isto ainda
   # está NO MESMO servidor — a cópia externa (off-site) precisa de um destino definido pelo Claudio.
-  # Prova de restauração: scripts/backup/restore-verify.sh (veja docs/RUNBOOK-infra.md).
+  # Prova de restauração: scripts/backup/restore-verify.sh.
   postgres-backup:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -168,7 +172,7 @@ networks:
   default:
     ipam:
       config:
-        - subnet: ${INTERNAL_SUBNET:-172.29.250.0/24}   # troque (e CADDY_IP/TRUST_PROXY_CIDR) se colidir com outra rede Docker do servidor
+        - subnet: ${INTERNAL_SUBNET:-172.29.250.0/24}   # troque (e CADDY_IP) se colidir com outra rede Docker do servidor
 
 volumes:
   postgres_data:

@@ -73,9 +73,32 @@ echo "== 5 /api/admin/* bloqueado no Caddy"
 b="$(curl -s -w '|%{http_code}' -X POST -H 'x-admin-token: qualquer' "http://127.0.0.1:$PORT/api/admin/notices")"
 [ "$b" = "not found|404" ] && check ok "POST /api/admin/notices barrado no Caddy ($b)" || check fail "admin alcançou a API: $b"
 
+# Fuzz de caminho: nenhuma variação pode chegar ao handler admin (que responderia 2xx, 401 ou 403).
+# 404/400/405 = barrado no Caddy ou rota inexistente na API.
+leak=""
+for p in "/api/admin/notices" "/API/ADMIN/notices" "/api/Admin/notices" "//api/admin/notices" "/api//admin/notices" \
+         "/api/admin/./notices" "/api/./admin/notices" "/api/x/../admin/notices" "/api/%61dmin/notices" "/api/admin%2fnotices" \
+         "/api/admin/" "/api/admin" "/api/admin/notices/" "/api/admin/notices%00" "/api/admin;x=1/notices"; do
+  c="$(curl -s --path-as-is -o /dev/null -w '%{http_code}' -X POST -H 'x-admin-token: x' -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT$p")"
+  case "$c" in 404|400|405|421|000) ;; *) leak="$leak $p=$c";; esac
+done
+[ -z "$leak" ] && check ok "15 variações de caminho de /api/admin/* (caixa, //, %61, ../, ;, %00) não chegam ao handler" || check fail "variações que passaram do Caddy:$leak"
+
 echo "== 6 X-Forwarded-For forjado não chega ao backend"
-r="$(curl -s -H 'X-Forwarded-For: 6.6.6.6, 7.7.7.7' "http://127.0.0.1:$PORT/__xff")"
+# o eco (node:20-alpine) pode demorar a abrir a porta: espera até 30 s por uma resposta não vazia
+r=""
+for i in $(seq 1 15); do
+  r="$(curl -s -H 'X-Forwarded-For: 6.6.6.6, 7.7.7.7' "http://127.0.0.1:$PORT/__xff")"
+  [ -n "$r" ] && break; sleep 2
+done
 echo "   backend recebeu: $r"
+if [ -z "$r" ]; then
+  echo "   DIAGNÓSTICO: eco=$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}}' "$PROJ-xffecho" 2>&1)"
+  echo "   --- logs do eco:"; docker logs --tail 5 "$PROJ-xffecho" 2>&1 | sed 's/^/   /'
+  echo "   --- status direto do eco pela rede do compose:"
+  docker run --rm --network "${PROJ}_default" node:20-alpine node -e "require('http').get('http://xffecho:8080',r=>{console.log('eco responde',r.statusCode)}).on('error',e=>console.log('eco inacessível:',e.code))" 2>&1 | sed 's/^/   /'
+  echo "   --- caddy:"; "${DC[@]}" logs --tail 8 caddy 2>&1 | sed 's/^/   /'
+fi
 case "$r" in *6.6.6.6*|*7.7.7.7*) check fail "XFF forjado chegou ao backend";; *'"xff":"'*) check ok "XFF do cliente descartado; Caddy envia o IP real da conexão";; *) check fail "resposta inesperada: $r";; esac
 
 echo "== 6b trustProxy: CIDR confiável = IP real do Caddy; XFF forjado não escapa do limite de login"
@@ -97,13 +120,17 @@ echo "== 7 backup verificado"
 for i in $(seq 1 30); do [ -s "$ROOT/infra/backups/LAST_OK" ] && break; sleep 2; done
 f="$(ls -1 "$ROOT"/infra/backups/*.dump 2>/dev/null | tail -1)"
 if [ -n "$f" ]; then sz="$(wc -c < "$f" | tr -d ' ')"; [ "$sz" -gt 20000 ] && check ok "dump $(basename "$f") com $sz bytes" || check fail "dump pequeno: $sz bytes"; else check fail "nenhum dump gerado"; fi
+pd="$("${DC[@]}" exec -T postgres-backup stat -c %a /backups | tr -d '\r')"
+pf="$("${DC[@]}" exec -T postgres-backup sh -c 'stat -c %a /backups/*.dump /backups/*.sha256 /backups/LAST_OK | sort -u | tr "\n" " "' | tr -d '\r')"
+[ "$pd" = 700 ] && check ok "pasta de backups com modo 700" || check fail "pasta de backups com modo $pd (esperado 700)"
+[ "$pf" = "600 " ] && check ok "dump, .sha256 e LAST_OK com modo 600" || check fail "arquivos de backup com modos '$pf' (esperado 600)"
 bh="$("${DC[@]}" exec -T postgres-backup /bin/sh /scripts/healthcheck.sh >/dev/null 2>&1 && echo ok || echo no)"; [ "$bh" = ok ] && check ok "healthcheck do backup saudável" || check fail "healthcheck do backup falhou"
 
 echo "== 8 compose recusa .env sem segredos"
 for v in JWT_SECRET MFA_HMAC_KEY POSTGRES_PASSWORD WEB_ORIGIN; do
   grep -v "^$v=" "$ENVF" > "$ENVF.sem"
   out="$(docker compose -p "$PROJ-neg" -f "$ROOTW/infra/docker-compose.yml" --env-file "$(cygpath -m "$ENVF.sem")" config -q 2>&1)"
-  case "$out" in *"$v"*) check ok "sem $v o compose recusa: $(echo "$out" | head -1 | cut -c1-90)";; *) check fail "compose aceitou .env sem $v";; esac
+  case "$out" in *"required variable $v is missing"*) check ok "sem $v o compose recusa: $(echo "$out" | head -1 | cut -c1-90)";; *) check fail "compose aceitou .env sem $v";; esac
 done
 rm -f "$ENVF.sem"
 
