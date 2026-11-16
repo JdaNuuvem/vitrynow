@@ -232,6 +232,46 @@ describe("limite de impressoras e aviso de interesse (integração)", () => {
     for (let i = 0; i < 3; i++) expect((await createToken(cookie!, `PC ${i}`)).statusCode).toBe(200);
   });
 
+  it("SEC-21: 20 convites de equipe em paralelo com maxUsers=3 criam exatamente 2 (dono + 2) e o resto leva 402", async () => {
+    const original = await prisma.plan.findUniqueOrThrow({ where: { code: "PRO" } });
+    await prisma.plan.update({ where: { code: "PRO" }, data: { limits: { maxUsers: 3, maxPrinters: null } } });
+    try {
+      const { cookie } = await registerStore(app);
+      const subscription = await prisma.subscription.findFirstOrThrow();
+      await activateSubscription({ subscriptionId: subscription.id, planCode: "PRO" });
+
+      const results = await Promise.all(
+        Array.from({ length: 20 }, (_, i) =>
+          app.inject({
+            method: "POST",
+            url: "/api/users",
+            remoteAddress: `10.9.0.${i + 1}`,
+            headers: { cookie: cookie! },
+            payload: { email: `func${i}@teste.com`, password: "senha-forte-123" },
+          }),
+        ),
+      );
+      const codes = results.map((r) => r.statusCode).sort();
+      expect(await prisma.user.count()).toBe(3);
+      expect(codes.filter((c) => c === 201)).toHaveLength(2);
+      expect(codes.filter((c) => c === 402)).toHaveLength(18);
+      expect(JSON.parse(results.find((r) => r.statusCode === 402)!.body)).toMatchObject({
+        code: "LIMIT_REACHED",
+        details: { limit: "maxUsers", max: 3 },
+      });
+    } finally {
+      await prisma.plan.update({ where: { code: "PRO" }, data: { limits: original.limits as object } });
+    }
+  });
+
+  it("SEC-21: a janela do limite se fecha sempre (402, sucesso, erro): 30 pedidos seguidos não travam", async () => {
+    const { cookie } = await registerStore(app);
+    for (let i = 0; i < 30; i++) {
+      const response = await createToken(cookie!, `PC ${i}`);
+      expect(response.statusCode, `tentativa ${i}`).toBe(i === 0 ? 200 : 402);
+    }
+  });
+
   it("CA-B10-04: 'Quero ser avisado' 3 vezes grava 1 registro por loja e recurso", async () => {
     const { cookie } = await registerStore(app);
     for (let i = 0; i < 3; i++) expect((await interest(cookie, "scheduled_orders")).statusCode).toBe(200);
