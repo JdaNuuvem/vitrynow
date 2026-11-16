@@ -13,6 +13,8 @@ namespace MeuCardapio.PrintClient.Services
         public string Message;
         public string Version;
         public string InstallerPath; // só em Ready: arquivo JÁ verificado
+        public string ExpectedSha256; // do manifesto assinado (só em Ready)
+        public long ExpectedSize;
     }
 
     // Auto-update seguro (PC-04, B17). Servidor NOSSO, em {UpdateBaseUrl}:
@@ -24,7 +26,14 @@ namespace MeuCardapio.PrintClient.Services
     // provisionada, recusa tudo (fecha por padrão).
     public static class Updater
     {
-        public const string CurrentVersion = "1.0.0";
+        // Versão do app = versão do assembly (Properties\AssemblyInfo.cs), sem o 4º número ("1.0.0").
+        public static readonly string CurrentVersion = ReadVersion();
+
+        static string ReadVersion()
+        {
+            var v = typeof(Updater).Assembly.GetName().Version;
+            return v == null ? "0.0.0" : v.Major + "." + v.Minor + "." + Math.Max(0, v.Build);
+        }
         public static event Action<string> StatusChanged;
 
         public static bool IsConfigured => !string.IsNullOrWhiteSpace(AppSettings.Current.UpdateBaseUrl);
@@ -46,17 +55,10 @@ namespace MeuCardapio.PrintClient.Services
                 StatusChanged?.Invoke(r.Message);
                 if (r.Outcome != UpdateOutcome.Ready) return;
 
-                try
-                {
-                    // Reconfere logo antes de executar (a pasta é do usuário, mas o custo é pequeno).
-                    StatusChanged?.Invoke("Instalando atualização " + r.Version + "...");
-                    Process.Start(r.InstallerPath);
-                }
-                catch (Exception ex)
-                {
-                    Logger.Error("Não foi possível iniciar o instalador", ex);
-                    StatusChanged?.Invoke("Erro ao iniciar o instalador: " + ex.Message);
-                }
+                // Reverifica o arquivo FINAL (tamanho + SHA-256 do manifesto assinado) imediatamente antes
+                // de executar e o mantém aberto (FileShare.Read: ninguém grava nem apaga) enquanto o
+                // instalador inicia. Fecha a janela entre Evaluate e o Process.Start (parecer U1).
+                TryLaunch(r, path => Process.Start(path), msg => StatusChanged?.Invoke(msg));
             }
             finally { System.Threading.Interlocked.Exchange(ref _running, 0); }
         }
@@ -108,6 +110,7 @@ namespace MeuCardapio.PrintClient.Services
                 var final = Path.Combine(updatesDir, m.File);
                 File.Move(part, final);
                 return new UpdateResult { Outcome = UpdateOutcome.Ready, Version = m.Version, InstallerPath = final,
+                    ExpectedSha256 = m.Sha256, ExpectedSize = m.Size,
                     Message = "Atualização " + m.Version + " verificada." };
             }
             catch (Exception ex)
@@ -115,6 +118,52 @@ namespace MeuCardapio.PrintClient.Services
                 TryDelete(part);
                 return Res(UpdateOutcome.Failed, "Falha ao baixar a atualização: " + ex.Message);
             }
+        }
+
+        // Reverifica tamanho + SHA-256 do arquivo final contra o manifesto assinado, lendo pelo MESMO
+        // handle que fica aberto (FileShare.Read) enquanto `start` roda: não dá para trocar o arquivo
+        // entre a conferência e a execução. `start` só é chamado se tudo conferir. Devolve se iniciou.
+        public static bool TryLaunch(UpdateResult r, Action<string> start, Action<string> status)
+        {
+            if (r == null || r.Outcome != UpdateOutcome.Ready || string.IsNullOrEmpty(r.InstallerPath)) return false;
+            bool mismatch = false;
+            try
+            {
+                using (var fs = new FileStream(r.InstallerPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    string hash = null;
+                    if (fs.Length == r.ExpectedSize)
+                    {
+                        using (var sha = System.Security.Cryptography.SHA256.Create())
+                        {
+                            var h = sha.ComputeHash(fs);
+                            var sb = new StringBuilder(h.Length * 2);
+                            foreach (var x in h) sb.Append(x.ToString("X2"));
+                            hash = sb.ToString();
+                        }
+                    }
+                    if (hash == null || !string.Equals(hash, r.ExpectedSha256, StringComparison.OrdinalIgnoreCase)) mismatch = true;
+                    else
+                    {
+                        status?.Invoke("Instalando atualização " + r.Version + "...");
+                        start(r.InstallerPath);
+                        return true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                status?.Invoke("Erro ao iniciar o instalador: " + ex.Message);
+                return false;
+            }
+            if (mismatch) Refuse(r, status); // handle já fechado: dá para apagar
+            return false;
+        }
+
+        static void Refuse(UpdateResult r, Action<string> status)
+        {
+            try { File.Delete(r.InstallerPath); } catch { }
+            status?.Invoke("O instalador mudou depois de verificado. Descartado, nada foi executado.");
         }
 
         static UpdateResult Res(UpdateOutcome o, string msg) { return new UpdateResult { Outcome = o, Message = msg }; }

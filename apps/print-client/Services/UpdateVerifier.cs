@@ -96,12 +96,16 @@ namespace MeuCardapio.PrintClient.Services
             catch { error = "manifesto ilegível"; return null; }
             if (m == null) { error = "manifesto vazio"; return null; }
             if (!IsValidVersion(m.Version)) { error = "versão inválida no manifesto"; return null; }
-            if (m.File == null || !FileRx.IsMatch(m.File) || m.File.Contains("..")) { error = "nome de arquivo inválido no manifesto"; return null; }
+            if (m.File == null || !FileRx.IsMatch(m.File) || m.File.Contains("..") || IsReservedName(m.File)) { error = "nome de arquivo inválido no manifesto"; return null; }
             if (m.Sha256 == null || !Sha256Rx.IsMatch(m.Sha256)) { error = "hash inválido no manifesto"; return null; }
             if (m.Size <= 0 || m.Size > MaxInstallerBytes) { error = "tamanho inválido no manifesto"; return null; }
             m.Sha256 = m.Sha256.ToUpperInvariant();
             return m;
         }
+
+        static readonly Regex ReservedRx = new Regex(@"^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\.|$)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        // Nomes de dispositivo do Windows (CON.exe, NUL.exe, ...) não viram arquivo comum.
+        public static bool IsReservedName(string file) { return file != null && ReservedRx.IsMatch(file); }
 
         public static string Sha256Hex(string path)
         {

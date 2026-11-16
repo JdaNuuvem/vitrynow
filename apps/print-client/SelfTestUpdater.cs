@@ -54,6 +54,13 @@ namespace MeuCardapio.PrintClient
             using (var s = SHA256.Create()) { var sb = new StringBuilder(); foreach (var x in s.ComputeHash(b)) sb.Append(x.ToString("X2")); return sb.ToString(); }
         }
 
+        static byte[] Swapped(byte[] inst, bool differentSize)
+        {
+            var b = differentSize ? new byte[inst.Length + 7] : (byte[])inst.Clone();
+            if (!differentSize) b[0] ^= 0x5A;
+            return b;
+        }
+
         static byte[] Manifest(string version, string file, byte[] installer, string sha = null, long? size = null)
         {
             return Encoding.UTF8.GetBytes("{\"version\":\"" + version + "\",\"file\":\"" + file + "\",\"sha256\":\"" + (sha ?? Hex(installer)) + "\",\"size\":" + (size ?? installer.Length) + "}");
@@ -128,6 +135,12 @@ namespace MeuCardapio.PrintClient
                 UpdateVerifier.ParseManifest(Manifest("1.1.0", "x.bat", inst), out e) == null
                 && UpdateVerifier.ParseManifest(Manifest("1.1.0", "x.ps1", inst), out e) == null
                 && UpdateVerifier.ParseManifest(Manifest("1.1.0", "x.exe.bat", inst), out e) == null);
+            Check("manifesto: nomes reservados do Windows recusados (CON, NUL, COM1, LPT9)",
+                UpdateVerifier.ParseManifest(Manifest("1.1.0", "CON.exe", inst), out e) == null
+                && UpdateVerifier.ParseManifest(Manifest("1.1.0", "nul.exe", inst), out e) == null
+                && UpdateVerifier.ParseManifest(Manifest("1.1.0", "COM1.exe", inst), out e) == null
+                && UpdateVerifier.ParseManifest(Manifest("1.1.0", "lpt9.exe", inst), out e) == null
+                && UpdateVerifier.ParseManifest(Manifest("1.1.0", "Console-Setup.exe", inst), out e) != null);
             Check("manifesto: hash curto/nao-hex recusado", UpdateVerifier.ParseManifest(Manifest("1.1.0", "s.exe", inst, "ABC"), out e) == null
                 && UpdateVerifier.ParseManifest(Manifest("1.1.0", "s.exe", inst, new string('Z', 64)), out e) == null);
             Check("manifesto: tamanho 0, negativo ou gigante recusado", UpdateVerifier.ParseManifest(Manifest("1.1.0", "s.exe", inst, null, 0), out e) == null
@@ -162,6 +175,34 @@ namespace MeuCardapio.PrintClient
             Check("fluxo: arquivo pronto tem exatamente o hash assinado", r.InstallerPath != null && UpdateVerifier.Sha256Hex(r.InstallerPath) == Hex(inst));
             Check("fluxo: instalador fica na pasta privada de updates, sem .part sobrando",
                 r.InstallerPath != null && Path.GetDirectoryName(r.InstallerPath) == upd && Directory.GetFiles(upd, "*.part").Length == 0);
+
+            // U1 (Nightingale): reverifica o arquivo final antes de executar e o mantem travado durante o inicio
+            int started = 0; string startedPath = null; bool lockedDuringStart = false; var msgs = new List<string>();
+            bool launched = Updater.TryLaunch(r, p =>
+            {
+                started++; startedPath = p;
+                try { File.WriteAllBytes(p, new byte[] { 0 }); } catch (IOException) { lockedDuringStart = true; }
+                try { File.Delete(p); lockedDuringStart = lockedDuringStart && File.Exists(p); } catch (IOException) { }
+            }, m => msgs.Add(m));
+            Check("lancamento: arquivo conferido e iniciado 1 vez", launched && started == 1 && startedPath == r.InstallerPath);
+            Check("lancamento: arquivo fica travado (sem gravar/apagar) enquanto o instalador inicia", lockedDuringStart);
+            Check("lancamento: conteudo intacto depois do inicio", UpdateVerifier.Sha256Hex(r.InstallerPath) == Hex(inst));
+
+            var r2 = Updater.Evaluate(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            File.WriteAllBytes(r2.InstallerPath, Swapped(inst, false)); // trocado depois de verificado, mesmo tamanho
+            int started2 = 0; var msgs2 = new List<string>();
+            bool launched2 = Updater.TryLaunch(r2, p => started2++, m => msgs2.Add(m));
+            Check("lancamento: arquivo trocado (mesmo tamanho) apos Evaluate => NAO executa", !launched2 && started2 == 0 && msgs2.Count > 0);
+            Check("lancamento: arquivo trocado e descartado do disco", !File.Exists(r2.InstallerPath));
+            var r3 = Updater.Evaluate(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            File.WriteAllBytes(r3.InstallerPath, Swapped(inst, true)); // tamanho diferente
+            int started3 = 0;
+            Check("lancamento: arquivo com tamanho diferente => NAO executa", !Updater.TryLaunch(r3, p => started3++, m => { }) && started3 == 0);
+            var r4 = Updater.Evaluate(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            File.Delete(r4.InstallerPath);
+            int started4 = 0;
+            Check("lancamento: arquivo sumiu => NAO executa e nao estoura", !Updater.TryLaunch(r4, p => started4++, m => { }) && started4 == 0);
+            Check("lancamento: resultado nao-Ready nunca executa", !Updater.TryLaunch(new UpdateResult { Outcome = UpdateOutcome.Rejected, InstallerPath = "x.exe" }, p => started4++, m => { }) && started4 == 0);
 
             // mesma versao e versao menor: nada e baixado (anti-downgrade/replay de manifesto antigo)
             var tSame = Server(man, sig, file, inst);

@@ -19,6 +19,12 @@ $rsp = Join-Path $obj "pathmap.rsp"
 Set-Content -Path $rsp -Value @('/deterministic', ('/pathmap:"' + $PSScriptRoot.TrimEnd('\') + '=C:\src\print-client"')) -Encoding ASCII
 & $msbuild $proj /t:Rebuild "/p:Configuration=$Configuration" "/p:CscToolExe=$csc" "/p:CompilerResponseFile=$rsp" /v:m /nologo
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# Fonte unica da versao: AssemblyInfo.cs. O instalador (installer.iss) precisa anunciar a mesma.
+$exe = Get-ChildItem (Join-Path $PSScriptRoot "bin\$Configuration") -Filter '*.exe' | Select-Object -First 1
+$fv = ($exe.VersionInfo.FileVersion -replace '(\.0)+$', '')
+$iss = (Get-Content (Join-Path $PSScriptRoot "installer.iss") | Select-String '#define AppVersion "([^"]+)"').Matches[0].Groups[1].Value
+if (($iss -replace '(\.0)+$', '') -ne $fv) { Write-Error "Versao do EXE ($fv) diferente de AppVersion em installer.iss ($iss). Ajuste os dois."; exit 2 }
+Write-Host "Versao $fv (EXE e installer.iss iguais)"
 Write-Host ""
 $outDir = Join-Path $PSScriptRoot "bin\$Configuration"
 Get-ChildItem -Path $outDir -Filter '*.exe' | ForEach-Object {
