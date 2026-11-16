@@ -156,7 +156,7 @@ namespace MeuCardapio.PrintClient.Services
 
         async Task CheckPendingAsync(CancellationToken token)
         {
-            if (!AppSettings.Current.ReceivePrints) return;
+            if (!_settings.ReceivePrints) return;
 
             // 0) watchdog: pedido preso "em impressão" (BeginInvoke perdido, form descartado) vira falha.
             foreach (var stuck in _ledger.ExpireStuck())

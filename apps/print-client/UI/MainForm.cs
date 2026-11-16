@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Drawing;
 using System.Drawing.Printing;
 using System.Threading.Tasks;
@@ -17,6 +19,14 @@ namespace MeuCardapio.PrintClient.UI
         readonly TrackBar _volume = new TrackBar { Minimum = 0, Maximum = 100, TickFrequency = 10, Width = 180 };
         readonly Label _toast = new Label { AutoSize = true, ForeColor = Color.DarkGreen, Location = new Point(16, 190), MaximumSize = new Size(380, 0) };
         readonly NotifyIcon _tray = new NotifyIcon();
+        // Indicador fixo (PC-06 d / PC-05): não some como o toast. Vazio = sem problema.
+        readonly Label _problemLabel = new Label
+        {
+            AutoSize = false, Visible = false, ForeColor = Color.White, BackColor = Color.Firebrick,
+            Font = new Font("Segoe UI", 9f, FontStyle.Bold), Location = new Point(16, 110), Size = new Size(210, 72), Padding = new Padding(6),
+        };
+        string _revokedText;
+        IList<string> _failedOrders = new List<string>();
 
         public MainForm()
         {
@@ -38,7 +48,7 @@ namespace MeuCardapio.PrintClient.UI
             _statusLabel.Text = "Conectando...";
             _statusLabel.Location = new Point(16, 80);
 
-            Controls.AddRange(new Control[] { lc1, _printers, lc2, _sounds, lv, _volume, _statusLabel, _toast });
+            Controls.AddRange(new Control[] { lc1, _printers, lc2, _sounds, lv, _volume, _statusLabel, _toast, _problemLabel });
 
             ReloadPrinters();
             _sounds.Items.AddRange(new object[] { "Sino", "Padrão", "Som personalizado..." });
@@ -112,7 +122,38 @@ namespace MeuCardapio.PrintClient.UI
                 BeginInvoke(new Action(() => { _statusLabel.Text = text; Toast(text); }));
             };
             App.Device.OrderPending += () => BeginInvoke(new Action(OnOrderPending));
+            App.Device.PrintProblemsChanged += list => BeginInvoke(new Action(() => ShowPrintProblems(list)));
+            App.Device.KeyRevoked += () => BeginInvoke(new Action(ShowKeyRevoked));
             App.Device.TicketReady += order => BeginInvoke(new Action(() => PrintAndAck(order)));
+        }
+
+        // Indicador persistente de pedidos sem imprimir. O balão do ícone só aparece quando a lista
+        // CRESCE (pedido novo com problema), nunca a cada tentativa.
+        void ShowPrintProblems(IList<string> list)
+        {
+            bool grew = list.Any(x => !_failedOrders.Contains(x));
+            _failedOrders = list;
+            RefreshProblemLabel();
+            if (grew && _tray.Visible)
+                _tray.ShowBalloonTip(8000, "MeuCardapio - Impressão", list.Count + " pedido(s) sem imprimir: " + string.Join(", ", list) + ". Confira papel, cabo e se a impressora está ligada.", ToolTipIcon.Warning);
+            _tray.Text = list.Count == 0 ? "MeuCardapio - Impressão" : "MeuCardapio: " + list.Count + " pedido(s) SEM IMPRIMIR";
+        }
+
+        void ShowKeyRevoked()
+        {
+            _revokedText = "CHAVE DE IMPRESSORA REVOGADA. A impressão está PAUSADA. Gere uma chave nova no painel e use \"Configurar chave...\" na bandeja.";
+            RefreshProblemLabel();
+            if (_tray.Visible) _tray.ShowBalloonTip(10000, "MeuCardapio - Impressão", "Chave de impressora revogada: impressão pausada.", ToolTipIcon.Error);
+        }
+
+        void RefreshProblemLabel()
+        {
+            if (_revokedText != null) { _problemLabel.Text = _revokedText; _problemLabel.Visible = true; return; }
+            _problemLabel.Visible = _failedOrders.Count > 0;
+            if (_failedOrders.Count > 0)
+                _problemLabel.Text = "⚠ " + _failedOrders.Count + " pedido(s) SEM IMPRIMIR: " + string.Join(", ", _failedOrders.Take(6)) + (_failedOrders.Count > 6 ? "…" : "")
+                    + "
+Confira papel, cabo e se a impressora está ligada.";
         }
 
         void OnOrderPending()
@@ -133,18 +174,20 @@ namespace MeuCardapio.PrintClient.UI
             {
                 // Falhou: o pedido continua pendente na API e volta depois do recuo do ledger
                 // (15 s, 30 s, ... 5 min), sem novo alerta sonoro.
-                App.Device.ReportPrintFailed(order.OrderId);
+                App.Device.ReportPrintFailed(order.OrderId, order.Code);
                 string msg = "Erro na impressão do pedido #" + order.Code + ": " + ex.Message;
                 Toast(msg);
                 Logger.Error(msg, ex);
                 return;
             }
 
-            // Imprimiu. ConfirmPrintedAsync grava no disco ANTES de avisar a API; se o aviso
-            // falhar, o ack é repetido no próximo ciclo e o pedido NÃO é reimpresso.
+            // Imprimiu. RecordPrinted grava no disco AGORA, síncrono, antes de toast, log ou rede (PC-06 a):
+            // se o processo cair a seguir, o pedido NÃO é reimpresso. Só o aviso à API vai para outra
+            // thread; se falhar, o ack é repetido no próximo ciclo.
+            App.Device.RecordPrinted(order.OrderId);
+            Task.Run(() => App.Device.AckPrintedAsync(order.OrderId));
             Toast("Impresso: pedido #" + order.Code);
             Logger.Info("Impresso: pedido #" + order.Code);
-            Task.Run(() => App.Device.ConfirmPrintedAsync(order.OrderId));
         }
 
         void ReloadPrinters()

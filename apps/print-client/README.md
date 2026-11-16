@@ -138,6 +138,22 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 - Ícone/sons são placeholders — troque antes de distribuir pra clientes de verdade.
 - Teste real com impressora térmica física (só validado até aqui via self-test + payload JSON da API).
 
+## Resiliência (PC-05, PC-06)
+
+- **Chave revogada (PC-05):** 3 recusas **seguidas** (401/403 no polling, no WS ou no ack; qualquer resposta boa zera a conta)
+  pausam polling e WS, mostram faixa vermelha "CHAVE DE IMPRESSORA REVOGADA" e um balão no ícone. O app não fica martelando
+  a API. Para voltar: gerar chave nova no painel, "Configurar chave..." e reabrir o app. Redirecionamento (30x) não é seguido
+  e não conta como revogação.
+- **Gravação antes de tudo (PC-06 a):** depois de imprimir, `RecordPrinted` grava no disco de forma síncrona, antes de toast,
+  log ou rede; só o aviso à API roda em outra thread. Queda do app entre imprimir e avisar não reimprime.
+- **Watchdog (PC-06 b):** pedido "em impressão" há mais de 2 min (ciclo da UI perdido) vira falha com recuo e passa a aparecer
+  como "sem imprimir"; não fica preso até reiniciar.
+- **Indicador "N pedidos sem imprimir" (PC-06 d):** faixa fixa na janela e texto do ícone, com os números dos pedidos. O balão
+  aparece só quando entra um pedido **novo** com problema (nunca a cada tentativa). Some quando o pedido é impresso ou quando a
+  API deixa de listá-lo (cancelado/impresso em outro PC). Sobrevive ao reinício do app.
+- Testes: `SelfTestDeviceClient.cs` roda o `DeviceClient` real contra uma API falsa em loopback (dedupe, ack que falha e repete,
+  indicador sem repetição, 401/403, 401 isolado, redirecionamento).
+
 ## Confiabilidade e segredos (PC-02)
 
 - **Dedupe e ack persistido** (`Services/PrintLedger.cs`, arquivo `%LOCALAPPDATA%\MeuCardapioPrintClient\printed.json`): polling e WS passam pelo mesmo portão, um pedido nunca é impresso duas vezes, e se o aviso à API falhar o ack é repetido sem reimprimir. Falha de impressão volta com recuo (15 s até 5 min) e sem novo alerta sonoro.
