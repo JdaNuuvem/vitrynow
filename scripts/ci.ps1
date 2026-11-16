@@ -21,7 +21,8 @@ param(
   [Parameter(Mandatory = $true)][ValidatePattern('^[a-z0-9-]+$')][string]$Agent,
   [Parameter(Mandatory = $true)][ValidateRange(55440, 55459)][int]$Port,
   [switch]$SkipTests,
-  [switch]$Images
+  [switch]$Images,
+  [int]$WaitMinutes = 30   # quanto esperar se outro CI estiver rodando
 )
 # Continue (e não Stop): ver nota em test-db.ps1 (stderr redirecionado no PowerShell 5.1).
 $ErrorActionPreference = 'Continue'
@@ -46,6 +47,18 @@ function Step([string]$name, [scriptblock]$body) {
   return $ok
 }
 
+# Limite de paralelismo (INF-14): suíte + builds Docker são pesados; duas ao mesmo tempo na mesma máquina
+# já fizeram o Docker derrubar containers (22:03 UTC). Um mutex global faz a segunda esperar a primeira.
+$freeGb = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB, 1)
+if ($freeGb -lt 3) { Write-Host "AVISO: só $freeGb GB de RAM livre; a máquina está sobrecarregada (outras suítes/builds rodando?). Prefira esperar." -ForegroundColor Yellow }
+$ciLock = New-Object System.Threading.Mutex($false, 'Global\meucardapio-ci-pesado')
+$got = $false
+try { $got = $ciLock.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true }
+if (-not $got) {
+  Write-Host "Outro CI/suíte pesada já está rodando nesta máquina; aguardando (até $WaitMinutes min) para não sobrecarregar o Docker..." -ForegroundColor Yellow
+  try { $got = $ciLock.WaitOne([TimeSpan]::FromMinutes($WaitMinutes)) } catch [System.Threading.AbandonedMutexException] { $got = $true }
+  if (-not $got) { Write-Host "Desisti após $WaitMinutes min esperando outro CI. Tente de novo mais tarde." -ForegroundColor Red; exit 3 }
+}
 foreach ($tool in 'node', 'pnpm', 'docker') { if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "$tool não encontrado no PATH" } }
 
 $continue = $true
@@ -105,6 +118,7 @@ Write-Host "`n(banco de teste mantido em mc-test-$Agent-$Port; remova com: .\scr
 Write-Host "`n=== RESUMO" -ForegroundColor Cyan
 $results | Format-Table -AutoSize | Out-String | Write-Host
 $failed = @($results | Where-Object Resultado -eq 'FALHA').Count
-if ($failed -gt 0) { Write-Host "CI: $failed etapa(s) com falha" -ForegroundColor Red; exit 1 }
+if ($failed -gt 0) { Write-Host "CI: $failed etapa(s) com falha" -ForegroundColor Red; try { $ciLock.ReleaseMutex() } catch {}; exit 1 }
 Write-Host 'CI: tudo verde' -ForegroundColor Green
+try { $ciLock.ReleaseMutex() } catch {}
 exit 0
