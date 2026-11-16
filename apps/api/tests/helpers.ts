@@ -22,6 +22,7 @@ export async function resetDb() {
     prisma.coupon.deleteMany(),
     prisma.deliverer.deleteMany(),
     prisma.deviceToken.deleteMany(),
+    prisma.revokedSession.deleteMany(),
     prisma.passwordResetToken.deleteMany(),
     prisma.mfaChallenge.deleteMany(),
     prisma.noticeRead.deleteMany(),

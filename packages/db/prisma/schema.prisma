@@ -497,3 +497,13 @@ model MfaChallenge {
 
   @@index([userId, createdAt])
 }
+
+// SEC-19 / ST-30: sessões encerradas (logout de UM aparelho). O sid vem do JWT; a linha vale até o `exp`
+// do token e depois é apagada pela limpeza técnica. "Sair de todos" continua sendo User.tokenVersion++.
+model RevokedSession {
+  sid       String   @id
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}

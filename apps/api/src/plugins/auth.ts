@@ -87,10 +87,12 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     const nowSeconds = Math.floor(Date.now() / 1000);
     if (nowSeconds - payload.auth_time > sessionAbsoluteLimit()) return deny("SESSION_EXPIRED");
 
-    const user = await prisma.user.findUnique({
-      where: { id: payload.sub },
-      select: { id: true, storeId: true, role: true, tokenVersion: true },
-    });
+    // Usuário e lista de revogação (logout deste aparelho) na mesma ida ao banco, ambos por chave primária.
+    const [user, revoked] = await Promise.all([
+      prisma.user.findUnique({ where: { id: payload.sub }, select: { id: true, storeId: true, role: true, tokenVersion: true } }),
+      prisma.revokedSession.findUnique({ where: { sid: payload.sid }, select: { sid: true } }),
+    ]);
+    if (revoked) return deny("SESSION_REVOKED");
     if (!user) return deny("SESSION_REVOKED");
     if (user.tokenVersion !== payload.tv) return deny("SESSION_REVOKED");
 
