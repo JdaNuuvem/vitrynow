@@ -63,6 +63,22 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     const input = parsed.data;
 
+    // Regras de modalidade no servidor (B09): a interface esconde, mas quem decide é a API.
+    if (input.type === "DELIVERY") {
+      if (!store.deliveryEnabled) {
+        return reply.code(409).send({ error: "Esta loja não está fazendo entregas no momento.", code: "DELIVERY_DISABLED" });
+      }
+      if (!input.address?.trim()) {
+        return reply.code(400).send({ error: "Informe o endereço de entrega.", code: "ADDRESS_REQUIRED" });
+      }
+      if (!input.customerPhone) {
+        return reply.code(400).send({ error: "Informe um telefone para contato da entrega.", code: "PHONE_REQUIRED" });
+      }
+    }
+    if (input.type === "BALCAO" && !store.pickupEnabled) {
+      return reply.code(409).send({ error: "Esta loja não está aceitando retirada no momento.", code: "PICKUP_DISABLED" });
+    }
+
     const products = await prisma.product.findMany({
       where: { storeId: store.id, id: { in: input.items.map((i) => i.productId) } },
       include: { additionals: true },
@@ -70,6 +86,15 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     const productById = new Map(products.map((p) => [p.id, p]));
     if (products.length !== new Set(input.items.map((i) => i.productId)).size) {
       return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja" });
+    }
+    // Produto pausado some do cardápio e não pode ser pedido por chamada direta (B08).
+    const unavailable = products.filter((p) => !p.active);
+    if (unavailable.length > 0) {
+      return reply.code(400).send({
+        error: `Produto indisponível no momento: ${unavailable.map((p) => p.name).join(", ")}.`,
+        code: "PRODUCT_UNAVAILABLE",
+        productIds: unavailable.map((p) => p.id),
+      });
     }
 
     let itemsData;
