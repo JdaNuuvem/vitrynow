@@ -63,6 +63,12 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     const input = parsed.data;
 
+    // Mesa só entra por QR/comanda (API-22). Esta rota genérica não tem mesa: recusa até lá (API-60).
+    // MESA não depende de pickupEnabled/deliveryEnabled (loja só de salão é válida).
+    if (input.type === "MESA") {
+      return reply.code(400).send({ error: "Pedido de mesa só é feito pelo QR da mesa.", code: "TABLE_REQUIRED" });
+    }
+
     // Regras de modalidade no servidor (B09): a interface esconde, mas quem decide é a API.
     if (input.type === "DELIVERY") {
       if (!store.deliveryEnabled) {
@@ -90,10 +96,11 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     // Produto pausado some do cardápio e não pode ser pedido por chamada direta (B08).
     const unavailable = products.filter((p) => !p.active);
     if (unavailable.length > 0) {
+      // Mesmo código/forma para B11, QR de mesa e pedido manual (contrato B3 §8, item 3).
       return reply.code(400).send({
-        error: `Produto indisponível no momento: ${unavailable.map((p) => p.name).join(", ")}.`,
-        code: "PRODUCT_UNAVAILABLE",
-        productIds: unavailable.map((p) => p.id),
+        error: `Item indisponível no momento: ${unavailable.map((p) => p.name).join(", ")}.`,
+        code: "ITEM_UNAVAILABLE",
+        details: { items: unavailable.map((p) => ({ id: p.id, name: p.name })) },
       });
     }
 

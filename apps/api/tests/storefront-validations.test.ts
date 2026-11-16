@@ -35,13 +35,13 @@ describe("API-05 — pedido público: validações no servidor", () => {
   const countOrders = (ctx: Ctx) => prisma.order.count({ where: { storeId: ctx.storeId } });
 
   // ───────────── B08: produto pausado ─────────────
-  it("produto pausado não pode ser pedido (400 PRODUCT_UNAVAILABLE) e o pedido inteiro é recusado", async () => {
+  it("produto pausado não pode ser pedido (400 ITEM_UNAVAILABLE) e o pedido inteiro é recusado", async () => {
     const ctx = await setup();
     await prisma.product.update({ where: { id: ctx.productId }, data: { active: false } });
 
     const only = await place(ctx, { type: "BALCAO" });
     expect(only.statusCode).toBe(400);
-    expect(json(only)).toMatchObject({ code: "PRODUCT_UNAVAILABLE", productIds: [ctx.productId] });
+    expect(json(only)).toMatchObject({ code: "ITEM_UNAVAILABLE", details: { items: [{ id: ctx.productId, name: "Combo" }] } });
     expect(json(only).error).toContain("Combo");
 
     // Um pausado + um ativo: nada é criado (não aceita "o que dá").
@@ -53,7 +53,7 @@ describe("API-05 — pedido público: validações no servidor", () => {
       ],
     });
     expect(mixed.statusCode).toBe(400);
-    expect(json(mixed).productIds).toEqual([ctx.productId]);
+    expect(json(mixed).details.items).toEqual([{ id: ctx.productId, name: "Combo" }]);
     expect(await countOrders(ctx)).toBe(0);
   });
 
@@ -99,6 +99,16 @@ describe("API-05 — pedido público: validações no servidor", () => {
     expect(res.statusCode).toBe(409);
     expect(json(res).code).toBe("PICKUP_DISABLED");
     expect((await place(ctx, delivery)).statusCode).toBe(201);
+  });
+
+  it("MESA no pedido público genérico ⇒ 400 TABLE_REQUIRED (independe de entrega/retirada habilitadas)", async () => {
+    const ctx = await setup();
+    const res = await place(ctx, { type: "MESA" });
+    expect([res.statusCode, json(res).code]).toEqual([400, "TABLE_REQUIRED"]);
+    await prisma.store.update({ where: { id: ctx.storeId }, data: { pickupEnabled: false, deliveryEnabled: false } });
+    const only = await place(ctx, { type: "MESA" });
+    expect([only.statusCode, json(only).code]).toEqual([400, "TABLE_REQUIRED"]); // não vira PICKUP_DISABLED
+    expect(await countOrders(ctx)).toBe(0);
   });
 
   it("recusas de modalidade não consomem número de pedido (próximo pedido válido é 0001)", async () => {
