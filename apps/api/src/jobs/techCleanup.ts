@@ -47,6 +47,22 @@ const TARGETS = {
       return (await tx.mfaChallenge.aggregate({ _min: { expiresAt: true } }))._min.expiresAt;
     },
   },
+  // SEC-19 / ST-30: sessões encerradas (logout de um aparelho). Linha só serve até o exp do token;
+  // depois da retenção é lixo técnico. A chave primária é o `sid`.
+  RevokedSession: {
+    async claim(tx, cutoff, limit) {
+      const rows = await tx.$queryRaw<{ sid: string }[]>`
+        SELECT "sid" FROM "RevokedSession" WHERE "expiresAt" < ${cutoff}
+        ORDER BY "expiresAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED`;
+      return rows.map((row) => row.sid);
+    },
+    async remove(tx, ids) {
+      return (await tx.revokedSession.deleteMany({ where: { sid: { in: ids } } })).count;
+    },
+    async oldestExpiry(tx) {
+      return (await tx.revokedSession.aggregate({ _min: { expiresAt: true } }))._min.expiresAt;
+    },
+  },
 } satisfies Record<string, Target>;
 
 export type TechTable = keyof typeof TARGETS;

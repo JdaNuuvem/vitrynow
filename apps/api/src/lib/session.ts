@@ -46,9 +46,3 @@ export async function revokeSession(sid: string, exp: number): Promise<void> {
   const expiresAt = new Date(exp * 1000);
   await prisma.revokedSession.upsert({ where: { sid }, create: { sid, expiresAt }, update: { expiresAt } });
 }
-
-// Limpeza técnica (lista de permissão do tech.cleanup, ADR-0011): linhas cujo token já expirou.
-export async function purgeExpiredRevokedSessions(now: Date = new Date()): Promise<number> {
-  const result = await prisma.revokedSession.deleteMany({ where: { expiresAt: { lt: now } } });
-  return result.count;
-}

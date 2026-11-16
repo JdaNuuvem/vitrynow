@@ -3,7 +3,8 @@ import type { WebSocket } from "ws";
 import { prisma } from "@meucardapio/db";
 import { buildApp } from "../src/app";
 import { getJwtSecret, getMfaKey, trustProxySetting } from "../src/lib/securityConfig";
-import { purgeExpiredRevokedSessions } from "../src/lib/session";
+import { JobRunner } from "../src/jobs/runner";
+import { TECH_RETENTION_MS, techCleanupJob } from "../src/jobs/techCleanup";
 import { login, makeApp, registerStore, resetDb } from "./helpers";
 
 // SEC-19 (ADR-0008 §7): ST-04b segredo de teste só no vitest · ST-02c proxy obrigatório em produção ·
@@ -150,15 +151,21 @@ describe("ST-30 / ST-31 — logout por aparelho e socket que fecha no exp", () =
     expect((await me(b)).statusCode).toBe(401);
   });
 
-  it("limpeza apaga só as linhas cujo token já expirou", async () => {
+  it("tech.cleanup apaga só as sessões revogadas cujo token expirou há mais de 24 h", async () => {
+    const now = new Date("2026-11-16T12:00:00.000Z");
+    const ago = (ms: number) => new Date(now.getTime() - ms);
     await prisma.revokedSession.createMany({
       data: [
-        { sid: "velha", expiresAt: new Date(Date.now() - 60_000) },
-        { sid: "valida", expiresAt: new Date(Date.now() + 3_600_000) },
+        { sid: "velha", expiresAt: ago(TECH_RETENTION_MS + 3_600_000) },
+        { sid: "recente", expiresAt: ago(3_600_000) },
+        { sid: "valida", expiresAt: new Date(now.getTime() + 3_600_000) },
       ],
     });
-    expect(await purgeExpiredRevokedSessions()).toBe(1);
-    expect((await prisma.revokedSession.findMany()).map((r) => r.sid)).toEqual(["valida"]);
+    const runner = new JobRunner({ db: prisma, log: { info() {}, warn() {}, error() {} }, now: () => now });
+    runner.register(techCleanupJob);
+    const result = await runner.run("tech.cleanup");
+    expect(result).toMatchObject({ status: "ok", processed: 1 });
+    expect((await prisma.revokedSession.findMany()).map((r) => r.sid).sort()).toEqual(["recente", "valida"]);
   });
 
   it("logout fecha o WebSocket DESTA sessão e deixa o do outro aparelho aberto", async () => {
