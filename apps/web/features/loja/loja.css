@@ -7,7 +7,8 @@
   --loja-ink-2: #334155;
   --loja-ink-3: #475569;
   --loja-muted: #64748b;
-  --loja-faint: #94a3b8;
+  --loja-faint: #94a3b8; /* só ícone decorativo: 2,5:1 reprova como texto (spec 09 §3) */
+  --loja-field-line: #7b8aa0; /* borda de campo, 3,35:1 (WCAG 1.4.11) */
   --loja-surface: #f8fafc;
   --loja-surface-2: #f1f5f9;
   --loja-link: #1d4ed8;
@@ -45,7 +46,7 @@
   margin-left: auto;
   margin-right: auto;
   max-width: 42rem;
-  padding-bottom: 7rem;
+  padding-bottom: 9rem;
 }
 
 .loja__content {
@@ -74,18 +75,28 @@
 
 /* ---------- cabeçalho da loja ---------- */
 .loja__cover {
-  height: 9rem;
+  height: 10rem; /* 160 px com capa (spec 09 §2.1) */
   width: 100%;
   background: #e2e8f0;
+}
+/* sem capa ou capa quebrada: bloco liso e baixo, para não roubar a primeira dobra */
+.loja__cover--empty {
+  height: 5.5rem; /* 88 px */
+}
+.loja[data-brand] .loja__cover--empty {
+  background: color-mix(in srgb, var(--loja-accent) 18%, white);
 }
 .loja__cover img {
   height: 100%;
   width: 100%;
   object-fit: cover;
 }
-@media (min-width: 640px) {
+@media (min-width: 768px) {
   .loja__cover {
-    height: 12rem;
+    height: 12.5rem; /* 200 px */
+  }
+  .loja__cover--empty {
+    height: 7.5rem; /* 120 px */
   }
 }
 
@@ -94,7 +105,7 @@
   border-top-left-radius: 1rem;
   border-top-right-radius: 1rem;
   background: #fff;
-  padding: 1rem 1rem 0;
+  padding: 1rem 1rem 1rem;
   box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.04);
 }
 
@@ -112,14 +123,36 @@
 }
 
 .loja__logo {
-  height: 4rem;
-  width: 4rem;
+  height: 5rem; /* 80 px (spec 09 §2.2) */
+  width: 5rem;
   flex-shrink: 0;
   overflow: hidden;
   border-radius: 9999px;
-  border: 4px solid #fff;
+  border: 2px solid #fff;
   background: var(--loja-surface-2);
   box-shadow: var(--loja-shadow);
+}
+.loja__logo--initials {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* texto sempre em --loja-ink: o fundo tem só 14% de cor, então o contraste não depende da cor da loja */
+  color: var(--loja-ink);
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1;
+}
+.loja[data-brand] .loja__logo--initials {
+  background: color-mix(in srgb, var(--loja-accent) 14%, white);
+}
+@media (max-width: 360px) {
+  .loja__logo {
+    height: 3.5rem;
+    width: 3.5rem;
+  }
+  .loja__logo--initials {
+    font-size: 1.125rem;
+  }
 }
 .loja__logo img {
   height: 100%;
@@ -162,6 +195,30 @@
   color: #15803d;
 }
 
+.loja__hours-row {
+  margin-top: 0.75rem;
+  display: flex;
+  width: 100%;
+  min-height: 3rem; /* 48 px, o botão inteiro */
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 0.5rem;
+  background: var(--loja-surface);
+  padding: 0 0.75rem;
+  text-align: left;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: var(--loja-ink-3);
+}
+.loja__hours-label {
+  flex: 1 1 0%;
+}
+.loja__hours-chevron {
+  display: flex;
+}
+.loja__hours-chevron--open {
+  transform: rotate(180deg);
+}
 .loja__status {
   margin-top: 0.75rem;
   display: flex;
@@ -221,14 +278,14 @@
   align-items: center;
   gap: 0.5rem;
   border-radius: 9999px;
-  border: 1px solid var(--loja-line);
+  border: 1px solid var(--loja-field-line);
   background: var(--loja-surface);
   padding: 0.5rem 1rem 0.5rem 2.25rem;
   min-height: 2.75rem;
   text-align: left;
   font-size: 0.875rem;
   line-height: 1.25rem;
-  color: var(--loja-faint);
+  color: var(--loja-muted);
 }
 .loja__search-icon {
   position: absolute;
@@ -267,6 +324,9 @@
   line-height: 1.25rem;
 }
 .loja__chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem; /* área clicável de 44 px */
   flex-shrink: 0;
   border-radius: 9999px;
   border: 1px solid #e2e8f0;
@@ -364,32 +424,50 @@
   border-top: 1px solid var(--loja-line);
   background: #fff;
   padding: 0.5rem 0;
+  padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
 }
 .loja__nav-tab {
+  position: relative;
   display: flex;
+  flex: 1 1 0%; /* 1/3 da largura cada */
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  /* alvo de toque mínimo de 44 px (WCAG 2.5.8 / checklist UX-07) */
-  min-width: 2.75rem;
-  min-height: 2.75rem;
+  gap: 0.125rem;
+  min-height: 3.5rem; /* 56 px */
   font-size: 0.75rem;
   line-height: 1rem;
-  color: var(--loja-ink-2);
+  font-weight: 500;
+  color: var(--loja-ink-3);
 }
+/* ativo: barra no topo + negrito + ícone preenchido; a cor da loja só reforça */
 .loja__nav-tab--active {
-  color: var(--loja-accent);
+  color: var(--loja-ink);
+  font-weight: 700;
+}
+.loja__nav-tab--active::before {
+  content: "";
+  position: absolute;
+  top: -0.5rem;
+  left: 25%;
+  right: 25%;
+  height: 3px;
+  border-radius: 0 0 3px 3px;
+  background: var(--loja-accent);
+}
+.loja__nav-tab--active svg {
+  fill: currentColor;
+  fill-opacity: 0.16;
 }
 .loja__nav-label {
-  margin-top: 0.125rem;
-  font-weight: 500;
+  margin-top: 0;
 }
 
 .loja__cart-bar {
   position: fixed;
   left: 1rem;
   right: 1rem;
-  bottom: 4rem;
+  bottom: 5rem; /* acima da barra inferior de 56 px + respiro */
   z-index: 20;
   margin-left: auto;
   margin-right: auto;
@@ -475,8 +553,13 @@
   flex: 1 1 0%;
   font-size: 1rem;
   line-height: 1.5rem;
+  min-height: 2.75rem;
   outline: 2px solid transparent;
   outline-offset: 2px;
+}
+.loja__search-input::placeholder {
+  color: var(--loja-muted); /* 4,8:1; o --loja-faint reprovava (spec 09 §3) */
+  opacity: 1;
 }
 .loja__results-title {
   margin-bottom: 0.75rem;
@@ -590,7 +673,7 @@
 .loja__notes-input {
   width: 100%;
   border-radius: 0.5rem;
-  border: 1px solid var(--loja-line);
+  border: 1px solid var(--loja-field-line);
   padding: 0.5rem 0.75rem;
   font-size: 0.875rem;
   line-height: 1.25rem;
@@ -772,8 +855,9 @@
 }
 .loja__field {
   width: 100%;
+  min-height: 2.75rem;
   border-radius: 0.25rem;
-  border: 1px solid var(--loja-line);
+  border: 1px solid var(--loja-field-line);
   padding: 0.5rem 0.75rem;
 }
 .loja__field--upper {
@@ -799,7 +883,7 @@
   align-items: center;
   gap: 0.5rem;
   border-radius: 0.25rem;
-  border: 1px solid var(--loja-line);
+  border: 1px solid var(--loja-field-line);
   padding: 0.5rem 0.75rem;
   color: var(--loja-muted);
 }
@@ -979,4 +1063,55 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ---------- foco, pular para o conteúdo e cardápio vazio (spec 09 §4, §5, §6) ---------- */
+/* Anel de foco: 2 px branco + 2 px escuro. O outline transparente continua valendo no modo de alto contraste. */
+.loja :focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--loja-ink);
+}
+/* o campo de valor tem o <input> sem borda dentro de uma moldura: o anel vai na moldura */
+.loja__money input:focus-visible {
+  box-shadow: none;
+}
+.loja__money:focus-within {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--loja-ink);
+}
+
+.loja__skip {
+  position: absolute;
+  left: 0.75rem;
+  top: 0.75rem;
+  z-index: 50;
+  transform: translateY(-200%);
+  border-radius: 0.5rem;
+  background: var(--loja-ink);
+  padding: 0.75rem 1rem;
+  color: #fff;
+  font-weight: 600;
+}
+.loja__skip:focus {
+  transform: translateY(0);
+}
+.loja__content:focus {
+  outline: none;
+}
+
+.loja__empty-menu {
+  margin: 2rem 1rem;
+  text-align: center;
+  color: var(--loja-ink-3);
+}
+.loja__empty-menu-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  margin-top: 0.75rem;
+  border-radius: 9999px;
+  border: 1px solid var(--loja-field-line);
+  padding: 0 1.25rem;
+  color: var(--loja-link);
+  font-weight: 600;
 }

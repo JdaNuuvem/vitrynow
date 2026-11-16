@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { Menu, Product } from "@/core/domain/storefront";
-import { isStoreOpenNow } from "@/lib/openingHours";
 import { formatCents } from "@/shared/format/money";
 import { BottomNav, type NavTab } from "./components/BottomNav";
 import { CartDrawer } from "./components/CartDrawer";
@@ -74,6 +73,9 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
     if (!menu) return <main className="loja__message">Carregando...</main>;
 
     const { store, categories } = menu;
+    // Categoria sem produto não aparece para o cliente (spec 09 §6).
+    const visibleCategories = categories.filter((category) => category.products.length > 0);
+    const hasProducts = visibleCategories.length > 0;
     const activeCategoryId = selectedCategoryId ?? categories[0]?.id ?? null;
     const closed = !store.acceptingOrders;
 
@@ -119,7 +121,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
     }
 
     if (showCategories) {
-      return <CategoriesScreen categories={categories} onClose={() => setShowCategories(false)} onSelect={scrollToCategory} />;
+      return <CategoriesScreen categories={visibleCategories} onClose={() => setShowCategories(false)} onSelect={scrollToCategory} />;
     }
 
     return (
@@ -128,22 +130,33 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
           <OrdersScreen orders={history.orders} storeName={store.name} />
         ) : (
           <>
-            <StoreHeader store={store} isOpenNow={isStoreOpenNow(store.openingHours)} onOpenSearch={() => setTab("pesquisa")}>
+            <StoreHeader store={store} onOpenSearch={() => setTab("pesquisa")}>
               <CategoryChips
-                categories={categories}
+                categories={visibleCategories}
                 activeCategoryId={activeCategoryId}
                 onSelect={scrollToCategory}
                 onViewAll={() => setShowCategories(true)}
               />
             </StoreHeader>
 
-            <div className="loja__content">
+            {/* Destino do link "Ir para o cardápio" (primeiro foco da página). */}
+            <div className="loja__content" id="cardapio-conteudo" tabIndex={-1}>
               {closed && (
                 <div className="loja__closed" role="status">
                   {STORE_CLOSED_MESSAGE}
                 </div>
               )}
-              {categories.map((category) => (
+              {!hasProducts && (
+                <div className="loja__empty-menu" role="status">
+                  <p>Este cardápio ainda não tem produtos.</p>
+                  {store.whatsapp && (
+                    <a href={`https://wa.me/${store.whatsapp}`} target="_blank" rel="noreferrer" className="loja__empty-menu-link">
+                      Falar com a loja
+                    </a>
+                  )}
+                </div>
+              )}
+              {visibleCategories.map((category) => (
                 <section key={category.id} id={`categoria-${category.id}`} className="loja__section">
                   <CategorySectionHeading category={category} />
                   <div className="loja__list">
@@ -206,7 +219,10 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
   }
 
   return (
-    <div className="loja" style={rootStyle}>
+    <div className="loja" style={rootStyle} data-brand={menu?.store.primaryColor ? "" : undefined}>
+      <a href="#cardapio-conteudo" className="loja__skip">
+        Ir para o cardápio
+      </a>
       {renderScreen()}
     </div>
   );
