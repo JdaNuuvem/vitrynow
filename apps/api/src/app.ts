@@ -33,6 +33,7 @@ import { clientKey } from "./lib/clientKey";
 import { isPrismaError, loggerOptions, redactLogUrl } from "./lib/logging";
 import { ORDER_TOKEN_HEADER } from "./lib/orderToken";
 import jobsPlugin from "./jobs/plugin";
+import subscriptionGate from "./plugins/subscriptionGate";
 
 export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = {}) {
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
@@ -89,6 +90,8 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(websocket);
   app.register(authPlugin);
   app.register(jobsPlugin);
+  // Portão da assinatura (Consulta/Suspensão): precisa vir ANTES de qualquer rota, pois age no `onRoute`.
+  app.register(subscriptionGate);
 
   // Várias rotas são "ação sem corpo" (delete, revoke) chamadas com
   // Content-Type: application/json mas sem body — o parser padrão do Fastify rejeita
