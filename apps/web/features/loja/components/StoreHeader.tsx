@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useBrokenImage } from "../hooks/useBrokenImage";
 import type { StoreInfo } from "@/core/domain/storefront";
 import { formatCents } from "@/shared/format/money";
 import { storeInitials } from "@/lib/storeInitials";
@@ -18,11 +19,11 @@ export function StoreHeader({
 }) {
   const [showHours, setShowHours] = useState(false);
   // URL de capa/logo pode estar quebrada (loja digitou errado, arquivo saiu do ar): some o ícone
-  // de imagem quebrada e fica o fundo neutro.
-  const [coverFailed, setCoverFailed] = useState(false);
-  const [logoFailed, setLogoFailed] = useState(false);
-  const hasCover = Boolean(store.coverImageUrl) && !coverFailed;
-  const hasLogo = Boolean(store.logoUrl) && !logoFailed;
+  // de imagem quebrada e fica o fundo neutro. Inclui a que falhou antes da hidratação (SSR).
+  const cover = useBrokenImage(store.coverImageUrl);
+  const logo = useBrokenImage(store.logoUrl);
+  const hasCover = Boolean(store.coverImageUrl) && !cover.failed;
+  const hasLogo = Boolean(store.logoUrl) && !logo.failed;
   const whatsappLink = store.whatsapp ? `https://wa.me/${store.whatsapp}` : null;
   const minOrderCents = store.minOrderCents;
 
@@ -30,7 +31,7 @@ export function StoreHeader({
     <div>
       {/* Spec 09 §2.1: sem capa (ou capa quebrada) vira um bloco liso mais baixo, sem ícone. */}
       <div className={`loja__cover${hasCover ? "" : " loja__cover--empty"}`}>
-        {hasCover && <img src={store.coverImageUrl as string} alt="" onError={() => setCoverFailed(true)} />}
+        {hasCover && <img ref={cover.ref} src={store.coverImageUrl as string} alt="" onError={cover.onError} />}
       </div>
 
       <div className="loja__card">
@@ -38,7 +39,8 @@ export function StoreHeader({
           <div className="loja__identity">
             {hasLogo ? (
               <div className="loja__logo">
-                <img src={store.logoUrl as string} alt={store.name} onError={() => setLogoFailed(true)} />
+                {/* alt vazio: o nome da loja já está no título ao lado (revisão da Da Vinci, N1) */}
+                <img ref={logo.ref} src={store.logoUrl as string} alt="" onError={logo.onError} />
               </div>
             ) : (
               // Iniciais (spec 09 §2.2): decorativo, o nome da loja vem logo ao lado.

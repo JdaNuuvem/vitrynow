@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { StoreInfo } from "@/core/domain/storefront";
 import { StoreHeader } from "./StoreHeader";
 
@@ -44,7 +44,7 @@ describe("logo (spec 09 §2.2)", () => {
 
   it("logo quebrado cai nas iniciais e o nome da loja continua na tela", () => {
     const { container } = setup();
-    fireEvent.error(screen.getByAltText("Pizzaria Boa Massa"));
+    fireEvent.error(container.querySelector(".loja__logo img") as HTMLImageElement);
     expect(container.querySelector(".loja__logo--initials")).toHaveTextContent("PB");
     expect(screen.getByRole("heading", { name: "Pizzaria Boa Massa" })).toBeInTheDocument();
   });
@@ -84,5 +84,28 @@ describe("contato", () => {
   it("sem WhatsApp não há link", () => {
     setup({ whatsapp: null });
     expect(screen.queryByRole("link", { name: /WhatsApp/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("imagem que falha ANTES da hidratação (B1 da revisão da Da Vinci)", () => {
+  afterEach(() => {
+    delete (HTMLImageElement.prototype as unknown as Record<string, unknown>).complete;
+    delete (HTMLImageElement.prototype as unknown as Record<string, unknown>).naturalWidth;
+  });
+
+  it("capa e logo já falhos ao montar caem no bloco liso e nas iniciais, sem depender do onError", () => {
+    // O navegador já terminou de falhar (complete e largura 0) quando o React hidrata: o evento passou.
+    Object.defineProperty(HTMLImageElement.prototype, "complete", { configurable: true, get: () => true });
+    Object.defineProperty(HTMLImageElement.prototype, "naturalWidth", { configurable: true, get: () => 0 });
+    const { container } = setup({ coverImageUrl: "http://localhost:9/nao-existe.jpg", logoUrl: "http://localhost:9/logo.png" });
+    expect(container.querySelector(".loja__cover--empty")).toBeInTheDocument();
+    expect(container.querySelector(".loja__cover img")).not.toBeInTheDocument();
+    expect(container.querySelector(".loja__logo--initials")).toHaveTextContent("PB");
+    expect(container.querySelector(".loja__logo img")).not.toBeInTheDocument();
+  });
+
+  it("o logo usa alt vazio (o nome da loja já está no título)", () => {
+    const { container } = setup();
+    expect(container.querySelector(".loja__logo img")).toHaveAttribute("alt", "");
   });
 });

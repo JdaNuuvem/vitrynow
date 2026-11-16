@@ -14,7 +14,8 @@ import { ProductDetailScreen } from "./components/ProductDetailScreen";
 import { ProductListItem } from "./components/ProductListItem";
 import { SearchScreen } from "./components/SearchScreen";
 import { StoreHeader } from "./components/StoreHeader";
-import { STORE_CLOSED_MESSAGE, type CheckoutForm, type CheckoutTotals } from "./checkoutForm";
+import { STORE_CLOSED_MESSAGE, buildOrderSummary, type CheckoutForm, type CheckoutTotals } from "./checkoutForm";
+import { InfoIcon } from "./icons";
 import { useCart } from "./hooks/useCart";
 import { useMenu } from "./hooks/useMenu";
 import { useOrderFlow } from "./hooks/useOrderFlow";
@@ -62,7 +63,8 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
   }
 
   async function submitOrder(form: CheckoutForm, totals: CheckoutTotals) {
-    const placed = await order.submit(form, cart.cart, totals.totalCents);
+    const summary = buildOrderSummary(form, cart.cart, productsById, totals.totalCents);
+    const placed = await order.submit(form, cart.cart, totals.totalCents, summary);
     if (!placed) return;
     cart.clear();
     setCheckoutOpen(false);
@@ -88,6 +90,8 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
           paymentConfirmed={order.placed.paymentConfirmed}
           paymentFailedMessage={order.placed.paymentFailedMessage}
           cancelError={order.placed.cancelError}
+          summary={order.placed.summary}
+          whatsapp={store.whatsapp}
           onCancel={order.cancel}
           onBack={order.back}
         />
@@ -98,6 +102,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
       return (
         <ProductDetailScreen
           product={detailProduct}
+          closed={closed}
           logoUrl={store.logoUrl}
           onClose={() => setDetailProduct(null)}
           onConfirm={({ quantity, additionalIds, notes }) => {
@@ -112,6 +117,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
       return (
         <SearchScreen
           categories={categories}
+          closed={closed}
           quantityByProduct={cart.quantityByProduct}
           onClose={() => setTab("itens")}
           onOpenProduct={setDetailProduct}
@@ -143,7 +149,8 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
             <div className="loja__content" id="cardapio-conteudo" tabIndex={-1}>
               {closed && (
                 <div className="loja__closed" role="status">
-                  {STORE_CLOSED_MESSAGE}
+                  <InfoIcon />
+                  <span>{STORE_CLOSED_MESSAGE}.</span>
                 </div>
               )}
               {!hasProducts && (
@@ -163,6 +170,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
                     {category.products.map((product) => (
                       <ProductListItem
                         key={product.id}
+                        closed={closed}
                         product={product}
                         quantityInCart={cart.quantityByProduct[product.id] ?? 0}
                         onOpen={setDetailProduct}

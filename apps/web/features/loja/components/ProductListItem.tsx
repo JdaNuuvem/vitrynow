@@ -6,11 +6,14 @@ import { formatCents } from "@/shared/format/money";
 export function ProductListItem({
   product,
   quantityInCart,
+  closed = false,
   onOpen,
   onQuickAdd,
 }: {
   product: Product;
   quantityInCart: number;
+  // Loja fechada: sem o "+" de adicionar rápido (spec 09 §2.4).
+  closed?: boolean;
   onOpen: (product: Product) => void;
   onQuickAdd: (product: Product) => void;
 }) {
@@ -31,15 +34,17 @@ export function ProductListItem({
         {product.imageUrl && (
           <div className="loja__item-media">
             <img src={product.imageUrl} alt={product.name} />
-            <span
-              onClick={(e) => {
-                e.stopPropagation();
-                onQuickAdd(product);
-              }}
-              className="loja__item-badge"
-            >
-              {quantityInCart > 0 ? quantityInCart : "+"}
-            </span>
+            {!closed && (
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onQuickAdd(product);
+                }}
+                className="loja__item-badge"
+              >
+                {quantityInCart > 0 ? quantityInCart : "+"}
+              </span>
+            )}
           </div>
         )}
       </div>

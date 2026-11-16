@@ -1,17 +1,22 @@
 import { useState } from "react";
 import type { Product } from "@/core/domain/storefront";
 import { formatCents } from "@/shared/format/money";
+import { STORE_CLOSED_MESSAGE } from "../checkoutForm";
+import { InfoIcon } from "../icons";
 
 // Tela cheia de detalhe do produto: foto, descrição, adicionais, observação e a barra fixa
 // com quantidade + Adicionar. Não conhece carrinho — só devolve o que o cliente escolheu.
 export function ProductDetailScreen({
   product,
   logoUrl,
+  closed = false,
   onClose,
   onConfirm,
 }: {
   product: Product;
   logoUrl: string | null;
+  // Loja fechada/pausada/em consulta: o produto continua visível, mas não dá para adicionar.
+  closed?: boolean;
   onClose: () => void;
   onConfirm: (choice: { quantity: number; additionalIds: string[]; notes: string }) => void;
 }) {
@@ -28,8 +33,8 @@ export function ProductDetailScreen({
   return (
     <main className="loja__screen">
       <div className="loja__detail-bar">
-        <button onClick={onClose} className="loja__detail-back">
-          ‹
+        <button type="button" onClick={onClose} className="loja__detail-back" aria-label="Voltar ao cardápio">
+          <span aria-hidden="true">‹</span>
         </button>
         {logoUrl && <img src={logoUrl} alt="" className="loja__detail-logo" />}
       </div>
@@ -73,30 +78,49 @@ export function ProductDetailScreen({
           )}
 
           <div className="loja__notes">
-            <label className="loja__notes-label">Alguma observação?</label>
-            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="loja__notes-input" />
+            <label className="loja__notes-label" htmlFor="loja-observacao">
+              Alguma observação?
+            </label>
+            <textarea id="loja-observacao" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="loja__notes-input" />
           </div>
         </div>
       </div>
 
-      <div className="loja__detail-footer">
-        <div className="loja__stepper">
-          <button
-            onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-            className={`loja__step${quantity <= 1 ? " loja__step--off" : ""}`}
-          >
-            −
-          </button>
-          <span className="loja__stepper-qty">{quantity}</span>
-          <button onClick={() => setQuantity((q) => q + 1)} className="loja__step">
-            +
+      {closed ? (
+        <div className="loja__detail-footer loja__detail-footer--closed">
+          <p className="loja__closed" role="status">
+            <InfoIcon />
+            <span>{STORE_CLOSED_MESSAGE}.</span>
+          </p>
+          <button type="button" onClick={onClose} className="loja__cta">
+            Voltar ao cardápio
           </button>
         </div>
-        <button onClick={() => onConfirm({ quantity, additionalIds, notes: notes.trim() })} className="loja__add">
-          <span>Adicionar</span>
-          <span>{formatCents(lineTotal)}</span>
-        </button>
-      </div>
+      ) : (
+        <div className="loja__detail-footer">
+          <div className="loja__stepper" role="group" aria-label="Quantidade">
+            <button
+              type="button"
+              onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+              className={`loja__step${quantity <= 1 ? " loja__step--off" : ""}`}
+              aria-label={`Diminuir quantidade de ${product.name}`}
+              disabled={quantity <= 1}
+            >
+              −
+            </button>
+            <span className="loja__stepper-qty" role="status" aria-label={`Quantidade: ${quantity}`}>
+              {quantity}
+            </span>
+            <button type="button" onClick={() => setQuantity((q) => q + 1)} className="loja__step" aria-label={`Aumentar quantidade de ${product.name}`}>
+              +
+            </button>
+          </div>
+          <button type="button" onClick={() => onConfirm({ quantity, additionalIds, notes: notes.trim() })} className="loja__add">
+            <span>Adicionar</span>
+            <span>{formatCents(lineTotal)}</span>
+          </button>
+        </div>
+      )}
     </main>
   );
 }

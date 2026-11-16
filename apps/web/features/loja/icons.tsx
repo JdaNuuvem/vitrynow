@@ -94,3 +94,20 @@ export function ChevronIcon() {
     </Svg>
   );
 }
+
+export function TrashIcon() {
+  return (
+    <Svg size="md" strokeWidth={1.8}>
+      <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+export function InfoIcon() {
+  return (
+    <Svg size="md" strokeWidth={1.8}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5M12 8h.01" strokeLinecap="round" />
+    </Svg>
+  );
+}
