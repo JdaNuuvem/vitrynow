@@ -176,13 +176,13 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 
 Ordem da spec B4.1: loja, `PEDIDO #código`, tipo em destaque (ENTREGA/RETIRADA/MESA), "2ª VIA (n)" quando `reprintCount > 0`, data e hora
 (a API manda ISO em UTC; sai `dd/MM/aaaa HH:mm` no fuso do computador até a API informar o da loja), cliente, itens, observação,
-valores e bloco de pagamento (B4.2). O item mostra o valor da **linha** = (unitário + adicionais) x quantidade; o adicional mostra o extra por unidade (`+R$ 8,00`).
+valores e bloco de pagamento (B4.2). A linha do item mostra produto x quantidade e cada adicional mostra extra x quantidade com o "(Nx)" escrito (`+ Borda catupiry (2x)  +R$ 16,00`), então a coluna de valores soma exatamente o subtotal.
 
 - **Já com o contrato de hoje:** taxa de entrega, gorjeta, forma de pagamento (DINHEIRO, PIX, CREDITO, DEBITO, VR, VA ou nula), desconto **derivado**
-  (soma das linhas + taxa + gorjeta - total, sem código de cupom). PIX no tíquete significa pago online: hoje só existe PIX online e o pedido só imprime depois de pago.
+  (soma das linhas + taxa + gorjeta - total, sem código de cupom). **Fail-safe do PIX:** "PAGO ONLINE (PIX) - NÃO COBRAR" só com prova (`paymentStatus` = APROVADO); PIX sem prova (ex.: pedido manual com PIX presencial) imprime "PIX - CONFERIR NA HORA". Enquanto a API não enviar `paymentStatus`, todo PIX sai "conferir na hora" (seguro, mas conservador).
 - **Opcionais que a API-14 vai enviar** (já aceitos pelo `PrintableOrder`): `subtotalCents`, `discountCents`, `couponCode` (vira "Desconto (BEM10)"),
-  `changeForCents` (vira "TROCO PARA / LEVAR DE TROCO"), `reprintCount`.
+  `changeForCents` (vira "TROCO PARA / LEVAR DE TROCO"), `reprintCount`, `paymentStatus`, `tableLabel` ("Mesa 12" => "MESA 12" no topo).
 - Bloco de pagamento: PIX => `PAGO ONLINE (PIX) - NÃO COBRAR`; dinheiro => `COBRAR R$ X EM DINHEIRO` (+ troco em linhas separadas); cartão (crédito/débito/VR/VA);
   balcão sem forma => `COBRAR NO CAIXA`; mesa => `PAGAMENTO NA MESA`; sem forma => `FORMA DE PAGAMENTO NÃO INFORMADA`.
-- **Ainda não:** aviso "PEDIDO #xxxx CANCELADO" e o trabalho de reimpressão (precisam do `PrintJob`, PC-03/API-12/API-14), número da mesa ("MESA 12" não vem no contrato),
+- **Ainda não:** aviso "PEDIDO #xxxx CANCELADO" e o trabalho de reimpressão (precisam do `PrintJob`, PC-03/API-12/API-14), número da mesa só quando a API enviar `tableLabel`,
   bairro/referência separados do endereço, opções agrupadas (B8).

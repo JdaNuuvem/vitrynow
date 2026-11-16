@@ -68,7 +68,7 @@ namespace MeuCardapio.PrintClient
                 Address = "Avenida-Engenheiro-Luís-Carlos-Berrini-1234567890-Cidade-Monções, bloco B",
                 // ESC @ (reset), GS V 0 (corte), BEL, tabulação e quebra de linha: tudo isso é texto do cliente, nunca comando.
                 Notes = "Sem pimenta\u0007\u001b@ \u001dV\u0000 por favor\nsegunda linha\tcom tab \u202eevil",
-                TotalCents = 10820, CreatedAt = "2026-11-17T00:05:00Z", PaymentMethod = null,
+                TotalCents = 10820, CreatedAt = "2026-11-17T00:05:00Z", PaymentMethod = null, TableLabel = "Mesa 12",
                 Items = new List<PrintableOrderItem>
                 {
                     new PrintableOrderItem { ProductName = "Pastel de Camarão com Catupiry e Cream Cheese Especial da Casa", Quantity = 3, UnitPriceCents = 2890,
@@ -98,8 +98,43 @@ namespace MeuCardapio.PrintClient
         internal static PrintableOrder Reprint()
         {
             var o = Basic();
-            o.OrderId = "ord-1042"; o.PaymentMethod = "PIX"; o.ChangeForCents = null; o.ReprintCount = 1;
+            o.OrderId = "ord-1042"; o.PaymentMethod = "PIX"; o.PaymentStatus = "APROVADO"; o.ChangeForCents = null; o.ReprintCount = 1;
             return o;
+        }
+
+        // Quantidades diferentes com adicional: qtd 1 (sem "(1x)"), qtd 3 e item sem adicional. Entrega com taxa, dinheiro.
+        internal static PrintableOrder Quantities()
+        {
+            // itens: 1 x (18,00 + 3,00) + 3 x (15,00 + 4,00) + 2 x 9,00 = 96,00; + taxa 5,00 = 101,00
+            return new PrintableOrder
+            {
+                OrderId = "ord-5005", Code = "5005", Type = "DELIVERY", StoreName = "Sucos & Lanches", CustomerName = "Rita", CreatedAt = "2026-11-17T15:00:00Z",
+                DeliveryFeeCents = 500, PaymentMethod = "DINHEIRO", TotalCents = 10100,
+                Items = new List<PrintableOrderItem>
+                {
+                    new PrintableOrderItem { ProductName = "X-Tudo", Quantity = 1, UnitPriceCents = 1800, Additionals = new List<PrintableOrderAdditional> { new PrintableOrderAdditional { Name = "Bacon extra", PriceCents = 300 } } },
+                    new PrintableOrderItem { ProductName = "Suco 300ml", Quantity = 3, UnitPriceCents = 1500, Additionals = new List<PrintableOrderAdditional> { new PrintableOrderAdditional { Name = "Queijo duplo", PriceCents = 400 } } },
+                    new PrintableOrderItem { ProductName = "Água", Quantity = 2, UnitPriceCents = 900 },
+                },
+            };
+        }
+
+        // Soma da coluna de valores das linhas de item e de adicional (o que o entregador soma no papel).
+        static long ColumnSum(TicketDocument d)
+        {
+            long sum = 0;
+            foreach (var l in d.Lines)
+                if (l.RightText.Length > 0 && (l.Text.Length > 1 && char.IsDigit(l.Text[0]) && l.Text.Contains("x ") || l.Text.StartsWith("  + ")))
+                    sum += Cents(l.RightText);
+            return sum;
+        }
+
+        // "R$ 1.234,56" / "+R$ 8,00" / "-R$ 4,50" -> centavos.
+        static long Cents(string money)
+        {
+            var digits = new string(money.Where(char.IsDigit).ToArray());
+            long v = digits.Length == 0 ? 0 : long.Parse(digits);
+            return money.StartsWith("-") ? -v : v;
         }
 
         static TicketDocument Build(PrintableOrder o, int mm = 58) { return TicketBuilder.Build(o, mm, Tz); }
@@ -155,8 +190,16 @@ namespace MeuCardapio.PrintClient
             Check("tiquete: data e hora sob o tipo, centralizada", d.Lines[3].Text == "16/11/2026 20:31" && d.Lines[3].Align == TicketAlign.Center);
             Check("tiquete: cliente, telefone e endereco antes dos itens", d.Lines.FindIndex(l => l.Text.StartsWith("Cliente: Maria")) < d.Lines.FindIndex(l => l.Text.StartsWith("2x Pizza"))
                 && d.Lines.Any(l => l.Text.StartsWith("Telefone:")) && d.Lines.Any(l => l.Text.StartsWith("Endereço:")));
-            Check("tiquete: item mostra o valor da LINHA ((unitario + adicionais) x qtd = 2 x 43,00)", d.Lines.Any(l => l.Text == "2x Pizza Calabresa G" && l.RightText == "R$ 86,00"));
-            Check("tiquete: adicional recuado, menor, com o extra por unidade", d.Lines.Any(l => l.Text == "  + Borda catupiry" && l.RightText == "+R$ 8,00" && l.Scale < 1f));
+            Check("tiquete: linha do item = produto x qtd (2 x 35,00 = 70,00)", d.Lines.Any(l => l.Text == "2x Pizza Calabresa G" && l.RightText == "R$ 70,00"));
+            Check("tiquete: adicional x qtd escrito, recuado e menor ('(2x)' e +16,00)", d.Lines.Any(l => l.Text == "  + Borda catupiry (2x)" && l.RightText == "+R$ 16,00" && l.Scale < 1f));
+            Check("tiquete: a coluna de valores dos itens SOMA o subtotal (70,00 + 16,00 + 8,50 = 94,50)", ColumnSum(d) == 9450 && d.Lines.Any(l => l.Text == "Subtotal" && l.RightText == "R$ 94,50"));
+            foreach (var q in new[] { Quantities() })
+            {
+                var dq = Build(q);
+                Check("tiquete qtd 1 com adicional: sem '(1x)' e coluna soma o subtotal", dq.Lines.Any(l => l.Text == "  + Bacon extra" && l.RightText == "+R$ 3,00") && ColumnSum(dq) == 9600);
+                Check("tiquete qtd 3 com adicional: '(3x)' e extra x 3", dq.Lines.Any(l => l.Text == "  + Queijo duplo (3x)" && l.RightText == "+R$ 12,00") && dq.Lines.Any(l => l.Text == "3x Suco 300ml" && l.RightText == "R$ 45,00"));
+                Check("tiquete: total coerente com a coluna (soma dos itens + taxa + gorjeta - desconto = TOTAL)", ColumnSum(dq) + dq.Lines.Where(l => l.Text == "Taxa de entrega").Sum(l => Cents(l.RightText)) == dq.Lines.Where(l => l.Text == "TOTAL").Sum(l => Cents(l.RightText)));
+            }
             Check("tiquete: observacao do item em italico", d.Lines.Any(l => l.Text == "  obs: sem cebola" && l.Italic));
             Check("tiquete: observacao do pedido em destaque", d.Lines.Any(l => l.Text == "OBS: Tocar o interfone" && l.Bold));
             Check("tiquete: subtotal, desconto com o cupom, taxa e TOTAL (CA-B4-03)", d.Lines.Any(l => l.Text == "Subtotal" && l.RightText == "R$ 94,50")
@@ -199,11 +242,27 @@ namespace MeuCardapio.PrintClient
         // Os cenarios do bloco de pagamento (B4.2) e CA-B4-01/02/08: o que o entregador/balcao precisa saber.
         static void PaymentBlock()
         {
+            string status = "APROVADO"; // prova de pagamento online; os cenarios sem PIX nao dependem dela
             Func<string, string, int, int?, string[]> lines = (type, method, total, changeFor) =>
-                TicketBuilder.PaymentLines(new PrintableOrder { Type = type, PaymentMethod = method, TotalCents = total, ChangeForCents = changeFor }, type.ToUpperInvariant()).ToArray();
+                TicketBuilder.PaymentLines(new PrintableOrder { Type = type, PaymentMethod = method, TotalCents = total, ChangeForCents = changeFor, PaymentStatus = status }, type.ToUpperInvariant()).ToArray();
             Func<string[], string> one = a => string.Join(" | ", a);
 
-            Check("pagamento 1: PIX aprovado => PAGO ONLINE, sem frase de cobranca (CA-B4-02)", one(lines("DELIVERY", "PIX", 4500, null)) == "PAGO ONLINE (PIX) - NÃO COBRAR");
+            Check("pagamento 1: PIX aprovado (com prova) => PAGO ONLINE, sem frase de cobranca (CA-B4-02)", one(lines("DELIVERY", "PIX", 4500, null)) == "PAGO ONLINE (PIX) - NÃO COBRAR");
+            foreach (var noProof in new string[] { null, "", "PENDENTE", "REJEITADO", "REEMBOLSADO", "qualquer" })
+            {
+                status = noProof;
+                Check("fail-safe: PIX sem prova (status '" + (noProof ?? "null") + "') NUNCA diz NÃO COBRAR, manda conferir na hora", one(lines("DELIVERY", "PIX", 4500, null)) == "PIX - CONFERIR NA HORA");
+            }
+            status = "aprovado";
+            Check("fail-safe: status em minusculas tambem e prova", one(lines("DELIVERY", "PIX", 4500, null)) == "PAGO ONLINE (PIX) - NÃO COBRAR");
+            status = "APROVADO";
+            Check("fail-safe: pedido manual com PIX presencial (sem status) imprime 'conferir na hora', inclusive na mesa e no balcao",
+                one(TicketBuilder.PaymentLines(new PrintableOrder { Type = "BALCAO", PaymentMethod = "PIX", TotalCents = 100 }, "BALCAO").ToArray()) == "PIX - CONFERIR NA HORA"
+                && one(TicketBuilder.PaymentLines(new PrintableOrder { Type = "MESA", PaymentMethod = "PIX", TotalCents = 100 }, "MESA").ToArray()) == "PIX - CONFERIR NA HORA");
+            Check("pagamento: status APROVADO sem PIX nao muda nada (dinheiro continua cobrando)", one(lines("DELIVERY", "DINHEIRO", 4500, null)) == "COBRAR R$ 45,00 EM DINHEIRO");
+            var mesa = Build(LongAndHostile());
+            Check("mesa: tableLabel 'Mesa 12' vira 'MESA 12' no topo (CA-B4-08); sem rotulo fica so 'MESA'", mesa.Lines[2].Text == "MESA 12"
+                && Build(new PrintableOrder { Code = "9", StoreName = "x", Type = "MESA", Items = new List<PrintableOrderItem>() }).Lines[2].Text == "MESA");
             Check("pagamento 2: dinheiro sem troco => COBRAR R$ X EM DINHEIRO", one(lines("DELIVERY", "DINHEIRO", 4500, null)) == "COBRAR R$ 45,00 EM DINHEIRO");
             Check("pagamento 3: dinheiro com troco => cobrar, troco para, levar de troco (CA-B4-01: 45,00, 100,00 => 55,00)",
                 one(lines("DELIVERY", "DINHEIRO", 4500, 10000)) == "COBRAR R$ 45,00 EM DINHEIRO | TROCO PARA R$ 100,00 | LEVAR R$ 55,00 DE TROCO");
@@ -225,7 +284,7 @@ namespace MeuCardapio.PrintClient
 
         static void Writer()
         {
-            foreach (var fixture in new[] { Basic(), CurrentContract(), LongAndHostile(), ManyItems(), Reprint() })
+            foreach (var fixture in new[] { Basic(), CurrentContract(), LongAndHostile(), ManyItems(), Reprint(), Quantities() })
             {
                 foreach (var mm in new[] { 58, 80 })
                 {
@@ -236,14 +295,14 @@ namespace MeuCardapio.PrintClient
             }
             var txt = TextTicketWriter.Render(Build(Basic()), 32);
             var itemLine = txt.First(l => l.StartsWith("2x Pizza Calabresa G"));
-            Check("colunas: valor da linha colado na borda direita", itemLine.EndsWith("R$ 86,00") && TicketText.CellWidth(itemLine) == 32);
+            Check("colunas: valor da linha colado na borda direita", itemLine.EndsWith("R$ 70,00") && TicketText.CellWidth(itemLine) == 32);
             Check("colunas: separador ocupa a largura toda", txt.Any(l => l == new string('-', 32)));
             Check("colunas: titulo centralizado", txt[0].TrimStart().StartsWith("Pizzaria") && txt[0].Length - txt[0].TrimStart().Length >= 7);
             Check("colunas: texto final sem espaco sobrando e com \\n", TextTicketWriter.RenderText(Build(Basic()), 32).Split('\n').All(l => l == l.TrimEnd()) && TextTicketWriter.RenderText(Build(Basic()), 32).EndsWith("\n"));
 
             // CA-B4-07: nome de produto longo em 58 mm quebra sem cortar o preco
             var longName = TextTicketWriter.Render(Build(LongAndHostile()), 32);
-            Check("CA-B4-07: nome longo em 58 mm quebra em varias linhas e o preco da linha fica inteiro", longName.Any(l => l.EndsWith("R$ 97,20") && TicketText.CellWidth(l) <= 32)
+            Check("CA-B4-07: nome longo em 58 mm quebra em varias linhas e o preco da linha fica inteiro", longName.Any(l => l.EndsWith("R$ 86,70") && TicketText.CellWidth(l) <= 32)
                 && longName.Count(l => l.Contains("Pastel") || l.Contains("Catupiry") || l.Contains("Cheese")) >= 3);
         }
 
@@ -256,7 +315,7 @@ namespace MeuCardapio.PrintClient
             var fixtures = new Dictionary<string, PrintableOrder>
             {
                 { "basico", Basic() }, { "contrato-atual", CurrentContract() }, { "longo-emoji-hostil", LongAndHostile() },
-                { "muitos-itens", ManyItems() }, { "segunda-via", Reprint() },
+                { "muitos-itens", ManyItems() }, { "segunda-via", Reprint() }, { "quantidades", Quantities() },
             };
             foreach (var kv in fixtures)
             {

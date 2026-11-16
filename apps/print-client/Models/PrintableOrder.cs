@@ -40,6 +40,9 @@ namespace MeuCardapio.PrintClient.Models
         [JsonProperty("couponCode")] public string CouponCode { get; set; }
         [JsonProperty("changeForCents")] public int? ChangeForCents { get; set; }
         [JsonProperty("reprintCount")] public int? ReprintCount { get; set; }
+        // Prova de pagamento (enum do Payment: APROVADO...). "NÃO COBRAR" só com APROVADO. Pedido de mesa: "Mesa 12".
+        [JsonProperty("paymentStatus")] public string PaymentStatus { get; set; }
+        [JsonProperty("tableLabel")] public string TableLabel { get; set; }
         [JsonProperty("createdAt")] public string CreatedAt { get; set; }
         [JsonProperty("items")] public List<PrintableOrderItem> Items { get; set; } = new List<PrintableOrderItem>();
     }

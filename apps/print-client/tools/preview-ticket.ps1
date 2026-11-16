@@ -26,7 +26,7 @@ public static class Preview
         foreach (var mm in new[] { 58, 80 })
         {
             var target = new VirtualPrintTarget(Path.Combine(dir, mm + "mm"), true);
-            foreach (var o in new[] { SelfTestPrint.Basic(), SelfTestPrint.CurrentContract(), SelfTestPrint.LongAndHostile(), SelfTestPrint.ManyItems(), SelfTestPrint.Reprint() })
+            foreach (var o in new[] { SelfTestPrint.Basic(), SelfTestPrint.CurrentContract(), SelfTestPrint.LongAndHostile(), SelfTestPrint.ManyItems(), SelfTestPrint.Reprint(), SelfTestPrint.Quantities() })
             { target.Print(TicketBuilder.Build(o, mm, SelfTestPrint.Tz)); n++; }
         }
         return n + " tiquetes gravados em " + dir;

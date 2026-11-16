@@ -26,7 +26,11 @@ namespace MeuCardapio.PrintClient.Printing
             // 1) cabeçalho
             doc.Text(S(order.StoreName), TicketAlign.Center, bold: true, scale: 1.5f);
             doc.Text("PEDIDO #" + S(order.Code), TicketAlign.Center, bold: true);
-            doc.Text(TypeLabel(order.Type), TicketAlign.Center, bold: true, scale: 1.3f);
+            // Mesa: "MESA 12" quando a API informa o rótulo (tableLabel), senão só "MESA".
+            var label = TypeLabel(order.Type);
+            var table = S(order.TableLabel);
+            if (type == "MESA" && table.Length > 0) label = table.StartsWith("MESA", StringComparison.OrdinalIgnoreCase) ? table.ToUpperInvariant() : "MESA " + table.ToUpperInvariant();
+            doc.Text(label, TicketAlign.Center, bold: true, scale: 1.3f);
             if (order.ReprintCount.HasValue && order.ReprintCount.Value > 0)
                 doc.Text("2ª VIA (" + order.ReprintCount.Value + ")", TicketAlign.Center, bold: true);
             var when = FormatDate(order.CreatedAt, timeZone);
@@ -46,11 +50,13 @@ namespace MeuCardapio.PrintClient.Printing
             {
                 long extras = 0;
                 foreach (var add in item.Additionals ?? new List<PrintableOrderAdditional>()) extras += add.PriceCents;
-                long line = ((long)item.UnitPriceCents + extras) * item.Quantity;
-                sumLines += line;
-                doc.Pair(item.Quantity + "x " + S(item.ProductName), Money(line));
+                sumLines += ((long)item.UnitPriceCents + extras) * item.Quantity;
+                // Linha do item = produto x qtd; cada adicional = extra x qtd, com "(Nx)" escrito. Assim a coluna
+                // de valores soma exatamente o subtotal (parecer funcional do Leonardo).
+                doc.Pair(item.Quantity + "x " + S(item.ProductName), Money((long)item.UnitPriceCents * item.Quantity));
                 foreach (var add in item.Additionals ?? new List<PrintableOrderAdditional>())
-                    doc.Pair("  + " + S(add.Name), "+" + Money(add.PriceCents), scale: 0.85f);
+                    doc.Pair("  + " + S(add.Name) + (item.Quantity > 1 ? " (" + item.Quantity + "x)" : ""),
+                        "+" + Money((long)add.PriceCents * item.Quantity), scale: 0.85f);
                 if (!string.IsNullOrWhiteSpace(item.Notes))
                     doc.Text("  obs: " + S(item.Notes), italic: true, scale: 0.85f);
             }
@@ -94,7 +100,14 @@ namespace MeuCardapio.PrintClient.Printing
             string method = (o.PaymentMethod ?? "").Trim().ToUpperInvariant();
             string total = Money(o.TotalCents);
 
-            if (method == "PIX") { lines.Add("PAGO ONLINE (PIX) - NÃO COBRAR"); return lines; }
+            // Fail-safe: "NÃO COBRAR" só com PROVA de pagamento online (paymentStatus APROVADO). PIX sem prova
+            // (ex.: pedido manual com PIX presencial) manda conferir na hora, nunca deixa de cobrar por engano.
+            if (method == "PIX")
+            {
+                bool proven = string.Equals((o.PaymentStatus ?? "").Trim(), "APROVADO", StringComparison.OrdinalIgnoreCase);
+                lines.Add(proven ? "PAGO ONLINE (PIX) - NÃO COBRAR" : "PIX - CONFERIR NA HORA");
+                return lines;
+            }
             if (type == "MESA") { lines.Add("PAGAMENTO NA MESA"); return lines; }
 
             switch (method)
