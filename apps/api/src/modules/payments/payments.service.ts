@@ -1,0 +1,174 @@
+import type { prisma as prismaClient, Payment, PaymentStatus, SubscriptionPayment } from "@meucardapio/db";
+import type { WsServerMessage } from "@meucardapio/shared-types";
+import type { AuditLogger } from "../../shared/audit";
+import { getPayment, mapMpStatus, type ProviderPayment } from "../../lib/mercadopago";
+import { canMovePayment, originsFor } from "../../lib/paymentStateMachine";
+import { activateSubscription } from "../../lib/subscription";
+import type { OrderService } from "../orders/orders.service";
+
+type Db = typeof prismaClient;
+
+// O que o webhook fez — devolvido só para teste e log (a resposta HTTP é sempre 200 quando a assinatura é válida).
+export type WebhookOutcome =
+  | "UNKNOWN_PAYMENT"
+  | "MISMATCH"
+  | "UNKNOWN_STATUS"
+  | "NOOP"
+  | "REGRESSION_IGNORED"
+  | { applied: PaymentStatus; announced?: boolean; refunded?: boolean };
+
+// Webhook do Mercado Pago (ADR-0007 §6.1). A notificação só traz o id: o estado vem SEMPRE da consulta ao
+// provedor, conferido contra o que gravamos (valor, moeda, referência). Cada transição é um UPDATE
+// condicional; só quem vence (contagem 1) produz efeitos — entrega duplicada ou fora de ordem não faz nada.
+export class PaymentService {
+  constructor(
+    private readonly db: Db,
+    private readonly orders: OrderService,
+    private readonly audit: AuditLogger,
+    private readonly publish: (storeId: string, message: WsServerMessage) => void,
+  ) {}
+
+  async handleNotification(providerPaymentId: string): Promise<WebhookOutcome> {
+    // Falha de rede/provedor aqui propaga ⇒ 5xx ⇒ o provedor reenvia (§6.1 item 6).
+    const remote = await getPayment(providerPaymentId);
+
+    const orderPayment = await this.findOrderPayment(providerPaymentId, remote);
+    if (orderPayment) return this.applyOrderPayment(orderPayment, remote);
+
+    const subscriptionPayment = await this.findSubscriptionPayment(providerPaymentId, remote);
+    if (subscriptionPayment) return this.applySubscriptionPayment(subscriptionPayment, remote);
+
+    return "UNKNOWN_PAYMENT";
+  }
+
+  // ───────────── Localizar o pagamento local ─────────────
+  // A notificação pode chegar ANTES de gravarmos o id do provedor (ou a gravação pode ter caído depois do
+  // aceite — cobrança "órfã", SEC-17). Nesse caso a referência externa (= id do pedido) liga os dois lados.
+  private async findOrderPayment(providerPaymentId: string, remote: ProviderPayment): Promise<Payment | null> {
+    const known = await this.db.payment.findUnique({ where: { providerPaymentId } });
+    if (known) return known;
+    const reference = remote.externalReference;
+    if (!reference) return null;
+    const pending = await this.db.payment.findFirst({ where: { orderId: reference, providerPaymentId: null } });
+    if (!pending || !this.matchesLocal(remote, pending.amountCents, pending.orderId)) return null;
+    const attached = await this.db.payment.updateMany({ where: { id: pending.id, providerPaymentId: null }, data: { providerPaymentId } });
+    return attached.count === 1 ? this.db.payment.findUnique({ where: { id: pending.id } }) : this.db.payment.findUnique({ where: { providerPaymentId } });
+  }
+
+  private async findSubscriptionPayment(providerPaymentId: string, remote: ProviderPayment): Promise<SubscriptionPayment | null> {
+    const known = await this.db.subscriptionPayment.findUnique({ where: { providerPaymentId } });
+    if (known) return known;
+    const reference = remote.externalReference;
+    if (!reference) return null;
+    const pending = await this.db.subscriptionPayment.findFirst({ where: { id: reference, providerPaymentId: null } });
+    if (!pending || !this.matchesLocal(remote, pending.amountCents, pending.id)) return null;
+    const attached = await this.db.subscriptionPayment.updateMany({ where: { id: pending.id, providerPaymentId: null }, data: { providerPaymentId } });
+    return attached.count === 1
+      ? this.db.subscriptionPayment.findUnique({ where: { id: pending.id } })
+      : this.db.subscriptionPayment.findUnique({ where: { providerPaymentId } });
+  }
+
+  // Valor, moeda e referência têm que bater com o que gravamos; ausência = não verificável = não aprova.
+  private matchesLocal(remote: ProviderPayment, amountCents: number, reference: string): boolean {
+    return remote.externalReference === reference && remote.amountCents === amountCents && remote.currency === "BRL";
+  }
+
+  // ───────────── Pedido ─────────────
+  private async applyOrderPayment(payment: Payment, remote: ProviderPayment): Promise<WebhookOutcome> {
+    const order = await this.db.order.findUniqueOrThrow({ where: { id: payment.orderId }, select: { id: true, storeId: true, status: true } });
+    const audit = (action: string, metadata: Record<string, unknown> = {}) =>
+      this.audit.log({ storeId: order.storeId, action, targetType: "Payment", targetId: payment.id, metadata });
+
+    if (!this.matchesLocal(remote, payment.amountCents, payment.orderId)) {
+      await this.db.payment.update({ where: { id: payment.id }, data: { lastRawStatus: remote.status ?? null, lastCheckedAt: new Date() } });
+      audit("payment.mismatch", { remoteStatus: remote.status ?? null });
+      return "MISMATCH";
+    }
+
+    const mapped = mapMpStatus(remote.status);
+    await this.db.payment.update({ where: { id: payment.id }, data: { lastRawStatus: remote.status ?? null, lastCheckedAt: new Date() } });
+    if (!mapped) {
+      audit("payment.unknown_status", { remoteStatus: remote.status ?? null });
+      return "UNKNOWN_STATUS";
+    }
+    if (mapped === payment.status) return "NOOP";
+
+    // Estorno nosso em andamento e o provedor já mostra "refunded": quem conclui é a saga (cancela o pedido
+    // junto). Trocar o status aqui deixaria o pedido ativo com o dinheiro devolvido.
+    if (payment.status === "ESTORNO_PENDENTE" && mapped === "REEMBOLSADO") {
+      await this.orders.attemptRefund(payment.id);
+      return { applied: "REEMBOLSADO", refunded: true };
+    }
+
+    if (!canMovePayment(payment.status, mapped)) {
+      audit("payment.regression_ignored", { from: payment.status, remote: mapped });
+      return "REGRESSION_IGNORED";
+    }
+
+    // Transição condicional: contagem 0 = outra entrega (ou o job de conciliação) já aplicou ⇒ nada a fazer.
+    const moved = await this.db.payment.updateMany({ where: { id: payment.id, status: { in: originsFor(mapped) } }, data: { status: mapped } });
+    if (moved.count !== 1) return "NOOP";
+
+    return this.orderEffects(order, payment, mapped);
+  }
+
+  // Efeitos de negócio — só para quem venceu a transição.
+  private async orderEffects(order: { id: string; storeId: string }, payment: Payment, mapped: PaymentStatus): Promise<WebhookOutcome> {
+    switch (mapped) {
+      case "APROVADO": {
+        // Conditional: se o pedido foi cancelado no meio do caminho a contagem é 0 e vira estorno automático.
+        const announced = await this.db.order.updateMany({
+          where: { id: order.id, awaitingPayment: true, status: { not: "CANCELADO" } },
+          data: { awaitingPayment: false },
+        });
+        if (announced.count === 1) {
+          this.publish(order.storeId, { type: "order.created", orderId: order.id });
+          return { applied: mapped, announced: true };
+        }
+        const current = await this.db.order.findUniqueOrThrow({ where: { id: order.id }, select: { status: true } });
+        if (current.status === "CANCELADO") {
+          // Pagou depois de cancelado (RN-B3-04): estorna e NÃO anuncia o pedido.
+          await this.orders.refundAfterCancel(payment.id);
+          return { applied: mapped, refunded: true };
+        }
+        return { applied: mapped };
+      }
+      case "REJEITADO":
+      case "EXPIRADO":
+      case "CANCELADO":
+        await this.orders.cancelBySystem(order.storeId, order.id, "PAGAMENTO_NAO_APROVADO", "WEBHOOK");
+        return { applied: mapped };
+      case "REEMBOLSADO":
+        // Estorno feito por fora (painel do provedor): o dinheiro já voltou, o pedido ativo não faz mais sentido.
+        await this.orders.cancelBySystem(order.storeId, order.id, "PAGAMENTO_ESTORNADO_NO_PROVEDOR", "WEBHOOK");
+        return { applied: mapped };
+      case "CONTESTADO":
+        // Sem automação de dinheiro (ADR-0007 §6.1): fica visível na auditoria para a loja e o suporte.
+        this.audit.log({ storeId: order.storeId, action: "payment.chargeback", targetType: "Payment", targetId: payment.id });
+        return { applied: mapped };
+      default:
+        return { applied: mapped };
+    }
+  }
+
+  // ───────────── Assinatura da plataforma ─────────────
+  // Aprovação + ativação do plano na MESMA transação e condicionadas à troca de estado: duas entregas
+  // simultâneas ativam uma vez só (SEC-12 d) e uma queda no meio não deixa "pago sem plano".
+  private async applySubscriptionPayment(payment: SubscriptionPayment, remote: ProviderPayment): Promise<WebhookOutcome> {
+    if (!this.matchesLocal(remote, payment.amountCents, payment.id)) {
+      return "MISMATCH";
+    }
+    const mapped = mapMpStatus(remote.status);
+    if (!mapped) return "UNKNOWN_STATUS";
+    if (mapped === payment.status) return "NOOP";
+    if (!canMovePayment(payment.status, mapped)) return "REGRESSION_IGNORED";
+
+    const activated = await this.db.$transaction(async (tx) => {
+      const moved = await tx.subscriptionPayment.updateMany({ where: { id: payment.id, status: { in: originsFor(mapped) } }, data: { status: mapped } });
+      if (moved.count !== 1) return null;
+      if (mapped === "APROVADO") await activateSubscription({ subscriptionId: payment.subscriptionId, planCode: payment.planCode }, tx);
+      return mapped;
+    });
+    return activated ? { applied: activated } : "NOOP";
+  }
+}

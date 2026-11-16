@@ -15,7 +15,7 @@ import realtimeRoutes from "./routes/realtime";
 import catalogRoutes from "./modules/catalog/catalog.module";
 import cashierRoutes from "./routes/cashier";
 import couponRoutes from "./modules/coupons/coupons.module";
-import paymentRoutes from "./routes/payments";
+import paymentRoutes from "./modules/payments/payments.module";
 import storeRoutes from "./routes/store";
 import delivererRoutes from "./modules/deliverers/deliverers.module";
 import reportRoutes from "./routes/reports";

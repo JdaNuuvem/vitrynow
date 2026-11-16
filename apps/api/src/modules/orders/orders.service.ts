@@ -259,6 +259,10 @@ export class OrderService {
     }
     await this.afterCancelCommitted(order, origin);
 
+    // Cobrança que nunca chegou a existir no provedor (falha ao criar o PIX): só fechar o registro local.
+    if (order.payment?.status === "PENDENTE" && !order.payment.providerPaymentId) {
+      await this.db.payment.updateMany({ where: { id: order.payment.id, status: "PENDENTE", providerPaymentId: null }, data: { status: "CANCELADO" } });
+    }
     // Fora da transação: cobrança aberta no MP (melhor esforço; o pedido já está cancelado — RN-B3-02).
     if (order.payment?.status === "PENDENTE" && order.payment.providerPaymentId) {
       try {
@@ -428,6 +432,20 @@ export class OrderService {
         return false;
       }
     }
+  }
+
+  // Pagamento aprovado DEPOIS de o pedido ter sido cancelado (RN-B3-04): estorno automático, sem anunciar
+  // o pedido e sem reabri-lo. Idempotente: só começa se o pagamento ainda está APROVADO.
+  async refundAfterCancel(paymentId: string): Promise<RefundOutcome> {
+    const payment = await this.db.payment.findUnique({ where: { id: paymentId }, include: { order: true } });
+    if (!payment || payment.status !== "APROVADO") return payment ? this.refundState(payment) : "NONE";
+    const origin: CancelOrigin = {
+      source: "WEBHOOK",
+      userId: null,
+      actor: "SYSTEM",
+      reason: { code: "PAGAMENTO_APOS_CANCELAMENTO", customerMessage: "O pagamento chegou depois do cancelamento do pedido." },
+    };
+    return this.refundSaga({ ...payment.order, payment }, origin);
   }
 
   async retryRefund(actor: PanelActor, orderId: string) {

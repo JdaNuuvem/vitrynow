@@ -13,7 +13,11 @@ vi.mock("../src/lib/mercadopago", async (importOriginal) => ({
     pixQrCodeBase64: "base64",
     expiresAt: new Date(Date.now() + 3600_000),
   })),
-  getPayment: vi.fn(async () => ({ providerPaymentId: "mp-sub-1", status: "approved" })),
+  getPayment: vi.fn(async (id: string) => {
+    const { prisma: db } = await import("@meucardapio/db");
+    const sub = await db.subscriptionPayment.findUnique({ where: { providerPaymentId: id } });
+    return { providerPaymentId: id, status: "approved", externalReference: sub?.id ?? null, amountCents: sub?.amountCents ?? null, currency: "BRL" };
+  }),
 }));
 
 const DAY = 24 * 60 * 60 * 1000;
