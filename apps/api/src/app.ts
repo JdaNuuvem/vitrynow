@@ -27,6 +27,7 @@ import noticeRoutes from "./routes/notices";
 import mfaRoutes from "./routes/mfa";
 import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
 import jobsPlugin from "./jobs/plugin";
+import subscriptionGate from "./plugins/subscriptionGate";
 
 export function buildApp() {
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
@@ -51,6 +52,8 @@ export function buildApp() {
   app.register(websocket);
   app.register(authPlugin);
   app.register(jobsPlugin);
+  // Portão da assinatura (Consulta/Suspensão): precisa vir ANTES de qualquer rota, pois age no `onRoute`.
+  app.register(subscriptionGate);
 
   // Várias rotas são "ação sem corpo" (delete, revoke) chamadas com
   // Content-Type: application/json mas sem body — o parser padrão do Fastify rejeita
