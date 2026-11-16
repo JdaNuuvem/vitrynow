@@ -9,6 +9,8 @@ import {
   SYSTEM_REASON_CODES,
   UNDO_WINDOW_MS,
   allowedTransitions,
+  blockedTransitions,
+  type BlockedTransition,
   canCancel,
   holdsMoney,
   isAdvanceAllowed,
@@ -101,6 +103,7 @@ export class OrderService {
         refundPending: order.payment.status === "ESTORNO_PENDENTE",
       },
       allowedTransitions: allowedTransitions(order, role),
+      blocked: [...blockedTransitions(order, role), ...this.undoBlocked(order, history, role)],
       canUndo: undo.canUndo,
       undoUntil: undo.until?.toISOString() ?? null,
       cancel: cancelRow && {
@@ -124,6 +127,17 @@ export class OrderService {
     const deadline = new Date(last.createdAt.getTime() + UNDO_WINDOW_MS);
     const open = this.now() <= deadline;
     return { canUndo: open, until: open ? deadline : null };
+  }
+
+  // Desfazer existe (última ação "para frente") mas não está disponível para este usuário.
+  private undoBlocked(order: OrderWithPayment, history: HistoryRow[], role: Role): BlockedTransition[] {
+    const [last, prev] = history;
+    if (!last || !prev || FINAL_STATUSES.includes(order.status) || last.kind !== "ADVANCE" || last.status !== order.status) return [];
+    if (order.payment?.status === "ESTORNO_PENDENTE") return [{ to: prev.status, kind: "UNDO", reason: "REFUND_PENDING" }];
+    if (role !== "OWNER" && this.now().getTime() - last.createdAt.getTime() > UNDO_WINDOW_MS) {
+      return [{ to: prev.status, kind: "UNDO", reason: "UNDO_WINDOW_EXPIRED" }];
+    }
+    return [];
   }
 
   // ───────────── Avançar ─────────────
@@ -192,6 +206,7 @@ export class OrderService {
     const valid = this.validateReason(reason);
     const order = await this.load(actor.storeId, orderId);
     if (FINAL_STATUSES.includes(order.status)) throw err(409, "INVALID_TRANSITION", "Este pedido já foi finalizado ou cancelado.");
+    if (order.payment?.status === "ESTORNO_PENDENTE") throw err(409, "REFUND_PENDING", "Há um estorno em andamento neste pedido.");
     if (!canCancel(order, actor.role)) throw err(403, "FORBIDDEN_ROLE", "Só o dono da loja pode cancelar este pedido.");
     const refund = await this.cancelOrder(order, { source: "PANEL", userId: actor.userId, actor: actor.role, reason: valid });
     return { order: await this.get(actor, orderId), refund };

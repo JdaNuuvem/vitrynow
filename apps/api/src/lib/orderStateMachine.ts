@@ -81,31 +81,90 @@ export type AllowedTransition = {
   requires?: { reason: boolean; owner: boolean; mfa: boolean; refund: boolean };
 };
 
-const ADVANCE_LABEL: Record<AdvanceTarget, string> = {
-  CONFIRMADO: "Aceitar",
-  EM_PREPARO: "Preparar",
-  PRONTO: "Pronto",
-  SAIU_PARA_ENTREGA: "Saiu para entrega",
-  CONCLUIDO: "Concluir",
-};
+// Rótulos fixados pela Da Vinci (02 §2/§11). Dependem do destino e do tipo do pedido.
+function advanceLabel(order: Pick<OrderFacts, "status" | "type">, to: AdvanceTarget): string {
+  switch (to) {
+    case "CONFIRMADO":
+      return "Aceitar";
+    case "EM_PREPARO":
+      return "Iniciar preparo";
+    case "PRONTO":
+      return "Pronto";
+    case "SAIU_PARA_ENTREGA":
+      return "Saiu para entrega";
+    case "CONCLUIDO":
+      if (order.type === "DELIVERY") return "Concluir (entregue)";
+      return order.type === "MESA" ? "Entregue na mesa" : "Concluir";
+  }
+}
+
+function cancelLabel(order: Pick<OrderFacts, "status" | "payment">): string {
+  const refund = holdsMoney(order.payment);
+  if (order.status === "PENDENTE") return refund ? "Recusar e estornar" : "Recusar";
+  return refund ? "Cancelar e estornar" : "Cancelar";
+}
+
+// Por que um botão NÃO está disponível para este usuário (a UI desenha desabilitado, com o texto do
+// catálogo do Leonardo — nunca mostra o código). Contrato B3 §9: UM motivo por transição, o mais
+// específico, nesta ordem. OWNER só recebe REFUND_PENDING, AWAITING_PAYMENT e ORDER_ALREADY_RECEIVED.
+export const BLOCK_REASONS = [
+  "REFUND_PENDING",
+  "AWAITING_PAYMENT",
+  "ORDER_ALREADY_RECEIVED", // mesa já recebida (ADR-0012 I8) — entra com a API-22/27
+  "CASH_CLOSED_OWNER_ONLY", // caixa fechado — entra com a API-59
+  "REFUND_REQUIRES_OWNER",
+  "CANCEL_AFTER_PREP_OWNER_ONLY",
+  "UNDO_WINDOW_EXPIRED",
+  "FORBIDDEN_ROLE",
+] as const;
+export type BlockedReason = (typeof BLOCK_REASONS)[number];
+export type BlockedTransition = { to: OrderStatus; kind: "ADVANCE" | "CANCEL" | "UNDO"; reason: BlockedReason };
+
+const IN_PREPARATION: readonly OrderStatus[] = ["EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA"];
 
 export function allowedTransitions(order: OrderFacts, role: Role): AllowedTransition[] {
   const list: AllowedTransition[] = [];
   const refundPending = order.payment?.status === "ESTORNO_PENDENTE";
   const next = nextAdvance(order);
   if (next && !refundPending && isAdvanceAllowed(order, next)) {
-    list.push({ to: next, label: ADVANCE_LABEL[next as AdvanceTarget], kind: "ADVANCE", primary: true });
+    list.push({ to: next, label: advanceLabel(order, next as AdvanceTarget), kind: "ADVANCE", primary: true });
   }
-  if (canCancel(order, role)) {
+  // Com estorno em curso só existe "Tentar estorno" (rota própria): não cancela de novo.
+  if (!refundPending && canCancel(order, role)) {
     const refund = holdsMoney(order.payment);
     list.push({
       to: "CANCELADO",
-      label: refund ? "Cancelar e estornar" : order.status === "PENDENTE" ? "Recusar" : "Cancelar",
+      label: cancelLabel(order),
       kind: "CANCEL",
       requires: { reason: true, owner: refund, mfa: refund, refund },
     });
   }
   return list;
+}
+
+export function blockedTransitions(order: OrderFacts, role: Role): BlockedTransition[] {
+  if (FINAL_STATUSES.includes(order.status)) return [];
+  const blocked: BlockedTransition[] = [];
+  const refundPending = order.payment?.status === "ESTORNO_PENDENTE";
+  const next = nextAdvance(order);
+
+  if (next) {
+    if (refundPending) blocked.push({ to: next, kind: "ADVANCE", reason: "REFUND_PENDING" });
+    else if (!isAdvanceAllowed(order, next)) blocked.push({ to: next, kind: "ADVANCE", reason: "AWAITING_PAYMENT" });
+  }
+
+  if (refundPending) {
+    blocked.push({ to: "CANCELADO", kind: "CANCEL", reason: "REFUND_PENDING" });
+  } else if (!canCancel(order, role)) {
+    // Só STAFF chega aqui (OWNER cancela qualquer pedido ativo). Mais específico primeiro.
+    const reason: BlockedReason = holdsMoney(order.payment)
+      ? "REFUND_REQUIRES_OWNER"
+      : IN_PREPARATION.includes(order.status)
+        ? "CANCEL_AFTER_PREP_OWNER_ONLY"
+        : "FORBIDDEN_ROLE";
+    blocked.push({ to: "CANCELADO", kind: "CANCEL", reason });
+  }
+  return blocked;
 }
 
 // Desfazer: só a última ação "para frente" (nunca a partir de estado final nem de cancelamento).

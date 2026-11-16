@@ -145,9 +145,52 @@ describe("API-02 — estados do pedido", () => {
     expect(o.allowedTransitions[1].requires).toEqual({ reason: true, owner: false, mfa: false, refund: false });
     expect(o.canUndo).toBe(false);
     expect(o.cancel).toBeNull();
+    expect(o.blocked).toEqual([]);
   });
 
   // ───────────── Cancelar sem dinheiro ─────────────
+  it("blocked na listagem: STAFF vê o motivo do botão desabilitado; estorno pendente bloqueia avanço, cancelamento e desfazer", async () => {
+    const ctx = await setup();
+    const staff = await staffCookie(ctx);
+    const list = async (cookie: string, id: string) =>
+      json(await app.inject({ method: "GET", url: "/api/orders", headers: { cookie } })).orders.find((o: { id: string }) => o.id === id);
+
+    const prep = await newOrder(ctx);
+    for (const to of ["CONFIRMADO", "EM_PREPARO"]) await transition(ctx.cookie, prep, to);
+    expect((await list(staff, prep)).blocked).toEqual([{ to: "CANCELADO", kind: "CANCEL", reason: "CANCEL_AFTER_PREP_OWNER_ONLY" }]);
+    expect((await list(ctx.cookie, prep)).blocked).toEqual([]); // OWNER não recebe bloqueio por papel
+
+    const paid = await paidOrder(ctx);
+    expect((await list(staff, paid)).blocked).toEqual([{ to: "CANCELADO", kind: "CANCEL", reason: "REFUND_REQUIRES_OWNER" }]);
+
+    refundPayment.mockRejectedValueOnce(new Error("timeout"));
+    await cancel(ctx.cookie, paid, { code: "ITEM_EM_FALTA" });
+    const pending = await list(ctx.cookie, paid);
+    expect(pending.allowedTransitions).toEqual([]);
+    expect(pending.blocked).toEqual([
+      { to: "CONFIRMADO", kind: "ADVANCE", reason: "REFUND_PENDING" },
+      { to: "CANCELADO", kind: "CANCEL", reason: "REFUND_PENDING" },
+    ]);
+    // cancelar de novo pelo painel não é aceito: só "Tentar estorno"
+    const again = await cancel(ctx.cookie, paid, { code: "ITEM_EM_FALTA" });
+    expect(again.statusCode).toBe(409);
+    expect(json(again).code).toBe("REFUND_PENDING");
+  });
+
+  it("blocked: STAFF fora dos 2 min vê UNDO_WINDOW_EXPIRED na ação de desfazer", async () => {
+    const ctx = await setup();
+    const staff = await staffCookie(ctx);
+    const id = await newOrder(ctx);
+    await transition(staff, id, "CONFIRMADO");
+    await prisma.orderStatusHistory.updateMany({ where: { orderId: id }, data: { createdAt: new Date(Date.now() - 5 * 60_000) } });
+    const o = json(await app.inject({ method: "GET", url: "/api/orders", headers: { cookie: staff } })).orders.find((x: { id: string }) => x.id === id);
+    expect(o.canUndo).toBe(false);
+    expect(o.blocked).toEqual([{ to: "PENDENTE", kind: "UNDO", reason: "UNDO_WINDOW_EXPIRED" }]);
+    const owner = json(await app.inject({ method: "GET", url: "/api/orders", headers: { cookie: ctx.cookie } })).orders.find((x: { id: string }) => x.id === id);
+    expect(owner.canUndo).toBe(true);
+    expect(owner.blocked).toEqual([]);
+  });
+
   it("cancelar exige motivo válido; PAGAMENTO_NAO_APROVADO é só do sistema; OUTRO exige texto", async () => {
     const ctx = await setup();
     const id = await newOrder(ctx);
