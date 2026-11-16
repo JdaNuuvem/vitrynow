@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
 import { prisma } from "@meucardapio/db";
 import { loginSchema, registerStoreSchema, forgotPasswordSchema, resetPasswordSchema } from "@meucardapio/shared-types";
-import { sendPasswordResetEmail } from "../lib/email";
+import { sendLoginAlertEmail, sendPasswordResetEmail } from "../lib/email";
 import { newTrialEndsAt } from "../lib/subscription";
 import { SESSION_COOKIE, revokeSession, sessionCookieOptions, signSession } from "../lib/session";
 import { disconnectSession, disconnectUser } from "../realtime/hub";
@@ -76,18 +76,21 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     }
     const { email, password } = parsed.data;
 
-    // Bloqueio progressivo por conta e por conta+IP (ST-03). A resposta é a mesma exista a conta ou não.
-    const decision = throttle.check(email, request.ip);
-    if (!decision.allowed) {
-      reply.header("Retry-After", String(decision.retryAfterSeconds));
+    // Reserva a tentativa ANTES de qualquer await (ST-32): uma rajada paralela não passa toda pela checagem.
+    // Limite estrito por (conta, IP); o total da conta só atrasa e avisa o dono, nunca tranca (ST-33).
+    const slot = throttle.reserve(email, request.ip);
+    if (!slot.allowed) {
+      reply.header("Retry-After", String(slot.retryAfterSeconds));
       return reply.code(429).send({ error: "muitas tentativas de login; tente de novo em alguns minutos", code: "LOGIN_LOCKED" });
     }
+    if (slot.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, slot.delayMs));
 
     const user = await prisma.user.findUnique({ where: { email } });
     // Sempre compara com algum hash (o falso, se a conta não existe): mesmo tempo nos dois casos (ST-05).
     const passwordOk = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
+    // Muitos erros na conta (de vários IPs): avisa o dono UMA vez por janela. A resposta não muda.
+    if (slot.alertOwner && user) void sendLoginAlertEmail({ to: user.email }).catch(() => {});
     if (!user || !passwordOk) {
-      throttle.fail(email, request.ip);
       return reply.code(401).send({ error: "credenciais inválidas" });
     }
     throttle.succeed(email, request.ip);
