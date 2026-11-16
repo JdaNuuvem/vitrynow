@@ -34,11 +34,11 @@ public static class Preview
 }
 '@ | Set-Content -Path $glue -Encoding UTF8
 $srcs = @(
-  "SelfTest.cs", "SelfTestPrint.cs", "SelfTestHarness.cs", "SelfTestAudio.cs", "SelfTestFakeApi.cs", "SelfTestDevice.cs", "SelfTestUpdater.cs", "SelfTestDeviceClient.cs",
+  "SelfTest.cs", "SelfTestPrint.cs", "SelfTestHarness.cs", "SelfTestAudio.cs", "SelfTestInstall.cs", "SelfTestFakeApi.cs", "SelfTestDevice.cs", "SelfTestUpdater.cs", "SelfTestDeviceClient.cs",
   "Models\PrintableOrder.cs",
   "Printing\TicketDocument.cs", "Printing\TicketText.cs", "Printing\TicketBuilder.cs", "Printing\TextTicketWriter.cs", "Printing\IPrintTarget.cs",
   "Printing\GdiTicketPainter.cs", "Printing\VirtualPrintTarget.cs", "Printing\PrinterProbe.cs",
-  "Services\PrintCoordinator.cs", "Services\AlertSounds.cs", "Services\AudioPlayer.cs", "Services\DeviceClient.cs", "Services\PrintLedger.cs", "Services\SecretStore.cs",
+  "Services\PrintCoordinator.cs", "Services\SingleInstance.cs", "Services\AlertSounds.cs", "Services\AudioPlayer.cs", "Services\DeviceClient.cs", "Services\PrintLedger.cs", "Services\SecretStore.cs",
   "Services\AppSettings.cs", "Services\ApiUrlPolicy.cs",
   "Services\Updater.cs", "Services\UpdateTransport.cs", "Services\UpdateVerifier.cs", "Services\Logger.cs"
 ) | ForEach-Object { Join-Path $base $_ }

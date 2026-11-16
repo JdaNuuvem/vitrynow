@@ -10,8 +10,9 @@ da **nossa** API (`apps/api`), não do cardapio.ai.
   (`TextTicketWriter.cs`), o desenho GDI+ (`GdiTicketPainter.cs`, `GdiPrintTarget.cs`), a impressora virtual
   (`VirtualPrintTarget.cs`), `PrintCoordinator`, `DeviceClient`, `PrintLedger`, `Updater`. O tíquete **não é mais HTML**: sumiram o
   parser, o HtmlAgilityPack e os comandos embutidos no texto (`LARGURA`, `--QUEBRA--`) que vinham do módulo do terceiro.
-- **Ainda derivado do `reconstruction/` (pendente, PC-14):** `Services/AudioPlayer.cs` (alerta sonoro via Windows Media Player COM).
-  Decisão de marca/origem é do Claudio (CL-05); até lá não distribuir instalador.
+- **Alerta sonoro próprio (PC-14):** `Services/AlertSounds.cs` gera os sons e `AudioPlayer.cs` usa `SoundPlayer`; não sobra código derivado do
+  `reconstruction/`. `tools\scan-identity.ps1` confere isso (e nome/domínio do terceiro) no código, no EXE e no instalador a cada `build-installer.ps1`.
+  Nome/marca final é decisão do Claudio (CL-05); até lá o nome é placeholder.
 - `Services/DeviceClient.cs` + `UI/SetupForm.cs` + `Services/AppSettings.cs`: conexão (WS + polling) e configuração com a **nossa** API.
 
 ## Build
@@ -145,7 +146,7 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 - Servidor de downloads para o auto-update (`UpdateBaseUrl`) e a **chave de release** (custódia) ainda não existem:
   o mecanismo está pronto e testado, mas recusa tudo sem chave embutida.
 - Tela de configuração para `UpdateBaseUrl` (hoje só via edição manual do `settings.json`).
-- Ícone/sons são placeholders — troque antes de distribuir pra clientes de verdade. `AudioPlayer.cs` ainda deriva do `reconstruction/` (PC-14).
+- Ícone/sons são placeholders — troque antes de distribuir pra clientes de verdade. Os sons "Sino" e "Padrão" são gerados pelo app.
 - Teste real com impressora térmica física (só validado até aqui via self-test + payload JSON da API).
 
 ## Resiliência (PC-05, PC-06)

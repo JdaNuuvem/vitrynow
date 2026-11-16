@@ -163,7 +163,10 @@ namespace MeuCardapio.PrintClient.UI
         void OnOrderPending()
         {
             if (!AppSettings.Current.ReceiveAlerts) return;
-            using (var n = new NotifyForm()) n.Show();
+            // O balão fica vivo até o timer dele fechar (antes era descartado na mesma linha em que aparecia: R12).
+            var n = new NotifyForm();
+            n.FormClosed += (s2, e2) => n.Dispose();
+            n.Show();
             App.Audio.Play(AppSettings.Current.DropdownIndex, AppSettings.Current.CustomSound, AppSettings.Current.SoundVolume);
         }
 

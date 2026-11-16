@@ -1,0 +1,17 @@
+# Changelog do print-client
+
+A versão do app vem de `Properties\AssemblyInfo.cs` (fonte única); `build.ps1` falha se `installer.iss` anunciar outra.
+O hash do EXE de cada release sai em `tools\build-installer.ps1` e entra no manifesto de atualização (`tools\sign-update.ps1`).
+
+## 1.0.0 (em desenvolvimento, ainda sem release)
+
+- Impressão sem duplicidade (polling + WebSocket no mesmo portão, ack gravado no disco antes de avisar a API, recuo em falha, watchdog).
+- **Uma instância por computador** (o instalador também respeita: pede para fechar o app antes de atualizar).
+- Chave de impressora protegida pelo Windows (DPAPI); chave recusada pausa a impressão e volta sozinha quando a API aceitar.
+- Faixa "N pedidos sem imprimir" fixa na janela; balão de novo pedido não some mais na hora (R12).
+- Tíquete próprio (58 e 80 mm), com sanitização do texto do cliente, bloco de pagamento e impressora virtual para teste sem papel.
+- Atualização automática segura (HTTPS, manifesto assinado com duas chaves, validade, hash conferido antes de executar). Desligada até a chave de release existir.
+- Sons de alerta gerados pelo app.
+- Build reprodutível sem dependência do `reconstruction/`; instalador Inno Setup sem identidade do terceiro (`tools\scan-identity.ps1`).
+
+Pendências de distribuição: nome/marca final (CL-05), assinatura de código do instalador (PC-13, gasto), servidor de downloads e chaves de release (Claudio).
