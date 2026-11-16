@@ -137,7 +137,11 @@ describe("contrato de recursos (CA-B10-08, ADR-0003 §2.6)", () => {
 
   it("o registro tem exatamente as chaves do ADR-0003 e `released` booleano", () => {
     expect([...FEATURES].sort()).toEqual(["advanced_reports", "multi_user", "scheduled_orders", "table_qr", "tab_service", "whatsapp_auto"].sort());
-    for (const feature of FEATURES) expect(typeof FEATURE_REGISTRY[feature].released).toBe("boolean");
+    for (const feature of FEATURES) {
+      expect(typeof FEATURE_REGISTRY[feature].released).toBe("boolean");
+      expect(["BASICO", "PRO"]).toContain(FEATURE_REGISTRY[feature].tier);
+    }
+    expect(FEATURES.filter((f) => FEATURE_REGISTRY[f].tier === "BASICO")).toEqual(["table_qr"]);
   });
 
   it("nenhum plano gravado no banco libera recurso que não foi entregue", async () => {
@@ -252,6 +256,14 @@ describe("limite de impressoras e aviso de interesse (integração)", () => {
     const included = await interest(cookie, "multi_user");
     expect(included.statusCode).toBe(409);
     expect(JSON.parse(included.body).code).toBe("FEATURE_ALREADY_AVAILABLE");
+    expect(await prisma.featureInterest.count()).toBe(0);
+  });
+
+  it("aviso de interesse só vale para recurso do PRO: recurso do BASICO (table_qr) ⇒ 409 e nada é gravado", async () => {
+    const { cookie } = await registerStore(app);
+    const response = await interest(cookie, "table_qr");
+    expect(response.statusCode).toBe(409);
+    expect(JSON.parse(response.body).code).toBe("FEATURE_ALREADY_AVAILABLE");
     expect(await prisma.featureInterest.count()).toBe(0);
   });
 
