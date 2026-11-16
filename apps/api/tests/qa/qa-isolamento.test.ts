@@ -45,7 +45,7 @@ describe("QA isolamento entre lojas", () => {
     return { cookie: cookie!, store, categoryId: cat, productId: product.id, additionalId: product.additionals[0].id };
   }
 
-  bug("D25 (ST-10) loja A não consegue alterar adicional da loja B enviando o id dele na edição de produto", async () => {
+  it("D25 (ST-10) loja A não consegue alterar adicional da loja B enviando o id dele na edição de produto", async () => {
     const a = await storeWithProduct("a");
     const b = await storeWithProduct("b");
     await app.inject({
@@ -75,7 +75,7 @@ describe("QA isolamento entre lojas", () => {
     expect(victim?.productId).toBe(b.productId);
   });
 
-  bug("D26 (ST-11) criar produto em categoria de OUTRA loja é recusado e nada é criado", async () => {
+  it("D26 (ST-11) criar produto em categoria de OUTRA loja é recusado e nada é criado", async () => {
     const a = await storeWithProduct("a");
     const b = await storeWithProduct("b");
     const res = await app.inject({
@@ -92,7 +92,7 @@ describe("QA isolamento entre lojas", () => {
     expect(names).not.toContain("Injetado pela loja A");
   });
 
-  bug("D26b (ST-11) mover produto de A para categoria de B pela edição é recusado", async () => {
+  it("D26b (ST-11) mover produto de A para categoria de B pela edição é recusado", async () => {
     const a = await storeWithProduct("a");
     const b = await storeWithProduct("b");
     const res = await app.inject({
@@ -106,7 +106,7 @@ describe("QA isolamento entre lojas", () => {
     expect((await prisma.product.findUnique({ where: { id: a.productId } }))?.categoryId).toBe(a.categoryId);
   });
 
-  bug("D26c (ST-11, defesa em profundidade) o cardápio público de B nunca lista produto de outra loja, mesmo com dado inconsistente no banco", async () => {
+  it("D26c (ST-11, defesa em profundidade) o cardápio público de B nunca lista produto de outra loja, mesmo com dado inconsistente no banco", async () => {
     const a = await storeWithProduct("a");
     const b = await storeWithProduct("b");
     // Simula dado ruim já gravado (a API de catálogo antiga aceitava isso): produto da loja A dentro da categoria de B.
