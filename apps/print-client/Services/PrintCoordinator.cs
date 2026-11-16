@@ -15,6 +15,7 @@ namespace MeuCardapio.PrintClient.Services
         readonly IPrintTarget _target;
         readonly Func<int> _paperMm;
         readonly TimeZoneInfo _timeZone;
+        readonly object _printLock = new object();
 
         // Mensagem curta para o lojista (toast) e para o log.
         public event Action<string> Message;
@@ -32,7 +33,9 @@ namespace MeuCardapio.PrintClient.Services
             try
             {
                 var doc = TicketBuilder.Build(order, _paperMm(), _timeZone);
-                _target.Print(doc);
+                // Uma impressão por vez: o spooler/PrintDocument e a consulta WMI não são para uso concorrente, e
+                // dois tíquetes não podem se misturar. Chamado fora da thread da interface (ver MainForm).
+                lock (_printLock) { _target.Print(doc); }
             }
             catch (Exception ex)
             {

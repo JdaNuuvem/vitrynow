@@ -129,7 +129,9 @@ namespace MeuCardapio.PrintClient.UI
             App.Device.KeyRevoked += () => BeginInvoke(new Action(ShowKeyRevoked));
             App.Device.KeyRestored += () => BeginInvoke(new Action(() => { _revokedText = null; RefreshProblemLabel(); }));
             App.Coordinator.Message += msg => BeginInvoke(new Action(() => { Toast(msg); Logger.Info(msg); }));
-            App.Device.TicketReady += order => BeginInvoke(new Action(() => PrintAndAck(order)));
+            // Fora da thread da interface (PC-15): consultar o Windows sobre a impressora e imprimir podem demorar
+            // e não podem travar a janela. As mensagens voltam para a tela pelo BeginInvoke do Coordinator.Message.
+            App.Device.TicketReady += order => Task.Run(() => PrintAndAck(order));
         }
 
         // Indicador persistente de pedidos sem imprimir. O balão do ícone só aparece quando a lista

@@ -51,20 +51,34 @@ namespace MeuCardapio.PrintClient.Printing
 
             // 3) itens: valor da LINHA (unitário + adicionais) x quantidade; adicional mostra o extra por unidade
             long sumLines = 0;
+            int shownItems = 0, hiddenItems = 0;
+            long hiddenSum = 0;
             foreach (var item in items)
             {
                 long extras = 0;
                 foreach (var add in item.Additionals ?? new List<PrintableOrderAdditional>()) extras += add.PriceCents;
-                sumLines += ((long)item.UnitPriceCents + extras) * item.Quantity;
+                long lineTotal = ((long)item.UnitPriceCents + extras) * item.Quantity;
+                sumLines += lineTotal;
+                // Teto de itens no papel (PC-15): o subtotal e o TOTAL continuam corretos; a lista corta e uma linha
+                // "e mais N itens" leva a soma dos escondidos, para a coluna continuar somando o subtotal.
+                if (shownItems >= TicketText.MaxItemLines) { hiddenItems++; hiddenSum += lineTotal; continue; }
+                shownItems++;
                 // Linha do item = produto x qtd; cada adicional = extra x qtd, com "(Nx)" escrito. Assim a coluna
                 // de valores soma exatamente o subtotal (parecer funcional do Leonardo).
                 doc.Pair(item.Quantity + "x " + S(item.ProductName), Money((long)item.UnitPriceCents * item.Quantity));
+                int shownAdds = 0, hiddenAdds = 0; long hiddenAddSum = 0;
                 foreach (var add in item.Additionals ?? new List<PrintableOrderAdditional>())
-                    doc.Pair("  + " + S(add.Name) + (item.Quantity > 1 ? " (" + item.Quantity + "x)" : ""),
-                        "+" + Money((long)add.PriceCents * item.Quantity), scale: 0.85f);
+                {
+                    long addTotal = (long)add.PriceCents * item.Quantity;
+                    if (shownAdds >= TicketText.MaxAdditionalsPerItem) { hiddenAdds++; hiddenAddSum += addTotal; continue; }
+                    shownAdds++;
+                    doc.Pair("  + " + S(add.Name) + (item.Quantity > 1 ? " (" + item.Quantity + "x)" : ""), "+" + Money(addTotal), scale: 0.85f);
+                }
+                if (hiddenAdds > 0) doc.Pair("  + mais " + hiddenAdds + " adicionais", "+" + Money(hiddenAddSum), scale: 0.85f);
                 if (!string.IsNullOrWhiteSpace(item.Notes))
                     doc.Text("  obs: " + S(item.Notes), italic: true, scale: 0.85f);
             }
+            if (hiddenItems > 0) doc.Pair("... e mais " + hiddenItems + " itens (ver no painel)", Money(hiddenSum), bold: true);
 
             // 4) observação do pedido
             if (!string.IsNullOrWhiteSpace(order.Notes))
@@ -161,7 +175,9 @@ namespace MeuCardapio.PrintClient.Printing
             return lines;
         }
 
-        static string S(string v) { return TicketText.PrintSafe(v); }
+        // Texto do servidor no papel: sanitizado, sem emoji e com teto (PC-15): uma observação de 100 mil caracteres
+        // não imprime metros de papel.
+        static string S(string v) { return TicketText.Truncate(TicketText.PrintSafe(v), TicketText.MaxFieldChars); }
 
         static string TypeLabel(string type)
         {

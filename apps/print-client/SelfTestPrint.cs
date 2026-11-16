@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using MeuCardapio.PrintClient.Models;
 using MeuCardapio.PrintClient.Printing;
+using MeuCardapio.PrintClient.Services;
 
 namespace MeuCardapio.PrintClient
 {
@@ -148,6 +149,7 @@ namespace MeuCardapio.PrintClient
             Wrapping();
             Builder();
             ContractV1();
+            Limits();
             DateAndMoney();
             PaymentBlock();
             Writer();
@@ -269,6 +271,127 @@ namespace MeuCardapio.PrintClient
             var o = Newtonsoft.Json.JsonConvert.DeserializeObject<PrintableOrder>(json);
             return o.SubtotalCents == 1200 && o.DiscountCents == 200 && o.CouponCode == "BEM10" && o.ChangeForCents == 2000 && o.PaymentStatus == "A_COBRAR"
                 && o.TableLabel == "Mesa 3" && o.ReprintCount == 2 && o.PrintedAtOriginal == "2026-11-16T20:00:00Z" && o.CancelNotice == false && o.TicketSchemaVersion == 1;
+        }
+
+        static string C(int cp) { return ((char)cp).ToString(); }
+
+        sealed class OverlapTarget : IPrintTarget
+        {
+            int _inside; public int MaxInside; public int Printed;
+            public void Print(TicketDocument d)
+            {
+                int n = System.Threading.Interlocked.Increment(ref _inside);
+                lock (this) MaxInside = Math.Max(MaxInside, n);
+                System.Threading.Thread.Sleep(30);
+                System.Threading.Interlocked.Decrement(ref _inside);
+                System.Threading.Interlocked.Increment(ref Printed);
+            }
+        }
+
+        // PC-15 (parecer Nightingale P12-C1/C2 e recomendacoes): tetos de tamanho, invisiveis, zalgo, WMI com timeout.
+        static void Limits()
+        {
+            foreach (var cp in new[] { 0x061c, 0x2060, 0x180e, 0x034f, 0xfff9, 0xfffa, 0xfffb, 0xfffc, 0xe000, 0xf8ff })
+                if (TicketText.Sanitize("a" + C(cp) + "b") != "ab") { Check("sanitiza: invisivel/privado U+" + cp.ToString("X4") + " sai", false); }
+            Check("sanitiza: U+061C, U+2060, U+180E, U+034F, U+FFF9-FFFC e uso privado (E000-F8FF) saem", true);
+            Check("sanitiza: substituto solto (alto ou baixo) sai; par valido (emoji) fica", TicketText.Sanitize("a" + C(0xd800) + "b" + C(0xdc00) + "c") == "abc" && TicketText.Sanitize("a" + char.ConvertFromUtf32(0x1F355) + "b").Length == 4);
+            Check("sanitiza: plano privado 15/16 (par) sai", TicketText.Sanitize("a" + char.ConvertFromUtf32(0xF0000) + "b" + char.ConvertFromUtf32(0x10FFFD) + "c") == "abc");
+            Check("sanitiza: acento combinado normal fica", TicketText.Sanitize("e" + C(0x0301)).Length == 2 && TicketText.Sanitize("ac" + C(0x0327) + C(0x0301)).Length == 4);
+            var zalgo = "e" + string.Concat(Enumerable.Repeat(C(0x0301), 40)) + "x";
+            Check("zalgo: no maximo 2 marcas combinantes por letra (40 viram 2)", TicketText.Sanitize(zalgo) == "e" + C(0x0301) + C(0x0301) + "x");
+
+            var huge = new string('a', 100000);
+            var trunc = TicketText.Truncate(TicketText.PrintSafe(huge), TicketText.MaxFieldChars);
+            Check("teto: campo de 100 000 caracteres vira 300 + reticencias", trunc.Length == TicketText.MaxFieldChars + 1 && trunc.EndsWith(C(0x2026)));
+            var emoji = TicketText.Truncate(string.Concat(Enumerable.Repeat(char.ConvertFromUtf32(0x1F355), 500)), 301);
+            Check("teto: nao parte par de emoji ao meio", emoji.All(ch => !char.IsSurrogate(ch) || true) && !emoji.Where((ch, i) => char.IsHighSurrogate(ch) && (i + 1 >= emoji.Length || !char.IsLowSurrogate(emoji[i + 1]))).Any());
+            Check("teto: texto curto passa intacto e nulo vira vazio", TicketText.Truncate("abc", 300) == "abc" && TicketText.Truncate(null, 300) == "");
+
+            var big = Basic();
+            big.Notes = huge; big.CustomerName = huge; big.Address = huge; big.StoreName = huge;
+            var bd = Build(big);
+            Check("teto: nome, endereco e observacao de 100 000 caracteres saem com 300 + reticencias", bd.Lines.All(l => l.Text.Length <= TicketText.MaxFieldChars + 20));
+            Check("teto: tiquete com campos gigantes continua pequeno no papel (58 mm: < 120 linhas)", TextTicketWriter.Render(bd, 32).Count < 120);
+
+            // 500 itens, 40 adicionais no primeiro: papel limitado, subtotal e TOTAL corretos, coluna ainda soma
+            var many = new List<PrintableOrderItem>();
+            long expected = 0;
+            for (int i = 0; i < 500; i++) { many.Add(new PrintableOrderItem { ProductName = "Item " + i, Quantity = 2, UnitPriceCents = 100 + i }); expected += 2L * (100 + i); }
+            var adds = new List<PrintableOrderAdditional>();
+            for (int i = 0; i < 40; i++) { adds.Add(new PrintableOrderAdditional { Name = "Extra " + i, PriceCents = 10 }); }
+            many[0].Additionals = adds; expected += 2L * 40 * 10;
+            var order = new PrintableOrder { Code = "9", StoreName = "L", Type = "BALCAO", PaymentMethod = "CREDITO", TotalCents = (int)expected, Items = many };
+            var md = Build(order);
+            Check("teto de itens: so 80 itens no papel + 'e mais 420 itens (ver no painel)'", md.Lines.Count(l => l.Text.Length > 1 && char.IsDigit(l.Text[0]) && l.Text.Contains("x ")) == TicketText.MaxItemLines
+                && md.Lines.Any(l => l.Text == "... e mais 420 itens (ver no painel)"));
+            Check("teto de adicionais: 12 por item + '+ mais 28 adicionais'", md.Lines.Count(l => l.Text.StartsWith("  + Extra")) == TicketText.MaxAdditionalsPerItem && md.Lines.Any(l => l.Text == "  + mais 28 adicionais" && l.RightText == "+R$ 5,60"));
+            Check("teto: a coluna (itens, adicionais e linha dos escondidos) AINDA soma o subtotal e o TOTAL fica certo",
+                ColumnSumWithHidden(md) == expected && md.Lines.Any(l => l.Text == "TOTAL" && Cents(l.RightText) == expected));
+            Check("teto: tiquete de 500 itens tem menos de 200 linhas logicas", md.Lines.Count < 200);
+
+            // propriedade: texto aleatorio (todas as classes) nunca gera caractere proibido, e Sanitize e idempotente
+            var rnd = new Random(20261116);
+            int[] pool = { 0x41, 0x20, 0x09, 0x0a, 0x1b, 0x1d, 0x00, 0x07, 0x7f, 0x85, 0x9b, 0x0301, 0x061c, 0x2060, 0x180e, 0x034f, 0xfff9, 0xfffc, 0xe000, 0xf8ff, 0x202e, 0x2066, 0x200b, 0xfeff, 0xd800, 0xdc00, 0xe9, 0x2026 };
+            bool allClean = true, idem = true, noThrow = true;
+            for (int n = 0; n < 3000 && allClean && idem && noThrow; n++)
+            {
+                var sb = new System.Text.StringBuilder();
+                int len = rnd.Next(0, 80);
+                for (int k = 0; k < len; k++)
+                {
+                    int r = rnd.Next(pool.Length + 3);
+                    if (r < pool.Length) sb.Append((char)pool[r]);
+                    else if (r == pool.Length) sb.Append(char.ConvertFromUtf32(0x1F355));
+                    else if (r == pool.Length + 1) sb.Append(char.ConvertFromUtf32(0xF0001));
+                    else sb.Append((char)rnd.Next(0x20, 0xFFFF));
+                }
+                try
+                {
+                    var once = TicketText.Sanitize(sb.ToString());
+                    var twice = TicketText.Sanitize(once);
+                    if (once != twice) idem = false;
+                    for (int i = 0; i < once.Length; i++)
+                    {
+                        char ch = once[i];
+                        if (char.IsHighSurrogate(ch)) { if (i + 1 >= once.Length || !char.IsLowSurrogate(once[i + 1])) allClean = false; else { if (char.ConvertToUtf32(ch, once[i + 1]) >= 0xF0000) allClean = false; i++; } continue; }
+                        if (char.IsLowSurrogate(ch)) { allClean = false; continue; }
+                        if (ch < ' ' || ch == (char)0x7f || (ch >= (char)0x80 && ch <= (char)0x9f) || (ch >= (char)0xe000 && ch <= (char)0xf8ff) || (ch >= (char)0xfff9 && ch <= (char)0xfffc)
+                            || ch == (char)0x061c || ch == (char)0x2060 || ch == (char)0x180e || ch == (char)0x034f || ch == (char)0x202e || ch == (char)0x2066 || ch == (char)0x200b || ch == (char)0xfeff) allClean = false;
+                    }
+                    TicketText.PrintSafe(sb.ToString());
+                    TicketText.Truncate(once, 20);
+                }
+                catch { noThrow = false; }
+            }
+            Check("propriedade (3 000 textos aleatorios): saida sem controle, invisivel, uso privado nem substituto solto", allClean);
+            Check("propriedade: Sanitize e idempotente e nunca lanca excecao", idem && noThrow);
+
+            // WMI: timeout e nao bloqueia
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var slow = PrinterProbe.WithTimeout(() => { System.Threading.Thread.Sleep(3000); return "A impressora esta offline"; }, 200);
+            sw.Stop();
+            Check("WMI: consulta lenta desiste no timeout (devolve 'desconhecido', nao bloqueia a cozinha)", slow == null && sw.ElapsedMilliseconds < 2500);
+            Check("WMI: consulta rapida devolve o motivo; excecao vira 'desconhecido'", PrinterProbe.WithTimeout(() => "sem papel", 1000) == "sem papel" && PrinterProbe.WithTimeout(() => { throw new InvalidOperationException("x"); }, 1000) == null);
+            Check("WMI: tetos configurados (enumeracao 3 s, total 5 s)", PrinterProbe.EnumerationTimeoutMs == 3000 && PrinterProbe.TotalTimeoutMs == 5000);
+
+            // impressao serializada: 8 pedidos ao mesmo tempo nunca imprimem sobrepostos
+            var target = new OverlapTarget();
+            var device = new DeviceClient(new PrintLedger(null), new AppSettings { ApiBaseUrl = "http://127.0.0.1:9", DeviceToken = "t" });
+            var coord = new PrintCoordinator(device, target, () => 58, Tz);
+            var threads = Enumerable.Range(0, 8).Select(i => new System.Threading.Thread(() => { var o = Basic(); o.OrderId = "ser-" + i; o.Code = "S" + i; coord.Handle(o); })).ToList();
+            threads.ForEach(t => t.Start()); threads.ForEach(t => t.Join());
+            Check("impressao: 8 pedidos simultaneos imprimem um de cada vez (sem tiquetes misturados)", target.Printed == 8 && target.MaxInside == 1);
+            device.Dispose();
+        }
+
+        // Soma da coluna incluindo a linha dos itens escondidos ("... e mais N itens").
+        static long ColumnSumWithHidden(TicketDocument d)
+        {
+            long sum = 0;
+            foreach (var l in d.Lines)
+                if (l.RightText.Length > 0 && ((l.Text.Length > 1 && char.IsDigit(l.Text[0]) && l.Text.Contains("x ")) || l.Text.StartsWith("  + ") || l.Text.StartsWith("... e mais ")))
+                    sum += Cents(l.RightText);
+            return sum;
         }
 
         static void DateAndMoney()

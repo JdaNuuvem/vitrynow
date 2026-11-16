@@ -162,6 +162,16 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 - Testes: `SelfTestDeviceClient.cs` roda o `DeviceClient` real contra uma API falsa em loopback (dedupe, ack que falha e repete,
   indicador sem repetição, 401/403, 401 isolado, redirecionamento).
 
+## Limites e defesas no papel (PC-15)
+
+- **Teto de tamanho:** nome, endereço, observação e demais textos do servidor saem com no máximo **300 caracteres** + "…" (sem partir emoji nem letra com acento);
+  no máximo **80 itens** e **12 adicionais por item** no papel. O que passa disso vira uma linha "... e mais N itens (ver no painel)" / "+ mais N adicionais" **com o valor somado**,
+  então a coluna continua somando o subtotal e o TOTAL fica certo. Texto de megabytes não é varrido inteiro.
+- **Sanitização extra:** saem U+061C, U+2060, U+180E, U+034F, U+FFF9-FFFC, uso privado (U+E000-F8FF e planos 15/16) e substitutos soltos; no máximo 2 marcas combinantes por letra ("zalgo").
+  Teste de propriedade com 3 000 textos aleatórios (seed fixa): saída sem caractere proibido, `Sanitize` idempotente, sem exceção.
+- **Consulta WMI da impressora:** timeout de 3 s na enumeração e teto de 5 s no total (acima disso vale "desconhecido" e a impressão segue), cada objeto liberado.
+  Imprimir e consultar rodam **fora da thread da interface** e uma impressão por vez (tíquetes nunca se misturam).
+
 ## Confiabilidade e segredos (PC-02)
 
 - **Dedupe e ack persistido** (`Services/PrintLedger.cs`, arquivo `%LOCALAPPDATA%\MeuCardapioPrintClient\printed.json`): polling e WS passam pelo mesmo portão, um pedido nunca é impresso duas vezes, e se o aviso à API falhar o ack é repetido sem reimprimir. Falha de impressão volta com recuo (15 s até 5 min) e sem novo alerta sonoro.
