@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
-import type { Product } from "@/core/domain/storefront";
+import type { Menu, Product } from "@/core/domain/storefront";
 import { isStoreOpenNow } from "@/lib/openingHours";
 import { formatCents } from "@/shared/format/money";
 import { BottomNav, type NavTab } from "./components/BottomNav";
@@ -24,8 +24,8 @@ import "./loja.css";
 
 // Orquestra as telas da loja pública: decide qual aparece e liga carrinho e pedido.
 // Desenho, regras do carrinho, ciclo do pedido e HTTP vivem em arquivos próprios.
-export function LojaPage({ slug }: { slug: string }) {
-  const { menu, notFound, refresh } = useMenu(slug);
+export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Menu }) {
+  const { menu, notFound, refresh } = useMenu(slug, initialMenu);
   const history = useOrderHistory(slug);
   const order = useOrderFlow(slug, history.record);
 
