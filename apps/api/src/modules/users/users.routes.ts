@@ -3,7 +3,8 @@ import { changePasswordSchema, createStaffUserSchema } from "@meucardapio/shared
 import { requireMfa } from "../../lib/mfaGate";
 import { SESSION_COOKIE, sessionCookieOptions, signSession } from "../../lib/session";
 import { disconnectUser } from "../../realtime/hub";
-import { requireFeature } from "../../lib/subscription";
+import { prisma } from "@meucardapio/db";
+import { requireFeature, requireLimit } from "../../lib/subscription";
 import { useDomainErrors } from "../../shared/errors";
 import type { UsersService } from "./users.service";
 
@@ -19,7 +20,15 @@ export function buildUserRoutes(service: UsersService): FastifyPluginAsync {
 
     app.post(
       "/api/users",
-      { preHandler: [app.requirePanelAuth, app.requireOwner, requireFeature("multi_user")] },
+      {
+        preHandler: [
+          app.requirePanelAuth,
+          app.requireOwner,
+          requireFeature("multi_user"),
+          // Limite de usuários do plano (SEC-21): conta quem já tem acesso à loja (o dono entra na conta).
+          requireLimit("maxUsers", (request) => prisma.user.count({ where: { storeId: request.user.storeId } })),
+        ],
+      },
       async (request, reply) => {
         const parsed = createStaffUserSchema.safeParse(request.body);
         if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
