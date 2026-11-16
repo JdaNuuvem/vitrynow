@@ -7,6 +7,7 @@ import { prisma } from "@meucardapio/db";
 import { makeApp, registerStore, resetDb } from "../helpers";
 import { subscribe } from "../../src/realtime/hub";
 import { mapMpStatus } from "../../src/lib/mercadopago";
+import { activateSubscription } from "../../src/lib/subscription";
 
 vi.mock("../../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/mercadopago")>();
@@ -318,6 +319,8 @@ describe("QA probes — API", () => {
 
   it("D06 usuário removido perde o acesso imediatamente (sessão antiga não vale)", async () => {
     const owner = await setupStore();
+    // Equipe é recurso do PRO (D2/API-08): o teste vale só o fluxo de sessão, então ativamos o PRO nesta loja.
+    await activateSubscription({ subscriptionId: (await prisma.subscription.findFirstOrThrow()).id, planCode: "PRO" });
     const invite = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: owner.cookie }, payload: { email: "staff@teste.com", password: "senha123" } });
     expect(invite.statusCode).toBe(201);
     const staffId = JSON.parse(invite.body).user.id;

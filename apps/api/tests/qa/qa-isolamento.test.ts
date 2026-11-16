@@ -8,6 +8,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { makeApp, registerStore, resetDb } from "../helpers";
+import { activateSubscription } from "../../src/lib/subscription";
 
 const bug = process.env.QA_STRICT ? it : it.fails;
 
@@ -127,6 +128,8 @@ describe("QA isolamento entre lojas", () => {
   });
 
   async function inviteStaff(owner: { cookie: string }, email: string) {
+    // Equipe é recurso do PRO (D2/API-08): ativa o PRO só para montar o cenário de STAFF.
+    await activateSubscription({ subscriptionId: (await prisma.subscription.findFirstOrThrow()).id, planCode: "PRO" });
     const invite = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: owner.cookie }, payload: { email, password: "senha123" } });
     expect(invite.statusCode).toBe(201);
     const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email, password: "senha123" } });
