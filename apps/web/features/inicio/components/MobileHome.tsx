@@ -9,7 +9,7 @@ import { OnboardingWidget } from "@/features/shell/components/OnboardingWidget";
 import { StoreHeader } from "@/features/shell/components/StoreHeader";
 import { StoreHoursCard } from "@/features/shell/components/StoreHoursCard";
 import { computeOnboarding } from "@/features/shell/onboarding";
-import { useStore } from "@/features/shell/StoreProvider";
+import { useHasProducts, useStore } from "@/features/shell/StoreProvider";
 
 const QUICK_LINKS: { label: string; href: string; icon: IconName }[] = [
   { label: "Loja", href: "/dashboard/conta", icon: "store" },
@@ -24,6 +24,7 @@ const QUICK_LINKS: { label: string; href: string; icon: IconName }[] = [
 
 export function MobileHome() {
   const store = useStore();
+  const hasProducts = useHasProducts();
   const [greeting, setGreeting] = useState("");
 
   useEffect(() => setGreeting(greetingFor(new Date())), []);
@@ -48,7 +49,7 @@ export function MobileHome() {
               ))}
             </div>
           </div>
-          <OnboardingWidget progress={computeOnboarding(store)} href="/dashboard/conta" />
+          {hasProducts !== null && <OnboardingWidget progress={computeOnboarding(store, hasProducts)} href="/dashboard/conta" />}
         </div>
       )}
     </div>

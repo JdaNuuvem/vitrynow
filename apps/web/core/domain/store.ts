@@ -31,7 +31,6 @@ export type StoreSettingsInput = {
   logoUrl: string;
   coverImageUrl: string;
   primaryColor: string;
-  customDomain: string;
   address: string;
   whatsapp: string;
   openingHours: string;

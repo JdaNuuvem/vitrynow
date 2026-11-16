@@ -43,11 +43,6 @@ export function StoreSettingsCard({
         {...bind("primaryColor")}
       />
       <Field label="URL da capa do cardápio (opcional)" placeholder="https://..." {...bind("coverImageUrl")} />
-      <Field
-        label="Domínio próprio (opcional, configurado depois na infra)"
-        placeholder="pedidos.minhaloja.com.br"
-        {...bind("customDomain")}
-      />
       <Field label="Endereço (exibido no cardápio público)" placeholder="Rua Exemplo, 123, Centro, Cidade - UF" {...bind("address")} />
       <Field label="WhatsApp (só números com DDI, ex. 5521999999999)" placeholder="5521999999999" {...bind("whatsapp")} />
       <Field label="Horário de funcionamento (texto livre)" placeholder="Seg a sáb, 09:00 às 17:00" {...bind("openingHours")} />

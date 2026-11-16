@@ -7,7 +7,6 @@ export type ContaForm = {
   logoUrl: string;
   coverImageUrl: string;
   primaryColor: string;
-  customDomain: string;
   address: string;
   whatsapp: string;
   openingHours: string;
@@ -23,7 +22,6 @@ export function toForm(store: StoreSettings): ContaForm {
     logoUrl: store.logoUrl ?? "",
     coverImageUrl: store.coverImageUrl ?? "",
     primaryColor: store.primaryColor ?? "",
-    customDomain: store.customDomain ?? "",
     address: store.address ?? "",
     whatsapp: store.whatsapp ?? "",
     openingHours: store.openingHours ?? "",

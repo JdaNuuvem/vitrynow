@@ -5,11 +5,13 @@ import { useCallback, useEffect, useState } from "react";
 import type { Category, ProductInput } from "@/core/domain/catalog";
 import type { HttpResult } from "@/core/http/HttpClient";
 import { usePanelServices } from "@/core/services/PanelServices";
+import { useStoreActions } from "@/features/shell/StoreProvider";
 
 // Cada ação devolve a mensagem de erro, ou null se deu certo (e a lista já foi recarregada).
 export function useCatalogo() {
   const router = useRouter();
   const { catalog } = usePanelServices();
+  const { setHasProducts } = useStoreActions();
   const [categories, setCategories] = useState<Category[]>([]);
 
   const reload = useCallback(async () => {
@@ -19,7 +21,8 @@ export function useCatalogo() {
       return;
     }
     setCategories(result.data.categories);
-  }, [catalog, router]);
+    setHasProducts(result.data.categories.some((category) => category.products.length > 0));
+  }, [catalog, router, setHasProducts]);
 
   useEffect(() => {
     reload();
