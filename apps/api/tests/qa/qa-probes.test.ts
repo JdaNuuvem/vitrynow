@@ -115,7 +115,7 @@ describe("QA probes — API", () => {
     expect({ ok, usedCount: coupon?.usedCount }).toEqual({ ok: 1, usedCount: 1 });
   });
 
-  bug("D02 pedidos simultâneos recebem códigos únicos e nenhum falha", async () => {
+  it("D02 pedidos simultâneos recebem códigos únicos e nenhum falha", async () => {
     const ctx = await setupStore();
     const results = await Promise.all(
       Array.from({ length: 8 }, () => order(ctx.slug, { type: "BALCAO", items: [{ productId: ctx.productId, quantity: 1 }] })),

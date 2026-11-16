@@ -28,7 +28,7 @@ describe("QA probes — corridas", () => {
     app.inject({ method: "POST", url: `/stores/${s.slug}/orders`, payload: { type: "BALCAO", items: [{ productId: s.productId, quantity: 1 }], ...extra } });
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  bug("D02b dois pedidos quase simultâneos: o segundo cliente leva 500 por código de pedido duplicado", async () => {
+  it("D02b dois pedidos quase simultâneos: o segundo cliente leva 500 por código de pedido duplicado", async () => {
     const s = await setup();
     const [a, b] = await Promise.all([place(s), place(s)]);
     const codes = [a, b].map((r) => `${r.statusCode}`);
