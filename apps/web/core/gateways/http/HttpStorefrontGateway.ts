@@ -1,6 +1,6 @@
 import type { HttpClient } from "../../http/HttpClient";
 import type { StorefrontGateway } from "../StorefrontGateway";
-import type { Menu, PlaceOrderInput, PlacedOrderResponse } from "../../domain/storefront";
+import type { Menu, PaymentStatusResponse, PlaceOrderInput, PlacedOrderResponse } from "../../domain/storefront";
 
 export class HttpStorefrontGateway implements StorefrontGateway {
   constructor(private readonly http: HttpClient) {}
@@ -32,7 +32,7 @@ export class HttpStorefrontGateway implements StorefrontGateway {
     return this.http.post(`/stores/${slug}/orders/${orderId}/cancel`);
   }
 
-  isAwaitingPayment(slug: string, orderId: string) {
-    return this.http.get<{ awaitingPayment: boolean }>(`/stores/${slug}/orders/${orderId}/payment-status`);
+  getPaymentStatus(slug: string, orderId: string) {
+    return this.http.get<PaymentStatusResponse>(`/stores/${slug}/orders/${orderId}/payment-status`);
   }
 }

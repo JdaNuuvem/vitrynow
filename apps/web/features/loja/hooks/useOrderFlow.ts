@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { CartLine, PixPayment } from "@/core/domain/storefront";
 import { useStorefrontServices } from "@/core/services/StorefrontServices";
 import { STORE_CLOSED_MESSAGE, toPlaceOrderInput, type CheckoutForm } from "../checkoutForm";
+import { interpretPaymentStatus } from "../paymentStatus";
 import type { PlacedOrder } from "./useOrderHistory";
 
 export type PlacedOrderState = {
@@ -9,11 +10,13 @@ export type PlacedOrderState = {
   code: string;
   pixData: PixPayment | null;
   paymentConfirmed: boolean;
+  // Mensagem quando o PIX expirou/foi rejeitado ou a loja cancelou; null enquanto tudo certo.
+  paymentFailedMessage: string | null;
   cancelled: boolean;
   cancelError: string | null;
 };
 
-const PAYMENT_POLL_MS = 3000;
+export const PAYMENT_POLL_MS = 3000;
 
 // Ciclo de vida do pedido: enviar, acompanhar o PIX (polling) e cancelar. Não sabe de carrinho
 // nem de telas — recebe o carrinho no submit e avisa o histórico via onPlaced.
@@ -24,17 +27,43 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [placed, setPlaced] = useState<PlacedOrderState | null>(null);
 
+  // Acompanha o PIX até um estado final (pago, expirado, rejeitado ou cancelado). Uma consulta
+  // por vez (setTimeout encadeado, não setInterval: consulta lenta não empilha chamadas) e para
+  // sozinho ao desmontar, ao cancelar ou quando o pedido deixa de existir.
+  const orderId = placed?.orderId;
+  const watching = Boolean(placed?.pixData) && !placed?.paymentConfirmed && !placed?.paymentFailedMessage && !placed?.cancelled;
   useEffect(() => {
-    if (!placed?.pixData || placed.paymentConfirmed || placed.cancelled) return;
-    const interval = setInterval(async () => {
-      const result = await storefront.isAwaitingPayment(slug, placed.orderId);
-      if (result.ok && result.data.awaitingPayment === false) {
-        setPlaced((prev) => (prev ? { ...prev, paymentConfirmed: true } : prev));
-        clearInterval(interval);
+    if (!orderId || !watching) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    async function tick() {
+      const result = await storefront.getPaymentStatus(slug, orderId as string);
+      if (stopped) return;
+      if (result.ok) {
+        const outcome = interpretPaymentStatus(result.data);
+        if (outcome.kind === "PAID") {
+          setPlaced((prev) => (prev ? { ...prev, paymentConfirmed: true } : prev));
+          return;
+        }
+        if (outcome.kind === "FAILED") {
+          setPlaced((prev) => (prev ? { ...prev, paymentFailedMessage: outcome.message } : prev));
+          return;
+        }
+      } else if (result.status === 404) {
+        setPlaced((prev) => (prev ? { ...prev, paymentFailedMessage: "Não encontramos este pedido. Fale com a loja." } : prev));
+        return;
       }
-    }, PAYMENT_POLL_MS);
-    return () => clearInterval(interval);
-  }, [storefront, slug, placed]);
+      // Pendente ou falha de rede passageira: tenta de novo.
+      timer = setTimeout(tick, PAYMENT_POLL_MS);
+    }
+
+    timer = setTimeout(tick, PAYMENT_POLL_MS);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [storefront, slug, orderId, watching]);
 
   // Devolve true se o pedido foi criado (quem chamou limpa o carrinho e fecha o checkout).
   async function submit(form: CheckoutForm, cart: CartLine[], totalCents: number): Promise<boolean> {
@@ -61,6 +90,7 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
       code: result.data.code,
       pixData: result.data.payment ?? null,
       paymentConfirmed: false,
+      paymentFailedMessage: null,
       cancelled: false,
       cancelError: null,
     });

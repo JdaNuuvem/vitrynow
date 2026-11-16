@@ -7,6 +7,7 @@ export function OrderResultScreen({
   cancelled,
   pixData,
   paymentConfirmed,
+  paymentFailedMessage,
   cancelError,
   onCancel,
   onBack,
@@ -15,6 +16,7 @@ export function OrderResultScreen({
   cancelled: boolean;
   pixData: PixPayment | null;
   paymentConfirmed: boolean;
+  paymentFailedMessage: string | null;
   cancelError: string | null;
   onCancel: () => void;
   onBack: () => void;
@@ -23,6 +25,20 @@ export function OrderResultScreen({
     return (
       <main className="loja__result">
         <h1 className="loja__result-title">Pedido #{code} cancelado</h1>
+        <button onClick={onBack} className="loja__result-link loja__result-link--back-lg">
+          Voltar ao cardápio
+        </button>
+      </main>
+    );
+  }
+
+  if (pixData && paymentFailedMessage) {
+    return (
+      <main className="loja__result">
+        <h1 className="loja__result-title">Pedido #{code} não concluído</h1>
+        <p className="loja__result-error" role="alert">
+          {paymentFailedMessage}
+        </p>
         <button onClick={onBack} className="loja__result-link loja__result-link--back-lg">
           Voltar ao cardápio
         </button>

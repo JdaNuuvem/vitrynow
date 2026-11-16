@@ -83,6 +83,7 @@ export function LojaPage({ slug }: { slug: string }) {
           cancelled={order.placed.cancelled}
           pixData={order.placed.pixData}
           paymentConfirmed={order.placed.paymentConfirmed}
+          paymentFailedMessage={order.placed.paymentFailedMessage}
           cancelError={order.placed.cancelError}
           onCancel={order.cancel}
           onBack={order.back}
