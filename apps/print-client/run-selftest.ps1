@@ -26,7 +26,8 @@ $o = & $csc /nologo /target:library "/out:$outD" /r:mscorlib.dll /r:System.dll /
 if ($LASTEXITCODE -ne 0) { Write-Error "csc falhou:`n$o"; exit 1 }
 [Reflection.Assembly]::LoadFrom($hap) | Out-Null
 [Reflection.Assembly]::LoadFrom($json) | Out-Null
-$a = [Reflection.Assembly]::LoadFrom($outD)
+# Em memoria: o Smart App Control as vezes bloqueia a DLL recem-compilada quando carregada do disco.
+$a = [Reflection.Assembly]::Load([IO.File]::ReadAllBytes($outD))
 $t = $a.GetType("MeuCardapio.PrintClient.SelfTest")
 if (-not $t) { Write-Error "tipo MeuCardapio.PrintClient.SelfTest nao encontrado na DLL"; exit 3 }
 $code = [int]$t.InvokeMember("Run", [System.Reflection.BindingFlags]"Public,Static,InvokeMethod", $null, $null, @())
