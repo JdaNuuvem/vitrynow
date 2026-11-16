@@ -152,8 +152,7 @@ namespace MeuCardapio.PrintClient.UI
             _problemLabel.Visible = _failedOrders.Count > 0;
             if (_failedOrders.Count > 0)
                 _problemLabel.Text = "⚠ " + _failedOrders.Count + " pedido(s) SEM IMPRIMIR: " + string.Join(", ", _failedOrders.Take(6)) + (_failedOrders.Count > 6 ? "…" : "")
-                    + "
-Confira papel, cabo e se a impressora está ligada.";
+                    + Environment.NewLine + "Confira papel, cabo e se a impressora está ligada.";
         }
 
         void OnOrderPending()
