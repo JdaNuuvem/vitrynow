@@ -20,6 +20,7 @@ namespace MeuCardapio.PrintClient.Printing
         {
             var doc = new TicketDocument { PaperMm = paperMm };
             if (order == null) return doc;
+            if (order.CancelNotice == true) return BuildCancelNotice(order, paperMm, timeZone);
             var items = order.Items ?? new List<PrintableOrderItem>();
             string type = (order.Type ?? "").Trim().ToUpperInvariant();
 
@@ -32,7 +33,11 @@ namespace MeuCardapio.PrintClient.Printing
             if (type == "MESA" && table.Length > 0) label = table.StartsWith("MESA", StringComparison.OrdinalIgnoreCase) ? table.ToUpperInvariant() : "MESA " + table.ToUpperInvariant();
             doc.Text(label, TicketAlign.Center, bold: true, scale: 1.3f);
             if (order.ReprintCount.HasValue && order.ReprintCount.Value > 0)
+            {
                 doc.Text("2ª VIA (" + order.ReprintCount.Value + ")", TicketAlign.Center, bold: true);
+                var first = FormatDate(order.PrintedAtOriginal, timeZone);
+                if (first.Length > 0) doc.Text("1ª impressão: " + first, TicketAlign.Center, scale: 0.85f);
+            }
             var when = FormatDate(order.CreatedAt, timeZone);
             if (when.Length > 0) doc.Text(when, TicketAlign.Center, scale: 0.85f);
             doc.Rule();
@@ -93,6 +98,29 @@ namespace MeuCardapio.PrintClient.Printing
             return doc;
         }
 
+        // Aviso de cancelamento (RN-B4-03, CA-B4-09): curto, sem valores nem itens, para a cozinha/entregador PARAR.
+        // O tíquete original não é reimpresso. Só identifica o pedido (loja, número, tipo/mesa, hora e cliente).
+        public static TicketDocument BuildCancelNotice(PrintableOrder order, int paperMm, TimeZoneInfo timeZone)
+        {
+            var doc = new TicketDocument { PaperMm = paperMm };
+            string type = (order.Type ?? "").Trim().ToUpperInvariant();
+            var label = TypeLabel(order.Type);
+            var table = S(order.TableLabel);
+            if (type == "MESA" && table.Length > 0) label = table.StartsWith("MESA", StringComparison.OrdinalIgnoreCase) ? table.ToUpperInvariant() : "MESA " + table.ToUpperInvariant();
+            doc.Text(S(order.StoreName), TicketAlign.Center, bold: true);
+            doc.Rule();
+            doc.Text("PEDIDO #" + S(order.Code), TicketAlign.Center, bold: true, scale: 1.4f);
+            doc.Text("CANCELADO", TicketAlign.Center, bold: true, scale: 2f);
+            doc.Text("NÃO PREPARAR / NÃO ENTREGAR", TicketAlign.Center, bold: true);
+            doc.Rule();
+            doc.Text(label, TicketAlign.Center, bold: true, scale: 1.2f);
+            if (!string.IsNullOrWhiteSpace(order.CustomerName)) doc.Text("Cliente: " + S(order.CustomerName), TicketAlign.Center);
+            var when = FormatDate(order.CreatedAt, timeZone);
+            if (when.Length > 0) doc.Text("Pedido feito em " + when, TicketAlign.Center, scale: 0.85f);
+            doc.Rule();
+            return doc;
+        }
+
         // Texto do bloco de pagamento (B4.2) com o que a API entrega hoje; "troco" só com changeForCents.
         public static List<string> PaymentLines(PrintableOrder o, string type)
         {
@@ -104,8 +132,10 @@ namespace MeuCardapio.PrintClient.Printing
             // (ex.: pedido manual com PIX presencial) manda conferir na hora, nunca deixa de cobrar por engano.
             if (method == "PIX")
             {
-                bool proven = string.Equals((o.PaymentStatus ?? "").Trim(), "APROVADO", StringComparison.OrdinalIgnoreCase);
-                lines.Add(proven ? "PAGO ONLINE (PIX) - NÃO COBRAR" : "PIX - CONFERIR NA HORA");
+                string st = (o.PaymentStatus ?? "").Trim().ToUpperInvariant();
+                if (st == "PAGO") lines.Add("PAGO ONLINE (PIX) - NÃO COBRAR");
+                else if (st == "ESTORNADO") lines.Add("PIX ESTORNADO - CONFERIR NA HORA");
+                else lines.Add("PIX - CONFERIR NA HORA");   // A_COBRAR, ausente ou desconhecido: nunca "não cobrar"
                 return lines;
             }
             if (type == "MESA") { lines.Add("PAGAMENTO NA MESA"); return lines; }

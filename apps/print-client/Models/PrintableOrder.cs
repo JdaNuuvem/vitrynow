@@ -40,8 +40,12 @@ namespace MeuCardapio.PrintClient.Models
         [JsonProperty("couponCode")] public string CouponCode { get; set; }
         [JsonProperty("changeForCents")] public int? ChangeForCents { get; set; }
         [JsonProperty("reprintCount")] public int? ReprintCount { get; set; }
-        // Prova de pagamento (enum do Payment: APROVADO...). "NÃO COBRAR" só com APROVADO. Pedido de mesa: "Mesa 12".
+        // Contrato do tíquete: ADR-0004 §6. paymentStatus = PAGO | A_COBRAR | ESTORNADO ("NÃO COBRAR" só com PAGO).
+        // Sem token, QR, e-mail nem id do provedor de pagamento. Campo desconhecido é ignorado (cliente antigo não quebra).
         [JsonProperty("paymentStatus")] public string PaymentStatus { get; set; }
+        [JsonProperty("printedAtOriginal")] public string PrintedAtOriginal { get; set; }   // ISO UTC, só na 2ª via
+        [JsonProperty("cancelNotice")] public bool? CancelNotice { get; set; }              // true = imprime o aviso de cancelamento
+        [JsonProperty("ticketSchemaVersion")] public int? TicketSchemaVersion { get; set; }
         [JsonProperty("tableLabel")] public string TableLabel { get; set; }
         [JsonProperty("createdAt")] public string CreatedAt { get; set; }
         [JsonProperty("items")] public List<PrintableOrderItem> Items { get; set; } = new List<PrintableOrderItem>();

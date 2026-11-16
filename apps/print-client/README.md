@@ -180,10 +180,13 @@ Ordem da spec B4.1: loja, `PEDIDO #código`, tipo em destaque (ENTREGA/RETIRADA/
 valores e bloco de pagamento (B4.2). A linha do item mostra produto x quantidade e cada adicional mostra extra x quantidade com o "(Nx)" escrito (`+ Borda catupiry (2x)  +R$ 16,00`), então a coluna de valores soma exatamente o subtotal.
 
 - **Já com o contrato de hoje:** taxa de entrega, gorjeta, forma de pagamento (DINHEIRO, PIX, CREDITO, DEBITO, VR, VA ou nula), desconto **derivado**
-  (soma das linhas + taxa + gorjeta - total, sem código de cupom). **Fail-safe do PIX:** "PAGO ONLINE (PIX) - NÃO COBRAR" só com prova (`paymentStatus` = APROVADO); PIX sem prova (ex.: pedido manual com PIX presencial) imprime "PIX - CONFERIR NA HORA". Enquanto a API não enviar `paymentStatus`, todo PIX sai "conferir na hora" (seguro, mas conservador).
-- **Opcionais que a API-14 vai enviar** (já aceitos pelo `PrintableOrder`): `subtotalCents`, `discountCents`, `couponCode` (vira "Desconto (BEM10)"),
-  `changeForCents` (vira "TROCO PARA / LEVAR DE TROCO"), `reprintCount`, `paymentStatus`, `tableLabel` ("Mesa 12" => "MESA 12" no topo).
+  (soma das linhas + taxa + gorjeta - total, sem código de cupom). **Fail-safe do PIX:** "PAGO ONLINE (PIX) - NÃO COBRAR" só com prova (`paymentStatus` = PAGO); PIX sem prova (A_COBRAR, ausente, pedido manual com PIX presencial) imprime "PIX - CONFERIR NA HORA"; ESTORNADO imprime "PIX ESTORNADO - CONFERIR NA HORA". Enquanto a API não enviar `paymentStatus`, todo PIX sai "conferir na hora" (seguro, mas conservador).
+- **Contrato fechado no ADR-0004 §6** (Turing entrega na API-14; o cliente já aceita): `paymentStatus` (`PAGO`/`A_COBRAR`/`ESTORNADO`), `tableLabel`, `changeForCents`,
+  `subtotalCents`, `discountCents`, `couponCode`, `reprintCount`, `printedAtOriginal` ("1ª impressão: ..." na 2ª via), `cancelNotice` e `ticketSchemaVersion`.
+  Campos que o cliente não conhece são ignorados (cliente antigo não quebra). Valor antigo `APROVADO` **não** vale como prova: só `PAGO`.
+- **Aviso de cancelamento** (`cancelNotice: true`, CA-B4-09): imprime só "PEDIDO #n CANCELADO / NÃO PREPARAR / NÃO ENTREGAR", tipo ou mesa, cliente e hora; sem itens, valores,
+  endereço, telefone ou pagamento, e **não** reimprime o tíquete original.
 - Bloco de pagamento: PIX => `PAGO ONLINE (PIX) - NÃO COBRAR`; dinheiro => `COBRAR R$ X EM DINHEIRO` (+ troco em linhas separadas); cartão (crédito/débito/VR/VA);
   balcão sem forma => `COBRAR NO CAIXA`; mesa => `PAGAMENTO NA MESA`; sem forma => `FORMA DE PAGAMENTO NÃO INFORMADA`.
-- **Ainda não:** aviso "PEDIDO #xxxx CANCELADO" e o trabalho de reimpressão (precisam do `PrintJob`, PC-03/API-12/API-14), número da mesa só quando a API enviar `tableLabel`,
+- **Ainda não:** o *disparo* do aviso de cancelamento e da reimpressão (precisam do `PrintJob`: PC-03/API-12/API-14); o desenho já está pronto;
   bairro/referência separados do endereço, opções agrupadas (B8).

@@ -1,0 +1,10 @@
+                 Pizzaria do Zé
+------------------------------------------------
+                  PEDIDO #1042
+                   CANCELADO
+          NÃO PREPARAR / NÃO ENTREGAR
+------------------------------------------------
+                    ENTREGA
+            Cliente: Maria da Silva
+        Pedido feito em 16/11/2026 20:31
+------------------------------------------------

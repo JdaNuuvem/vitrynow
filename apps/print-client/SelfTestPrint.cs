@@ -98,7 +98,7 @@ namespace MeuCardapio.PrintClient
         internal static PrintableOrder Reprint()
         {
             var o = Basic();
-            o.OrderId = "ord-1042"; o.PaymentMethod = "PIX"; o.PaymentStatus = "APROVADO"; o.ChangeForCents = null; o.ReprintCount = 1;
+            o.OrderId = "ord-1042"; o.PaymentMethod = "PIX"; o.PaymentStatus = "PAGO"; o.PrintedAtOriginal = "2026-11-16T23:35:00Z"; o.ChangeForCents = null; o.ReprintCount = 1;
             return o;
         }
 
@@ -137,6 +137,8 @@ namespace MeuCardapio.PrintClient
             return money.StartsWith("-") ? -v : v;
         }
 
+        internal static PrintableOrder CancelFixture() { var o = Basic(); o.CancelNotice = true; return o; }
+
         static TicketDocument Build(PrintableOrder o, int mm = 58) { return TicketBuilder.Build(o, mm, Tz); }
         static string Txt(PrintableOrder o, int mm = 58) { return TextTicketWriter.RenderText(Build(o, mm), TicketText.ColumnsFor(mm)); }
 
@@ -145,6 +147,7 @@ namespace MeuCardapio.PrintClient
             Sanitize();
             Wrapping();
             Builder();
+            ContractV1();
             DateAndMoney();
             PaymentBlock();
             Writer();
@@ -226,6 +229,48 @@ namespace MeuCardapio.PrintClient
                 && TicketBuilder.Build(new PrintableOrder { Code = "1", StoreName = "x", Items = null }, 58, Tz).Lines.Count > 0);
         }
 
+        // ADR-0004 §6: aviso de cancelamento, 1a impressao na 2a via e cliente antigo/novo (campos desconhecidos).
+        static void ContractV1()
+        {
+            var cancel = Basic();
+            cancel.CancelNotice = true;
+            var d = Build(cancel);
+            var all = string.Join("\n", d.Lines.Select(l => l.Text + " " + l.RightText));
+            Check("cancelamento: aviso 'PEDIDO #1042' + 'CANCELADO' grande + 'NAO PREPARAR / NAO ENTREGAR' (CA-B4-09)",
+                d.Lines.Any(l => l.Text == "PEDIDO #1042") && d.Lines.Any(l => l.Text == "CANCELADO" && l.Scale >= 2f && l.Bold) && d.Lines.Any(l => l.Text == "NÃO PREPARAR / NÃO ENTREGAR"));
+            Check("cancelamento: NAO reimprime o tiquete original (sem itens, valores, endereco, telefone nem pagamento)",
+                !all.Contains("Calabresa") && !all.Contains("Refrigerante") && !all.Contains("R$") && !all.Contains("Endereço") && !all.Contains("Telefone") && !all.Contains("COBRAR") && !all.Contains("TOTAL"));
+            Check("cancelamento: mostra o tipo e o cliente para achar o pedido", d.Lines.Any(l => l.Text == "ENTREGA") && d.Lines.Any(l => l.Text == "Cliente: Maria da Silva"));
+            var mesa = LongAndHostile(); mesa.CancelNotice = true;
+            Check("cancelamento de mesa mostra 'MESA 12'", Build(mesa).Lines.Any(l => l.Text == "MESA 12"));
+            var hostile = Basic(); hostile.CancelNotice = true; hostile.CustomerName = "Eve\u001b@\u001dV\u0000";
+            Check("cancelamento: texto do cliente tambem passa pela sanitizacao", Build(hostile).Lines.All(l => l.Text.All(c => c >= ' ')));
+            Check("cancelamento: cancelNotice false/ausente imprime o tiquete normal", Build(Basic()).Lines.Any(l => l.Text.StartsWith("2x Pizza")) && !Build(Basic()).Lines.Any(l => l.Text == "CANCELADO"));
+            Check("cancelamento cabe em 58 e 80 mm", new[] { 58, 80 }.All(mm => TextTicketWriter.Render(Build(cancel, mm), TicketText.ColumnsFor(mm)).All(l => TicketText.CellWidth(l) <= TicketText.ColumnsFor(mm))));
+
+            var reprint = Build(Reprint());
+            Check("2a via: mostra '1a impressao' (printedAtOriginal 23:35Z => 20:35)", reprint.Lines.Any(l => l.Text == "1ª impressão: 16/11/2026 20:35"));
+            Check("2a via: sem printedAtOriginal nao imprime a linha da 1a impressao", !Build(new PrintableOrder { Code = "1", StoreName = "x", ReprintCount = 2, Items = new List<PrintableOrderItem>() }).Lines.Any(l => l.Text.StartsWith("1ª impressão")));
+
+            // O JSON da API pode trazer campos que este cliente nao conhece (versao nova do contrato): nao quebra, e a versao e lida.
+            var json = "{\"orderId\":\"o1\",\"code\":\"7\",\"type\":\"BALCAO\",\"storeName\":\"Loja\",\"totalCents\":500,\"paymentMethod\":\"PIX\",\"paymentStatus\":\"PAGO\",\"ticketSchemaVersion\":2,"
+                + "\"campoDoFuturo\":{\"x\":1},\"cancelNotice\":null,\"items\":[{\"productName\":\"Cafe\",\"quantity\":1,\"unitPriceCents\":500,\"novo\":true}]}";
+            var parsed = Newtonsoft.Json.JsonConvert.DeserializeObject<PrintableOrderResponse>("{\"order\":" + json + "}").Order;
+            Check("contrato: campos desconhecidos e ticketSchemaVersion novo sao tolerados (cliente antigo nao quebra)", parsed != null && parsed.TicketSchemaVersion == 2 && parsed.CancelNotice == null);
+            Check("contrato: tiquete de versao nova ainda imprime com os campos que conhece (PIX pago => NAO COBRAR)", Build(parsed).Lines.Any(l => l.Text == "PAGO ONLINE (PIX) - NÃO COBRAR"));
+            Check("contrato: JSON do §6 completo mapeia todos os campos", MapAll());
+        }
+
+        static bool MapAll()
+        {
+            var json = "{\"orderId\":\"o\",\"code\":\"1\",\"type\":\"MESA\",\"storeName\":\"L\",\"totalCents\":1000,\"subtotalCents\":1200,\"discountCents\":200,\"couponCode\":\"BEM10\","
+                + "\"changeForCents\":2000,\"paymentMethod\":\"DINHEIRO\",\"paymentStatus\":\"A_COBRAR\",\"tableLabel\":\"Mesa 3\",\"reprintCount\":2,"
+                + "\"printedAtOriginal\":\"2026-11-16T20:00:00Z\",\"cancelNotice\":false,\"ticketSchemaVersion\":1,\"items\":[]}";
+            var o = Newtonsoft.Json.JsonConvert.DeserializeObject<PrintableOrder>(json);
+            return o.SubtotalCents == 1200 && o.DiscountCents == 200 && o.CouponCode == "BEM10" && o.ChangeForCents == 2000 && o.PaymentStatus == "A_COBRAR"
+                && o.TableLabel == "Mesa 3" && o.ReprintCount == 2 && o.PrintedAtOriginal == "2026-11-16T20:00:00Z" && o.CancelNotice == false && o.TicketSchemaVersion == 1;
+        }
+
         static void DateAndMoney()
         {
             Check("data: ISO em UTC vira dd/MM/aaaa HH:mm no fuso pedido (01:31Z => 22:31 do dia anterior em UTC-3)", TicketBuilder.FormatDate("2026-11-17T01:31:00.000Z", Tz) == "16/11/2026 22:31");
@@ -242,24 +287,28 @@ namespace MeuCardapio.PrintClient
         // Os cenarios do bloco de pagamento (B4.2) e CA-B4-01/02/08: o que o entregador/balcao precisa saber.
         static void PaymentBlock()
         {
-            string status = "APROVADO"; // prova de pagamento online; os cenarios sem PIX nao dependem dela
+            string status = "PAGO"; // prova de pagamento online; os cenarios sem PIX nao dependem dela
             Func<string, string, int, int?, string[]> lines = (type, method, total, changeFor) =>
                 TicketBuilder.PaymentLines(new PrintableOrder { Type = type, PaymentMethod = method, TotalCents = total, ChangeForCents = changeFor, PaymentStatus = status }, type.ToUpperInvariant()).ToArray();
             Func<string[], string> one = a => string.Join(" | ", a);
 
             Check("pagamento 1: PIX aprovado (com prova) => PAGO ONLINE, sem frase de cobranca (CA-B4-02)", one(lines("DELIVERY", "PIX", 4500, null)) == "PAGO ONLINE (PIX) - NÃO COBRAR");
-            foreach (var noProof in new string[] { null, "", "PENDENTE", "REJEITADO", "REEMBOLSADO", "qualquer" })
+            foreach (var noProof in new string[] { null, "", "A_COBRAR", "APROVADO", "PENDENTE", "qualquer" })
             {
                 status = noProof;
                 Check("fail-safe: PIX sem prova (status '" + (noProof ?? "null") + "') NUNCA diz NÃO COBRAR, manda conferir na hora", one(lines("DELIVERY", "PIX", 4500, null)) == "PIX - CONFERIR NA HORA");
             }
-            status = "aprovado";
+            status = "pago";
             Check("fail-safe: status em minusculas tambem e prova", one(lines("DELIVERY", "PIX", 4500, null)) == "PAGO ONLINE (PIX) - NÃO COBRAR");
-            status = "APROVADO";
+            status = "PAGO";
             Check("fail-safe: pedido manual com PIX presencial (sem status) imprime 'conferir na hora', inclusive na mesa e no balcao",
                 one(TicketBuilder.PaymentLines(new PrintableOrder { Type = "BALCAO", PaymentMethod = "PIX", TotalCents = 100 }, "BALCAO").ToArray()) == "PIX - CONFERIR NA HORA"
                 && one(TicketBuilder.PaymentLines(new PrintableOrder { Type = "MESA", PaymentMethod = "PIX", TotalCents = 100 }, "MESA").ToArray()) == "PIX - CONFERIR NA HORA");
-            Check("pagamento: status APROVADO sem PIX nao muda nada (dinheiro continua cobrando)", one(lines("DELIVERY", "DINHEIRO", 4500, null)) == "COBRAR R$ 45,00 EM DINHEIRO");
+            status = "ESTORNADO";
+            Check("pagamento: PIX ESTORNADO nunca diz NAO COBRAR (manda conferir)", one(lines("DELIVERY", "PIX", 4500, null)) == "PIX ESTORNADO - CONFERIR NA HORA");
+            status = "PAGO";
+            Check("contrato ADR-0004 §6: 'APROVADO' (enum antigo do banco) NAO vale como prova; so PAGO", TicketBuilder.PaymentLines(new PrintableOrder { Type = "DELIVERY", PaymentMethod = "PIX", PaymentStatus = "APROVADO", TotalCents = 1 }, "DELIVERY")[0] == "PIX - CONFERIR NA HORA");
+            Check("pagamento: status PAGO sem PIX nao muda nada (dinheiro continua cobrando)", one(lines("DELIVERY", "DINHEIRO", 4500, null)) == "COBRAR R$ 45,00 EM DINHEIRO");
             var mesa = Build(LongAndHostile());
             Check("mesa: tableLabel 'Mesa 12' vira 'MESA 12' no topo (CA-B4-08); sem rotulo fica so 'MESA'", mesa.Lines[2].Text == "MESA 12"
                 && Build(new PrintableOrder { Code = "9", StoreName = "x", Type = "MESA", Items = new List<PrintableOrderItem>() }).Lines[2].Text == "MESA");
@@ -315,7 +364,7 @@ namespace MeuCardapio.PrintClient
             var fixtures = new Dictionary<string, PrintableOrder>
             {
                 { "basico", Basic() }, { "contrato-atual", CurrentContract() }, { "longo-emoji-hostil", LongAndHostile() },
-                { "muitos-itens", ManyItems() }, { "segunda-via", Reprint() }, { "quantidades", Quantities() },
+                { "muitos-itens", ManyItems() }, { "segunda-via", Reprint() }, { "quantidades", Quantities() }, { "cancelamento", CancelFixture() },
             };
             foreach (var kv in fixtures)
             {
