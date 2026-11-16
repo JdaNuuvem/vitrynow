@@ -7,6 +7,31 @@ import type { WsServerMessage } from "@meucardapio/shared-types";
 // Para múltiplas instâncias da API, trocar por um pub/sub via Redis sem mudar a API pública.
 const channels = new Map<string, Set<WebSocket>>();
 
+// Sockets do painel por usuário: permite fechá-los na hora quando a sessão é revogada
+// (troca/reset de senha, "sair de todos", remoção) — ADR-0008 §1.4.
+const userSockets = new Map<string, Set<WebSocket>>();
+
+export const WS_CLOSE_SESSION_REVOKED = 4401;
+
+export function trackUserSocket(userId: string, socket: WebSocket): void {
+  let set = userSockets.get(userId);
+  if (!set) {
+    set = new Set();
+    userSockets.set(userId, set);
+  }
+  set.add(socket);
+  socket.on("close", () => {
+    set?.delete(socket);
+    if (set && set.size === 0) userSockets.delete(userId);
+  });
+}
+
+export function disconnectUser(userId: string): void {
+  const set = userSockets.get(userId);
+  if (!set) return;
+  for (const socket of [...set]) socket.close(WS_CLOSE_SESSION_REVOKED, "sessão encerrada");
+}
+
 export function subscribe(storeId: string, socket: WebSocket): void {
   let set = channels.get(storeId);
   if (!set) {

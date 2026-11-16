@@ -1,7 +1,8 @@
-import { createHmac, randomInt, timingSafeEqual } from "node:crypto";
+import { randomInt, timingSafeEqual } from "node:crypto";
 import { nanoid } from "nanoid";
 import { prisma } from "@meucardapio/db";
 import type { MfaPurpose } from "@meucardapio/shared-types";
+import { mfaHmac } from "./securityConfig";
 
 export const CODE_TTL_MS = 10 * 60 * 1000;
 export const PROOF_TTL_MS = 10 * 60 * 1000;
@@ -9,12 +10,8 @@ export const MAX_ATTEMPTS = 5;
 
 export type VerifyOutcome = "ok" | "invalid" | "expired" | "locked";
 
-function secret(): string {
-  return process.env.JWT_SECRET ?? "dev-secret-change-me";
-}
-
 export function hashCode(challengeId: string, code: string): string {
-  return createHmac("sha256", secret()).update(`${challengeId}:${code}`).digest("hex");
+  return mfaHmac(`${challengeId}:${code}`);
 }
 
 export function generateCode(): string {

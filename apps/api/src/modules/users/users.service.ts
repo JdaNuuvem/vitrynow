@@ -44,6 +44,6 @@ export class UsersService {
     if (!user || !(await this.hasher.verify(input.currentPassword, user.passwordHash))) {
       throw new UnauthorizedError("senha atual incorreta");
     }
-    await this.repo.updatePasswordHash(userId, await this.hasher.hash(input.newPassword));
+    return this.repo.updatePasswordHash(userId, await this.hasher.hash(input.newPassword));
   }
 }

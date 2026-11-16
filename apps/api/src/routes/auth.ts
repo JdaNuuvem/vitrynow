@@ -5,14 +5,8 @@ import { prisma } from "@meucardapio/db";
 import { loginSchema, registerStoreSchema, forgotPasswordSchema, resetPasswordSchema } from "@meucardapio/shared-types";
 import { sendPasswordResetEmail } from "../lib/email";
 import { newTrialEndsAt } from "../lib/subscription";
-
-const COOKIE_OPTIONS = {
-  path: "/",
-  httpOnly: true,
-  sameSite: "lax" as const,
-  secure: process.env.NODE_ENV === "production",
-  maxAge: 60 * 60 * 24 * 7,
-};
+import { SESSION_COOKIE, sessionCookieOptions, signSession } from "../lib/session";
+import { disconnectUser } from "../realtime/hub";
 
 const authRoutes: FastifyPluginAsync = async (app) => {
   // Bootstrap de uma loja nova + usuário dono. Em produção isso vira o fluxo de
@@ -42,8 +36,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     });
 
     const user = store.users[0];
-    const token = app.jwt.sign({ userId: user.id, storeId: store.id, role: user.role });
-    reply.setCookie("mc_session", token, COOKIE_OPTIONS);
+    reply.setCookie(SESSION_COOKIE, signSession(app, user), sessionCookieOptions());
     return reply.code(201).send({ store: { id: store.id, name: store.name, slug: store.slug } });
   });
 
@@ -59,13 +52,25 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(401).send({ error: "credenciais inválidas" });
     }
 
-    const token = app.jwt.sign({ userId: user.id, storeId: user.storeId, role: user.role });
-    reply.setCookie("mc_session", token, COOKIE_OPTIONS);
+    reply.setCookie(SESSION_COOKIE, signSession(app, user), sessionCookieOptions());
     return { ok: true };
   });
 
   app.post("/auth/logout", async (_request, reply) => {
-    reply.clearCookie("mc_session", { path: "/" });
+    reply.clearCookie(SESSION_COOKIE, { path: "/" });
+    return { ok: true };
+  });
+
+  // "Sair de todos os dispositivos": incrementa tokenVersion (derruba todos os JWTs e sockets do
+  // usuário) e entrega um cookie novo só para este dispositivo continuar logado.
+  app.post("/auth/logout-all", { preHandler: app.requirePanelAuth }, async (request, reply) => {
+    const user = await prisma.user.update({
+      where: { id: request.user.userId },
+      data: { tokenVersion: { increment: 1 } },
+      select: { id: true, tokenVersion: true },
+    });
+    disconnectUser(user.id);
+    reply.setCookie(SESSION_COOKIE, signSession(app, user), sessionCookieOptions());
     return { ok: true };
   });
 
@@ -110,10 +115,12 @@ const authRoutes: FastifyPluginAsync = async (app) => {
 
       const passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
       await prisma.$transaction([
-        prisma.user.update({ where: { id: resetToken.userId }, data: { passwordHash } }),
+        // tokenVersion+1: redefinir a senha derruba todas as sessões abertas (token roubado inclusive).
+        prisma.user.update({ where: { id: resetToken.userId }, data: { passwordHash, tokenVersion: { increment: 1 } } }),
         prisma.passwordResetToken.update({ where: { id: resetToken.id }, data: { usedAt: new Date() } }),
       ]);
 
+      disconnectUser(resetToken.userId);
       return { ok: true };
     },
   );

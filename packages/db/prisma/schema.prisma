@@ -113,6 +113,9 @@ model User {
   email        String   @unique
   passwordHash String
   role         UserRole @default(OWNER)
+  // Versão da sessão (ADR-0008): incrementa em troca/redefinição de senha, mudança de papel e
+  // "sair de todos os dispositivos". JWT com `tv` diferente é recusado (SESSION_REVOKED).
+  tokenVersion Int      @default(0)
   createdAt    DateTime @default(now())
 
   @@index([storeId])

@@ -25,9 +25,12 @@ import feedbackRoutes from "./routes/feedback";
 import subscriptionRoutes from "./routes/subscription";
 import noticeRoutes from "./routes/notices";
 import mfaRoutes from "./routes/mfa";
+import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
 
 export function buildApp() {
-  const app = Fastify({ logger: process.env.NODE_ENV !== "test" });
+  // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
+  // e o rate limit deixa de contar o IP do proxy. Vazio = ignora X-Forwarded-For (não forjável).
+  const app = Fastify({ logger: process.env.NODE_ENV !== "test", trustProxy: trustProxySetting() });
 
   // app.close() (graceful shutdown) também desconecta o Prisma — ele é um singleton
   // importado direto de @meucardapio/db, não um plugin fastify com ciclo de vida próprio.
@@ -36,7 +39,7 @@ export function buildApp() {
   });
 
   app.register(cors, {
-    origin: process.env.WEB_ORIGIN ?? "http://localhost:3000",
+    origin: allowedOrigin(),
     credentials: true,
   });
   // API JSON pura — CSP não se aplica a respostas que o browser nunca renderiza como HTML.

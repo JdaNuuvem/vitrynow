@@ -15,7 +15,8 @@ export interface UsersRepository {
   countOwners(storeId: string): Promise<number>;
   create(data: { storeId: string; email: string; passwordHash: string; role: UserRole }): Promise<TeamMember>;
   delete(id: string): Promise<void>;
-  updatePasswordHash(id: string, passwordHash: string): Promise<void>;
+  // Troca o hash e incrementa tokenVersion (derruba as demais sessões); devolve a nova versão.
+  updatePasswordHash(id: string, passwordHash: string): Promise<{ tokenVersion: number }>;
 }
 
 export class PrismaUsersRepository implements UsersRepository {
@@ -50,6 +51,11 @@ export class PrismaUsersRepository implements UsersRepository {
   }
 
   async updatePasswordHash(id: string, passwordHash: string) {
-    await this.db.user.update({ where: { id }, data: { passwordHash } });
+    const user = await this.db.user.update({
+      where: { id },
+      data: { passwordHash, tokenVersion: { increment: 1 } },
+      select: { tokenVersion: true },
+    });
+    return { tokenVersion: user.tokenVersion };
   }
 }
