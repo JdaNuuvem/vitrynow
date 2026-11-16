@@ -45,9 +45,9 @@ describe("tech.cleanup — comportamento (Postgres)", () => {
     const user = await seedUser();
     await prisma.passwordResetToken.createMany({
       data: [
-        { userId: user.id, token: "velho", expiresAt: ago(TECH_RETENTION_MS + HOUR) },
-        { userId: user.id, token: "recente", expiresAt: ago(HOUR) },
-        { userId: user.id, token: "valido", expiresAt: new Date(NOW.getTime() + HOUR) },
+        { userId: user.id, tokenHash: "velho", expiresAt: ago(TECH_RETENTION_MS + HOUR) },
+        { userId: user.id, tokenHash: "recente", expiresAt: ago(HOUR) },
+        { userId: user.id, tokenHash: "valido", expiresAt: new Date(NOW.getTime() + HOUR) },
       ],
     });
     await prisma.mfaChallenge.createMany({
@@ -66,7 +66,7 @@ describe("tech.cleanup — comportamento (Postgres)", () => {
 
   it("nunca toca dados de negócio (loja, usuário, assinatura e demais tabelas)", async () => {
     const user = await seedUser();
-    await prisma.passwordResetToken.create({ data: { userId: user.id, token: "t", expiresAt: ago(10 * 24 * HOUR) } });
+    await prisma.passwordResetToken.create({ data: { userId: user.id, tokenHash: "t", expiresAt: ago(10 * 24 * HOUR) } });
     const before = {
       stores: await prisma.store.count(),
       users: await prisma.user.count(),
@@ -90,7 +90,7 @@ describe("tech.cleanup — comportamento (Postgres)", () => {
   it("recupera atraso: itens vencidos há dias são limpos de uma vez no próximo tick; segundo tick não faz nada", async () => {
     const user = await seedUser();
     await prisma.passwordResetToken.createMany({
-      data: Array.from({ length: 5 }, (_, i) => ({ userId: user.id, token: `old-${i}`, expiresAt: ago((3 + i) * 24 * HOUR) })),
+      data: Array.from({ length: 5 }, (_, i) => ({ userId: user.id, tokenHash: `old-${i}`, expiresAt: ago((3 + i) * 24 * HOUR) })),
     });
     const r = runner();
 
@@ -101,7 +101,7 @@ describe("tech.cleanup — comportamento (Postgres)", () => {
   it("respeita o limite por execução e deixa o excedente para o próximo tick", async () => {
     const user = await seedUser();
     await prisma.passwordResetToken.createMany({
-      data: Array.from({ length: 7 }, (_, i) => ({ userId: user.id, token: `old-${i}`, expiresAt: ago((2 + i) * 24 * HOUR) })),
+      data: Array.from({ length: 7 }, (_, i) => ({ userId: user.id, tokenHash: `old-${i}`, expiresAt: ago((2 + i) * 24 * HOUR) })),
     });
     const r = new JobRunner({ db: prisma, log: silent, now: () => NOW });
     r.register({ ...techCleanupJob, limit: 3 });
@@ -116,7 +116,7 @@ describe("tech.cleanup — comportamento (Postgres)", () => {
     const user = await seedUser();
     const total = 40;
     await prisma.passwordResetToken.createMany({
-      data: Array.from({ length: total }, (_, i) => ({ userId: user.id, token: `old-${i}`, expiresAt: ago((2 + i) * HOUR + TECH_RETENTION_MS) })),
+      data: Array.from({ length: total }, (_, i) => ({ userId: user.id, tokenHash: `old-${i}`, expiresAt: ago((2 + i) * HOUR + TECH_RETENTION_MS) })),
     });
 
     const [a, b] = await Promise.all([runner().run("tech.cleanup"), runner().run("tech.cleanup")]);
@@ -132,7 +132,7 @@ describe("tech.cleanup — comportamento (Postgres)", () => {
     const r = runner();
     expect(await r.run("tech.cleanup")).toMatchObject({ lagMs: null });
 
-    await prisma.passwordResetToken.create({ data: { userId: user.id, token: "t", expiresAt: ago(TECH_RETENTION_MS + 3 * HOUR) } });
+    await prisma.passwordResetToken.create({ data: { userId: user.id, tokenHash: "t", expiresAt: ago(TECH_RETENTION_MS + 3 * HOUR) } });
     // O job limpa o item no mesmo run; o atraso medido depois é null. Para medir antes, use a função direta:
     const lag = await techCleanupJob.lagMs!({ now: NOW, db: prisma, log: silent });
     expect(lag).toBe(3 * HOUR);
