@@ -166,22 +166,94 @@ export function requireFeature(feature: Feature) {
   };
 }
 
+// ── Limite do plano sem corrida (SEC-21 / ST-35) ──────────────────────────────────────────
+// Contar e criar precisa acontecer numa janela exclusiva por loja+limite; senão 8 pedidos paralelos
+// passam todos pela contagem. Duas camadas:
+//  1) fila em memória por (loja, limite): quem espera NÃO ocupa conexão do banco (evita esgotar o pool);
+//  2) `pg_advisory_xact_lock` numa transação mantida aberta até a resposta terminar: vale entre várias
+//     instâncias da API.
+// A janela só fecha quando a resposta acaba (a criação já foi gravada), e uma transação-guarda com
+// prazo (LIMIT_LOCK_TIMEOUT_MS) solta o lock sozinha se algo travar.
+const LIMIT_LOCK_TIMEOUT_MS = 20_000;
+const limitQueues = new Map<string, Promise<void>>();
+
+async function enterLimitQueue(key: string): Promise<() => void> {
+  const previous = limitQueues.get(key) ?? Promise.resolve();
+  let leave!: () => void;
+  const mine = new Promise<void>((resolve) => (leave = resolve));
+  const tail = previous.then(() => mine);
+  limitQueues.set(key, tail);
+  void tail.then(() => {
+    if (limitQueues.get(key) === tail) limitQueues.delete(key);
+  });
+  await previous;
+  return leave;
+}
+
+function holdDbLimitLock(key: string): Promise<() => void> {
+  return new Promise((resolveLock, rejectLock) => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    prisma
+      .$transaction(
+        async (tx) => {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+          resolveLock(() => release());
+          await held;
+        },
+        { timeout: LIMIT_LOCK_TIMEOUT_MS, maxWait: 10_000 },
+      )
+      .catch(rejectLock); // depois de resolveLock vira no-op (ex.: prazo estourou e o lock já caiu)
+  });
+}
+
+async function acquireLimitWindow(storeId: string, limit: LimitKey): Promise<() => void> {
+  const key = `limit:${storeId}:${limit}`;
+  const leaveQueue = await enterLimitQueue(key);
+  try {
+    const releaseDb = await holdDbLimitLock(key);
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      releaseDb();
+      leaveQueue();
+    };
+  } catch (error) {
+    leaveQueue();
+    throw error;
+  }
+}
+
 /**
  * preHandler de limite do plano (maxUsers, maxPrinters): `countCurrent` devolve quantos já existem
  * (só os ativos). Ao atingir o máximo → 402 LIMIT_REACHED. Sem limite (`null`) nunca bloqueia.
- * Limitação conhecida: duas criações simultâneas podem passar do limite em 1 (verificação e
- * criação não são atômicas); o impacto é pequeno e vale o aceite de RN-B10-03.
+ * Contagem e criação são serializadas por loja+limite (ver acima): o preHandler só devolve o
+ * controle com a janela aberta e a fecha quando a resposta termina.
  */
 export function requireLimit(limit: LimitKey, countCurrent: (request: FastifyRequest) => Promise<number>) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    const max = (await getEntitlements(request.user.storeId)).limits[limit];
+    const { storeId } = request.user;
+    const max = (await getEntitlements(storeId)).limits[limit];
     if (max === null) return;
-    const current = await countCurrent(request);
+
+    const release = await acquireLimitWindow(storeId, limit);
+    let current: number;
+    try {
+      current = await countCurrent(request);
+    } catch (error) {
+      release();
+      throw error;
+    }
     if (current >= max) {
-      reply
+      release();
+      return reply
         .code(402)
         .send({ error: "Você atingiu o limite do seu plano.", code: "LIMIT_REACHED", details: { limit, max, current } });
     }
+    // Janela aberta até o fim da resposta (sucesso, erro ou conexão derrubada).
+    reply.raw.once("close", release);
+    return undefined;
   };
 }
 
