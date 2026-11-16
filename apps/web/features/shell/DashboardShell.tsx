@@ -38,11 +38,12 @@ function ShellLayout({ children }: { children: ReactNode }) {
   return (
     <>
       <Sidebar collapsed={collapsed} mobileOpen={mobileOpen} onToggle={toggleCollapsed} onNavigate={closeMobile} />
-      <div className={`shell-content${collapsed ? " is-sidebar-collapsed" : ""}`}>
+      {/* Com o menu aberto no celular, o conteúdo atrás fica inerte: nem Tab nem leitor de tela chegam nele. */}
+      <div className={`shell-content${collapsed ? " is-sidebar-collapsed" : ""}`} {...(mobileOpen ? ({ inert: "" } as Record<string, string>) : {})}>
         <Topbar />
         {children}
       </div>
-      <Bottombar onOpenMenu={openMobile} onNavigate={closeMobile} />
+      <Bottombar onOpenMenu={openMobile} onNavigate={closeMobile} menuOpen={mobileOpen} />
     </>
   );
 }
