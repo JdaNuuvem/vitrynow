@@ -1,12 +1,44 @@
 {
-	email {$ACME_EMAIL:contato@exemplo.com}
+	email {$ACME_EMAIL}
 }
 
-{$DOMAIN:localhost} {
-	reverse_proxy /api/* api:3001
-	reverse_proxy /auth/* api:3001
-	reverse_proxy /stores/* api:3001
-	reverse_proxy /ws/* api:3001
-	reverse_proxy /health api:3001
-	reverse_proxy web:3000
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=15552000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Rotas administrativas da plataforma (x-admin-token) NÃO ficam na internet pública: só pela rede
+	# interna ou por túnel SSH até a API (ST-18). Para publicar um aviso, use o runbook.
+	handle /api/admin/* {
+		respond "not found" 404
+	}
+
+	# Caddy descarta qualquer X-Forwarded-For enviado pelo cliente e envia à API o IP real da
+	# conexão (comportamento padrão do reverse_proxy sem `trusted_proxies`). É isso que permite
+	# a API usar trustProxy + rate limit por IP sem que o cliente possa forjar o IP (B04).
+	# NÃO adicione `trusted_proxies` aqui sem revisão de segurança. Verificado por
+	# scripts/smoke-stack.sh (cabeçalho forjado não chega à API).
+	handle /api/* {
+		reverse_proxy api:3001
+	}
+	handle /auth/* {
+		reverse_proxy api:3001
+	}
+	handle /stores/* {
+		reverse_proxy api:3001
+	}
+	handle /ws/* {
+		reverse_proxy api:3001
+	}
+	handle /health {
+		reverse_proxy api:3001
+	}
+	handle {
+		reverse_proxy web:3000
+	}
 }

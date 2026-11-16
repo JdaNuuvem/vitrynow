@@ -2,6 +2,10 @@ import bcrypt from "bcryptjs";
 import { prisma } from "../src/index";
 
 async function main() {
+  // B25: o seed cria a conta conhecida dono@lojateste.com / senha123. Nunca em produção.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("seed recusado: NODE_ENV=production (cria uma conta com senha conhecida)");
+  }
   const passwordHash = await bcrypt.hash("senha123", 10);
 
   const store = await prisma.store.upsert({
