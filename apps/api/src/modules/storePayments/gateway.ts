@@ -1,4 +1,4 @@
-import { mercadoPagoGateway, type PixCharge, type PixChargeInput, type PixGateway, type ProviderPayment } from "../../lib/mercadopago";
+import { PIX_EXPIRATION_MINUTES, mercadoPagoGateway, type PixCharge, type PixChargeInput, type PixGateway, type ProviderPayment } from "../../lib/mercadopago";
 import { oauthProvider } from "./oauth";
 import { AccountChangedError, NeedsReconnectError, PixUnavailableError } from "./storePayments.service";
 import { storePaymentsService } from "./storePayments.module";
@@ -75,7 +75,7 @@ export class FakePixGateway implements PixGateway {
   }
 
   private charge(id: string): PixCharge {
-    return { providerPaymentId: id, status: FakePixGateway.entry(id).status, pixQrCode: `000201fakepix${id}`, pixQrCodeBase64: "ZmFrZQ==", expiresAt: new Date(Date.now() + 30 * 60_000) };
+    return { providerPaymentId: id, status: FakePixGateway.entry(id).status, pixQrCode: `000201fakepix${id}`, pixQrCodeBase64: "ZmFrZQ==", expiresAt: new Date(Date.now() + PIX_EXPIRATION_MINUTES * 60_000) };
   }
 
   async getPayment(providerPaymentId: string): Promise<ProviderPayment> {
