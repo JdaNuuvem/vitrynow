@@ -116,7 +116,7 @@ export const wsServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("print.available") }),
   z.object({ type: z.literal("print.job_failed"), jobId: z.string() }),
   // Caixa (CA-CX-28): o STAFF fechou com diferença ACIMA da tolerância. Só o id do caixa, o papel e o valor em centavos; nunca o texto do motivo.
-  z.object({ type: z.literal("cashier.difference_over_tolerance"), sessionId: z.string(), role: z.enum(["OWNER", "STAFF"]), differenceCents: z.number().int() }),
+  z.object({ type: z.literal("cashier.difference_over_tolerance"), sessionId: z.string() }),
   z.object({ type: z.literal("ping") }),
 ]);
 export type WsServerMessage = z.infer<typeof wsServerMessageSchema>;
@@ -223,7 +223,7 @@ export const orderInternalNoteSchema = z.object({ note: z.string().max(500).null
 // ---- Caixa (painel) ----
 
 export const openCashSessionSchema = z.object({
-  openingBalanceCents: z.number().int().nonnegative(),
+  openingBalanceCents: z.number().int().nonnegative().max(100_000_000), // teto da RN-CX-12 (R$ 1.000.000,00)
   notes: z.string().trim().max(300).optional(),
 });
 export type OpenCashSessionInput = z.infer<typeof openCashSessionSchema>;
@@ -231,7 +231,7 @@ export type OpenCashSessionInput = z.infer<typeof openCashSessionSchema>;
 // `closingBalanceCents` ausente/nulo NUNCA vira 0 por omissão: o servidor responde 400 CASH_COUNTED_REQUIRED (zero digitado de propósito vale).
 // `reason`/`reasonText` são validados pelo servidor contra a lista fechada (CASH_REASON_REQUIRED / CASH_REASON_INVALID).
 export const closeCashSessionSchema = z.object({
-  closingBalanceCents: z.number().int().nonnegative().nullable().optional(),
+  closingBalanceCents: z.number().int().nonnegative().max(100_000_000).nullable().optional(),
   notes: z.string().trim().max(300).optional(),
   reason: z.string().max(40).nullable().optional(),
   reasonText: z.string().max(400).nullable().optional(),

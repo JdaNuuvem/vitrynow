@@ -1,11 +1,11 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { Prisma, prisma } from "@meucardapio/db";
 import { closeCashSessionSchema, createCashMovementSchema, openCashSessionSchema, setCashStaffLimitSchema } from "@meucardapio/shared-types";
-import { logAudit } from "../lib/audit";
+import { toRow as auditRow, type AuditInput } from "../lib/audit";
 import { computeCashSummary } from "../lib/cashier";
 import { CASH_TOLERANCE_CENTS, closePreview, evaluateClose, validateMovementReason } from "../lib/cashRules";
 import { findOwnedOrNotFound } from "../lib/tenant";
-import { publishToStore } from "../realtime/hub";
+import { publishToOwners } from "../realtime/hub";
 import { CodedError, useDomainErrors } from "../shared/errors";
 
 const STALE_AFTER_HOURS = 20;
@@ -38,22 +38,35 @@ const movementView = (m: SessionWithMovements["movements"][number]) => ({
   createdByRole: m.createdByRole,
   createdAt: m.createdAt,
 });
-const sessionView = (s: SessionWithMovements) => ({ ...s, movements: s.movements.map(movementView) });
+// NENHUMA resposta do caixa, para nenhum papel, devolve id de usuário (só papel e hora, CA-CX-22) nem o retrato interno: tira os campos por nome
+// em um lugar só, usado por todas as visões da sessão.
+const withoutInternals = <T extends { openedByUserId: string; closedByUserId: string | null; summarySnapshot: Prisma.JsonValue | null }>(s: T) => {
+  const { openedByUserId: _opened, closedByUserId: _closed, summarySnapshot: _snapshot, ...rest } = s;
+  void _opened;
+  void _closed;
+  void _snapshot;
+  return rest;
+};
+const sessionView = (s: SessionWithMovements) => ({ ...withoutInternals(s), movements: s.movements.map(movementView) });
+
+// R2: a auditoria de uma ação do caixa é gravada DENTRO da transação do dado e é ESTRITA: se o registro falhar, a ação inteira é desfeita
+// (503 AUDIT_UNAVAILABLE). Nunca existe abertura, fechamento, movimentação ou mudança de limite sem rastro.
+async function auditInTx(tx: Db, entry: AuditInput): Promise<void> {
+  try {
+    await tx.auditLog.create({ data: auditRow(entry) });
+  } catch {
+    throw new CodedError(503, "AUDIT_UNAVAILABLE", "Não foi possível registrar a ação no histórico. Tente de novo em instantes.");
+  }
+}
 
 // Caixa FECHADO (histórico e resumo): o OWNER vê tudo (esperado, contado, diferença, motivo); o STAFF recebe SÓ abertura, fechamento, horários e
 // papel de quem fechou, SEM mascaramento parcial (RN-CX-22, CA-CX-27): nada de esperado, contado, diferença, motivo, observações nem retrato.
 // (O STAFF que acabou de fechar vê o resultado na resposta do PRÓPRIO fechamento, que usa `ownClosedView`.)
 const closedSessionView = (s: Prisma.CashSessionGetPayload<object>, role: "OWNER" | "STAFF") => {
-  const { summarySnapshot: _snapshot, ...rest } = s;
-  void _snapshot;
-  if (role === "OWNER") return rest;
+  if (role === "OWNER") return withoutInternals(s);
   return { id: s.id, openedAt: s.openedAt, closedAt: s.closedAt, openingBalanceCents: s.openingBalanceCents, closedByRole: s.closedByRole };
 };
-const ownClosedView = (s: Prisma.CashSessionGetPayload<object>) => {
-  const { summarySnapshot: _snapshot, ...rest } = s;
-  void _snapshot;
-  return rest;
-};
+const ownClosedView = (s: Prisma.CashSessionGetPayload<object>) => withoutInternals(s);
 
 // Caixa do balcão: abertura/fechamento + movimentações manuais (suprimento/sangria).
 // Saldo esperado = abertura + vendas em dinheiro + suprimentos - sangrias (ver lib/cashier.ts).
@@ -83,7 +96,7 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
     const { storeId } = request.user;
     const raw = (request.query as { countedCents?: string }).countedCents;
     const counted = raw === undefined || raw === "" ? NaN : Number(raw);
-    if (!Number.isInteger(counted) || counted < 0) return reply.code(400).send({ error: "Informe o valor contado.", code: "CASH_COUNTED_REQUIRED" });
+    if (!Number.isInteger(counted) || counted < 0 || counted > 100_000_000) return reply.code(400).send({ error: "Informe o valor contado.", code: "CASH_COUNTED_REQUIRED" });
     const session = await prisma.cashSession.findFirst({ where: { storeId, closedAt: null }, include: { movements: true } });
     if (!session) return reply.code(404).send({ error: "não há caixa aberto", code: "CASH_REQUIRED" });
     const summary = await summarizeSession(prisma, storeId, session);
@@ -117,16 +130,19 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
     // garante atomicidade — dois cliques/abas simultâneos não abrem dois caixas (um deles
     // recebe a violação de unicidade e vira 409 em vez de corromper o estado).
     try {
-      const session = await prisma.cashSession.create({
-        data: {
-          storeId,
-          openedByUserId: userId,
-          openingBalanceCents: parsed.data.openingBalanceCents,
-          openingNotes: parsed.data.notes || null,
-        },
+      const session = await prisma.$transaction(async (tx) => {
+        const created = await tx.cashSession.create({
+          data: {
+            storeId,
+            openedByUserId: userId,
+            openingBalanceCents: parsed.data.openingBalanceCents,
+            openingNotes: parsed.data.notes || null,
+          },
+        });
+        await auditInTx(tx, { storeId, userId, action: "cashier.open", targetType: "CashSession", targetId: created.id, metadata: { openingBalanceCents: created.openingBalanceCents, role } });
+        return created;
       });
-      logAudit({ storeId, userId, action: "cashier.open", targetType: "CashSession", targetId: session.id, metadata: { openingBalanceCents: session.openingBalanceCents, role } });
-      return reply.code(201).send({ session });
+      return reply.code(201).send({ session: withoutInternals(session) });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
         return reply.code(409).send({ error: "já existe um caixa aberto", code: "CASH_ALREADY_OPEN" });
@@ -175,23 +191,24 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
             summarySnapshot: JSON.parse(JSON.stringify(summary)) as Prisma.InputJsonValue,
           },
         });
+        // Auditoria: esperado, contado, diferença e o CÓDIGO do motivo; nunca o texto livre (ADR-0014). Dentro da transação (R2).
+        await auditInTx(tx, {
+          storeId,
+          userId,
+          action: "cashier.close",
+          targetType: "CashSession",
+          targetId: updated.id,
+          metadata: { closingBalanceCents: counted, expectedCents: summary.expectedCents, differenceCents, reason: verdict.reason, role },
+        });
         return { updated, summary, verdict, differenceCents };
       },
       { maxWait: 10_000, timeout: 20_000 },
     );
-    // Auditoria: esperado, contado, diferença e o CÓDIGO do motivo; nunca o texto livre (ADR-0014).
-    logAudit({
-      storeId,
-      userId,
-      action: "cashier.close",
-      targetType: "CashSession",
-      targetId: result.updated.id,
-      metadata: { closingBalanceCents: counted, expectedCents: result.summary.expectedCents, differenceCents: result.differenceCents, reason: result.verdict.reason, role },
-    });
-    // CA-CX-28: o STAFF fechou com diferença ACIMA da tolerância (exato R$ 5,00 não conta) ⇒ o painel do dono é avisado com o id do caixa, o
-    // papel e o valor; nunca o texto do motivo.
+    // CA-CX-28: o STAFF fechou com diferença ACIMA da tolerância (exato R$ 5,00 não conta) ⇒ o painel do dono é avisado SÓ com o id do caixa
+    // (regra do canal da loja: sem valor, papel nem texto; o dono busca o detalhe na tela do caixa fechado, que é só dele) e SÓ às
+    // conexões de OWNER: STAFF e impressoras nem recebem o sinal.
     if (role === "STAFF" && Math.abs(result.differenceCents) > CASH_TOLERANCE_CENTS) {
-      publishToStore(storeId, { type: "cashier.difference_over_tolerance", sessionId: result.updated.id, role, differenceCents: result.differenceCents });
+      publishToOwners(storeId, { type: "cashier.difference_over_tolerance", sessionId: result.updated.id });
     }
     // Quem acabou de fechar recebe o RESULTADO na resposta do próprio fechamento (Sobrou/Faltou/Fechou certo), mesmo sendo STAFF.
     return { session: ownClosedView(result.updated), summary: result.summary, differenceCents: result.differenceCents, toleranceCents: CASH_TOLERANCE_CENTS };
@@ -231,14 +248,15 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
             });
           }
         }
-        return tx.cashMovement.create({
+        const created = await tx.cashMovement.create({
           data: { cashSessionId: open.id, type, amountCents, notes: parsed.data.notes ?? null, reason, reasonText, createdByUserId: userId, createdByRole: role },
         });
+        // Auditoria: tipo, valor e o CÓDIGO do motivo; o texto livre do `OUTRO` NÃO vai para o log. Dentro da transação (R2).
+        await auditInTx(tx, { storeId, userId, action: "cashier.movement", targetType: "CashMovement", targetId: created.id, metadata: { type, amountCents, reason, role } });
+        return created;
       },
       { maxWait: 10_000, timeout: 20_000 },
     );
-    // Auditoria: tipo, valor e o CÓDIGO do motivo; o texto livre do `OUTRO` NÃO vai para o log.
-    logAudit({ storeId, userId, action: "cashier.movement", targetType: "CashMovement", targetId: movement.id, metadata: { type, amountCents, reason, role } });
     return reply.code(201).send({ movement: movementView({ ...movement }) });
   });
 
@@ -247,15 +265,17 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
     const { storeId, userId } = request.user;
     const parsed = setCashStaffLimitSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Informe o limite em centavos (0 ou mais).", code: "VALIDATION_ERROR" });
-    const before = await prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { cashStaffWithdrawalLimitCents: true } });
-    await prisma.store.update({ where: { id: storeId }, data: { cashStaffWithdrawalLimitCents: parsed.data.limitCents } });
-    logAudit({
-      storeId,
-      userId,
-      action: "cashier.staff_limit_change",
-      targetType: "Store",
-      targetId: storeId,
-      metadata: { fromCents: before.cashStaffWithdrawalLimitCents, toCents: parsed.data.limitCents },
+    await prisma.$transaction(async (tx) => {
+      const before = await tx.store.findUniqueOrThrow({ where: { id: storeId }, select: { cashStaffWithdrawalLimitCents: true } });
+      await tx.store.update({ where: { id: storeId }, data: { cashStaffWithdrawalLimitCents: parsed.data.limitCents } });
+      await auditInTx(tx, {
+        storeId,
+        userId,
+        action: "cashier.staff_limit_change",
+        targetType: "Store",
+        targetId: storeId,
+        metadata: { fromCents: before.cashStaffWithdrawalLimitCents, toCents: parsed.data.limitCents },
+      });
     });
     return { staffWithdrawalLimitCents: parsed.data.limitCents };
   });

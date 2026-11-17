@@ -3,7 +3,7 @@
 // congelado e auditoria sem texto livre. A DEVOLUCAO automática (RN-CX-14) e o dinheiro "recebido" com data (RN-CX-01) dependem da API-21.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { subscribe } from "../src/realtime/hub";
+import { publishToStore, subscribe } from "../src/realtime/hub";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
 describe("API-27 — caixa: regras do servidor", () => {
@@ -331,32 +331,172 @@ describe("API-27 — caixa: regras do servidor", () => {
     expect((await app.inject({ method: "POST", url: "/api/cashier/open", headers: { cookie: staff }, payload: { openingBalanceCents: 0 } })).statusCode).toBe(201);
   });
 
-  it("CA-CX-28: o STAFF que fecha com diferença ACIMA da tolerância avisa o painel do dono (id do caixa, papel e valor; nunca o motivo); R$ 5,00 exatos não avisa; fechamento do OWNER não avisa", async () => {
+  it("CA-CX-28: o STAFF que fecha com diferença ACIMA da tolerância avisa SÓ o OWNER conectado, e o corpo do evento tem APENAS o id do caixa (sem valor, papel nem motivo); R$ 5,00 exatos não avisa; fechamento do OWNER não avisa", async () => {
     const ctx = await setup(-1);
     const staff = await staffCookie(ctx);
     const abrir = (cookie: string) => app.inject({ method: "POST", url: "/api/cashier/open", headers: { cookie }, payload: { openingBalanceCents: 10000 } });
-    const eventos = () => ws.filter((m) => m.includes("cashier.difference_over_tolerance")).map((m) => JSON.parse(m));
-    const ws: string[] = [];
-    subscribe(ctx.storeId, { readyState: 1, OPEN: 1, send: (m: string) => ws.push(m), on: vi.fn() } as never);
-    // 500 exatos (STAFF): não avisa
+    // um socket falso por tipo de conexão da loja: painel do OWNER, painel do STAFF e print-client (DEVICE)
+    const conectar = (role: "OWNER" | "STAFF" | "DEVICE") => {
+      const recebido: string[] = [];
+      subscribe(ctx.storeId, { readyState: 1, OPEN: 1, send: (m: string) => recebido.push(m), on: vi.fn() } as never, role);
+      return recebido;
+    };
+    const donoWs = conectar("OWNER");
+    const staffWs = conectar("STAFF");
+    const impressoraWs = conectar("DEVICE");
+    const eventos = (ws: string[]) => ws.filter((m) => m.includes("cashier.difference_over_tolerance")).map((m) => JSON.parse(m));
+    // 500 exatos (STAFF): não avisa ninguém
     await abrir(staff);
     expect((await close(staff, { closingBalanceCents: 9500 })).statusCode).toBe(200);
-    expect(eventos()).toEqual([]);
-    // 501 (STAFF): avisa com id, papel e valor, sem motivo
+    expect(eventos(donoWs)).toEqual([]);
+    // 501 (STAFF): só o OWNER recebe; o corpo é SÓ { type, sessionId }
     await abrir(staff);
     const segredo = "Motivo Sigiloso do funcionario";
     const r = await close(staff, { closingBalanceCents: 9499, reason: "OUTRO", reasonText: segredo });
     expect(r.statusCode, r.body).toBe(200);
-    expect(eventos()).toEqual([{ type: "cashier.difference_over_tolerance", sessionId: json(r).session.id, role: "STAFF", differenceCents: -501 }]);
-    expect(JSON.stringify(ws)).not.toContain("Sigiloso");
+    expect(eventos(donoWs)).toEqual([{ type: "cashier.difference_over_tolerance", sessionId: json(r).session.id }]);
+    expect(JSON.stringify(donoWs)).not.toMatch(/Sigiloso|501|differenceCents|STAFF/);
+    // o STAFF conectado e o print-client NÃO recebem nem o sinal
+    expect(staffWs.filter((m) => m.includes("difference_over_tolerance"))).toEqual([]);
+    expect(impressoraWs.filter((m) => m.includes("difference_over_tolerance"))).toEqual([]);
+    // mesmo publicado pelo canal geral da loja, o tipo de dono continua só para o OWNER (o filtro vive no hub, não em quem publica)
+    publishToStore(ctx.storeId, { type: "cashier.difference_over_tolerance", sessionId: "outro-caixa" });
+    expect(eventos(donoWs).map((e) => e.sessionId)).toEqual([json(r).session.id, "outro-caixa"]);
+    expect(eventos(staffWs)).toEqual([]);
+    expect(eventos(impressoraWs)).toEqual([]);
+    donoWs.splice(0, donoWs.length, ...donoWs.filter((m) => !m.includes("outro-caixa"))); // volta ao estado anterior para as contagens abaixo
+    // eventos comuns continuam indo a TODOS (OWNER, STAFF e impressora)
+    publishToStore(ctx.storeId, { type: "print.available" });
+    for (const ws of [donoWs, staffWs, impressoraWs]) expect(ws.filter((m) => m.includes("print.available"))).toHaveLength(1);
     // OWNER com diferença grande: não avisa (o dono já sabe)
     await abrir(ctx.owner);
     expect((await close(ctx.owner, { closingBalanceCents: 1000, reason: "NAO_SEI" })).statusCode).toBe(200);
-    expect(eventos()).toHaveLength(1);
+    expect(eventos(donoWs)).toHaveLength(1);
     // STAFF fecha certo (diferença 0): não avisa
     await abrir(staff);
     expect((await close(staff, { closingBalanceCents: 10000 })).statusCode).toBe(200);
-    expect(eventos()).toHaveLength(1);
+    expect(eventos(donoWs)).toHaveLength(1);
+  });
+
+  it("CA-CX-28 pelos WebSockets REAIS (painel do OWNER, painel do STAFF e print-client): o papel entra no canal; só o OWNER recebe o evento; o evento comum chega aos três", async () => {
+    const ctx = await setup(-1);
+    const staff = await staffCookie(ctx);
+    const donoWs = await app.injectWS("/ws/panel", { headers: { cookie: ctx.owner } });
+    const staffWs = await app.injectWS("/ws/panel", { headers: { cookie: staff } });
+    // o print-client conecta de verdade pela chave da impressora
+    const chave = json(await app.inject({ method: "POST", url: "/api/device-tokens", headers: { cookie: ctx.owner }, payload: { label: "Balcao" } })).token.token as string;
+    const impressoraWs = await app.injectWS("/ws/device", { headers: { authorization: `Bearer ${chave}` } });
+    try {
+      const donoRecebeu: string[] = [];
+      const staffRecebeu: string[] = [];
+      const impressoraRecebeu: string[] = [];
+      donoWs.on("message", (m) => donoRecebeu.push(String(m)));
+      staffWs.on("message", (m) => staffRecebeu.push(String(m)));
+      impressoraWs.on("message", (m) => impressoraRecebeu.push(String(m)));
+      expect((await app.inject({ method: "POST", url: "/api/cashier/open", headers: { cookie: staff }, payload: { openingBalanceCents: 10000 } })).statusCode).toBe(201);
+      const r = await close(staff, { closingBalanceCents: 9000, reason: "NAO_SEI" });
+      expect(r.statusCode, r.body).toBe(200);
+      publishToStore(ctx.storeId, { type: "print.available" });
+      await vi.waitFor(() => expect(donoRecebeu.some((m) => m.includes("print.available"))).toBe(true), { timeout: 5000, interval: 50 });
+      await vi.waitFor(() => expect(staffRecebeu.some((m) => m.includes("print.available"))).toBe(true), { timeout: 5000, interval: 50 });
+      await vi.waitFor(() => expect(impressoraRecebeu.some((m) => m.includes("print.available"))).toBe(true), { timeout: 5000, interval: 50 });
+      expect(donoRecebeu.filter((m) => m.includes("difference_over_tolerance")).map((m) => JSON.parse(m))).toEqual([{ type: "cashier.difference_over_tolerance", sessionId: json(r).session.id }]);
+      expect(staffRecebeu.filter((m) => m.includes("difference_over_tolerance"))).toEqual([]);
+      expect(impressoraRecebeu.filter((m) => m.includes("difference_over_tolerance"))).toEqual([]); // a impressora nunca recebe evento de dono
+    } finally {
+      donoWs.terminate();
+      staffWs.terminate();
+      impressoraWs.terminate();
+    }
+  });
+
+  it("R2: a auditoria é ESTRITA e DENTRO da transação: se o registro falhar (gatilho no banco), abrir, movimentar, fechar e mudar o limite viram 503 AUDIT_UNAVAILABLE e NADA do dado fica", async () => {
+    const ctx = await setup(-1);
+    const dono = await prisma.user.findFirstOrThrow({ where: { storeId: ctx.storeId, role: "OWNER" }, select: { id: true } });
+    const abrir = (payload: Record<string, unknown> = { openingBalanceCents: 10000 }) => app.inject({ method: "POST", url: "/api/cashier/open", headers: { cookie: ctx.owner }, payload });
+    const limite = () => prisma.store.findUniqueOrThrow({ where: { id: ctx.storeId }, select: { cashStaffWithdrawalLimitCents: true } });
+    // o banco recusa a gravação de QUALQUER auditoria `cashier.*` desta loja
+    await prisma.$executeRawUnsafe(`CREATE OR REPLACE FUNCTION test_block_cashier_audit() RETURNS trigger AS $$ BEGIN IF NEW."storeId" = '${ctx.storeId}' AND NEW."action" LIKE 'cashier.%' THEN RAISE EXCEPTION 'auditoria indisponivel (teste)'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql`);
+    await prisma.$executeRawUnsafe(`CREATE TRIGGER test_block_cashier_audit BEFORE INSERT ON "AuditLog" FOR EACH ROW EXECUTE FUNCTION test_block_cashier_audit()`);
+    const falhas: Array<[number, string]> = [];
+    try {
+      // abrir: o caixa NÃO fica aberto
+      const o = await abrir();
+      falhas.push([o.statusCode, json(o).code]);
+      expect(await prisma.cashSession.count({ where: { storeId: ctx.storeId } })).toBe(0);
+      // limite: o valor NÃO muda
+      const l = await app.inject({ method: "PUT", url: "/api/cashier/staff-withdrawal-limit", headers: { cookie: ctx.owner }, payload: { limitCents: 7000 } });
+      falhas.push([l.statusCode, json(l).code]);
+      expect((await limite()).cashStaffWithdrawalLimitCents).toBe(0);
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS test_block_cashier_audit ON "AuditLog"`);
+    }
+    // com a auditoria de volta, abre; depois bloqueia de novo para movimentar e fechar
+    expect((await abrir()).statusCode).toBe(201);
+    await prisma.$executeRawUnsafe(`CREATE TRIGGER test_block_cashier_audit BEFORE INSERT ON "AuditLog" FOR EACH ROW EXECUTE FUNCTION test_block_cashier_audit()`);
+    try {
+      const m = await move(ctx.owner, { type: "SANGRIA", amountCents: 1000, reason: "DESPESA_LOJA" });
+      falhas.push([m.statusCode, json(m).code]);
+      expect(await movementsCount(ctx.storeId)).toBe(0); // a sangria NÃO existe sem rastro
+      const c = await close(ctx.owner, { closingBalanceCents: 10000 });
+      falhas.push([c.statusCode, json(c).code]);
+      const sessao = await prisma.cashSession.findFirstOrThrow({ where: { storeId: ctx.storeId } });
+      expect(sessao.closedAt).toBeNull(); // o caixa CONTINUA aberto
+      expect(sessao.summarySnapshot).toBeNull();
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS test_block_cashier_audit ON "AuditLog"`);
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS test_block_cashier_audit()`);
+    }
+    expect(falhas).toEqual([[503, "AUDIT_UNAVAILABLE"], [503, "AUDIT_UNAVAILABLE"], [503, "AUDIT_UNAVAILABLE"], [503, "AUDIT_UNAVAILABLE"]]);
+    // sem o defeito do banco tudo volta a funcionar e cada ação deixa EXATAMENTE um rastro, na mesma transação
+    expect((await move(ctx.owner, { type: "SANGRIA", amountCents: 1000, reason: "DESPESA_LOJA" })).statusCode).toBe(201);
+    expect((await close(ctx.owner, { closingBalanceCents: 9000 })).statusCode).toBe(200);
+    expect(dono.id).toBeTruthy();
+    for (const [acao, n] of [["cashier.open", 1], ["cashier.movement", 1], ["cashier.close", 1]] as const) expect((await audits(ctx.storeId, acao)).length, acao).toBe(n);
+  });
+
+  it("M1: NENHUMA resposta do caixa, para nenhum papel, devolve id de usuário nem o retrato interno (aberto, fechado, histórico, resumo, movimentações)", async () => {
+    const ctx = await setup(10000);
+    const staff = await staffCookie(ctx);
+    const donoId = (await prisma.user.findFirstOrThrow({ where: { storeId: ctx.storeId, role: "OWNER" }, select: { id: true } })).id;
+    const staffId = (await prisma.user.findFirstOrThrow({ where: { storeId: ctx.storeId, role: "STAFF" }, select: { id: true } })).id;
+    const corpos: Array<[string, string]> = [];
+    const guardar = (nome: string, r: { body: string }) => corpos.push([nome, r.body]);
+    await move(staff, { type: "SUPRIMENTO", amountCents: 500, reason: "TROCO" });
+    for (const [papel, cookie] of [["OWNER", ctx.owner], ["STAFF", staff]] as const) {
+      guardar(`${papel} current (aberto)`, await app.inject({ method: "GET", url: "/api/cashier/current", headers: { cookie } }));
+    }
+    const fechou = await close(staff, { closingBalanceCents: 10500 });
+    guardar("STAFF close", fechou);
+    const aberto = await app.inject({ method: "POST", url: "/api/cashier/open", headers: { cookie: ctx.owner }, payload: { openingBalanceCents: 0 } });
+    expect(aberto.statusCode).toBe(201);
+    guardar("OWNER open", aberto);
+    const fechado = await prisma.cashSession.findFirstOrThrow({ where: { storeId: ctx.storeId, closedAt: { not: null } } });
+    for (const [papel, cookie] of [["OWNER", ctx.owner], ["STAFF", staff]] as const) {
+      guardar(`${papel} sessions`, await app.inject({ method: "GET", url: "/api/cashier/sessions", headers: { cookie } }));
+      guardar(`${papel} summary (fechado)`, await app.inject({ method: "GET", url: `/api/cashier/sessions/${fechado.id}/summary`, headers: { cookie } }));
+    }
+    guardar("OWNER movimentacao", await move(ctx.owner, { type: "SUPRIMENTO", amountCents: 100, reason: "TROCO" }));
+    for (const [nome, corpo] of corpos) {
+      for (const proibido of [donoId, staffId, "openedByUserId", "closedByUserId", "createdByUserId", "summarySnapshot"]) expect(corpo, `${nome}: ${proibido}`).not.toContain(proibido);
+    }
+    // o PAPEL e a HORA continuam (é o que a tela mostra)
+    expect(json(fechou).session.closedByRole).toBe("STAFF");
+    expect(json(fechou).session.closedAt).toBeTruthy();
+  });
+
+  it("M2: abertura e valor contado têm teto de R$ 1.000.000,00 (100.000.000 centavos, RN-CX-12); o teto exato vale e 1 centavo a mais é 400; a prévia respeita o mesmo teto", async () => {
+    const ctx = await setup(-1);
+    const abrir = (v: number) => app.inject({ method: "POST", url: "/api/cashier/open", headers: { cookie: ctx.owner }, payload: { openingBalanceCents: v } });
+    expect((await abrir(100_000_001)).statusCode).toBe(400);
+    expect(await prisma.cashSession.count({ where: { storeId: ctx.storeId } })).toBe(0);
+    expect((await abrir(100_000_000)).statusCode).toBe(201);
+    expect((await preview(ctx.owner, "100000001")).statusCode).toBe(400);
+    expect((await preview(ctx.owner, "100000000")).statusCode).toBe(200);
+    const alto = await close(ctx.owner, { closingBalanceCents: 100_000_001, reason: "NAO_SEI" });
+    expect(alto.statusCode).toBe(400);
+    expect((await prisma.cashSession.findFirstOrThrow({ where: { storeId: ctx.storeId } })).closedAt).toBeNull();
+    expect((await close(ctx.owner, { closingBalanceCents: 100_000_000 })).statusCode).toBe(200);
   });
 
   it("auditoria do fechamento: esperado, contado, diferença, código do motivo e papel; nunca o texto livre", async () => {
