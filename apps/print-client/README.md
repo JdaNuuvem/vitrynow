@@ -102,6 +102,18 @@ O app só executa o instalador se **todas** as regras valerem; qualquer falha de
   reservado do Windows; tamanho ≤ 200 MB; SHA-256 e tamanho conferidos **antes** de executar e **de novo** pelo handle aberto
   (`FileShare.Read`) no instante do `Process.Start`. Baixa para `%LOCALAPPDATA%\MeuCardapioPrintClient\updates\`.
 
+**A atualização nunca instala sozinha (PC-13).** O app verifica e baixa em segundo plano (ao abrir e pelo menu "Verificar atualizações"; não há verificação periódica),
+confere assinatura e SHA-256 e só então **avisa** (balão + item "Instalar atualização X..." no menu do ícone). O instalador só roda depois do "sim" do lojista, numa pergunta que mostra a
+versão e o início do SHA-256 já conferidos; o arquivo é **reverificado pelo mesmo handle aberto** no instante de executar (U1). "Não agora", ou fechar o app, **apaga o instalador baixado**
+(nada executável fica esperando em disco; a próxima verificação baixa de novo, uma vez). `minVersion` (versão obrigatória) **só avisa com texto mais forte e oferece**: continua pedindo confirmação.
+Instalar só "fora do expediente" não foi feito (o app não conhece o horário da loja): a confirmação do lojista cobre o horário de pico.
+
+**Chave de release com senha (PC-13).** `new-update-key.ps1` grava a chave privada **cifrada** (`.updkey`, formato versionado `MCUK` v1: PBKDF2-HMAC-SHA256 com 600 000 iterações, AES-256-CBC e
+HMAC-SHA256 conferido **antes** de decifrar; senha mínima de 12 caracteres). A senha é pedida **por prompt seguro, duas vezes**; não existe parâmetro de senha em texto nem variável de ambiente, e sem
+console o script **falha** (não grava texto puro em silêncio). `-NoPassword` grava XML puro com aviso (escolha consciente). `sign-update.ps1` pede a senha, decifra só em memória, reverifica a assinatura e
+solta a chave (limite honesto: o XML decifrado é uma string do .NET, que o PowerShell não consegue apagar da memória; buffers de bytes e chaves derivadas são zerados). **Perdeu a senha = perdeu a chave.**
+Teste: `.	ools	est-keyfile.ps1` (22 checagens: ida e volta, senha errada, adulteração, truncado, senha curta, não sobrescreve, sem console, release assinado aceito pelo código do app).
+
 Publicar um release (**só o Claudio**, na máquina dele; a chave privada fica fora do repositório e o script recusa caminho dentro dele):
 
 ```powershell

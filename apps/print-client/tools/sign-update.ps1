@@ -12,9 +12,11 @@ param(
     [int]$ValidDays = 60,                                # janela do manifesto; vencido => o app diz "nao consegui confirmar"
     [string]$MinVersion = "",                            # abaixo dela o app avisa que a atualizacao e obrigatoria
     [string[]]$RevokeKeys = @(),                         # SO a reserva (k2) revoga chaves anteriores (ex.: -RevokeKeys k1)
+    [Security.SecureString]$PasswordSecure,              # so para testes (objeto em memoria); a senha NUNCA vai na linha de comando
     [switch]$SkipVersionCheck                            # so se o instalador nao carrega a versao no recurso de versao do .exe
 )
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "keyfile.ps1")
 $verRx = '^\d{1,5}(\.\d{1,5}){1,3}$'
 if ($Version -notmatch $verRx) { throw "Versao invalida: $Version (use 1.2.3)" }
 if ($MinVersion -and $MinVersion -notmatch $verRx) { throw "MinVersion invalida: $MinVersion" }
@@ -50,7 +52,14 @@ $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($json)
 $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider
 $rsa.PersistKeyInCsp = $false
 try {
-    $rsa.FromXmlString([IO.File]::ReadAllText($PrivateKeyFile))
+    # Chave cifrada (.updkey, PC-13): pede a senha por prompt seguro e decifra so em memoria. Chave em texto puro (.xml antigo) ainda abre.
+    $keyXml = $null
+    if (Test-KeyFileProtected $PrivateKeyFile) {
+        $pw = if ($PasswordSecure) { $PasswordSecure } else { Read-Host -AsSecureString "Senha da chave de release" }
+        $keyXml = Unprotect-KeyXml ([IO.File]::ReadAllBytes($PrivateKeyFile)) $pw
+    } else { $keyXml = [IO.File]::ReadAllText($PrivateKeyFile) }
+    $rsa.FromXmlString($keyXml)
+    $keyXml = $null   # a chave ja esta no objeto RSA; solta a string (o .NET nao permite apagar o conteudo da memoria)
     if ($rsa.KeySize -lt 3072) { throw "Chave de $($rsa.KeySize) bits: o app exige 3072 ou mais." }
     $oid = [Security.Cryptography.CryptoConfig]::MapNameToOID("SHA256")
     $raw = $rsa.SignData($bytes, $oid)
@@ -58,7 +67,7 @@ try {
     $pubOnly = New-Object System.Security.Cryptography.RSACryptoServiceProvider; $pubOnly.PersistKeyInCsp = $false
     try { $pubOnly.FromXmlString($rsa.ToXmlString($false)); if (-not $pubOnly.VerifyData($bytes, $oid, $raw)) { throw "A assinatura gerada nao confere com a chave publica." } } finally { $pubOnly.Dispose() }
     $sig = [Convert]::ToBase64String($raw)
-} finally { $rsa.Dispose() }
+} finally { $rsa.Dispose(); [GC]::Collect() }
 [IO.File]::WriteAllBytes((Join-Path $OutDir "latest.json"), $bytes)
 [IO.File]::WriteAllText((Join-Path $OutDir "latest.json.sig"), $sig, [Text.Encoding]::ASCII)
 Write-Host "Release $Version (chave $KeyId, valido ate $until) pronto em $OutDir : latest.json, latest.json.sig, $($inst.Name)" -ForegroundColor Green

@@ -51,7 +51,17 @@ namespace MeuCardapio.PrintClient.Services
         public static string StatePath => Path.Combine(AppSettings.BaseDirectory, "update-state.json");
 
         static int _running;
+        static readonly object _pendingLock = new object();
+        static UpdateResult _pending;
 
+        // Atualização já baixada e VERIFICADA, esperando o lojista aceitar (PC-13: nunca instala sozinha, porque o
+        // instalador fecha o app no meio do expediente e pode interromper a impressão no horário de pico).
+        public static UpdateResult Pending { get { lock (_pendingLock) return _pending; } }
+
+        // Avisa a tela: há atualização pronta (Required = versão mínima: texto mais forte, mas ainda pede confirmação).
+        public static event Action<UpdateResult> UpdateReady;
+
+        // Só verifica e prepara (baixa e confere hash/assinatura). NÃO executa nada.
         public static void CheckForUpdate()
         {
             // Duas verificações ao mesmo tempo (início + menu) usariam a mesma pasta: só uma roda.
@@ -63,15 +73,46 @@ namespace MeuCardapio.PrintClient.Services
                 if (r.Outcome == UpdateOutcome.Rejected) Logger.Error("Atualização recusada: " + r.Message);
                 else Logger.Info("Atualização: " + r.Outcome + " — " + r.Message);
                 StatusChanged?.Invoke(r.Message);
-                if (r.Outcome != UpdateOutcome.Ready) return;
-
-                // Reverifica o arquivo FINAL (tamanho + SHA-256 do manifesto assinado) imediatamente antes
-                // de executar e o mantém aberto (FileShare.Read: ninguém grava nem apaga) enquanto o
-                // instalador inicia. Fecha a janela entre Evaluate e o Process.Start (parecer U1).
-                TryLaunch(r, path => Process.Start(path), msg => StatusChanged?.Invoke(msg));
+                if (Stage(r)) UpdateReady?.Invoke(r);
             }
             finally { System.Threading.Interlocked.Exchange(ref _running, 0); }
         }
+
+        // Guarda o resultado como "pronto para instalar" se for Ready (a versão mais nova substitui a anterior).
+        public static bool Stage(UpdateResult r)
+        {
+            if (r == null || r.Outcome != UpdateOutcome.Ready) return false;
+            lock (_pendingLock)
+            {
+                if (_pending != null && UpdateVerifier.CompareVersions(_pending.Version, r.Version) > 0) return false;
+                _pending = r;
+            }
+            return true;
+        }
+
+        // Chamado SÓ depois do "sim" do lojista. Reverifica o arquivo (tamanho + SHA-256 do manifesto assinado) pelo handle
+        // aberto e só então inicia o instalador (parecer U1). Devolve se iniciou; a pendência sai ao iniciar.
+        public static bool InstallPending(Action<string> start, Action<string> status)
+        {
+            UpdateResult r;
+            lock (_pendingLock) r = _pending;
+            if (r == null) { status?.Invoke("Nenhuma atualização pronta para instalar."); return false; }
+            bool started = TryLaunch(r, start, status);
+            if (started) lock (_pendingLock) { if (ReferenceEquals(_pending, r)) _pending = null; }
+            return started;
+        }
+
+        // "Não agora" ou app fechando: o instalador verificado NÃO fica esperando em disco (parecer Nightingale). A próxima
+        // abertura ou "Verificar atualizações" baixa e confere de novo, uma vez (não há verificação periódica nem laço).
+        public static void DiscardPending()
+        {
+            UpdateResult r;
+            lock (_pendingLock) { r = _pending; _pending = null; }
+            if (r != null) TryDelete(r.InstallerPath);
+        }
+
+        // Para os testes.
+        internal static void ClearPending() { lock (_pendingLock) _pending = null; }
 
         // Toda a decisão, sem executar nada (testável com transporte falso e relógio injetado).
         public static UpdateResult Evaluate(string baseUrl, string currentVersion, IList<TrustedKey> keys,

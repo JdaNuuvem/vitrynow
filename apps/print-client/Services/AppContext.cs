@@ -59,6 +59,7 @@ namespace MeuCardapio.PrintClient.Services
 
         public static void Shutdown()
         {
+            try { Updater.DiscardPending(); } catch { }
             try { Device?.Dispose(); } catch { }
             try { Audio?.Dispose(); } catch { }
         }
