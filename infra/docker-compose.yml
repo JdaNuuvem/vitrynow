@@ -21,10 +21,15 @@ services:
     logging: *default-logging
     security_opt:
       - no-new-privileges:true
+    # Fuso do servidor FIXO em UTC (garantia): as colunas TIMESTAMP(3) do Prisma não têm fuso e o PrintJob (API-12)
+    # usa CURRENT_TIMESTAMP AT TIME ZONE 'UTC'. Mudar isto sem migrar os dados desloca todas as datas gravadas.
+    command: ["postgres", "-c", "timezone=UTC", "-c", "log_timezone=UTC"]
     environment:
       POSTGRES_USER: meucardapio
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
       POSTGRES_DB: meucardapio
+      TZ: UTC
+      PGTZ: UTC
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

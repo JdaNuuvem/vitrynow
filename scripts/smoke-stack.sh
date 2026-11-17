@@ -116,6 +116,14 @@ done
 if [ "$got429" = 1 ]; then check ok "14 logins, cada um com X-Forwarded-For diferente, bateram no limite (429): cabeçalho forjado não burla o rate limit"
 else check fail "nenhum 429 em 14 logins com XFF forjado: o limite pode ser burlado (B04)"; fi
 
+echo "== 6c Postgres em UTC (colunas TIMESTAMP sem fuso; API-12 usa AT TIME ZONE 'UTC')"
+tz="$("${DC[@]}" exec -T postgres psql -U meucardapio -d meucardapio -At -c "show timezone" | tr -d '\r')"
+ltz="$("${DC[@]}" exec -T postgres psql -U meucardapio -d meucardapio -At -c "show log_timezone" | tr -d '\r')"
+same="$("${DC[@]}" exec -T postgres psql -U meucardapio -d meucardapio -At -c "select (localtimestamp(0) = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::timestamp(0))" | tr -d '\r')"
+{ [ "$tz" = UTC ] || [ "$tz" = Etc/UTC ]; } && check ok "timezone do servidor = $tz" || check fail "timezone do servidor = '$tz' (esperado UTC)"
+{ [ "$ltz" = UTC ] || [ "$ltz" = Etc/UTC ]; } && check ok "log_timezone = $ltz" || check fail "log_timezone = '$ltz' (esperado UTC)"
+[ "$same" = t ] && check ok "hora local do banco == CURRENT_TIMESTAMP AT TIME ZONE 'UTC' (sem deslocamento)" || check fail "hora local do banco difere de UTC"
+
 echo "== 7 backup verificado"
 for i in $(seq 1 30); do [ -s "$ROOT/infra/backups/LAST_OK" ] && break; sleep 2; done
 f="$(ls -1 "$ROOT"/infra/backups/*.dump 2>/dev/null | tail -1)"
