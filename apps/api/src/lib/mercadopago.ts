@@ -50,9 +50,11 @@ export async function cancelPayment(providerPaymentId: string) {
 
 // Estorna um pagamento já aprovado (reembolso total). Mercado Pago devolve o PIX pro
 // pagador automaticamente quando o estorno é aceito.
-export async function refundPayment(providerPaymentId: string) {
+// idempotencyKey deterministica (ex. "refund-<payment.id>"): repetir a chamada depois de uma queda
+// devolve o mesmo resultado em vez de falhar com "ja estornado".
+export async function refundPayment(providerPaymentId: string, idempotencyKey?: string) {
   const refund = new PaymentRefund(client());
-  await refund.total({ payment_id: providerPaymentId });
+  await refund.total({ payment_id: providerPaymentId, ...(idempotencyKey ? { requestOptions: { idempotencyKey } } : {}) });
 }
 
 // Confere o header x-signature do webhook (ts=...,v1=<hmac>) contra MP_WEBHOOK_SECRET.
