@@ -78,6 +78,7 @@ namespace MeuCardapio.PrintClient
             ReclaimedBySameOwner();
             BadJobDoesNotBlockQueue();
             TestJobWithTicket();
+            CoordinatorWarnings();
             LegacyUnchanged();
             ModeFollowsServer();
         }
@@ -704,6 +705,80 @@ namespace MeuCardapio.PrintClient
             }
             finally { Clean(dir); }
         }
+
+        // PC-26 (pedido do Deming/Atlas, mutantes T4/T8/V3/V4 do PC-23): o PrintCoordinator GRAVA as linhas de AVISO no log, com o texto de que o alerta
+        // de operacao e o runbook dependem, e NAO as grava para aviso de cancelamento nem tiquete de teste.
+        static void CoordinatorWarnings()
+        {
+            var dir = Tmp();
+            var captured = new List<string>();
+            Logger.Sink = m => { lock (captured) captured.Add(m); };
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo"))
+                    {
+                        int seq = 0;
+                        Func<PrintableOrder, string[]> run = o =>
+                        {
+                            o.OrderId = "w-" + (++seq);
+                            lock (captured) captured.Clear();
+                            rig.Coordinator.Handle(o);
+                            lock (captured) return captured.Where(l => l.Contains("AVISO")).ToArray();
+                        };
+                        Func<string, PrintableOrder> fromJson = j => Newtonsoft.Json.JsonConvert.DeserializeObject<PrintableOrder>(j);
+                        const string items = "\"items\":[{\"productName\":\"A\",\"quantity\":2,\"unitPriceCents\":2500}]";
+
+                        // 1) servidor diz "nada a cobrar" mas o total e diferente de 0
+                        var conflict = Order("x", "7301"); conflict.TotalCents = 5000; conflict.NothingToCharge = true;
+                        var l1 = run(conflict);
+                        Check("log: servidor true com total R$ 50 grava o AVISO 'o servidor disse nada a cobrar mas o total nao chegou...' com o numero do pedido", l1.Length == 1 && l1[0].StartsWith("INFO AVISO: pedido #7301: o servidor disse 'nada a cobrar' mas o total nao chegou presente e igual a zero") && l1[0].Contains("impresso pela regra normal (cobra)"));
+                        // 2) servidor true e total AUSENTE
+                        var absent = fromJson("{\"orderId\":\"z\",\"code\":\"7302\",\"type\":\"BALCAO\",\"nothingToCharge\":true," + items + "}");
+                        var l2 = run(absent);
+                        Check("log: servidor true com total AUSENTE grava o mesmo AVISO de conflito", l2.Length == 1 && l2[0].Contains("pedido #7302") && l2[0].Contains("o servidor disse 'nada a cobrar'"));
+                        // 3) valor que nao e booleano
+                        var invalid = fromJson("{\"orderId\":\"z\",\"code\":\"7303\",\"type\":\"BALCAO\",\"nothingToCharge\":\"lixo\",\"totalCents\":5000," + items + "}");
+                        var l3 = run(invalid);
+                        Check("log: nothingToCharge nao booleano grava o AVISO 'o campo nothingToCharge chegou com valor que nao e booleano'", l3.Length == 1 && l3[0].Contains("pedido #7303") && l3[0].Contains("o campo nothingToCharge chegou com valor que nao e booleano") && l3[0].Contains("impresso pela regra normal (cobra)"));
+                        // 4) tiquete sem itens e total zero
+                        var empty = new PrintableOrder { OrderId = "e", Code = "7304", Type = "BALCAO", TotalCents = 0, Items = new List<PrintableOrderItem>() };
+                        var l4 = run(empty);
+                        Check("log: tiquete sem itens e total zero grava o AVISO 'sem itens e com total zero; impresso como SEM COBRANCA'", l4.Length == 1 && l4[0].Contains("pedido #7304 sem itens e com total zero; impresso como SEM COBRANCA"));
+
+                        // 5) aviso de cancelamento e tiquete de teste NUNCA gravam essas linhas (mesmo com o campo incoerente)
+                        var cancelConflict = SelfTestPrint.CancelFromApi(); cancelConflict.TotalCents = 5000; cancelConflict.NothingToCharge = true;
+                        Check("log: AVISO DE CANCELAMENTO com nothingToCharge=true e total R$ 50 NAO grava aviso", run(cancelConflict).Length == 0);
+                        var cancelInvalid = fromJson("{\"orderId\":\"c\",\"code\":\"7305\",\"type\":\"BALCAO\",\"cancelNotice\":true,\"nothingToCharge\":\"lixo\",\"totalCents\":0,\"items\":[]}");
+                        Check("log: AVISO DE CANCELAMENTO com nothingToCharge corrompido NAO grava aviso", run(cancelInvalid).Length == 0);
+                        var cancelEmpty = SelfTestPrint.CancelFromApi();
+                        Check("log: AVISO DE CANCELAMENTO (total 0 e sem itens, como a API manda) NAO grava o aviso de 'sem itens'", run(cancelEmpty).Length == 0);
+                        var testConflict = SelfTestPrint.TestFromClient(); testConflict.NothingToCharge = true; testConflict.TotalCents = 5000;
+                        Check("log: TIQUETE DE TESTE com nothingToCharge=true e total R$ 50 NAO grava aviso", run(testConflict).Length == 0);
+                        var testInvalid = SelfTestPrint.TestFromClient(); testInvalid.NothingToChargeRaw = new Newtonsoft.Json.Linq.JValue("lixo");
+                        Check("log: TIQUETE DE TESTE com nothingToCharge corrompido NAO grava aviso", run(testInvalid).Length == 0);
+                        var testEmpty = SelfTestPrint.TestFromClient();
+                        Check("log: TIQUETE DE TESTE (total 0 e sem itens) NAO grava o aviso de 'sem itens'", run(testEmpty).Length == 0);
+
+                        // 6) pedidos normais nao gravam nada
+                        var normal = Order("n", "7306");
+                        var zeroOk = ZeroTotalForLog();
+                        var serverYes = ZeroTotalForLog(); serverYes.NothingToCharge = true;
+                        var serverNo = ZeroTotalForLog(); serverNo.NothingToCharge = false;
+                        Check("log: pedido normal e pedidos de total zero coerentes (campo ausente, true, false) NAO gravam aviso", run(normal).Length == 0 && run(zeroOk).Length == 0 && run(serverYes).Length == 0 && run(serverNo).Length == 0);
+                        // 7) as linhas de aviso nao levam dado do cliente nem valores (so o numero do pedido)
+                        var pii = Order("p", "7307"); pii.CustomerName = "Fulana Segredo"; pii.CustomerPhone = "(11) 98888-7777"; pii.Address = "Rua Reservada 1"; pii.TotalCents = 5000; pii.NothingToCharge = true;
+                        var l7 = run(pii);
+                        Check("log: a linha de aviso NAO leva nome, telefone, endereco nem valores", l7.Length == 1 && !l7[0].Contains("Fulana") && !l7[0].Contains("98888") && !l7[0].Contains("Reservada") && !l7[0].Contains("5000") && !l7[0].Contains("50,00"));
+                    }
+                }
+            }
+            finally { Logger.Sink = null; Clean(dir); }
+        }
+
+        static PrintableOrder ZeroTotalForLog() { return SelfTestPrint.ZeroTotal(); }
 
         // 12) UsePrintJobs desligado (padrao): o cliente continua no /pending e nunca chama o claim
         static void LegacyUnchanged()
