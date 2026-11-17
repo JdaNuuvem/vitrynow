@@ -164,6 +164,12 @@ export const LOG_MAX_DEPTH = 8;
 export const LOG_MAX_STRING = 2000;
 const LOG_MAX_KEYS = 100;
 const LOG_MAX_ITEMS = 50;
+// SEC-33d: teto TOTAL de objetos/arrays visitados por chamada de log (100 chaves × 8 níveis seriam milhões de nós: medido pelo Deming, 20 chaves × 5 níveis = 5,7 s e 9 MB
+// no laço de eventos). Passou do teto, o resto vira um marcador.
+export const LOG_MAX_NODES = 2000;
+// ... e de ENTRADAS (chaves de objeto + itens de lista) por chamada: 2.000 objetos de 100 chaves ainda seriam uma linha de log de megabytes.
+export const LOG_MAX_ENTRIES = 5000;
+type Walk = { seen: WeakSet<object>; nodes: number; entries: number };
 const SECRET_KEY = /token|secret|passw|passwd|pwd|senha|authoriz|cookie|api[-_]?key|bearer|credential|signature|jwt|session/i;
 // SEC-33 (ST-78): nomes curtos só por IGUALDADE (por trecho pegariam `author`, `spin`, `hotp`). `code` NÃO entra como chave: é o código do pedido e
 // o código de erro em quase todo log; o `code`/`state` do OAuth vai na query e é apagado do TEXTO (QUERY_OAUTH abaixo) e da URL (`redactLogUrl`).
@@ -172,8 +178,12 @@ const isSecretKey = (key: string) => SECRET_KEY.test(key) || SECRET_KEY_EXACT.te
 // segredo dentro de texto, em passes separados (a ordem importa):
 //  1) linha de cabeçalho inteira: `Authorization: Digest …`, `Cookie: a=b; c=d`, `Set-Cookie: …` (vai até o fim da linha)
 const HEADER_LINE = /\b(proxy-authorization|authorization|set-cookie|cookie)(\s*:\s*)[^\r\n]+/gi;
-//  2) `nome=valor` / `"nome":"valor"` com valor entre aspas (aceita espaço dentro) ou sem aspas
-const NAMED_VALUE = /\b((?:access_token|refresh_token|client_secret|id_token|api[-_]?key|password|passwd|pwd|senha|authorization|x-order-token|x-mfa-challenge|x-admin-token)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|(?:(?:bearer|basic|digest)\s+)?[^\s"'&,}]+)/gi;
+//  1b) senha SEM aspas e com espaço (`password=ab cd ef`): vai até o fim da linha ou do parâmetro (`&`, `,`, `;`, `}`); redige a mais de propósito (SEC-33d)
+const PASSWORD_UNQUOTED = /\b((?:password|passwd|pwd|senha)\s*[:=]\s*)([^\s"'\r\n&,};][^\r\n&,};"']*)/gi;
+//  2) `nome=valor` / `"nome":"valor"` com valor entre aspas (aceita espaço e aspas ESCAPADAS dentro) ou sem aspas; inclui `token=`, `secret=` e `"cookie":"…"` soltos em texto
+const NAMED_VALUE = /\b((?:access_token|refresh_token|client_secret|id_token|api[-_]?key|password|passwd|pwd|senha|token|secret|cookie|set-cookie|authorization|x-order-token|x-mfa-challenge|x-admin-token)["']?\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|(?:(?:bearer|basic|digest)\s+)?[^\s"'&,}]+)/gi;
+//  2b) credencial na URL (`postgres://usuario:SENHA@host`): é o que um erro de conexão do banco coloca em texto (SEC-33d)
+const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]{1,20}:\/\/[^\/\s:@]*:)[^@\s\/]+(@)/gi;
 //  3) esquema solto (`Bearer abc`), JWT puro (três partes em base64url, a 1ª começa com `eyJ`), `?code=`/`&state=` do OAuth
 const SCHEME = /\b(bearer|basic)\s+[A-Za-z0-9._~+\/=-]{6,}/gi;
 const JWT = /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/g;
@@ -185,6 +195,8 @@ export function scrubText(text: string): string {
   const cut = text.length > LOG_MAX_STRING ? `${text.slice(0, LOG_MAX_STRING)}…[cortado]` : text;
   return cut
     .replace(HEADER_LINE, (_match, name: string, colon: string) => `${name}${colon}[redigido]`)
+    .replace(URL_CREDENTIALS, (_match, head: string, at: string) => `${head}[redigido]${at}`)
+    .replace(PASSWORD_UNQUOTED, (_match, prefix: string) => `${prefix}[redigido]`)
     .replace(NAMED_VALUE, (_match, prefix: string, value: string) => {
       const quote = value.startsWith('"') ? '"' : value.startsWith("'") ? "'" : "";
       return `${prefix}${quote}[redigido]${quote}`;
@@ -206,7 +218,7 @@ function isSecretEntry(key: string, value: unknown): boolean {
 // lança viram um marcador, nunca uma exceção para quem chamou `log.info(...)`.
 const UNREADABLE = "[ilegível]";
 
-function sanitize(value: unknown, depth: number, seen: WeakSet<object>): unknown {
+function sanitize(value: unknown, depth: number, walk: Walk): unknown {
   if (value === null || value === undefined) return value;
   if (typeof value === "string") return scrubText(value);
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return value;
@@ -217,14 +229,19 @@ function sanitize(value: unknown, depth: number, seen: WeakSet<object>): unknown
     if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return "[binário]";
     if (depth >= LOG_MAX_DEPTH) return "[profundo demais]";
     const object = value as Record<string, unknown>;
-    if (seen.has(object)) return "[circular]";
-    seen.add(object);
+    if (walk.seen.has(object)) return "[circular]";
+    if ((walk.nodes += 1) > LOG_MAX_NODES) return "[omitido: objeto grande demais]";
+    walk.seen.add(object);
     try {
-      if (Array.isArray(value)) return value.slice(0, LOG_MAX_ITEMS).map((item) => sanitize(item, depth + 1, seen));
+      if (Array.isArray(value)) {
+        const allowed = Math.max(0, Math.min(LOG_MAX_ITEMS, LOG_MAX_ENTRIES - walk.entries));
+        walk.entries += allowed;
+        return value.slice(0, allowed).map((item) => sanitize(item, depth + 1, walk));
+      }
       const out: Record<string, unknown> = {};
       let count = 0;
       for (const key of Object.keys(object)) {
-        if (count >= LOG_MAX_KEYS) {
+        if (count >= LOG_MAX_KEYS || (walk.entries += 1) > LOG_MAX_ENTRIES) {
           out["[…]"] = "chaves omitidas";
           break;
         }
@@ -236,11 +253,11 @@ function sanitize(value: unknown, depth: number, seen: WeakSet<object>): unknown
           out[key] = UNREADABLE; // getter que lança: o nome fica, o valor não
           continue;
         }
-        out[key] = isSecretEntry(key, child) ? "[redigido]" : sanitize(child, depth + 1, seen);
+        out[key] = isSecretEntry(key, child) ? "[redigido]" : sanitize(child, depth + 1, walk);
       }
       return out;
     } finally {
-      seen.delete(object); // só ciclo de verdade é "circular": o mesmo objeto em dois ramos irmãos é logado nos dois
+      walk.seen.delete(object); // só ciclo de verdade é "circular": o mesmo objeto em dois ramos irmãos é logado nos dois
     }
   } catch {
     return UNREADABLE;
@@ -250,7 +267,7 @@ function sanitize(value: unknown, depth: number, seen: WeakSet<object>): unknown
 export function sanitizeLogObject(obj: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   try {
-    const seen = new WeakSet<object>();
+    const walk: Walk = { seen: new WeakSet<object>(), nodes: 0, entries: 0 };
     for (const key of Object.keys(obj)) {
       let value: unknown;
       try {
@@ -260,7 +277,7 @@ export function sanitizeLogObject(obj: Record<string, unknown>): Record<string, 
         continue;
       }
       if (SERIALIZED_KEYS.has(key)) out[key] = value; // o serializador da chave (req/res/err) cuida; não percorrer o objeto da requisição
-      else out[key] = isSecretEntry(key, value) ? "[redigido]" : sanitize(value, 0, seen);
+      else out[key] = isSecretEntry(key, value) ? "[redigido]" : sanitize(value, 0, walk);
     }
   } catch {
     out.logSanitizeFailed = true; // falha inesperada ao percorrer: o que já foi limpo sai, e o log segue
