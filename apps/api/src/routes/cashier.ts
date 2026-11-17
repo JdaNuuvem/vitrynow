@@ -5,6 +5,7 @@ import { logAudit } from "../lib/audit";
 import { computeCashSummary } from "../lib/cashier";
 import { CASH_TOLERANCE_CENTS, closePreview, evaluateClose, validateMovementReason } from "../lib/cashRules";
 import { findOwnedOrNotFound } from "../lib/tenant";
+import { publishToStore } from "../realtime/hub";
 import { CodedError, useDomainErrors } from "../shared/errors";
 
 const STALE_AFTER_HOURS = 20;
@@ -39,16 +40,19 @@ const movementView = (m: SessionWithMovements["movements"][number]) => ({
 });
 const sessionView = (s: SessionWithMovements) => ({ ...s, movements: s.movements.map(movementView) });
 
-// Histórico: a diferença e o motivo de cada fechamento são do OWNER (RN-CX-22); o STAFF vê o resumo do turno, não a diferença.
+// Caixa FECHADO (histórico e resumo): o OWNER vê tudo (esperado, contado, diferença, motivo); o STAFF recebe SÓ abertura, fechamento, horários e
+// papel de quem fechou, SEM mascaramento parcial (RN-CX-22, CA-CX-27): nada de esperado, contado, diferença, motivo, observações nem retrato.
+// (O STAFF que acabou de fechar vê o resultado na resposta do PRÓPRIO fechamento, que usa `ownClosedView`.)
 const closedSessionView = (s: Prisma.CashSessionGetPayload<object>, role: "OWNER" | "STAFF") => {
   const { summarySnapshot: _snapshot, ...rest } = s;
   void _snapshot;
   if (role === "OWNER") return rest;
-  const { differenceCents: _d, closeReason: _r, closeReasonText: _t, ...masked } = rest;
-  void _d;
-  void _r;
-  void _t;
-  return masked;
+  return { id: s.id, openedAt: s.openedAt, closedAt: s.closedAt, openingBalanceCents: s.openingBalanceCents, closedByRole: s.closedByRole };
+};
+const ownClosedView = (s: Prisma.CashSessionGetPayload<object>) => {
+  const { summarySnapshot: _snapshot, ...rest } = s;
+  void _snapshot;
+  return rest;
 };
 
 // Caixa do balcão: abertura/fechamento + movimentações manuais (suprimento/sangria).
@@ -95,7 +99,9 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
       "caixa não encontrado",
     );
     if (!session) return;
-    // Caixa FECHADO: devolve o retrato CONGELADO no fechamento (não recalcula; pedidos cancelados depois não mudam o histórico, RN-CX-15).
+    // Caixa FECHADO: o OWNER recebe o retrato CONGELADO no fechamento (não recalcula; pedidos cancelados depois não mudam o histórico,
+    // RN-CX-15); o STAFF recebe só abertura, fechamento, horários e papel, sem resumo nem movimentações (CA-CX-27).
+    if (session.closedAt && role !== "OWNER") return { session: closedSessionView(session, role), summary: null };
     const summary = session.closedAt && session.summarySnapshot ? session.summarySnapshot : await summarizeSession(prisma, storeId, session);
     const view = session.closedAt ? { ...closedSessionView(session, role), movements: session.movements.map(movementView) } : sessionView(session);
     return { session: view, summary };
@@ -182,7 +188,13 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
       targetId: result.updated.id,
       metadata: { closingBalanceCents: counted, expectedCents: result.summary.expectedCents, differenceCents: result.differenceCents, reason: result.verdict.reason, role },
     });
-    return { session: closedSessionView(result.updated, role), summary: result.summary, differenceCents: result.differenceCents, toleranceCents: CASH_TOLERANCE_CENTS };
+    // CA-CX-28: o STAFF fechou com diferença ACIMA da tolerância (exato R$ 5,00 não conta) ⇒ o painel do dono é avisado com o id do caixa, o
+    // papel e o valor; nunca o texto do motivo.
+    if (role === "STAFF" && Math.abs(result.differenceCents) > CASH_TOLERANCE_CENTS) {
+      publishToStore(storeId, { type: "cashier.difference_over_tolerance", sessionId: result.updated.id, role, differenceCents: result.differenceCents });
+    }
+    // Quem acabou de fechar recebe o RESULTADO na resposta do próprio fechamento (Sobrou/Faltou/Fechou certo), mesmo sendo STAFF.
+    return { session: ownClosedView(result.updated), summary: result.summary, differenceCents: result.differenceCents, toleranceCents: CASH_TOLERANCE_CENTS };
   });
 
   app.post("/api/cashier/movements", { preHandler: app.requirePanelAuth }, async (request, reply) => {
@@ -203,9 +215,12 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
         if (!rows[0] || rows[0].closedAt) throw new CodedError(409, "CASH_REQUIRED", "não há caixa aberto");
         if (type === "SANGRIA") {
           if (role !== "OWNER") {
+            // Limite ÚNICO do dono, aplicado à SOMA das sangrias do STAFF neste caixa (turno) incluindo a que chega, dentro da trava da linha do
+            // caixa: um lançamento maior que o limite já é recusado; a sangria do OWNER não conta; um caixa novo recomeça a soma (RN-CX-09).
             const store = await tx.store.findUniqueOrThrow({ where: { id: storeId }, select: { cashStaffWithdrawalLimitCents: true } });
-            if (amountCents > store.cashStaffWithdrawalLimitCents) {
-              throw new CodedError(403, "FORBIDDEN_ROLE", "Peça ao dono para autorizar esta sangria.");
+            const used = await tx.cashMovement.aggregate({ where: { cashSessionId: open.id, type: "SANGRIA", createdByRole: "STAFF" }, _sum: { amountCents: true } });
+            if ((used._sum.amountCents ?? 0) + amountCents > store.cashStaffWithdrawalLimitCents) {
+              throw new CodedError(403, "CASH_WITHDRAWAL_NEEDS_OWNER", "Peça ao dono para autorizar essa sangria.");
             }
           }
           const session = await tx.cashSession.findUniqueOrThrow({ where: { id: open.id }, include: { movements: true } });

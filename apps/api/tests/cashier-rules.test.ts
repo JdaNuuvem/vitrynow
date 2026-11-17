@@ -3,6 +3,7 @@
 // congelado e auditoria sem texto livre. A DEVOLUCAO automática (RN-CX-14) e o dinheiro "recebido" com data (RN-CX-01) dependem da API-21.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { subscribe } from "../src/realtime/hub";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
 describe("API-27 — caixa: regras do servidor", () => {
@@ -200,25 +201,60 @@ describe("API-27 — caixa: regras do servidor", () => {
     expect((await current(ctx.owner)).expectedBalanceCents).toBe(4000);
   });
 
-  it("RN-CX-09: limite de sangria do STAFF (padrão 0 ⇒ toda sangria exige o dono; 403 FORBIDDEN_ROLE); só o OWNER muda o limite, com auditoria; suprimento do STAFF sempre vale", async () => {
-    const ctx = await setup(10000);
+  it("RN-CX-09 / CA-CX-26: UM limite do dono sobre a SOMA das sangrias do STAFF no caixa (turno); padrão 0 ⇒ 403 CASH_WITHDRAWAL_NEEDS_OWNER; só o OWNER muda o limite (auditado); a sangria do OWNER não conta; caixa novo recomeça a soma", async () => {
+    const ctx = await setup(100000);
     const staff = await staffCookie(ctx);
-    const antes = await move(staff, { type: "SANGRIA", amountCents: 100, reason: "DESPESA_LOJA" });
-    expect([antes.statusCode, json(antes).code]).toEqual([403, "FORBIDDEN_ROLE"]);
+    const sangria = (cookie: string, amountCents: number) => move(cookie, { type: "SANGRIA", amountCents, reason: "DESPESA_LOJA" });
+    const antes = await sangria(staff, 100);
+    expect([antes.statusCode, json(antes).code]).toEqual([403, "CASH_WITHDRAWAL_NEEDS_OWNER"]);
     expect(await movementsCount(ctx.storeId)).toBe(0);
-    expect((await move(staff, { type: "SUPRIMENTO", amountCents: 1000, reason: "TROCO" })).statusCode).toBe(201);
+    expect((await move(staff, { type: "SUPRIMENTO", amountCents: 1000, reason: "TROCO" })).statusCode).toBe(201); // suprimento do STAFF sempre vale
     // o STAFF não muda o limite
     expect((await app.inject({ method: "PUT", url: "/api/cashier/staff-withdrawal-limit", headers: { cookie: staff }, payload: { limitCents: 999999 } })).statusCode).toBe(403);
     expect((await app.inject({ method: "PUT", url: "/api/cashier/staff-withdrawal-limit", headers: { cookie: ctx.owner }, payload: { limitCents: -1 } })).statusCode).toBe(400);
-    const set = await app.inject({ method: "PUT", url: "/api/cashier/staff-withdrawal-limit", headers: { cookie: ctx.owner }, payload: { limitCents: 3000 } });
-    expect([set.statusCode, json(set).staffWithdrawalLimitCents]).toEqual([200, 3000]);
-    await vi.waitFor(async () => expect((await audits(ctx.storeId, "cashier.staff_limit_change"))[0]?.metadata).toEqual({ fromCents: 0, toCents: 3000 }), { timeout: 10_000, interval: 100 });
-    expect((await move(staff, { type: "SANGRIA", amountCents: 3000, reason: "DESPESA_LOJA" })).statusCode).toBe(201); // no limite
-    expect((await move(staff, { type: "SANGRIA", amountCents: 3001, reason: "DESPESA_LOJA" })).statusCode).toBe(403); // acima
-    expect((await move(ctx.owner, { type: "SANGRIA", amountCents: 3001, reason: "DESPESA_LOJA" })).statusCode).toBe(201); // o dono não tem o limite
-    // o STAFF vê o resumo mas não o valor do limite da loja
+    const set = await app.inject({ method: "PUT", url: "/api/cashier/staff-withdrawal-limit", headers: { cookie: ctx.owner }, payload: { limitCents: 5000 } });
+    expect([set.statusCode, json(set).staffWithdrawalLimitCents]).toEqual([200, 5000]);
+    await vi.waitFor(async () => expect((await audits(ctx.storeId, "cashier.staff_limit_change"))[0]?.metadata).toEqual({ fromCents: 0, toCents: 5000 }), { timeout: 10_000, interval: 100 });
+    // CA-CX-26: limite R$ 50,00: 1ª de R$ 30,00 passa; 2ª de R$ 30,00 (soma 60,00) é recusada; 2ª de R$ 20,00 (soma 50,00) passa; mais 1 centavo, não
+    expect((await sangria(staff, 3000)).statusCode).toBe(201);
+    const segunda = await sangria(staff, 3000);
+    expect([segunda.statusCode, json(segunda).code]).toEqual([403, "CASH_WITHDRAWAL_NEEDS_OWNER"]);
+    expect((await sangria(staff, 2000)).statusCode).toBe(201);
+    expect((await sangria(staff, 1)).statusCode).toBe(403);
+    // a sangria do OWNER nunca conta no limite da equipe (e o dono não tem limite)
+    expect((await sangria(ctx.owner, 20000)).statusCode).toBe(201);
+    expect((await sangria(staff, 1)).statusCode).toBe(403);
+    // um lançamento MAIOR que o limite já é recusado (não existe segundo limite "por lançamento")
+    // caixa novo: a soma recomeça
+    expect((await close(ctx.owner, { closingBalanceCents: 0, reason: "NAO_SEI" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: "/api/cashier/open", headers: { cookie: ctx.owner }, payload: { openingBalanceCents: 100000 } })).statusCode).toBe(201);
+    // a sangria do OWNER feita ANTES não consome o limite do STAFF: o STAFF ainda leva os R$ 50,00 inteiros
+    expect((await sangria(ctx.owner, 4000)).statusCode).toBe(201);
+    expect((await sangria(staff, 5000)).statusCode).toBe(201);
+    expect((await sangria(staff, 1)).statusCode).toBe(403);
+    // o STAFF vê o saldo e as regras do turno que opera, mas não o valor do limite da loja
     expect((await current(staff)).staffWithdrawalLimitCents).toBeUndefined();
-    expect((await current(ctx.owner)).staffWithdrawalLimitCents).toBe(3000);
+    expect((await current(ctx.owner)).staffWithdrawalLimitCents).toBe(5000);
+  });
+
+  it("CA-CX-26 com a loja inteira: 8 sangrias do STAFF de R$ 50,00 com limite de R$ 50,00 ⇒ só a 1ª passa; uma ÚNICA sangria acima do limite já é recusada", async () => {
+    const ctx = await setup(100000);
+    const staff = await staffCookie(ctx);
+    await app.inject({ method: "PUT", url: "/api/cashier/staff-withdrawal-limit", headers: { cookie: ctx.owner }, payload: { limitCents: 5000 } });
+    const acima = await move(staff, { type: "SANGRIA", amountCents: 5001, reason: "DESPESA_LOJA" });
+    expect([acima.statusCode, json(acima).code]).toEqual([403, "CASH_WITHDRAWAL_NEEDS_OWNER"]);
+    const codigos: number[] = [];
+    for (let i = 0; i < 8; i++) codigos.push((await move(staff, { type: "SANGRIA", amountCents: 5000, reason: "DESPESA_LOJA" })).statusCode);
+    expect(codigos).toEqual([201, 403, 403, 403, 403, 403, 403, 403]);
+  });
+
+  it("CONCORRÊNCIA do limite do STAFF: 4 sangrias do STAFF SIMULTÂNEAS de R$ 30,00 com limite de R$ 50,00 ⇒ exatamente 1 passa (soma sob a trava do caixa)", async () => {
+    const ctx = await setup(100000);
+    const staff = await staffCookie(ctx);
+    await app.inject({ method: "PUT", url: "/api/cashier/staff-withdrawal-limit", headers: { cookie: ctx.owner }, payload: { limitCents: 5000 } });
+    const rs = await Promise.all(Array.from({ length: 4 }, () => move(staff, { type: "SANGRIA", amountCents: 3000, reason: "DESPESA_LOJA" })));
+    expect(rs.map((r) => r.statusCode).sort()).toEqual([201, 403, 403, 403]);
+    expect(await movementsCount(ctx.storeId)).toBe(1);
   });
 
   it("RN-CX-18: dois fechamentos simultâneos ⇒ UM fechamento (200) e o outro 409 CASH_ALREADY_CLOSED; fechar de novo ⇒ 404 CASH_REQUIRED; movimentar sem caixa aberto ⇒ 409 CASH_REQUIRED", async () => {
@@ -270,20 +306,57 @@ describe("API-27 — caixa: regras do servidor", () => {
     expect(Object.keys(depois.session)).not.toContain("summarySnapshot"); // o retrato é interno
   });
 
-  it("RN-CX-22: o histórico de fechamentos com diferença e motivo é do OWNER; o STAFF abre, movimenta (no limite) e fecha, mas não vê a diferença nem o motivo", async () => {
+  it("RN-CX-22 / CA-CX-27: o OWNER vê esperado, contado, diferença e motivo do caixa FECHADO; o STAFF no histórico e no resumo recebe SÓ abertura, fechamento, horários e papel (sem esperado, contado, diferença, motivo, observações nem summary); quem fecha vê o resultado na PRÓPRIA resposta", async () => {
     const ctx = await setup(10000);
     const staff = await staffCookie(ctx);
-    const fechou = await close(staff, { closingBalanceCents: 8000, reason: "NAO_SEI" }); // o STAFF fecha
+    const fechou = await close(staff, { closingBalanceCents: 8000, reason: "NAO_SEI", notes: "faltou dinheiro" }); // o STAFF fecha
     expect(fechou.statusCode, fechou.body).toBe(200);
-    expect(json(fechou).session).not.toHaveProperty("differenceCents"); // a resposta do fechamento também respeita o papel
+    // o resultado na resposta do PRÓPRIO fechamento (o STAFF precisa dele; a prévia já devolve a diferença; mascarar só aqui seria parcial)
+    expect(json(fechou)).toMatchObject({ differenceCents: -2000, toleranceCents: 500, session: { expectedClosingCents: 10000, closingBalanceCents: 8000, closeReason: "NAO_SEI" } });
+    expect(json(fechou).session).not.toHaveProperty("summarySnapshot");
     const dono = json(await app.inject({ method: "GET", url: "/api/cashier/sessions", headers: { cookie: ctx.owner } })).sessions[0];
-    expect(dono).toMatchObject({ differenceCents: -2000, closeReason: "NAO_SEI", closedByRole: "STAFF" });
+    expect(dono).toMatchObject({ differenceCents: -2000, expectedClosingCents: 10000, closingBalanceCents: 8000, closeReason: "NAO_SEI", closedByRole: "STAFF" });
     const equipe = json(await app.inject({ method: "GET", url: "/api/cashier/sessions", headers: { cookie: staff } })).sessions[0];
-    for (const campo of ["differenceCents", "closeReason", "closeReasonText", "summarySnapshot"]) expect(equipe, campo).not.toHaveProperty(campo);
-    const resumo = json(await app.inject({ method: "GET", url: `/api/cashier/sessions/${dono.id}/summary`, headers: { cookie: staff } }));
-    expect(resumo.session).not.toHaveProperty("differenceCents");
+    expect(Object.keys(equipe).sort()).toEqual(["closedAt", "closedByRole", "id", "openedAt", "openingBalanceCents"]);
+    const resumoEquipe = json(await app.inject({ method: "GET", url: `/api/cashier/sessions/${dono.id}/summary`, headers: { cookie: staff } }));
+    expect(resumoEquipe.summary).toBeNull();
+    expect(Object.keys(resumoEquipe.session).sort()).toEqual(["closedAt", "closedByRole", "id", "openedAt", "openingBalanceCents"]);
+    for (const proibido of ["expectedClosingCents", "closingBalanceCents", "differenceCents", "closeReason", "closingNotes", "summarySnapshot", "faltou"]) {
+      expect(JSON.stringify([equipe, resumoEquipe]), proibido).not.toContain(proibido);
+    }
+    // o dono continua vendo o retrato
+    const resumoDono = json(await app.inject({ method: "GET", url: `/api/cashier/sessions/${dono.id}/summary`, headers: { cookie: ctx.owner } }));
+    expect(resumoDono.summary.expectedCents).toBe(10000);
     // abrir (STAFF) funciona
     expect((await app.inject({ method: "POST", url: "/api/cashier/open", headers: { cookie: staff }, payload: { openingBalanceCents: 0 } })).statusCode).toBe(201);
+  });
+
+  it("CA-CX-28: o STAFF que fecha com diferença ACIMA da tolerância avisa o painel do dono (id do caixa, papel e valor; nunca o motivo); R$ 5,00 exatos não avisa; fechamento do OWNER não avisa", async () => {
+    const ctx = await setup(-1);
+    const staff = await staffCookie(ctx);
+    const abrir = (cookie: string) => app.inject({ method: "POST", url: "/api/cashier/open", headers: { cookie }, payload: { openingBalanceCents: 10000 } });
+    const eventos = () => ws.filter((m) => m.includes("cashier.difference_over_tolerance")).map((m) => JSON.parse(m));
+    const ws: string[] = [];
+    subscribe(ctx.storeId, { readyState: 1, OPEN: 1, send: (m: string) => ws.push(m), on: vi.fn() } as never);
+    // 500 exatos (STAFF): não avisa
+    await abrir(staff);
+    expect((await close(staff, { closingBalanceCents: 9500 })).statusCode).toBe(200);
+    expect(eventos()).toEqual([]);
+    // 501 (STAFF): avisa com id, papel e valor, sem motivo
+    await abrir(staff);
+    const segredo = "Motivo Sigiloso do funcionario";
+    const r = await close(staff, { closingBalanceCents: 9499, reason: "OUTRO", reasonText: segredo });
+    expect(r.statusCode, r.body).toBe(200);
+    expect(eventos()).toEqual([{ type: "cashier.difference_over_tolerance", sessionId: json(r).session.id, role: "STAFF", differenceCents: -501 }]);
+    expect(JSON.stringify(ws)).not.toContain("Sigiloso");
+    // OWNER com diferença grande: não avisa (o dono já sabe)
+    await abrir(ctx.owner);
+    expect((await close(ctx.owner, { closingBalanceCents: 1000, reason: "NAO_SEI" })).statusCode).toBe(200);
+    expect(eventos()).toHaveLength(1);
+    // STAFF fecha certo (diferença 0): não avisa
+    await abrir(staff);
+    expect((await close(staff, { closingBalanceCents: 10000 })).statusCode).toBe(200);
+    expect(eventos()).toHaveLength(1);
   });
 
   it("auditoria do fechamento: esperado, contado, diferença, código do motivo e papel; nunca o texto livre", async () => {
