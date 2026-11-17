@@ -9,6 +9,14 @@ function client() {
   return new Resend(apiKey);
 }
 
+// LGPD (ST-62): nos logs de ERRO o destinatário vai mascarado (primeira letra + domínio); o endereço inteiro só no modo de
+// desenvolvimento, que o desenvolvedor precisa ver.
+export function maskEmail(address: string): string {
+  const at = address.lastIndexOf("@");
+  if (at < 1) return "***";
+  return `${address.slice(0, 1)}***${address.slice(at)}`;
+}
+
 // Só em desenvolvimento/teste o "modo sem chave" pode escrever no log o que seria o conteúdo do e-mail (link de recuperação,
 // código de confirmação): fora disso esse log iria para `docker logs` e para o coletor de logs, e quem lê o log tomaria a
 // conta. NODE_ENV ausente conta como produção (mesma regra da SEC-22). `EMAIL_LOG_LINKS=true` é o aceite explícito para
@@ -42,7 +50,7 @@ export async function sendPasswordResetEmail(input: { to: string; resetUrl: stri
   if (error) {
     // Não derruba o fluxo de forgot-password por isso — a resposta já é genérica
     // (nunca revela se o e-mail existe), só registramos a falha de envio.
-    console.error(`[email] falha ao enviar recuperação de senha para ${input.to}:`, error);
+    console.error(`[email] falha ao enviar recuperação de senha para ${maskEmail(input.to)}:`, error);
   }
 }
 
@@ -64,7 +72,7 @@ export async function sendMfaCodeEmail(input: { to: string; code: string; purpos
       <p>Ele vale por 10 minutos. Se não foi você, ignore este e-mail.</p>
     `,
   });
-  if (error) console.error(`[email] falha ao enviar código de confirmação para ${input.to}:`, error);
+  if (error) console.error(`[email] falha ao enviar código de confirmação para ${maskEmail(input.to)}:`, error);
 }
 
 // SEC-20 / ST-33: aviso ao dono quando a conta recebe muitas tentativas de senha errada (de vários IPs).
@@ -72,7 +80,7 @@ export async function sendMfaCodeEmail(input: { to: string; code: string; purpos
 export async function sendLoginAlertEmail(input: { to: string }) {
   const resend = client();
   if (!resend) {
-    console.warn(`[email] RESEND_API_KEY não configurado — aviso de tentativas de login para ${input.to}`);
+    console.warn(`[email] RESEND_API_KEY não configurado — aviso de tentativas de login para ${mayLogEmailSecrets() ? input.to : maskEmail(input.to)}`);
     return;
   }
   const { error } = await resend.emails.send({
@@ -85,5 +93,5 @@ export async function sendLoginAlertEmail(input: { to: string }) {
       depois de entrar, escolha "Sair de todos os dispositivos".</p>
     `,
   });
-  if (error) console.error(`[email] falha ao enviar aviso de tentativas de login para ${input.to}:`, error);
+  if (error) console.error(`[email] falha ao enviar aviso de tentativas de login para ${maskEmail(input.to)}:`, error);
 }
