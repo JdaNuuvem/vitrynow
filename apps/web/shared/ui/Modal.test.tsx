@@ -157,3 +157,69 @@ describe("Modal: folha que ocupa só o conteúdo (revisão da Da Vinci, W2)", ()
     expect(container.querySelector(".ui-modal")).not.toHaveClass("ui-modal--fit");
   });
 });
+
+// Deming (resíduo do A2): o passo de MFA tem um campo com autoFocus. O React o foca no commit, antes dos efeitos do
+// Modal; o "gatilho" guardado virava o próprio campo (que some ao fechar) e o foco caía no body.
+describe("Modal compartilhado: devolve o foco a quem abriu mesmo com filho com autoFocus", () => {
+  function WithAutoFocus() {
+    const [open, setOpen] = useState(false);
+    return (
+      <div>
+        <button onClick={() => setOpen(true)}>Abrir com campo</button>
+        <Modal open={open} labelledBy="t2" onClose={() => setOpen(false)}>
+          <h2 id="t2">Código</h2>
+          <input aria-label="Código de 6 dígitos" autoFocus />
+          <button onClick={() => setOpen(false)}>Confirmar</button>
+        </Modal>
+      </div>
+    );
+  }
+
+  it("o campo com autoFocus recebe o foco ao abrir", async () => {
+    render(<WithAutoFocus />);
+    await userEvent.click(screen.getByRole("button", { name: "Abrir com campo" }));
+    expect(screen.getByRole("textbox", { name: "Código de 6 dígitos" })).toBeInTheDocument();
+  });
+
+  it("ao fechar, o foco volta ao botão que abriu (não ao body)", async () => {
+    render(<WithAutoFocus />);
+    const opener = screen.getByRole("button", { name: "Abrir com campo" });
+    await userEvent.click(opener);
+    await userEvent.click(screen.getByRole("button", { name: "Confirmar" }));
+    expect(opener).toHaveFocus();
+  });
+
+  it("ao fechar por Esc também", async () => {
+    render(<WithAutoFocus />);
+    const opener = screen.getByRole("button", { name: "Abrir com campo" });
+    await userEvent.click(opener);
+    await userEvent.keyboard("{Escape}");
+    expect(opener).toHaveFocus();
+  });
+
+  it("janela sobre janela (MFA sobre a folha): fechar a de cima devolve o foco ao botão da folha de baixo", async () => {
+    function Stacked() {
+      const [sheet, setSheet] = useState(true);
+      const [mfa, setMfa] = useState(false);
+      return (
+        <div>
+          <Modal open={sheet} labelledBy="s" onClose={() => setSheet(false)}>
+            <h2 id="s">Folha</h2>
+            <button onClick={() => setMfa(true)}>Confirmar estorno</button>
+          </Modal>
+          <Modal open={mfa} labelledBy="m" onClose={() => setMfa(false)}>
+            <h2 id="m">Código</h2>
+            <input aria-label="Código" autoFocus />
+            <button onClick={() => setMfa(false)}>Enviar código</button>
+          </Modal>
+        </div>
+      );
+    }
+    render(<Stacked />);
+    const confirm = screen.getByRole("button", { name: "Confirmar estorno" });
+    await userEvent.click(confirm);
+    await userEvent.click(screen.getByRole("button", { name: "Enviar código" }));
+    expect(confirm).toHaveFocus();
+  });
+});
+

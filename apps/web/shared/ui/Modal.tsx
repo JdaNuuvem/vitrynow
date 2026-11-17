@@ -34,10 +34,20 @@ export function Modal({ open, onClose, labelledBy, width = 480, sheetOnMobile = 
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
+  // Quem abriu (o botão clicado): o foco volta para ele ao fechar, em vez de se perder no topo da página.
+  // Capturado no RENDER em que `open` vira verdadeiro, não no efeito: um filho com `autoFocus` (o campo do código do
+  // MFA) é focado durante o commit, ANTES dos efeitos do pai, e o "gatilho" guardado passava a ser esse campo, que
+  // some ao fechar: o foco ficava no body (Deming, resíduo do A2). A leitura é idempotente; o StrictMode não a repete.
+  const triggerRef = useRef<HTMLElement | null>(null);
+  const wasOpen = useRef(false);
+  if (open && !wasOpen.current) {
+    triggerRef.current = typeof document !== "undefined" && document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  }
+  wasOpen.current = open;
+
   useEffect(() => {
     if (!open) return;
-    // Quem abriu (o botão clicado): o foco volta para ele ao fechar, em vez de se perder no topo da página.
-    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const trigger = triggerRef.current;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     // O resto da página fica inerte enquanto a janela está aberta (nem Tab nem leitor de tela chegam lá).
