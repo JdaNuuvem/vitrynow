@@ -35,6 +35,28 @@ export function disconnectDevice(deviceTokenId: string): void {
   for (const socket of [...set]) socket.close(WS_CLOSE_SESSION_REVOKED, "chave revogada");
 }
 
+// Sockets por sessão (sid): logout de UM aparelho fecha só os sockets daquela sessão (SEC-19 / ST-30).
+const sessionSockets = new Map<string, Set<WebSocket>>();
+
+export function trackSessionSocket(sid: string, socket: WebSocket): void {
+  let set = sessionSockets.get(sid);
+  if (!set) {
+    set = new Set();
+    sessionSockets.set(sid, set);
+  }
+  set.add(socket);
+  socket.on("close", () => {
+    set?.delete(socket);
+    if (set && set.size === 0) sessionSockets.delete(sid);
+  });
+}
+
+export function disconnectSession(sid: string): void {
+  const set = sessionSockets.get(sid);
+  if (!set) return;
+  for (const socket of [...set]) socket.close(WS_CLOSE_SESSION_REVOKED, "sessão encerrada");
+}
+
 export function trackUserSocket(userId: string, socket: WebSocket): void {
   let set = userSockets.get(userId);
   if (!set) {

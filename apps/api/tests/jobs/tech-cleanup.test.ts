@@ -28,7 +28,7 @@ describe("tech.cleanup — lista de permissão (ADR-0011 §4)", () => {
   // Se este teste falhar porque alguém acrescentou uma tabela, a revisão precisa decidir se ela
   // é mesmo técnica (token/desafio expirado) e nunca dado de negócio.
   it("limpa SOMENTE estas tabelas técnicas", () => {
-    expect([...TECH_CLEANUP_ALLOWLIST].sort()).toEqual(["MfaChallenge", "PasswordResetToken"]);
+    expect([...TECH_CLEANUP_ALLOWLIST].sort()).toEqual(["MfaChallenge", "PasswordResetToken", "RevokedSession"]);
   });
 });
 

@@ -5,8 +5,8 @@ import { prisma } from "@meucardapio/db";
 import { loginSchema, registerStoreSchema, forgotPasswordSchema, resetPasswordSchema } from "@meucardapio/shared-types";
 import { sendPasswordResetEmail } from "../lib/email";
 import { newTrialEndsAt } from "../lib/subscription";
-import { SESSION_COOKIE, sessionCookieOptions, signSession } from "../lib/session";
-import { disconnectUser } from "../realtime/hub";
+import { SESSION_COOKIE, revokeSession, sessionCookieOptions, signSession } from "../lib/session";
+import { disconnectSession, disconnectUser } from "../realtime/hub";
 import { hashToken } from "../lib/tokenHash";
 
 const authRoutes: FastifyPluginAsync = async (app) => {
@@ -57,7 +57,21 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true };
   });
 
-  app.post("/auth/logout", async (_request, reply) => {
+  // Sair deste aparelho: o cookie copiado deixa de valer (ST-30) sem derrubar os outros aparelhos do mesmo
+  // usuário. Sem cookie, ou com cookie inválido/vencido, só limpa e responde ok (idempotente).
+  app.post("/auth/logout", async (request, reply) => {
+    const token = request.cookies?.[SESSION_COOKIE];
+    if (token) {
+      try {
+        const payload = await app.jwt.verify<{ sid?: string; exp?: number }>(token);
+        if (typeof payload.sid === "string" && typeof payload.exp === "number") {
+          await revokeSession(payload.sid, payload.exp);
+          disconnectSession(payload.sid);
+        }
+      } catch {
+        // token inválido ou vencido: nada a revogar
+      }
+    }
     reply.clearCookie(SESSION_COOKIE, { path: "/" });
     return { ok: true };
   });

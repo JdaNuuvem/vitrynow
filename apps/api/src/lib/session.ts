@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
+import { prisma } from "@meucardapio/db";
 import type { PanelJwtPayload } from "../plugins/auth";
 import { cookieSecure, sessionAbsoluteSeconds, sessionTtlSeconds } from "./securityConfig";
 
@@ -38,4 +39,10 @@ export function sessionNeedsRenewal(payload: PanelJwtPayload, nowSeconds: number
   const remaining = payload.exp - nowSeconds;
   const absoluteEnd = payload.auth_time + sessionAbsoluteSeconds();
   return remaining < sessionTtlSeconds() / 2 && payload.exp < absoluteEnd;
+}
+
+// SEC-19 / ST-30: encerra UMA sessão (um aparelho) sem derrubar as outras. Vale até o `exp` do token.
+export async function revokeSession(sid: string, exp: number): Promise<void> {
+  const expiresAt = new Date(exp * 1000);
+  await prisma.revokedSession.upsert({ where: { sid }, create: { sid, expiresAt }, update: { expiresAt } });
 }
