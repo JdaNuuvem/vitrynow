@@ -21,6 +21,8 @@ export default defineConfig({
       DATABASE_URL: testDatabaseUrl,
       JWT_SECRET: "test-secret-nao-use-em-producao",
       MP_WEBHOOK_SECRET: "test-webhook-secret",
+      // SEC-34: a faixa de hash de senha mede "metade do threadpool"; fixo aqui (e no compose) para o tamanho não variar de máquina para máquina.
+      UV_THREADPOOL_SIZE: "4",
     },
     fileParallelism: false,
     hookTimeout: 30000,
