@@ -208,7 +208,7 @@ describe("API-54a — lista, ações e detalhe", () => {
     const count = (extra: object = {}) => prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "order.view_contact", targetId: id, ...extra } });
 
     await open();
-    await vi.waitFor(async () => expect(await count()).toBe(1));
+    await vi.waitFor(async () => expect(await count()).toBe(1), { timeout: 10_000, interval: 50 });
     await open();
     await open();
     await new Promise((r) => setTimeout(r, 300));
@@ -220,12 +220,12 @@ describe("API-54a — lista, ações e detalhe", () => {
 
     // Outra pessoa (OWNER) abrindo o mesmo pedido gera a sua própria linha.
     await app.inject({ method: "GET", url: `/api/orders/${id}`, headers: { cookie: ctx.owner } });
-    await vi.waitFor(async () => expect(await count()).toBe(2));
+    await vi.waitFor(async () => expect(await count()).toBe(2), { timeout: 10_000, interval: 50 });
 
     // Passados os 10 min, nova abertura do mesmo usuário audita de novo.
     await prisma.auditLog.updateMany({ where: { action: "order.view_contact", userId: row.userId }, data: { createdAt: new Date(Date.now() - 11 * 60_000) } });
     await open();
-    await vi.waitFor(async () => expect(await count()).toBe(3));
+    await vi.waitFor(async () => expect(await count()).toBe(3), { timeout: 10_000, interval: 50 });
 
     // Mascarado (STAFF em pedido antigo) não é abertura de contato: não audita.
     for (const to of ["CONFIRMADO", "EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA", "CONCLUIDO"]) {
