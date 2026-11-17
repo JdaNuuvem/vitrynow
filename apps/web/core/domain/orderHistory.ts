@@ -25,11 +25,11 @@ export type HistoryResponse = {
   rows: HistoryRow[];
   total: number;
   nextCursor: string | null;
-  period: { from: string; to: string };
+  period: { from: string; to: string } | null; // null no filtro ABERTO: ele ignora o período (API-72)
   timezone: string;
 };
 
-// Filtros da Fatia 1: só a situação "Em aberto" e o período. Busca, tipo, pagamento e estorno pendente chegam na Fatia 2.
+// Filtros da Fatia 1: só a situação "Em aberto" (sem período: a API-72 devolve TODO pedido aberto). Busca, tipo, pagamento e estorno pendente chegam na Fatia 2.
 export type HistoryQuery = {
   status?: "ALL" | "ABERTO" | "CONCLUIDO" | "CANCELADO" | "AGUARDANDO_PAGAMENTO" | "PAGAMENTO_EXPIRADO";
   period?: "today" | "yesterday" | "7d" | "30d" | "custom";

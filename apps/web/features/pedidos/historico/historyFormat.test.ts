@@ -1,25 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { customerText, formatWhen, HISTORY_OPEN_DAYS, openPeriodQuery, rowBadges, safePhone, statusChip, typeLabel } from "./historyFormat";
-
-describe("openPeriodQuery: 90 dias cravados, o máximo que a API aceita", () => {
-  const days = (query: { from?: string; to?: string }) => (Date.parse(`${query.to}T00:00:00Z`) - Date.parse(`${query.from}T00:00:00Z`)) / 86_400_000 + 1;
-
-  it("de hoje − 89 até hoje, os dois dias inclusos = 90 dias, no formato AAAA-MM-DD", () => {
-    const query = openPeriodQuery(new Date(2026, 10, 17, 14, 30)); // 17/11/2026
-    expect(query).toEqual({ period: "custom", from: "2026-08-20", to: "2026-11-17" });
-    expect(days(query)).toBe(HISTORY_OPEN_DAYS);
-  });
-
-  it("nunca passa de 90 dias, em qualquer data (virada de mês, de ano e ano bissexto)", () => {
-    for (const now of [new Date(2026, 0, 1), new Date(2026, 2, 1), new Date(2024, 2, 1), new Date(2026, 11, 31, 23, 59), new Date(2026, 9, 25)]) {
-      expect(days(openPeriodQuery(now)), now.toISOString()).toBe(90);
-    }
-  });
-
-  it("não depende da hora do dia (meia-noite e 23:59 dão o mesmo período)", () => {
-    expect(openPeriodQuery(new Date(2026, 5, 10, 0, 0))).toEqual(openPeriodQuery(new Date(2026, 5, 10, 23, 59)));
-  });
-});
+import { customerText, formatWhen, rowBadges, safePhone, statusChip, typeLabel } from "./historyFormat";
 
 describe("statusChip: ícone + texto + tom, nunca o código cru", () => {
   it("aberto mostra o estado de verdade do quadro (Pendente, Em preparo...)", () => {

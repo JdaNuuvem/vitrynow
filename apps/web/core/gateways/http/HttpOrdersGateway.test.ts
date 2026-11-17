@@ -21,10 +21,10 @@ describe("HttpOrdersGateway.history (API-70)", () => {
 
   it("pede GET /api/orders/history com os filtros na query string", async () => {
     const { get, gateway: g } = gateway();
-    await g.history({ status: "ABERTO", period: "custom", from: "2026-08-20", to: "2026-11-17", limit: 25 });
+    await g.history({ status: "CONCLUIDO", period: "custom", from: "2026-08-20", to: "2026-11-17", limit: 25 });
     const url = calledUrl(get);
     expect(url.pathname).toBe("/api/orders/history");
-    expect(Object.fromEntries(url.searchParams)).toEqual({ status: "ABERTO", period: "custom", from: "2026-08-20", to: "2026-11-17", limit: "25" });
+    expect(Object.fromEntries(url.searchParams)).toEqual({ status: "CONCLUIDO", period: "custom", from: "2026-08-20", to: "2026-11-17", limit: "25" });
   });
 
   it("não manda parâmetro vazio nem indefinido", async () => {

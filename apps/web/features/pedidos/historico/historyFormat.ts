@@ -1,24 +1,6 @@
 import { statusLabel, TYPE_LABELS, UNKNOWN_STATUS_LABEL } from "@/core/domain/orderLabels";
-import type { HistoryQuery, HistoryRow } from "@/core/domain/orderHistory";
+import type { HistoryRow } from "@/core/domain/orderHistory";
 import type { OrderType } from "@/core/domain/orders";
-
-// ---- Período da Fatia 1: "Em aberto" olha 90 dias para trás (API-70), para o dono achar o que o teto do kanban escondeu ----
-
-export const HISTORY_OPEN_DAYS = 90;
-
-const pad = (n: number) => String(n).padStart(2, "0");
-const isoDay = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-
-/**
- * `period=custom` com 90 dias CRAVADOS (de hoje − 89 até hoje, os dois dias inclusos): é o máximo que a API aceita (`PERIOD_TOO_LONG`
- * acima disso). As datas valem no fuso da LOJA e o web só conhece o do navegador; como as duas pontas andam juntas, o tamanho do
- * período não muda, no máximo a janela desliza algumas horas. O que nasceu hoje já está sempre no kanban.
- */
-export function openPeriodQuery(now: Date = new Date()): Pick<HistoryQuery, "period" | "from" | "to"> {
-  const to = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const from = new Date(to.getFullYear(), to.getMonth(), to.getDate() - (HISTORY_OPEN_DAYS - 1));
-  return { period: "custom", from: isoDay(from), to: isoDay(to) };
-}
 
 // ---- Linha da lista ----
 

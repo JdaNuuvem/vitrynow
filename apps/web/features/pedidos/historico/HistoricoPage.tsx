@@ -15,7 +15,7 @@ import { detailRefreshKey } from "../detail/detailRefreshKey";
 import { useNow } from "../hooks/useNow";
 import { usePedidos } from "../hooks/usePedidos";
 import { HISTORY_HREF } from "../hiddenOpen";
-import { customerText, formatWhen, openPeriodQuery, rowBadges, statusChip, typeLabel } from "./historyFormat";
+import { customerText, formatWhen, rowBadges, statusChip, typeLabel } from "./historyFormat";
 import { useOrderHistoryList } from "./useOrderHistoryList";
 import "../pedidos.css";
 import "../pedidos-acoes.css";
@@ -27,14 +27,14 @@ type CancelTarget = { order: Order; action: CardAction } | null;
 const RETRY_REFUND_ACTION: CardAction = { to: "CANCELADO", label: "Tentar estorno", kind: "CANCEL", primary: false, requiresReason: false, refund: true, disabledReason: null };
 
 // Textos desta tela. Os marcados (provisório) aguardam o Ogilvy.
-export const HISTORY_EMPTY_TEXT = "Nenhum pedido em aberto nos últimos 90 dias."; // (provisório)
+export const HISTORY_EMPTY_TEXT = "Nenhum pedido em aberto."; // (provisório)
 export const HISTORY_ERROR_TEXT = "Não foi possível carregar o histórico. Verifique sua internet."; // (provisório)
 export const HISTORY_RATE_TEXT = "Muitas buscas em pouco tempo. Aguarde um instante."; // spec 10 §2.3 (CA-HP, anti-abuso)
 export const HISTORY_MORE_ERROR_TEXT = "Não foi possível carregar mais pedidos."; // (provisório)
 
 const countText = (total: number) => (total === 1 ? "1 pedido em aberto" : `${total.toLocaleString("pt-BR")} pedidos em aberto`); // (provisório)
 
-// Histórico de pedidos, Fatia 1 (WEB-44, spec 10 §2): "Em aberto" até 90 dias, para o dono achar os pedidos antigos que o teto do quadro
+// Histórico de pedidos, Fatia 1 (WEB-44, spec 10 §2): "Em aberto" sem limite de data (API-72), para o dono achar os pedidos antigos que o teto do quadro
 // escondeu. Tocar numa linha abre o MESMO detalhe do quadro (WEB-26), com as ações que o servidor permite a cada papel.
 export function HistoricoPage() {
   const p = usePedidos();
@@ -44,8 +44,8 @@ export function HistoricoPage() {
   const searchParams = useSearchParams();
   const selectedId = searchParams.get("pedido");
   const desktop = useMediaQuery("(min-width: 1100px)");
-  // Fixo por visita: o período é calculado uma vez, não a cada renderização (senão a consulta mudaria sozinha à meia-noite).
-  const query = useMemo(() => ({ status: "ABERTO" as const, ...openPeriodQuery() }), []);
+  // "Em aberto" não manda período: a API devolve todo pedido aberto da loja, por mais antigo que seja (API-72).
+  const query = useMemo(() => ({ status: "ABERTO" as const }), []);
   const h = useOrderHistoryList(query);
   const [cancelTarget, setCancelTarget] = useState<CancelTarget>(null);
   // Muda a cada ação concluída aqui: faz o detalhe aberto recarregar (o pedido pode nem estar no quadro).
@@ -135,7 +135,7 @@ export function HistoricoPage() {
 
         {/* Fatia 1: um filtro só, "Em aberto". Não é botão (nada a escolher ainda); busca e demais filtros chegam na Fatia 2. */}
         <p className="historico__filter">
-          <span className="historico__chip">Em aberto</span> últimos 90 dias
+          <span className="historico__chip">Em aberto</span>
         </p>
 
         {p.notice && (

@@ -29,9 +29,9 @@ const row = (id: string, over: Partial<HistoryRow> = {}): HistoryRow => ({
   notPrinted: false,
   ...over,
 });
-const page = (rows: HistoryRow[], total = rows.length, nextCursor: string | null = null) => ok({ rows, total, nextCursor, period: { from: "a", to: "b" }, timezone: "America/Sao_Paulo" });
+const page = (rows: HistoryRow[], total = rows.length, nextCursor: string | null = null) => ok({ rows, total, nextCursor, period: null, timezone: "America/Sao_Paulo" });
 
-const QUERY: HistoryQuery = { status: "ABERTO", period: "custom", from: "2026-08-20", to: "2026-11-17" };
+const QUERY: HistoryQuery = { status: "ABERTO" };
 
 function setup(history: ReturnType<typeof vi.fn>, query: HistoryQuery = QUERY) {
   const services = { orders: { history } } as unknown as PanelServices;
@@ -53,11 +53,11 @@ describe("useOrderHistoryList: carga", () => {
     expect(result.current.hasMore).toBe(false);
   });
 
-  it("pede a situação ABERTO, o período de 90 dias e 25 por página", async () => {
+  it("pede a situação ABERTO SEM período (todo pedido aberto) e 25 por página", async () => {
     const history = vi.fn().mockResolvedValue(page([]));
     setup(history);
     await waitFor(() => expect(history).toHaveBeenCalled());
-    expect(history).toHaveBeenCalledWith({ status: "ABERTO", period: "custom", from: "2026-08-20", to: "2026-11-17", limit: 25 });
+    expect(history).toHaveBeenCalledWith({ status: "ABERTO", limit: 25 });
   });
 
   it("falha na 1ª carga vira 'error' e 'Tentar de novo' busca de novo", async () => {
@@ -162,7 +162,7 @@ describe("useOrderHistoryList: recarga depois de uma ação", () => {
       .mockImplementationOnce(() => new Promise((resolve) => (releaseOld = resolve as typeof releaseOld)))
       .mockResolvedValue(page([row("9")], 1));
     const { result, rerender } = setup(history);
-    rerender({ q: { ...QUERY, to: "2026-11-18" } });
+    rerender({ q: { ...QUERY, type: "BALCAO" } as HistoryQuery });
     await waitFor(() => expect(result.current.rows.map((r) => r.id)).toEqual(["9"]));
     await act(async () => releaseOld(page([row("OLD")], 1)));
     expect(result.current.rows.map((r) => r.id)).toEqual(["9"]);

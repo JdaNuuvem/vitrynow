@@ -107,11 +107,9 @@ beforeEach(() => {
 });
 
 describe("HistoricoPage: consulta e cabeçalho", () => {
-  it("consulta a situação ABERTO com o período de 90 dias", () => {
+  it("consulta a situação ABERTO SEM período: nada de period, from ou to (API-72)", () => {
     render(<HistoricoPage />);
-    expect(lastQuery).toMatchObject({ status: "ABERTO", period: "custom" });
-    const { from, to } = lastQuery as { from: string; to: string };
-    expect((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 + 1).toBe(90);
+    expect(lastQuery).toEqual({ status: "ABERTO" });
   });
 
   it("tem título, link de volta para Pedidos e o filtro 'Em aberto' como informação (não como botão)", () => {
@@ -120,7 +118,7 @@ describe("HistoricoPage: consulta e cabeçalho", () => {
     expect(screen.getByRole("link", { name: /Pedidos/ })).toHaveAttribute("href", "/dashboard/pedidos");
     expect(screen.getByText("Em aberto")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Em aberto" })).not.toBeInTheDocument();
-    expect(screen.getByText(/últimos 90 dias/, { selector: ".historico__filter" })).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/90 dias/); // sem janela de data: o filtro mostra todo pedido aberto
   });
 });
 
