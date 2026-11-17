@@ -83,6 +83,17 @@ services:
       API_INTERNAL_SECRET: ${API_INTERNAL_SECRET:?defina API_INTERNAL_SECRET no .env (32+ caracteres; openssl rand -hex 32)}
       API_INTERNAL_SECRET_PREVIOUS: ${API_INTERNAL_SECRET_PREVIOUS:-}
       JOBS_ENABLED: ${JOBS_ENABLED:-true}   # jobs no processo da API (ADR-0011); false só para depurar
+      # PIX por loja (API-07, ADR-0001): desligado por padrão. As regras CONDICIONAIS (com MP_OAUTH_MODE=real exige chave de cifra
+      # própria, MP_CLIENT_ID/SECRET e PUBLIC_API_URL https) o compose não expressa: ficam em infra/check-env.sh (rode antes de subir) e
+      # a própria API recusa subir fora delas. `fake` só em desenvolvimento.
+      MP_OAUTH_MODE: ${MP_OAUTH_MODE:-off}
+      PAYMENT_ENC_KEY: ${PAYMENT_ENC_KEY:-}
+      PAYMENT_ENC_KEY_ID: ${PAYMENT_ENC_KEY_ID:-v1}
+      PAYMENT_ENC_KEY_PREV: ${PAYMENT_ENC_KEY_PREV:-}
+      PAYMENT_ENC_KEY_PREV_ID: ${PAYMENT_ENC_KEY_PREV_ID:-}
+      MP_CLIENT_ID: ${MP_CLIENT_ID:-}
+      MP_CLIENT_SECRET: ${MP_CLIENT_SECRET:-}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-}
       MP_ACCESS_TOKEN: ${MP_ACCESS_TOKEN:-}
       MP_WEBHOOK_SECRET: ${MP_WEBHOOK_SECRET:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
