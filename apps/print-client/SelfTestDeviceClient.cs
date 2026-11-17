@@ -97,7 +97,7 @@ namespace MeuCardapio.PrintClient
                     Check("cliente real: pedido impresso exatamente 1 vez, mesmo com varios ciclos", Volatile.Read(ref ready) == 1);
                     Check("cliente real: ack que falhou (500) e repetido ate passar, sem reimprimir", acked && api.AckCalls == 3 && Volatile.Read(ref ready) == 1);
                     Check("cliente real: ack fecha o pedido no ledger", led.IsPrinted("A") && led.PendingAcks().Count == 0);
-                    Check("cliente real: Bearer da chave enviado", api.Requests.Any(r => r.Contains("/api/device/orders/pending") && r.EndsWith("auth=Bearer mcd_teste_segredo")));
+                    Check("cliente real: Bearer da chave enviado", api.Has(r => r.Contains("/api/device/orders/pending") && r.EndsWith("auth=Bearer mcd_teste_segredo")));
                 }
             }
         }
@@ -219,7 +219,7 @@ namespace MeuCardapio.PrintClient
                     api.Pending.Add(new[] { "W", "88" });
                     api.SendWs("{\"type\":\"print.available\"}");
                     bool got = WaitFor(() => Volatile.Read(ref ready) == 1, 5000);
-                    Check("ws real: conecta com upgrade e Bearer", connected && api.Requests.Any(r => r.Contains("/ws/device") && r.EndsWith("auth=Bearer mcd_teste_segredo")));
+                    Check("ws real: conecta com upgrade e Bearer", connected && api.Has(r => r.Contains("/ws/device") && r.EndsWith("auth=Bearer mcd_teste_segredo")));
                     Check("ws real: aviso do servidor acorda o ciclo sem esperar o polling", got && api.PendingCalls >= 2);
                 }
             }
