@@ -220,7 +220,7 @@ describe("C5 — estorno × pedido, com barreira de linha", () => {
     const l = await loja();
     const id = await pedidoPago(l, "PRONTO");
     const sent: string[] = [];
-    subscribe(l.store.id, { readyState: 1, OPEN: 1, send: (m: string) => sent.push(m), on: vi.fn() } as never);
+    subscribe(l.store.id, { readyState: 1, OPEN: 1, send: (m: string) => sent.push(m), on: vi.fn() } as never, "OWNER");
     // Durante a chamada ao provedor, algo fora do fluxo normal conclui o pedido (a trava impede isso pelas rotas).
     refundPayment.mockImplementationOnce(async () => {
       await prisma.order.update({ where: { id }, data: { status: "CONCLUIDO" } });

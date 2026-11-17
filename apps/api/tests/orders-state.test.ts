@@ -340,7 +340,7 @@ describe("API-02 — estados do pedido", () => {
     await cancel(ctx.cookie, id, { code: "ITEM_EM_FALTA" });
     const sent: string[] = [];
     const socket = { readyState: 1, OPEN: 1, send: (m: string) => sent.push(m), on: vi.fn() };
-    subscribe(ctx.storeId, socket as never);
+    subscribe(ctx.storeId, socket as never, "OWNER");
 
     const [a, b] = await Promise.all([
       app.inject({ method: "POST", url: `/api/orders/${id}/refund/retry`, headers: { cookie: ctx.cookie } }),

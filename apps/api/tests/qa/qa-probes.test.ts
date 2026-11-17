@@ -233,7 +233,7 @@ describe("QA probes — API", () => {
     const ctx = await setupStore();
     const { providerPaymentId } = await pixOrder(ctx);
     const socket = { readyState: 1, OPEN: 1, send: vi.fn(), on: vi.fn() };
-    subscribe(ctx.storeId, socket as never);
+    subscribe(ctx.storeId, socket as never, "OWNER");
     getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "approved"));
     await webhook(providerPaymentId);
     await webhook(providerPaymentId);
@@ -269,7 +269,7 @@ describe("QA probes — API", () => {
     const ctx = await setupStore();
     const { orderId, providerPaymentId } = await pixOrder(ctx);
     const socket = { readyState: 1, OPEN: 1, send: vi.fn(), on: vi.fn() };
-    subscribe(ctx.storeId, socket as never);
+    subscribe(ctx.storeId, socket as never, "OWNER");
     await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${orderId}/cancel`, headers: orderTokenHeader(orderId) });
     getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "approved"));
     await webhook(providerPaymentId);

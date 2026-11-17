@@ -127,7 +127,7 @@ describe("API-03 — webhook e PIX", () => {
   const orderOf = (id: string) => prisma.order.findUnique({ where: { id }, include: { payment: true } });
   const wsSocket = (storeId: string) => {
     const sent: string[] = [];
-    subscribe(storeId, { readyState: 1, OPEN: 1, send: (m: string) => sent.push(m), on: vi.fn() } as never);
+    subscribe(storeId, { readyState: 1, OPEN: 1, send: (m: string) => sent.push(m), on: vi.fn() } as never, "OWNER");
     return { count: (type: string) => sent.filter((m) => m.includes(type)).length };
   };
 

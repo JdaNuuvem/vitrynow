@@ -89,7 +89,7 @@ describe("API-12 — PrintJob", () => {
   const releaseBackoff = (id: string) => prisma.printJob.update({ where: { id }, data: { availableAt: new Date(Date.now() - 1000) } });
   const sockets = (storeId: string) => {
     const sent: string[] = [];
-    subscribe(storeId, { readyState: 1, OPEN: 1, send: (m: string) => sent.push(m), on: vi.fn() } as never);
+    subscribe(storeId, { readyState: 1, OPEN: 1, send: (m: string) => sent.push(m), on: vi.fn() } as never, "OWNER");
     return (type: string) => sent.filter((m) => JSON.parse(m).type === type);
   };
 
