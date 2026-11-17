@@ -289,6 +289,12 @@ docker exec "$CID" sh -c 'touch /etc/caddy/x 2>/dev/null' && check fail "o Caddy
 docker exec "$CID" sh -c 'touch /data/.w && rm /data/.w && touch /config/.w && rm /config/.w' && check ok "/data (conta ACME) e /config são graváveis pelo usuário sem privilégio" || check fail "o Caddy sem root não consegue gravar em /data ou /config"
 for i in $(seq 1 20); do hs="$(docker inspect -f '{{.State.Health.Status}}' "$CID")"; [ "$hs" = healthy ] && break; sleep 3; done
 [ "$hs" = healthy ] && check ok "healthcheck do Caddy: healthy" || check fail "healthcheck do Caddy: $hs"
+# NG-16 (Deming): o log de acesso do Caddy também gravaria a URL com ?token=. O Caddyfile não tem `log`, então não deve gravar; confere
+# no comportamento: um valor único na query não pode aparecer nos logs do Caddy. (Sem controle positivo: se o Caddy não logasse NADA
+# por outro motivo, o teste também passaria; por isso o texto diz "não registra", não "redige".)
+qtok="smoke-q-$RANDOM$RANDOM$RANDOM"
+curl -s -o /dev/null "http://127.0.0.1:$PORT/health?token=$qtok&code=$qtok"; sleep 2
+[ "$("${DC[@]}" logs caddy 2>&1 | grep -c "$qtok")" = 0 ] && check ok "NG-16: o Caddy não registra a URL com token/code na query (nenhuma linha de acesso nos logs)" || check fail "NG-16: o valor do token apareceu nos logs do Caddy"
 # redes: o banco só existe na rede de dados (interna). Caddy e web não o enxergam; a API sim (controle positivo).
 # Prova por CONEXÃO ao IP do banco (um timeout de DNS não prova nada: o resolvedor do Docker demora a responder nomes que não conhece).
 ares="$("${DC[@]}" exec -T api node -e "require('dns').lookup('postgres',(e,a)=>console.log(e?'ERRO '+e.code:'ok '+a))" 2>&1 | tr -d '\r' | tail -1)"
