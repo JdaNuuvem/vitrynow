@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PixPayment } from "@/core/domain/storefront";
 import { formatCents } from "@/shared/format/money";
 import type { OrderSummary } from "../checkoutForm";
-import { PIX_PAID_REASSURANCE, TRACKING_UNAVAILABLE_MESSAGE } from "../hooks/useOrderFlow";
+import { PIX_EXPIRED_MESSAGE, PIX_PAID_REASSURANCE, PIX_RESUMED_MESSAGE, TRACKING_UNAVAILABLE_MESSAGE } from "../hooks/useOrderFlow";
 import { Sheet } from "./Sheet";
 
 // Conversa com a loja no WhatsApp, só com o código do pedido na mensagem (sem token nem dado do cliente). Sem número
@@ -11,6 +11,8 @@ export function storeChatLink(whatsapp: string | null | undefined, code: string)
   const digits = (whatsapp ?? "").replace(/\D/g, "");
   return digits ? `https://wa.me/${digits}?text=${encodeURIComponent(`Pedido #${code}`)}` : null;
 }
+
+const formatClock = (ms: number) => new Date(ms).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 
 // Telas pós-pedido (spec 09 §10.2): resumo do que foi pedido, "Voltar ao cardápio" como ação
 // principal e o cancelamento numa folha que escreve o efeito (nunca confirm() nativo).
@@ -23,6 +25,8 @@ export function OrderResultScreen({
   paymentFailedMessage,
   cancelError,
   trackingUnavailable = false,
+  resume = "none",
+  pixExpiresAt = null,
   summary = null,
   whatsapp = null,
   onCancel,
@@ -36,6 +40,9 @@ export function OrderResultScreen({
   cancelError: string | null;
   // NG-16: sem acesso ao pedido neste aparelho: sem acompanhar o PIX nem cancelar; o cliente fala com a loja.
   trackingUnavailable?: boolean;
+  // WEB-33b: tela recuperada depois de recarregar (só QR) ou com o PIX vencido.
+  resume?: "none" | "valid" | "expired";
+  pixExpiresAt?: number | null;
   summary?: OrderSummary | null;
   whatsapp?: string | null;
   onCancel: () => void | Promise<void>;
@@ -87,6 +94,27 @@ export function OrderResultScreen({
     );
   }
 
+  if (resume === "expired") {
+    return (
+      <main className="loja__result">
+        <h1 ref={headingRef} tabIndex={-1} className="loja__result-title">
+          {`Pedido #${code}`}
+        </h1>
+        <p role="status" className="loja__result-text">
+          {PIX_EXPIRED_MESSAGE}
+        </p>
+        {chatLink && (
+          <a href={chatLink} target="_blank" rel="noreferrer" className="loja__empty-menu-link">
+            Falar com a loja no WhatsApp
+          </a>
+        )}
+        <button type="button" onClick={onBack} className="loja__cta">
+          Voltar ao cardápio
+        </button>
+      </main>
+    );
+  }
+
   if (pixData && paymentFailedMessage) {
     return (
       <main className="loja__result">
@@ -104,8 +132,9 @@ export function OrderResultScreen({
   }
 
   const awaitingPix = Boolean(pixData) && !paymentConfirmed;
+  const resumedValid = resume === "valid" && awaitingPix;
   const watchingPix = awaitingPix && !trackingUnavailable;
-  const title = paymentConfirmed ? "Pagamento confirmado" : awaitingPix ? `Pedido #${code}` : "Pedido enviado";
+  const title = paymentConfirmed ? "Pagamento confirmado" : resumedValid ? `Pedido #${code} enviado` : awaitingPix ? `Pedido #${code}` : "Pedido enviado";
 
   return (
     <main className="loja__result">
@@ -125,7 +154,19 @@ export function OrderResultScreen({
         )}
       </div>
 
-      {trackingUnavailable && !paymentConfirmed && (
+      {resumedValid && (
+        <div role="status" className="loja__result-notice">
+          <p className="loja__result-text">{PIX_RESUMED_MESSAGE}</p>
+          {pixExpiresAt !== null && <p className="loja__result-hint">Vale até {formatClock(pixExpiresAt)}</p>}
+          {chatLink && (
+            <a href={chatLink} target="_blank" rel="noreferrer" className="loja__empty-menu-link">
+              Falar com a loja no WhatsApp
+            </a>
+          )}
+        </div>
+      )}
+
+      {trackingUnavailable && !paymentConfirmed && !resumedValid && (
         <div role="status" className="loja__result-notice">
           <p className="loja__result-text">{TRACKING_UNAVAILABLE_MESSAGE}</p>
           {pixData && <p className="loja__result-text">{PIX_PAID_REASSURANCE}</p>}
@@ -140,7 +181,7 @@ export function OrderResultScreen({
       {awaitingPix && pixData && (
         <>
           <p className="loja__result-text">Escaneie o QR Code ou copie o código para pagar via PIX:</p>
-          <p className="loja__result-warning">Não feche nem atualize esta página até pagar.</p>
+          {!resumedValid && <p className="loja__result-warning">Não feche esta página antes de pagar.</p>}
           {pixData.pixQrCode && (
             <>
               <button type="button" onClick={copyPixCode} className="loja__cta">

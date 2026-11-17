@@ -186,9 +186,9 @@ describe("OrderResultScreen: espera do PIX (aviso e copiar)", () => {
   const pix = { pixQrCode: "000201PIXCODE", pixQrCodeBase64: "QUJD" };
   afterEach(() => vi.unstubAllGlobals());
 
-  it("mostra 'Não feche nem atualize esta página até pagar.' ACIMA do QR e o botão 'Copiar código PIX'", () => {
+  it("mostra 'Não feche esta página antes de pagar.' ACIMA do QR e o botão 'Copiar código PIX'", () => {
     setup({ pixData: pix });
-    const warning = screen.getByText("Não feche nem atualize esta página até pagar.");
+    const warning = screen.getByText("Não feche esta página antes de pagar.");
     const qr = screen.getByAltText("QR Code PIX");
     expect(warning.compareDocumentPosition(qr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole("button", { name: "Copiar código PIX" })).toBeInTheDocument();
@@ -213,13 +213,13 @@ describe("OrderResultScreen: espera do PIX (aviso e copiar)", () => {
 
   it("sem acompanhamento (sem token) o aviso e o botão de copiar continuam: o cliente ainda precisa pagar", () => {
     setup({ pixData: pix, trackingUnavailable: true });
-    expect(screen.getByText("Não feche nem atualize esta página até pagar.")).toBeInTheDocument();
+    expect(screen.getByText("Não feche esta página antes de pagar.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copiar código PIX" })).toBeInTheDocument();
   });
 
   it("pedido sem PIX não mostra aviso nem copiar", () => {
     setup();
-    expect(screen.queryByText(/Não feche nem atualize/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Não feche esta página/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Copiar código PIX" })).not.toBeInTheDocument();
   });
 });
@@ -240,5 +240,53 @@ describe("OrderResultScreen: a frase 'a loja recebe o pedido' só em pedido PIX 
   it("com acompanhamento normal, nenhuma das duas frases aparece", () => {
     setup({ pixData: { pixQrCode: "000201...", pixQrCodeBase64: null } });
     expect(screen.queryByText(/já pagou/)).not.toBeInTheDocument();
+  });
+});
+
+
+describe("OrderResultScreen: tela recuperada depois de recarregar (WEB-33b, UI-V-20/21)", () => {
+  const pix = { pixQrCode: "000201PIXCODE", pixQrCodeBase64: "QUJD" };
+  const expires = Date.parse("2026-11-17T14:50:00");
+
+  it("PIX válido: 'Pedido #0123 enviado', mesmo QR e copiar, prazo e faixa; sem cancelar e sem 'verificando'", () => {
+    setup({ code: "0123", resume: "valid", trackingUnavailable: true, pixData: pix, pixExpiresAt: expires, summary: null, whatsapp: "5521999999999" });
+    expect(screen.getByRole("heading", { name: "Pedido #0123 enviado" })).toBeInTheDocument();
+    expect(screen.getByAltText("QR Code PIX")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copiar código PIX" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Código PIX (copia e cola)")).toHaveValue("000201PIXCODE");
+    expect(screen.getByText("Depois de pagar, a loja recebe o pedido. Se tiver dúvida, fale com a loja.")).toBeInTheDocument();
+    expect(screen.getByText(/Vale até 14:50/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancelar pedido" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Aguardando confirmação|Verificando/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Não feche esta página/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Se você já pagou/)).not.toBeInTheDocument(); // a faixa já diz o que importa
+    expect(document.body.textContent).not.toMatch(/não encontr|não existe|telefone/i);
+    expect(screen.getByRole("link", { name: "Falar com a loja no WhatsApp" })).toHaveAttribute("href", "https://wa.me/5521999999999?text=Pedido%20%230123");
+  });
+
+  it("PIX válido sem WhatsApp: só o texto, sem botão", () => {
+    setup({ code: "0123", resume: "valid", trackingUnavailable: true, pixData: pix, pixExpiresAt: expires, summary: null, whatsapp: null });
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("PIX vencido: 'Este PIX venceu…', sem QR e sem pagar, 'Voltar ao cardápio' como botão primário", async () => {
+    const { onBack } = setup({ code: "0123", resume: "expired", trackingUnavailable: true, pixData: null, summary: null, whatsapp: "5521999999999" });
+    expect(screen.getByText("Este PIX venceu. Faça o pedido de novo. Se você já pagou, fale com a loja.")).toBeInTheDocument();
+    expect(screen.queryByAltText("QR Code PIX")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copiar código PIX" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancelar pedido" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Falar com a loja no WhatsApp" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Voltar ao cardápio" }));
+    expect(onBack).toHaveBeenCalled();
+  });
+
+  it("PIX vencido sem WhatsApp: só o texto", () => {
+    setup({ code: "0123", resume: "expired", trackingUnavailable: true, pixData: null, summary: null, whatsapp: null });
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("o botão de copiar tem alvo de pelo menos 44 px (classe de botão principal, min-height 3rem)", () => {
+    setup({ code: "0123", resume: "valid", trackingUnavailable: true, pixData: pix, pixExpiresAt: expires, summary: null });
+    expect(screen.getByRole("button", { name: "Copiar código PIX" })).toHaveClass("loja__cta");
   });
 });

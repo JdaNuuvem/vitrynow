@@ -34,7 +34,7 @@ export type CartLine = { productId: string; quantity: number; additionalIds: str
 export type DeliveryType = "DELIVERY" | "BALCAO";
 export type PaymentMethod = "PIX" | "DINHEIRO" | "CREDITO" | "DEBITO" | "VR" | "VA";
 
-export type PixPayment = { pixQrCode: string | null; pixQrCodeBase64: string | null };
+export type PixPayment = { pixQrCode: string | null; pixQrCodeBase64: string | null; expiresAt?: string | null };
 
 // GET /stores/:slug/orders/:orderId/payment-status (ADR-0007 §3.2). `terminal` e `cancelReason`
 // só existem depois do API-02; até lá o front deduz dos estados.

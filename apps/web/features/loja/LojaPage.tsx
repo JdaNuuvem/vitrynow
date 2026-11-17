@@ -91,6 +91,8 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
           paymentFailedMessage={order.placed.paymentFailedMessage}
           cancelError={order.placed.cancelError}
           trackingUnavailable={order.placed.trackingUnavailable}
+          resume={order.placed.resume}
+          pixExpiresAt={order.placed.pixExpiresAt}
           summary={order.placed.summary}
           whatsapp={store.whatsapp}
           onCancel={order.cancel}
@@ -134,7 +136,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
     return (
       <main className="loja__page">
         {tab === "pedidos" ? (
-          <OrdersScreen orders={history.orders} storeName={store.name} />
+          <OrdersScreen orders={history.orders} storeName={store.name} whatsapp={store.whatsapp} pendingPix={order.pendingPix} />
         ) : (
           <>
             <StoreHeader store={store} onOpenSearch={() => setTab("pesquisa")}>

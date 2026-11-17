@@ -6,6 +6,7 @@ import type { StorefrontGateway } from "@/core/gateways/StorefrontGateway";
 import type { HttpResult } from "@/core/http/HttpClient";
 import { StorefrontServicesProvider } from "@/core/services/StorefrontServices";
 import type { CheckoutForm } from "../checkoutForm";
+import { resumeKey } from "../pixResume";
 import { CANCEL_UNAVAILABLE_MESSAGE, PAYMENT_POLL_MS, useOrderFlow } from "./useOrderFlow";
 
 const form: CheckoutForm = {
@@ -288,5 +289,151 @@ describe("useOrderFlow: confirmação ao recarregar durante o PIX (WEB-33)", () 
     await placePixOrder(t);
     t.unmount();
     expect(unload().defaultPrevented).toBe(false);
+  });
+});
+
+
+describe("useOrderFlow: voltar ao QR depois de recarregar (WEB-33b)", () => {
+  const KEY = resumeKey("loja");
+  const NOW = Date.now();
+  const saved = (over: Record<string, unknown> = {}) =>
+    sessionStorage.setItem(
+      KEY,
+      JSON.stringify({ v: 1, code: "0123", placedAt: NOW, totalCents: 4500, paymentMethod: "PIX", pix: { pixQrCode: "000201PIXCODE", pixQrCodeBase64: "QUJD" }, pixExpiresAt: NOW + 20 * 60_000, ...over }),
+    );
+  beforeEach(() => {
+    sessionStorage.clear();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    sessionStorage.clear();
+  });
+
+  it("depois de criar o pedido PIX guarda só o que pode: nada de token nem orderId", async () => {
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await placePixOrder(t);
+    const raw = sessionStorage.getItem(KEY) as string;
+    expect(JSON.parse(raw)).toMatchObject({ code: "0042", totalCents: 3000, paymentMethod: "PIX" });
+    expect(raw).not.toContain(TOKEN);
+    expect(raw).not.toContain('"o1"');
+    expect(localStorage.length).toBe(0);
+  });
+
+  it("usa o prazo que a API devolveu (expiresAt)", async () => {
+    const expiresAt = new Date(NOW + 10 * 60_000).toISOString();
+    const t = setup(
+      [ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })],
+      ok({ orderId: "o1", code: "0042", token: TOKEN, payment: { pixQrCode: "000201...", pixQrCodeBase64: null, expiresAt } }),
+    );
+    await placePixOrder(t);
+    expect(JSON.parse(sessionStorage.getItem(KEY) as string).pixExpiresAt).toBe(Date.parse(expiresAt));
+  });
+
+  it("pedido em dinheiro não guarda nada", async () => {
+    const t = setup([ok({ awaitingPayment: false, paymentStatus: "APROVADO" })], ok({ orderId: "o2", code: "0043", token: TOKEN }));
+    await placePixOrder(t);
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it("UI-V-20: recarregar com PIX válido volta ao QR, sem acompanhar, sem cancelar e sem consultar a API", async () => {
+    saved();
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await act(async () => {});
+    expect(t.result.current.placed).toMatchObject({ code: "0123", resume: "valid", trackingUnavailable: true, paymentConfirmed: false });
+    expect(t.result.current.placed?.pixData).toEqual({ pixQrCode: "000201PIXCODE", pixQrCodeBase64: "QUJD" });
+    expect(t.result.current.placed?.pixExpiresAt).toBe(NOW + 20 * 60_000);
+    await tick(PAYMENT_POLL_MS * 4);
+    expect(t.getPaymentStatus).not.toHaveBeenCalled();
+    await act(async () => {
+      await t.result.current.cancel();
+    });
+    expect(t.storefront.cancelOrder).not.toHaveBeenCalled();
+    expect(JSON.stringify(t.result.current.placed)).not.toMatch(/não encontr|não existe/i);
+  });
+
+  it("na tela recuperada recarregar de novo é seguro: sem aviso do navegador", async () => {
+    saved();
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await act(async () => {});
+    const event = new Event("beforeunload", { cancelable: true }) as BeforeUnloadEvent;
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("UI-V-21: recarregar com PIX vencido mostra 'venceu' (sem QR) e apaga a chave", async () => {
+    saved({ pixExpiresAt: NOW - 1000 });
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await act(async () => {});
+    expect(t.result.current.placed).toMatchObject({ code: "0123", resume: "expired", pixData: null });
+    expect(sessionStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("UI-V-28: chave adulterada é descartada inteira e a tela cai no cardápio normal", async () => {
+    saved({ paymentMethod: "BOLETO" });
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await act(async () => {});
+    expect(t.result.current.placed).toBeNull();
+    expect(sessionStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("UI-V-26: sem chave (outra aba) não há retomada", async () => {
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await act(async () => {});
+    expect(t.result.current.placed).toBeNull();
+  });
+
+  it("UI-V-22: pagamento confirmado apaga a chave", async () => {
+    const t = setup([ok({ awaitingPayment: false, orderStatus: "PENDENTE", paymentStatus: "APROVADO" })]);
+    await placePixOrder(t);
+    expect(sessionStorage.getItem(KEY)).not.toBeNull();
+    await tick();
+    expect(t.result.current.placed?.paymentConfirmed).toBe(true);
+    expect(sessionStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("UI-V-22: PIX que falhou/expirou apaga a chave", async () => {
+    const t = setup([ok({ awaitingPayment: false, orderStatus: "PENDENTE", paymentStatus: "EXPIRADO", terminal: true })]);
+    await placePixOrder(t);
+    await tick();
+    expect(t.result.current.placed?.paymentFailedMessage).toBeTruthy();
+    expect(sessionStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("UI-V-22: cancelar apaga a chave", async () => {
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await placePixOrder(t);
+    await act(async () => {
+      await t.result.current.cancel();
+    });
+    expect(sessionStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("'Voltar ao cardápio' da tela do pedido recém-feito MANTÉM a chave (recarregar ainda volta ao QR)", async () => {
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await placePixOrder(t);
+    act(() => t.result.current.back());
+    expect(sessionStorage.getItem(KEY)).not.toBeNull();
+    expect(t.result.current.pendingPix?.code).toBe("0042");
+  });
+
+  it("'Voltar ao cardápio' da tela RECUPERADA dispensa a retomada e apaga a chave", async () => {
+    saved();
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await act(async () => {});
+    act(() => t.result.current.back());
+    expect(sessionStorage.getItem(KEY)).toBeNull();
+    expect(t.result.current.pendingPix).toBeNull();
+    expect(t.result.current.placed).toBeNull();
+  });
+
+  it("varredura: nenhum token nem orderId em sessionStorage, localStorage nem no estado devolvido", async () => {
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await placePixOrder(t);
+    // o orderId existe só na memória da tela (precisa dele para consultar); fora dela, nunca
+    const outside = JSON.stringify({ ...sessionStorage, ...localStorage, pending: t.result.current.pendingPix });
+    expect(outside).not.toMatch(/"o1"|orderId/);
+    expect(outside).not.toContain(TOKEN);
+    expect(JSON.stringify(t.result.current.placed)).not.toContain(TOKEN);
   });
 });

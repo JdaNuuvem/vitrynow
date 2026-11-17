@@ -3,6 +3,7 @@ import type { CartLine, PixPayment } from "@/core/domain/storefront";
 import { useStorefrontServices } from "@/core/services/StorefrontServices";
 import { STORE_CLOSED_MESSAGE, toPlaceOrderInput, type CheckoutForm, type OrderSummary } from "../checkoutForm";
 import { interpretPaymentStatus } from "../paymentStatus";
+import { clearResume, readResume, saveResume } from "../pixResume";
 import type { PlacedOrder } from "./useOrderHistory";
 
 export type PlacedOrderState = {
@@ -19,12 +20,18 @@ export type PlacedOrderState = {
   // NG-16: false = este aparelho não tem acesso ao pedido (a API não devolveu o token, ou recusou o que tinha).
   // Não dá para consultar o pagamento nem cancelar por aqui: a tela manda o cliente falar com a loja.
   trackingUnavailable: boolean;
+  // WEB-33b: "none" = pedido feito nesta tela; "valid" = tela recuperada depois de recarregar, PIX ainda válido (só QR, sem
+  // acompanhar nem cancelar); "expired" = recuperada com o PIX vencido. Só código, total e PIX voltam do sessionStorage.
+  resume: "none" | "valid" | "expired";
+  pixExpiresAt: number | null;
 };
 
 // Sem prometer telefone: a loja pública só tem WhatsApp (e nem toda loja o cadastrou). O botão do WhatsApp vem da tela, se houver.
 export const TRACKING_UNAVAILABLE_MESSAGE = "Não é possível acompanhar este pedido por aqui. Fale com a loja.";
 // Só em pedido PIX (em dinheiro ou cartão na entrega a frase enganaria).
 export const PIX_PAID_REASSURANCE = "Se você já pagou, a loja recebe o pedido.";
+export const PIX_RESUMED_MESSAGE = "Depois de pagar, a loja recebe o pedido. Se tiver dúvida, fale com a loja.";
+export const PIX_EXPIRED_MESSAGE = "Este PIX venceu. Faça o pedido de novo. Se você já pagou, fale com a loja.";
 export const CANCEL_UNAVAILABLE_MESSAGE = "Não é possível cancelar por aqui. Fale com a loja.";
 
 export const PAYMENT_POLL_MS = 3000;
@@ -40,6 +47,64 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
   // NG-16: o token fica SÓ em memória, num ref: não entra no estado que a tela recebe, não vai à URL, ao localStorage
   // (o histórico guarda só código e total) nem a log. Some ao recarregar a página.
   const tokenRef = useRef<string | null>(null);
+  // PIX deste pedido ainda guardado para retomada (código e prazo): a aba "Meus pedidos" só diz "a loja recebe o pedido"
+  // enquanto houver um payload válido (em dúvida, omite).
+  const [pendingPix, setPendingPix] = useState<{ code: string; expiresAt: number } | null>(null);
+
+  function dropResume() {
+    clearResume(slug);
+    setPendingPix(null);
+  }
+
+  // Recarregou com um PIX guardado: volta ao QR (válido) ou diz que venceu. Valida o objeto inteiro (pixResume.ts).
+  useEffect(() => {
+    const reading = readResume(slug);
+    if (!reading) return;
+    if (reading.kind === "expired") {
+      setPlaced((prev) =>
+        prev ?? {
+          orderId: "",
+          code: reading.code,
+          pixData: null,
+          paymentConfirmed: false,
+          paymentFailedMessage: null,
+          cancelled: false,
+          cancelError: null,
+          summary: null,
+          trackingUnavailable: true,
+          resume: "expired",
+          pixExpiresAt: null,
+        },
+      );
+      return;
+    }
+    const { record } = reading;
+    setPendingPix({ code: record.code, expiresAt: record.pixExpiresAt as number });
+    setPlaced((prev) =>
+      prev ?? {
+        orderId: "", // o orderId nunca é guardado: sem ele (e sem token) esta tela não consulta nem cancela
+        code: record.code,
+        pixData: record.pix,
+        paymentConfirmed: false,
+        paymentFailedMessage: null,
+        cancelled: false,
+        cancelError: null,
+        summary: null,
+        trackingUnavailable: true,
+        resume: "valid",
+        pixExpiresAt: record.pixExpiresAt,
+      },
+    );
+  }, [slug]);
+
+  // PIX pago, falho ou cancelado: a retomada não faz mais sentido.
+  const finished = Boolean(placed?.paymentConfirmed || placed?.paymentFailedMessage || placed?.cancelled);
+  useEffect(() => {
+    if (finished) {
+      clearResume(slug);
+      setPendingPix(null);
+    }
+  }, [finished, slug]);
 
   // Acompanha o PIX até um estado final (pago, expirado, rejeitado ou cancelado). Uma consulta
   // por vez (setTimeout encadeado, não setInterval: consulta lenta não empilha chamadas) e para
@@ -86,7 +151,9 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
 
   // PIX na tela e ainda não resolvido: recarregar ou fechar a aba perde o QR e o "copia e cola" (o token só vive em
   // memória). Pede a confirmação padrão do navegador (sem texto próprio) até o pagamento confirmar, falhar ou cancelar.
-  const pixOnScreen = Boolean(placed?.pixData) && !placed?.paymentConfirmed && !placed?.paymentFailedMessage && !placed?.cancelled;
+  // Na tela recuperada (resume !== "none") recarregar é seguro: o QR volta; não precisa do aviso.
+  const pixOnScreen =
+    Boolean(placed?.pixData) && placed?.resume === "none" && !placed?.paymentConfirmed && !placed?.paymentFailedMessage && !placed?.cancelled;
   useEffect(() => {
     if (!pixOnScreen) return;
     const warn = (event: BeforeUnloadEvent) => {
@@ -118,6 +185,17 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
 
     onPlaced({ code: result.data.code, totalCents, placedAt: new Date().toISOString() });
     tokenRef.current = result.data.token ?? null;
+    // WEB-33b: guarda o que permite VOLTAR ao QR depois de recarregar (nunca token nem orderId).
+    const parsedExpiry = result.data.payment?.expiresAt ? Date.parse(result.data.payment.expiresAt) : NaN;
+    const placedAt = Date.now();
+    const saved = saveResume(slug, {
+      code: result.data.code,
+      totalCents,
+      placedAt,
+      pix: result.data.payment,
+      pixExpiresAt: Number.isFinite(parsedExpiry) ? parsedExpiry : null,
+    });
+    if (saved) setPendingPix({ code: result.data.code, expiresAt: Number.isFinite(parsedExpiry) ? parsedExpiry : placedAt + 30 * 60 * 1000 });
     setPlaced({
       orderId: result.data.orderId,
       code: result.data.code,
@@ -128,6 +206,8 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
       cancelError: null,
       summary,
       trackingUnavailable: !result.data.token,
+      resume: "none",
+      pixExpiresAt: null,
     });
     return true;
   }
@@ -148,8 +228,10 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
 
   function back() {
     tokenRef.current = null;
+    // Quem sai da tela RECUPERADA dispensou a retomada; quem sai da tela do pedido recém-feito ainda pode recarregar e voltar ao QR.
+    if (placed && placed.resume !== "none") dropResume();
     setPlaced(null);
   }
 
-  return { placed, submitting, error, errorCode, submit, cancel, back };
+  return { placed, submitting, error, errorCode, submit, cancel, back, pendingPix };
 }
