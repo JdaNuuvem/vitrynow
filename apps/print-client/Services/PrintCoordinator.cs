@@ -33,6 +33,7 @@ namespace MeuCardapio.PrintClient.Services
             try
             {
                 // Tiquete sem itens e total zero e malformado: sai "SEM COBRANCA", mas fica registrado (o dono pode conferir no painel).
+                if (TicketBuilder.IsNothingToChargeConflict(order)) Logger.Info("AVISO: pedido #" + order.Code + ": o servidor disse 'nada a cobrar' mas o total nao chegou presente e igual a zero; impresso pela regra normal (cobra). Conferir no painel.");
                 if (TicketBuilder.IsEmptyZeroTicket(order)) Logger.Info("AVISO: pedido #" + order.Code + " sem itens e com total zero; impresso como SEM COBRANCA. Conferir no painel.");
                 var doc = TicketBuilder.Build(order, _paperMm(), _timeZone);
                 // Uma impressão por vez: o spooler/PrintDocument e a consulta WMI não são para uso concorrente, e

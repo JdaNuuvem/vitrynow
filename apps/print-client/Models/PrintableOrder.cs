@@ -52,6 +52,8 @@ namespace MeuCardapio.PrintClient.Models
         [JsonProperty("printedAtOriginal")] public string PrintedAtOriginal { get; set; }   // ISO UTC, só na 2ª via
         [JsonProperty("cancelNotice")] public bool? CancelNotice { get; set; }              // true = imprime o aviso de cancelamento
         [JsonProperty("ticketSchemaVersion")] public int? TicketSchemaVersion { get; set; }
+        // API-66 (schema 3): o SERVIDOR diz se nao ha nada a cobrar (fonte unica: total 0 E nenhuma cobranca possivel). Ausente (API antiga) = null.
+        [JsonProperty("nothingToCharge")] public bool? NothingToCharge { get; set; }
         [JsonProperty("tableLabel")] public string TableLabel { get; set; }
         // Job TEST sem tíquete do servidor: o cliente imprime o tíquete de teste próprio (não vem da API).
         [JsonIgnore] public bool IsTest { get; set; }

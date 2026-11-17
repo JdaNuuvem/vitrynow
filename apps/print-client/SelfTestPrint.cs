@@ -214,6 +214,7 @@ namespace MeuCardapio.PrintClient
             PaymentBlock();
             TotalZero();
             AbsentTotals();
+            NothingToChargeField();
             Writer();
             Golden();
             Probe();
@@ -552,6 +553,55 @@ namespace MeuCardapio.PrintClient
             int last = d.Lines.Count - 1;
             Check("pagamento: bloco em destaque no fim do tiquete (centralizado, negrito, maior, entre separadores)",
                 d.Lines[last].Divider && d.Lines[last - 1].Text == "LEVAR R$ 4,00 DE TROCO" && d.Lines[last - 1].Bold && d.Lines[last - 1].Scale > 1f && d.Lines[last - 1].Align == TicketAlign.Center);
+        }
+
+        // PC-23 (API-66): o campo `nothingToCharge` do servidor. Presente MANDA; `true` exige total presente e 0; ausente => aritmetica do PC-19.
+        static void NothingToChargeField()
+        {
+            const string Z = "SEM COBRANÇA: NADA A COBRAR";
+            Func<PrintableOrder, string> pay = o => string.Join("|", TicketBuilder.PaymentLines(o, (o.Type ?? "").ToUpperInvariant()));
+            Func<string, PrintableOrder> fromJson = j => Newtonsoft.Json.JsonConvert.DeserializeObject<PrintableOrder>(j);
+
+            var no = ZeroTotal(); no.NothingToCharge = false;
+            Check("servidor diz nothingToCharge=false com total 0 e desconto = itens (pagamento vivo): NUNCA 'SEM COBRANÇA' (o campo presente manda)", !pay(no).Contains("SEM COBRANÇA"));
+            var noPix = ZeroTotal(); noPix.NothingToCharge = false; noPix.PaymentMethod = "PIX"; noPix.PaymentStatus = "A_COBRAR";
+            Check("nothingToCharge=false com PIX pendente e total 0: regra normal do PIX ('PIX - CONFERIR NA HORA'), nao 'nada a cobrar'", pay(noPix) == "PIX - CONFERIR NA HORA");
+
+            var yes = ZeroTotal(); yes.NothingToCharge = true;
+            Check("nothingToCharge=true com total PRESENTE e 0: diz 'SEM COBRANÇA'", pay(yes) == Z);
+            var yesNoDiscount = ZeroTotal(); yesNoDiscount.NothingToCharge = true; yesNoDiscount.DiscountCents = null; yesNoDiscount.SubtotalCents = null;
+            Check("nothingToCharge=true manda mesmo quando a aritmetica local nao fecharia (o servidor e a fonte unica)", pay(yesNoDiscount) == Z);
+
+            var yesTotal = ZeroTotal(); yesTotal.NothingToCharge = true; yesTotal.TotalCents = 5000;
+            Check("nothingToCharge=true mas total R$ 50 (incoerente): regra normal (cobra), NUNCA 'SEM COBRANÇA'", !pay(yesTotal).Contains("SEM COBRANÇA") && TicketBuilder.IsNothingToChargeConflict(yesTotal));
+            var yesAbsent = fromJson("{\"orderId\":\"x\",\"code\":\"1\",\"type\":\"BALCAO\",\"nothingToCharge\":true,\"items\":[{\"productName\":\"A\",\"quantity\":1,\"unitPriceCents\":1000}]}");
+            Check("nothingToCharge=true mas total AUSENTE: regra normal e conflito registrado (nao decide 'nada a cobrar' sozinho)", !pay(yesAbsent).Contains("SEM COBRANÇA") && TicketBuilder.IsNothingToChargeConflict(yesAbsent) && !yesAbsent.HasTotalCents);
+            var yesNull = fromJson("{\"orderId\":\"x\",\"code\":\"1\",\"type\":\"BALCAO\",\"nothingToCharge\":true,\"totalCents\":null,\"items\":[]}");
+            Check("nothingToCharge=true com totalCents null: tratado como ausente (regra normal + conflito)", !pay(yesNull).Contains("SEM COBRANÇA") && TicketBuilder.IsNothingToChargeConflict(yesNull));
+            Check("sem conflito: campo ausente, false, ou true com total 0 presente nao geram aviso", !TicketBuilder.IsNothingToChargeConflict(ZeroTotal()) && !TicketBuilder.IsNothingToChargeConflict(no) && !TicketBuilder.IsNothingToChargeConflict(yes));
+
+            var absentField = ZeroTotal(); absentField.NothingToCharge = null;
+            Check("campo AUSENTE (API antiga): vale a aritmetica do PC-19 (desconto = itens, total 0 presente => 'SEM COBRANÇA')", pay(absentField) == Z);
+            var absentFieldBad = ZeroTotal(); absentFieldBad.NothingToCharge = null; absentFieldBad.DiscountCents = 100;
+            Check("campo AUSENTE e aritmetica nao fecha (desconto R$ 1 em R$ 50): regra normal", !pay(absentFieldBad).Contains("SEM COBRANÇA"));
+
+            // leitura do JSON: true, false, null e ausente
+            var jTrue = fromJson("{\"nothingToCharge\":true}"); var jFalse = fromJson("{\"nothingToCharge\":false}"); var jNull = fromJson("{\"nothingToCharge\":null}"); var jMiss = fromJson("{}");
+            Check("JSON: nothingToCharge true/false/null/ausente => true/false/ausente/ausente", jTrue.NothingToCharge == true && jFalse.NothingToCharge == false && jNull.NothingToCharge == null && jMiss.NothingToCharge == null);
+
+            // aviso de cancelamento e teste nunca usam o campo (layout proprio, sem linha de pagamento)
+            var cancel = CancelFromApi(); cancel.NothingToCharge = true;
+            var test = TestFromClient(); test.NothingToCharge = true;
+            Check("aviso de cancelamento e TESTE com nothingToCharge=true: continuam sem linha de pagamento e sem conflito", !Txt(cancel).Contains("SEM COBRANÇA") && !Txt(test).Contains("SEM COBRANÇA") && !TicketBuilder.IsNothingToChargeConflict(cancel) && !TicketBuilder.IsNothingToChargeConflict(test));
+
+            // 2a via de total zero com o campo do servidor
+            var re = ZeroTotalReprint(); re.NothingToCharge = true;
+            Check("2a via de total zero com nothingToCharge=true: 'SEM COBRANÇA' e '2ª VIA'", TextTicketWriter.RenderText(Build(re), 32).Contains(Z) && TextTicketWriter.RenderText(Build(re), 32).Contains("2ª VIA"));
+
+            // lacuna apontada pelo Deming (mutante M6 do PC-21): desconto maior que os itens com total ausente NAO pode calcular um valor negativo
+            var over = AbsentTotalCounter(); over.DiscountCents = 6000;
+            var overTxt = TextTicketWriter.RenderText(Build(over), 32);
+            Check("total ausente com desconto R$ 60 sobre itens R$ 50: 'TOTAL NÃO INFORMADO' e SEM 'CALCULADO' (nao calcula valor negativo)", overTxt.Contains("TOTAL NÃO INFORMADO") && !overTxt.Contains("CALCULADO"));
         }
 
         // PC-21 (parecer Nightingale): total AUSENTE nunca imprime "TOTAL R$ 0,00" nem "COBRAR R$ 0,00".

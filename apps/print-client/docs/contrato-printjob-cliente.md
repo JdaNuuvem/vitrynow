@@ -72,3 +72,12 @@ Quem decide como imprimir é o **servidor, por loja** (`Store.printMode`, padrã
 - **Aviso do job recusado de vez** (4xx exceto 408/429; 404 e 409 já encerravam): encerra, avisa na tela e não repete. Job já impresso que o servidor **reoferece** (o mesmo dono recebe o mesmo job enquanto a lease vale) reenvia o aviso **uma vez por ciclo** e para o laço (antes pedia o job de novo até 20 vezes por ciclo).
 - **Se um job chegar em `LEGACY`** (servidor fora do contrato), o cliente **não imprime** (o legado cuidaria do mesmo pedido).
 - Teste executável: `SelfTestJobs.ModeFollowsServer` (M1–M12) sobre o `FakeApi` com `PrintMode`; o plano de virada fica em `docs\plano-virada-printjobs.md`.
+
+## `nothingToCharge` (API-66, ticketSchemaVersion 3)
+O servidor diz se **não há nada a cobrar** (`totalCents == 0` E nenhuma cobrança possível: sem Payment, ou Payment morto REJEITADO/EXPIRADO/CANCELADO). Campo opcional; em pedido real nunca sai ausente; aviso de cancelamento e tíquete de teste saem `false`.
+| Campo | Total | O cliente imprime |
+|---|---|---|
+| `false` | qualquer | **regra normal (cobra)**, mesmo com a aritmética local dando zero (há pagamento vivo) |
+| `true` | PRESENTE e 0 | "SEM COBRANÇA: NADA A COBRAR" |
+| `true` | ≠ 0 ou AUSENTE | **regra normal (cobra)** + AVISO no log (servidor incoerente) |
+| ausente/`null` (API antiga) | — | aritmética do PC-19: total PRESENTE e 0, desconto = itens, sem taxa/gorjeta, subtotal batendo |
