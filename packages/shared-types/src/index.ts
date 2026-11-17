@@ -131,6 +131,8 @@ export const DEVICE_ALERT_CLIENT_CODES = [
   "MODE_UNCONFIRMED",
   "MODE_RECOVERED",
 ] as const;
+// Alertas de DINHEIRO (regra de não cobrar / total zero): o aviso em tempo real vai SÓ ao OWNER (decisão do Leonardo e do Atlas); o hub aplica o filtro.
+export const DEVICE_ALERT_MONEY_CODES: readonly string[] = ["NOTHING_TO_CHARGE_CONFLICT", "NOTHING_TO_CHARGE_INVALID", "EMPTY_ZERO_TICKET"];
 // Corpo ESTRITO: chave desconhecida é recusada (nenhum texto livre cabe aqui). `orderId` é frouxo de propósito (o formato é conferido no
 // serviço, que NÃO recusa: grava sem o id e responde igual); `clientVersion` só com a lista curta de caracteres.
 export const deviceAlertBodySchema = z

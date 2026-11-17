@@ -1,6 +1,6 @@
 import type { prisma as prismaClient, DeviceAlertCode } from "@meucardapio/db";
 import { utc } from "../../lib/sqlTime";
-import type { WsServerMessage } from "@meucardapio/shared-types";
+import { DEVICE_ALERT_MONEY_CODES, type WsServerMessage } from "@meucardapio/shared-types";
 
 type Db = typeof prismaClient;
 
@@ -86,7 +86,7 @@ export class DeviceAlertService {
     const unconfirmed = last("MODE_UNCONFIRMED");
     const recovered = last("MODE_RECOVERED");
     const server = last("QUEUE_WITHOUT_PRINTER");
-    const money = rows.some((r) => (r.code === "NOTHING_TO_CHARGE_CONFLICT" || r.code === "NOTHING_TO_CHARGE_INVALID" || r.code === "EMPTY_ZERO_TICKET") && now.getTime() - r.lastAt.getTime() < 24 * 3_600_000);
+    const money = rows.some((r) => DEVICE_ALERT_MONEY_CODES.includes(r.code) && now.getTime() - r.lastAt.getTime() < 24 * 3_600_000);
     return {
       needsAttention: {
         queueWithoutPrinter: !!server && now.getTime() - server.getTime() < ALERT_WINDOW_MS, // o detector re-emite a cada minuto enquanto vale

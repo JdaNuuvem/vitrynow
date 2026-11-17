@@ -1,5 +1,5 @@
 import type { WebSocket } from "ws";
-import type { WsServerMessage } from "@meucardapio/shared-types";
+import { DEVICE_ALERT_MONEY_CODES, type WsServerMessage } from "@meucardapio/shared-types";
 
 // Pub/sub em memória: um canal por loja. Usado tanto pelo painel (kanban em tempo
 // real, substitui o pollSales de 60s do original) quanto pelo print-client (substitui
@@ -88,6 +88,11 @@ const socketRoles = new WeakMap<WebSocket, SocketRole>();
 // por rota autenticada com o papel certo.
 const OWNER_ONLY_TYPES: ReadonlySet<WsServerMessage["type"]> = new Set(["cashier.difference_over_tolerance"]);
 
+// `device.alert` com código de DINHEIRO também é de dono: o código denuncia a regra de não cobrar (PC-24); os demais (fila sem impressora, modo
+// não confirmado) seguem a todos. O filtro é pelo conteúdo do tipo, aqui, para valer a qualquer publicador (rota, job).
+const isOwnerOnly = (message: WsServerMessage): boolean =>
+  OWNER_ONLY_TYPES.has(message.type) || (message.type === "device.alert" && DEVICE_ALERT_MONEY_CODES.includes(message.code));
+
 export function subscribe(storeId: string, socket: WebSocket, role: SocketRole): void {
   socketRoles.set(socket, role);
   let set = channels.get(storeId);
@@ -115,7 +120,7 @@ function deliver(storeId: string, message: WsServerMessage, ownersOnly: boolean)
 
 /** Todos da loja: painel (OWNER e STAFF) e print-client. Os tipos de dono (`OWNER_ONLY_TYPES`) são entregues SÓ ao OWNER mesmo por aqui. */
 export function publishToStore(storeId: string, message: WsServerMessage): void {
-  deliver(storeId, message, OWNER_ONLY_TYPES.has(message.type));
+  deliver(storeId, message, isOwnerOnly(message));
 }
 
 /** Só as conexões de OWNER da loja (STAFF e impressoras não recebem). */

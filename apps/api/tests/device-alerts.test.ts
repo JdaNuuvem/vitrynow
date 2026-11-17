@@ -47,9 +47,9 @@ describe("PC-24 — alertas de dispositivo", () => {
   };
   const alert = (token: string, body: unknown) => app.inject({ method: "POST", url: "/api/device/alerts", headers: { ...bearer(token), "content-type": "application/json" }, payload: body as never });
   const rows = (storeId: string) => prisma.deviceAlert.findMany({ where: { storeId }, orderBy: { firstAt: "asc" } });
-  const sockets = (storeId: string) => {
+  const sockets = (storeId: string, role: "OWNER" | "STAFF" | "DEVICE" = "OWNER") => {
     const sent: string[] = [];
-    subscribe(storeId, { readyState: 1, OPEN: 1, send: (m: string) => sent.push(m), on: vi.fn() } as never);
+    subscribe(storeId, { readyState: 1, OPEN: 1, send: (m: string) => sent.push(m), on: vi.fn() } as never, role);
     return sent;
   };
   async function staffCookie(ctx: Ctx) {
@@ -69,6 +69,23 @@ describe("PC-24 — alertas de dispositivo", () => {
     expect(row.tokenId).not.toBeNull();
     expect(ws.filter((m) => m.includes("device.alert")).map((m) => JSON.parse(m))).toEqual([{ type: "device.alert", code: "MODE_UNCONFIRMED" }]);
     expect(r.headers["x-print-mode"]).toBe("LEGACY"); // como nas outras rotas /api/device/*
+  });
+
+  it("alertas de DINHEIRO (NOTHING_TO_CHARGE_*, EMPTY_ZERO_TICKET) chegam SÓ ao OWNER conectado; STAFF e a impressora não recebem; os demais códigos seguem a todos", async () => {
+    const ctx = await setup();
+    const dono = sockets(ctx.storeId, "OWNER");
+    const staff = sockets(ctx.storeId, "STAFF");
+    const impressora = sockets(ctx.storeId, "DEVICE");
+    for (const code of ["NOTHING_TO_CHARGE_CONFLICT", "NOTHING_TO_CHARGE_INVALID", "EMPTY_ZERO_TICKET"]) {
+      expect((await alert(ctx.token, { code })).statusCode).toBe(204);
+    }
+    expect((await alert(ctx.token, { code: "MODE_UNCONFIRMED" })).statusCode).toBe(204);
+    const codigos = (ws: string[]) => ws.filter((m) => m.includes("device.alert")).map((m) => JSON.parse(m).code);
+    expect(codigos(dono)).toEqual(["NOTHING_TO_CHARGE_CONFLICT", "NOTHING_TO_CHARGE_INVALID", "EMPTY_ZERO_TICKET", "MODE_UNCONFIRMED"]);
+    expect(codigos(staff)).toEqual(["MODE_UNCONFIRMED"]);
+    expect(codigos(impressora)).toEqual(["MODE_UNCONFIRMED"]);
+    // o corpo do evento segue sendo SÓ o código
+    expect(dono.filter((m) => m.includes("EMPTY_ZERO_TICKET")).map((m) => JSON.parse(m))).toEqual([{ type: "device.alert", code: "EMPTY_ZERO_TICKET" }]);
   });
 
   it("DEDUPE ATÔMICO: 25 alertas iguais simultâneos ⇒ 1 linha com count 25, e o painel é acordado UMA vez", async () => {
