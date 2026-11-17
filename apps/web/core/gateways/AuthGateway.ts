@@ -12,4 +12,7 @@ export interface AuthGateway {
   changePassword(currentPassword: string, newPassword: string, options?: RequestOptions): Promise<HttpResult<unknown>>;
   forgotPassword(email: string): Promise<HttpResult<unknown>>;
   resetPassword(token: string, newPassword: string): Promise<HttpResult<unknown>>;
+  // SEC-29 / ST-63: confere o token SEM consumi-lo e devolve o e-mail mascarado ("m***@gmail.com"). Inválido, vencido, usado e
+  // malformado dão o MESMO `{ valid: false }`; o corpo nunca traz id, loja nem papel.
+  inspectResetToken(token: string): Promise<HttpResult<{ valid: boolean; email?: string }>>;
 }

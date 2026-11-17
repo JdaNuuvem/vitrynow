@@ -1,14 +1,24 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
+import { PasswordField } from "@/shared/ui/PasswordField";
+import { isPasswordRuleError, PASSWORD_HELP } from "@/shared/auth/passwordPolicy";
+import { usePasswordRule } from "@/shared/auth/usePasswordRule";
 import { AuthCard } from "./components/AuthCard";
-import { SingleFieldForm } from "./components/SingleFieldForm";
+import { useResetInspect } from "./hooks/useResetInspect";
 import { useResetPassword } from "./hooks/useResetPassword";
 import { clearResetTokenFromUrl, readResetToken } from "./resetToken";
 
+function InvalidLink() {
+  return (
+    <AuthCard>
+      <p className="auth__text">Link inválido — peça um novo em &quot;esqueci minha senha&quot;.</p>
+    </AuthCard>
+  );
+}
+
 export function ResetPasswordPage() {
-  const router = useRouter();
   // null = ainda não leu a URL (o fragmento só existe no navegador). O token fica SÓ neste estado; a barra de endereço é
   // limpa na hora. A atualização funcional protege o StrictMode: a 2ª execução do efeito já não acha token na URL e não
   // pode apagar o que a 1ª leu.
@@ -29,18 +39,25 @@ export function ResetPasswordPage() {
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
-  const { submit, loading, error, done } = useResetPassword(token ?? "");
-  const [newPassword, setNewPassword] = useState("");
 
   if (token === null) return <AuthCard>{null}</AuthCard>;
+  if (!token) return <InvalidLink />;
+  // `key={token}`: um link novo REMONTA o fluxo e zera tudo (conferência, senha digitada, "senha alterada"); nada do link
+  // anterior vaza para o novo.
+  return <ResetFlow key={token} token={token} />;
+}
 
-  if (!token) {
-    return (
-      <AuthCard>
-        <p className="auth__text">Link inválido — peça um novo em &quot;esqueci minha senha&quot;.</p>
-      </AuthCard>
-    );
-  }
+function ResetFlow({ token }: { token: string }) {
+  const router = useRouter();
+  const { submit, loading, error, done } = useResetPassword(token);
+  const { result: inspect, retry } = useResetInspect(token);
+  const noteId = useId();
+  const [newPassword, setNewPassword] = useState("");
+  const serverRejectedLength = isPasswordRuleError(error);
+  const rule = usePasswordRule(newPassword, serverRejectedLength);
+
+  // Inválido, vencido, usado ou malformado: a API não diferencia o motivo e a tela também não.
+  if (inspect.state === "invalid") return <InvalidLink />;
 
   if (done) {
     return (
@@ -53,20 +70,62 @@ export function ResetPasswordPage() {
     );
   }
 
+  // Falha fechada (SEC-29): sem confirmar de qual conta é o link, NÃO há campo de senha.
+  if (inspect.state === "checking") {
+    return (
+      <AuthCard title="Nova senha" backToLogin>
+        <p className="auth__text" role="status">
+          Conferindo o link...
+        </p>
+      </AuthCard>
+    );
+  }
+  if (inspect.state === "failed") {
+    return (
+      <AuthCard title="Nova senha" backToLogin>
+        <div role="alert" className="auth__alert">
+          <p className="auth__text">Não foi possível confirmar a conta deste link. Tente de novo.</p>
+          <button type="button" className="auth__button" onClick={retry}>
+            Tentar de novo
+          </button>
+        </div>
+      </AuthCard>
+    );
+  }
+
   return (
     <AuthCard title="Nova senha" backToLogin>
-      <SingleFieldForm
-        type="password"
-        placeholder="Nova senha"
-        minLength={6}
-        value={newPassword}
-        onChange={setNewPassword}
-        submitLabel="Salvar nova senha"
-        loadingLabel="Salvando..."
-        loading={loading}
-        error={error}
-        onSubmit={() => submit(newPassword)}
-      />
+      <form
+        className="auth__form"
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (loading || !rule.validate()) return;
+          void submit(newPassword);
+        }}
+      >
+        {/* Conferência: DE QUAL conta é este link (o e-mail mascarado entra como TEXTO, nunca HTML) e o aviso de quem recebeu o link de outra pessoa */}
+        <div id={noteId} role="note" className="auth__note">
+          <p>
+            Você está redefinindo a senha de <strong>{inspect.email}</strong>
+          </p>
+          <p>Se esta não for a sua conta, feche esta página e não digite nenhuma senha.</p>
+        </div>
+        <PasswordField
+          label="Nova senha"
+          value={newPassword}
+          onChange={setNewPassword}
+          help={PASSWORD_HELP}
+          error={rule.error}
+          onBlur={rule.onBlur}
+          describedBy={[noteId]}
+          inputClassName="auth__input"
+        />
+        {error && !serverRejectedLength && <p className="auth__error">{error}</p>}
+        <button className="auth__button" type="submit" disabled={loading}>
+          {loading ? "Salvando..." : "Salvar nova senha"}
+        </button>
+      </form>
     </AuthCard>
   );
 }
