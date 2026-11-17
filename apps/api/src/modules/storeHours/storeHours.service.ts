@@ -18,13 +18,18 @@ export type StoreHoursRow = {
   schedule: unknown;
   pausedUntil: Date | null;
   closedUntil: Date | null;
+  prepMinutesDelivery: number | null;
+  prepMinutesPickup: number | null;
 };
+
+export type PrepMinutes = { delivery: number | null; pickup: number | null };
 
 export interface StoreHoursRepository {
   find(storeId: string): Promise<StoreHoursRow | null>;
   findBySlug(slug: string): Promise<StoreHoursRow | null>;
   saveSchedule(storeId: string, schedule: Schedule | null): Promise<void>;
   saveOverrides(storeId: string, data: { pausedUntil: Date | null; closedUntil: Date | null }): Promise<void>;
+  savePrepTimes(storeId: string, data: { prepMinutesDelivery: number | null; prepMinutesPickup: number | null }): Promise<void>;
 }
 
 export type Clock = { now(): Date };
@@ -42,7 +47,15 @@ export type StoreHoursView = {
   pausedUntil: string | null;
   closedUntil: string | null;
   status: StoreStatus;
+  /** Tempo médio de preparo configurado (RN-PZ-01); `null` em cada modalidade sem previsão. */
+  prepMinutes: PrepMinutes;
 };
+
+/** Para o cardápio público: só existe quando a loja configurou alguma modalidade (nunca um padrão inventado). */
+export function publicPrepMinutes(row: Pick<StoreHoursRow, "prepMinutesDelivery" | "prepMinutesPickup">): PrepMinutes | null {
+  if (row.prepMinutesDelivery === null && row.prepMinutesPickup === null) return null;
+  return { delivery: row.prepMinutesDelivery, pickup: row.prepMinutesPickup };
+}
 
 // Horário de funcionamento (B5): configura a grade e os controles do dia a dia, e responde "a loja
 // recebe pedido agora?" para o cardápio público e o painel (RN-B5-02: uma só fonte, no servidor).
@@ -73,6 +86,7 @@ export class StoreHoursService {
       pausedUntil: row.pausedUntil?.toISOString() ?? null,
       closedUntil: row.closedUntil?.toISOString() ?? null,
       status: this.statusOf(row),
+      prepMinutes: { delivery: row.prepMinutesDelivery, pickup: row.prepMinutesPickup },
     };
   }
 
@@ -87,9 +101,24 @@ export class StoreHoursService {
   }
 
   /** Estado público pelo slug (cardápio); `null` se a loja não existe. */
-  async publicStatus(slug: string): Promise<{ storeId: string; status: StoreStatus } | null> {
+  async publicStatus(slug: string): Promise<{ storeId: string; status: StoreStatus; prepMinutes: PrepMinutes | null } | null> {
     const row = await this.repo.findBySlug(slug);
-    return row ? { storeId: row.id, status: this.statusOf(row) } : null;
+    return row ? { storeId: row.id, status: this.statusOf(row), prepMinutes: publicPrepMinutes(row) } : null;
+  }
+
+  // "Minha loja → Atendimento" (RN-PZ-01): tempo médio de preparo por modalidade. Mudar não altera previsões já dadas (RN-PZ-07).
+  async setPrepTimes(actor: Actor, input: { deliveryMinutes: number | null; pickupMinutes: number | null }): Promise<StoreHoursView> {
+    const row = await this.load(actor.storeId);
+    const next = { prepMinutesDelivery: input.deliveryMinutes, prepMinutesPickup: input.pickupMinutes };
+    await this.repo.savePrepTimes(actor.storeId, next);
+    this.audit.log({
+      ...actor,
+      action: "store.prep_times_update",
+      targetType: "Store",
+      targetId: actor.storeId,
+      metadata: { before: { delivery: row.prepMinutesDelivery, pickup: row.prepMinutesPickup }, after: { delivery: next.prepMinutesDelivery, pickup: next.prepMinutesPickup } },
+    });
+    return this.view({ ...row, ...next });
   }
 
   async saveSchedule(actor: Actor, input: Schedule | null): Promise<StoreHoursView> {

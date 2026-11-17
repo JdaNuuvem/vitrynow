@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { storeStatusActionSchema, updateStoreHoursSchema } from "@meucardapio/shared-types";
+import { storeStatusActionSchema, updatePrepTimesSchema, updateStoreHoursSchema } from "@meucardapio/shared-types";
 import { useDomainErrors } from "../../shared/errors";
 import type { StoreHoursService } from "./storeHours.service";
 
@@ -17,6 +17,13 @@ export function buildStoreHoursRoutes(service: StoreHoursService): FastifyPlugin
       const parsed = updateStoreHoursSchema.safeParse(request.body);
       if (!parsed.success) return reply.code(400).send({ error: "Horário inválido.", code: "VALIDATION_ERROR", details: parsed.error.flatten() });
       return { hours: await service.saveSchedule(request.user, parsed.data.schedule) };
+    });
+
+    // "Minha loja → Atendimento": tempo médio de preparo por modalidade (5 a 240 min; null = sem previsão).
+    app.post("/api/store/prep-times", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request, reply) => {
+      const parsed = updatePrepTimesSchema.safeParse(request.body);
+      if (!parsed.success) return reply.code(400).send({ error: "Tempo de preparo inválido (use de 5 a 240 minutos).", code: "VALIDATION_ERROR", details: parsed.error.flatten() });
+      return { hours: await service.setPrepTimes(request.user, parsed.data) };
     });
 
     app.post("/api/store/status", { preHandler: app.requirePanelAuth }, async (request, reply) => {
