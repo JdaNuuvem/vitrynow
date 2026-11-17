@@ -116,6 +116,7 @@ model Store {
   subscription Subscription?
   counter      StoreCounter?
   printJobs    PrintJob[]
+  printMode    PrintMode @default(LEGACY) // modo de impressão decidido pelo SERVIDOR por loja (ADR-0004 §8.12)
 }
 
 // Contador atômico por loja (hoje: sequência do código do pedido). Incrementado com
@@ -515,6 +516,13 @@ model RevokedSession {
 
 // Fila de impressão (ADR-0004). O servidor decide, o cliente obedece: claim com lease (relógio do BANCO), ack
 // idempotente pelo dono, recuo por falha (availableAt). Tabela nova ⇒ FK composta (orderId, storeId) → Order(id, storeId).
+// Modo de impressão da loja (ADR-0004 §8.12): LEGACY = o cliente lista pedidos com printedAt nulo; QUEUE = o cliente consome
+// jobs (claim/ack). O servidor impede a impressão em dobro: só um dos dois caminhos funciona por vez.
+enum PrintMode {
+  LEGACY
+  QUEUE
+}
+
 enum PrintKind {
   ORDER_KITCHEN // tíquete do pedido (1ª impressão)
   ORDER_REPRINT // 2ª via, com contador

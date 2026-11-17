@@ -35,6 +35,8 @@ describe("QA aviso de cancelamento da fila de impressão (C1)", () => {
   async function pedidoImpresso() {
     const { cookie, response } = await registerStore(app);
     const store = json(response).store as { id: string; slug: string };
+    // API-12b: o aviso de cancelamento só existe com a loja em modo QUEUE (em LEGACY ninguém consome a fila).
+    await prisma.store.update({ where: { id: store.id }, data: { printMode: "QUEUE" } });
     const cat = json(await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie: cookie! }, payload: { name: "C" } })).category.id;
     const productId = json(await app.inject({ method: "POST", url: "/api/catalog/products", headers: { cookie: cookie! }, payload: { categoryId: cat, name: "P", priceCents: 1000 } })).product.id as string;
     const token = json(await app.inject({ method: "POST", url: "/api/device-tokens", headers: { cookie: cookie! }, payload: { label: "PC" } })).token.token as string;
