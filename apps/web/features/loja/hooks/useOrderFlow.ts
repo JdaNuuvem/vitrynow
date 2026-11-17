@@ -24,6 +24,8 @@ export type PlacedOrderState = {
   // acompanhar nem cancelar); "expired" = recuperada com o PIX vencido. Só código, total e PIX voltam do sessionStorage.
   resume: "none" | "valid" | "expired";
   pixExpiresAt: number | null;
+  // Total a pagar (com taxa e gorjeta), para a tela do PIX; na tela recuperada vem do que foi guardado.
+  totalCents: number | null;
 };
 
 // Sem prometer telefone: a loja pública só tem WhatsApp (e nem toda loja o cadastrou). O botão do WhatsApp vem da tela, se houver.
@@ -74,6 +76,7 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
           trackingUnavailable: true,
           resume: "expired",
           pixExpiresAt: null,
+          totalCents: null,
         },
       );
       return;
@@ -94,6 +97,7 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
         resume: "valid",
         // só o prazo que o SERVIDOR deu vira "Vale até"; o de reserva local apenas esconde o QR quando vence
         pixExpiresAt: record.pixExpiryKnown ? record.pixExpiresAt : null,
+        totalCents: record.totalCents,
       },
     );
   }, [slug]);
@@ -209,6 +213,7 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
       trackingUnavailable: !result.data.token,
       resume: "none",
       pixExpiresAt: null,
+      totalCents,
     });
     return true;
   }

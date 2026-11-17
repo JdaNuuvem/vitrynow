@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OrderSummary } from "../checkoutForm";
 import { OrderResultScreen } from "./OrderResultScreen";
 
@@ -189,7 +189,7 @@ describe("OrderResultScreen: espera do PIX (aviso e copiar)", () => {
   it("mostra 'Não feche esta página antes de pagar.' ACIMA do QR e o botão 'Copiar código PIX'", () => {
     setup({ pixData: pix });
     const warning = screen.getByText("Não feche esta página antes de pagar.");
-    const qr = screen.getByAltText("QR Code PIX");
+    const qr = screen.getByAltText(/QR Code do PIX do pedido #/);
     expect(warning.compareDocumentPosition(qr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole("button", { name: "Copiar código PIX" })).toBeInTheDocument();
   });
@@ -251,7 +251,7 @@ describe("OrderResultScreen: tela recuperada depois de recarregar (WEB-33b, UI-V
   it("PIX válido: 'Pedido #0123 enviado', mesmo QR e copiar, prazo e faixa; sem cancelar e sem 'verificando'", () => {
     setup({ code: "0123", resume: "valid", trackingUnavailable: true, pixData: pix, pixExpiresAt: expires, summary: null, whatsapp: "5521999999999" });
     expect(screen.getByRole("heading", { name: "Pedido #0123 enviado" })).toBeInTheDocument();
-    expect(screen.getByAltText("QR Code PIX")).toBeInTheDocument();
+    expect(screen.getByAltText(/QR Code do PIX do pedido #/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copiar código PIX" })).toBeInTheDocument();
     expect(screen.getByLabelText("Código PIX (copia e cola)")).toHaveValue("000201PIXCODE");
     expect(screen.getByText("Depois de pagar, a loja recebe o pedido. Se tiver dúvida, fale com a loja.")).toBeInTheDocument();
@@ -266,7 +266,7 @@ describe("OrderResultScreen: tela recuperada depois de recarregar (WEB-33b, UI-V
 
   it("sem prazo do servidor: mostra o QR e NÃO mostra 'Vale até' (nenhuma hora inventada)", () => {
     setup({ code: "0123", resume: "valid", trackingUnavailable: true, pixData: pix, pixExpiresAt: null, summary: null });
-    expect(screen.getByAltText("QR Code PIX")).toBeInTheDocument();
+    expect(screen.getByAltText(/QR Code do PIX do pedido #/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copiar código PIX" })).toBeInTheDocument();
     expect(screen.queryByText(/Vale até/)).not.toBeInTheDocument();
   });
@@ -279,7 +279,7 @@ describe("OrderResultScreen: tela recuperada depois de recarregar (WEB-33b, UI-V
   it("PIX vencido: 'Este PIX venceu…', sem QR e sem pagar, 'Voltar ao cardápio' como botão primário", async () => {
     const { onBack } = setup({ code: "0123", resume: "expired", trackingUnavailable: true, pixData: null, summary: null, whatsapp: "5521999999999" });
     expect(screen.getByText("Este PIX venceu. Faça o pedido de novo. Se você já pagou, fale com a loja.")).toBeInTheDocument();
-    expect(screen.queryByAltText("QR Code PIX")).not.toBeInTheDocument();
+    expect(screen.queryByAltText(/QR Code do PIX/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Copiar código PIX" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancelar pedido" })).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Falar com a loja no WhatsApp" })).toBeInTheDocument();
@@ -295,5 +295,154 @@ describe("OrderResultScreen: tela recuperada depois de recarregar (WEB-33b, UI-V
   it("o botão de copiar tem alvo de pelo menos 44 px (classe de botão principal, min-height 3rem)", () => {
     setup({ code: "0123", resume: "valid", trackingUnavailable: true, pixData: pix, pixExpiresAt: expires, summary: null });
     expect(screen.getByRole("button", { name: "Copiar código PIX" })).toHaveClass("loja__cta");
+  });
+});
+
+
+// ---- WEB-33b, parecer visual da Da Vinci (A1 a A5; spec 09 §10.6 "Ordem e hierarquia da tela do PIX")
+const stubViewport = (wide: boolean) =>
+  vi.stubGlobal("matchMedia", (query: string) => ({ matches: wide, media: query, addEventListener: () => {}, removeEventListener: () => {} }));
+
+describe("OrderResultScreen: hierarquia, valor e ordem da tela do PIX (A1 a A4)", () => {
+  const pix = { pixQrCode: "000201PIXCODE", pixQrCodeBase64: "QUJD" };
+  const base = { code: "0101", resume: "valid" as const, trackingUnavailable: true, pixData: pix, pixExpiresAt: Date.parse("2026-11-17T04:45:00"), totalCents: 4500, storeName: "Pizzaria Boa", whatsapp: "5521999999999", summary: null };
+  afterEach(() => vi.unstubAllGlobals());
+  beforeEach(() => stubViewport(true));
+
+  it("A1: com PIX válido o ÚNICO primário é 'Copiar código PIX'; 'Voltar ao cardápio' é secundário (contorno)", () => {
+    setup(base);
+    expect(screen.getByRole("button", { name: "Copiar código PIX" })).toHaveClass("loja__cta");
+    expect(screen.getByRole("button", { name: "Copiar código PIX" })).not.toHaveClass("loja__cta--outline");
+    expect(screen.getByRole("button", { name: "Voltar ao cardápio" })).toHaveClass("loja__cta--outline");
+  });
+
+  it("A1: também na espera normal do PIX (pedido recém-feito, com acompanhamento)", () => {
+    setup({ pixData: pix, totalCents: 4500, summary });
+    expect(screen.getByRole("button", { name: "Voltar ao cardápio" })).toHaveClass("loja__cta--outline");
+    expect(screen.getByRole("button", { name: "Copiar código PIX" })).not.toHaveClass("loja__cta--outline");
+  });
+
+  it("A1: só no PIX VENCIDO 'Voltar ao cardápio' é o primário", () => {
+    setup({ code: "0101", resume: "expired", trackingUnavailable: true, pixData: null, summary: null });
+    expect(screen.getByRole("button", { name: "Voltar ao cardápio" })).not.toHaveClass("loja__cta--outline");
+  });
+
+  it("A1: sem PIX (dinheiro, cartão) nada muda: 'Voltar ao cardápio' segue primário", () => {
+    setup();
+    expect(screen.getByRole("button", { name: "Voltar ao cardápio" })).not.toHaveClass("loja__cta--outline");
+  });
+
+  it("A2: mostra 'Total a pagar: R$ 45,00' junto do 'Vale até'", () => {
+    setup(base);
+    expect(screen.getByText("Total a pagar: R$ 45,00")).toBeInTheDocument();
+    const total = screen.getByText("Total a pagar: R$ 45,00");
+    const until = screen.getByText(/Vale até 04:45/);
+    expect(total.compareDocumentPosition(until) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("A2: na espera normal (recém-feito) também mostra o total a pagar; sem total guardado, não inventa", () => {
+    const { onBack } = setup({ pixData: pix, totalCents: 3000, summary });
+    expect(onBack).not.toHaveBeenCalled();
+    expect(screen.getByText("Total a pagar: R$ 30,00")).toBeInTheDocument();
+  });
+
+  it("A2: sem totalCents a linha não aparece", () => {
+    setup({ ...base, totalCents: null });
+    expect(screen.queryByText(/Total a pagar/)).not.toBeInTheDocument();
+  });
+
+  it("A2: pedido sem PIX não mostra 'Total a pagar'", () => {
+    setup({ totalCents: 4500 });
+    expect(screen.queryByText(/Total a pagar/)).not.toBeInTheDocument();
+  });
+
+  it("A4: o nome da loja aparece ACIMA do título; sem nome, nada", () => {
+    setup(base);
+    const store = screen.getByText("Pizzaria Boa");
+    const heading = screen.getByRole("heading", { name: "Pedido #0101 enviado" });
+    expect(store.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("A4: sem storeName não renderiza linha vazia", () => {
+    setup({ ...base, storeName: null });
+    expect(document.querySelector(".loja__result-store")).toBeNull();
+  });
+
+  it("ordem completa: loja, título, total e prazo, copiar, copia e cola, QR, faixa, WhatsApp, voltar", () => {
+    setup(base);
+    const at = (el: Element | null) => {
+      expect(el).not.toBeNull();
+      return el as Element;
+    };
+    const sequence = [
+      screen.getByText("Pizzaria Boa"),
+      screen.getByRole("heading", { name: "Pedido #0101 enviado" }),
+      screen.getByText("Total a pagar: R$ 45,00"),
+      screen.getByText(/Vale até 04:45/),
+      screen.getByRole("button", { name: "Copiar código PIX" }),
+      screen.getByLabelText("Código PIX (copia e cola)"),
+      screen.getByAltText(/QR Code do PIX/),
+      screen.getByText("Depois de pagar, a loja recebe o pedido. Se tiver dúvida, fale com a loja."),
+      screen.getByRole("link", { name: "Falar com a loja no WhatsApp" }),
+      screen.getByRole("button", { name: "Voltar ao cardápio" }),
+    ].map(at);
+    for (let i = 0; i < sequence.length - 1; i++) {
+      expect(sequence[i].compareDocumentPosition(sequence[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING, `passo ${i}`).toBeTruthy();
+    }
+  });
+
+  it("A3: o WhatsApp vem DEPOIS do copia e cola e do QR (apoio, não compete com pagar)", () => {
+    setup({ pixData: pix, trackingUnavailable: true, whatsapp: "5521999999999", summary: null });
+    const code = screen.getByLabelText("Código PIX (copia e cola)");
+    const link = screen.getByRole("link", { name: "Falar com a loja no WhatsApp" });
+    expect(code.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+describe("OrderResultScreen: celular, QR recolhido (A5)", () => {
+  const pix = { pixQrCode: "000201PIXCODE", pixQrCodeBase64: "QUJD" };
+  const base = { code: "0101", resume: "valid" as const, trackingUnavailable: true, pixData: pix, pixExpiresAt: null, totalCents: 4500, summary: null };
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("< 800 px: 'Copie o código e pague no app do seu banco.', copiar em destaque e o QR recolhido atrás de 'Mostrar QR Code'", () => {
+    stubViewport(false);
+    setup(base);
+    expect(screen.getByText("Copie o código e pague no app do seu banco.")).toBeInTheDocument();
+    expect(screen.queryByText(/Escaneie o QR Code/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copiar código PIX" })).toBeInTheDocument();
+    const summaryEl = screen.getByText("Mostrar QR Code");
+    const details = summaryEl.closest("details") as HTMLDetailsElement;
+    expect(details).not.toBeNull();
+    expect(details.open).toBe(false);
+    // recolhido, não removido: quem paga com outro aparelho ainda alcança o QR
+    expect(details.querySelector("img")).not.toBeNull();
+  });
+
+  it("< 800 px: abrir a seção mostra o QR (funciona por teclado: é um <summary>)", async () => {
+    stubViewport(false);
+    setup(base);
+    await userEvent.click(screen.getByText("Mostrar QR Code"));
+    expect((screen.getByText("Mostrar QR Code").closest("details") as HTMLDetailsElement).open).toBe(true);
+  });
+
+  it(">= 800 px: QR visível acima da frase de escanear, sem seção recolhida", () => {
+    stubViewport(true);
+    setup(base);
+    expect(screen.getByText("Escaneie o QR Code ou copie o código para pagar via PIX:")).toBeInTheDocument();
+    expect(screen.queryByText("Mostrar QR Code")).not.toBeInTheDocument();
+    expect(screen.getByAltText(/QR Code do PIX do pedido #0101/).closest("details")).toBeNull();
+  });
+
+  it("a frase do celular só vale com o botão 'Copiar código PIX' visível: sem copia e cola, volta a frase do QR", () => {
+    stubViewport(false);
+    setup({ ...base, pixData: { pixQrCode: null, pixQrCodeBase64: "QUJD" } });
+    expect(screen.queryByText("Copie o código e pague no app do seu banco.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copiar código PIX" })).not.toBeInTheDocument();
+  });
+
+  it("o QR tem texto alternativo com o número do pedido", () => {
+    stubViewport(true);
+    setup(base);
+    expect(screen.getByAltText("QR Code do PIX do pedido #0101")).toBeInTheDocument();
   });
 });

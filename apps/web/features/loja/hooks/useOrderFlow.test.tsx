@@ -382,6 +382,18 @@ describe("useOrderFlow: voltar ao QR depois de recarregar (WEB-33b)", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
+  it("A2: o total a pagar volta junto da retomada (e o do pedido recém-feito fica no estado)", async () => {
+    saved({ totalCents: 4500 });
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await act(async () => {});
+    expect(t.result.current.placed?.totalCents).toBe(4500);
+    t.unmount();
+    sessionStorage.clear();
+    const live = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await placePixOrder(live);
+    expect(live.result.current.placed?.totalCents).toBe(3000);
+  });
+
   it("UI-V-21: recarregar com PIX vencido mostra 'venceu' (sem QR) e apaga a chave", async () => {
     saved({ placedAt: NOW - 3_600_000, pixExpiresAt: NOW - 1000 });
     const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);

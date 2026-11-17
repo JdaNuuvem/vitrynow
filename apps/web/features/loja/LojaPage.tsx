@@ -93,6 +93,8 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
           trackingUnavailable={order.placed.trackingUnavailable}
           resume={order.placed.resume}
           pixExpiresAt={order.placed.pixExpiresAt}
+          storeName={store.name}
+          totalCents={order.placed.totalCents}
           summary={order.placed.summary}
           whatsapp={store.whatsapp}
           onCancel={order.cancel}
