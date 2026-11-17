@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import * as emailLib from "../src/lib/email";
-import { FORGOT_MIN_DURATION_MS, RESET_COOLDOWN_MS, RESET_MAX_ATTEMPTS_PER_HOUR, RESET_MAX_PER_HOUR, issueResetToken, markResetSendFailed } from "../src/lib/passwordReset";
+import { FORGOT_MIN_DURATION_MS, RESET_COOLDOWN_MS, RESET_MAX_ATTEMPTS_PER_HOUR, RESET_MAX_PER_HOUR, floorExceeded, issueResetToken, markResetSendFailed, padToMinimum, resetFloorStats } from "../src/lib/passwordReset";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
 // SEC-28b (ST-64, ST-65, ST-66; Sun Tzu): (1) conta existente, inexistente e limitada executam a MESMA sequência de instruções no banco (o piso de
@@ -237,5 +237,32 @@ describe("ST-65/ST-66: sendPasswordResetEmail informa se saiu, e o texto diz 'us
     expect(html).toContain("mais recente");
     expect(html).toContain("anteriores deixam de valer");
     expect(html).toContain("válido por 1 hora");
+  });
+});
+
+describe("SEC-33: aviso `<rota>_floor_exceeded` quando a resposta passa do piso de tempo", () => {
+  beforeEach(() => resetFloorStats());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("dentro do piso: espera e NÃO conta; fora do piso: conta e avisa uma vez por minuto por rota, com o tempo gasto e sem dado de conta", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await padToMinimum(performance.now(), 20); // dentro do piso: dorme o resto e segue
+    expect(floorExceeded).toEqual({ forgot: 0, reset: 0 });
+    expect(warn).not.toHaveBeenCalled();
+
+    await padToMinimum(performance.now() - 1000, FORGOT_MIN_DURATION_MS); // já passou 1 s: piso excedido
+    expect(floorExceeded.forgot).toBe(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = String(warn.mock.calls[0][0]);
+    expect(line).toContain("[forgot_floor_exceeded]");
+    expect(line).toMatch(/\d+ ms > 350 ms/);
+    await padToMinimum(performance.now() - 1000, FORGOT_MIN_DURATION_MS); // 2ª no mesmo minuto: conta, não repete o aviso
+    expect(floorExceeded.forgot).toBe(2);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    await padToMinimum(performance.now() - 1000, 300, "reset"); // outra rota tem o próprio aviso e o próprio contador
+    expect(floorExceeded).toEqual({ forgot: 2, reset: 1 });
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(String(warn.mock.calls[1][0])).toContain("[reset_floor_exceeded]");
   });
 });

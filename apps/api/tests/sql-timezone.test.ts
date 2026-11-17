@@ -145,8 +145,8 @@ describe("guarda de fuso: UTC passa em silêncio", () => {
     const log = { error: (obj: unknown) => void logs.push(obj) };
     for (const env of ["production", "development", "test", undefined]) await expect(assertDatabaseTimezone(prisma, env, log)).resolves.toMatch(/utc/i);
     expect(logs).toHaveLength(0);
-    for (const name of ["UTC", "Etc/UTC", "etc/uct", "Zulu"]) expect(isUtcName(name), name).toBe(true);
-    for (const name of ["America/Sao_Paulo", "Asia/Tokyo", "GMT+3", "", "UTC-3"]) expect(isUtcName(name), name).toBe(false);
+    for (const name of ["UTC", "Etc/UTC", "etc/uct", "Zulu", "GMT", "Etc/GMT", "Etc/GMT+0", "Etc/GMT-0", "GMT0", "Greenwich"]) expect(isUtcName(name), name).toBe(true);
+    for (const name of ["America/Sao_Paulo", "Asia/Tokyo", "GMT+3", "Etc/GMT+3", "Etc/GMT-9", "", "UTC-3", "Europe/London"]) expect(isUtcName(name), name).toBe(false);
     await setDbTimezone(null);
   }, 60000);
 });

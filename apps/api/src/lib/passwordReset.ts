@@ -70,9 +70,31 @@ export async function markResetSendFailed(id: string): Promise<void> {
 // "banco na mesma rede" e a regra de revisão do piso estão em docs/forgot-password-tempo.md.
 export const FORGOT_MIN_DURATION_MS = 350;
 
-export async function padToMinimum(startedAt: number, minMs: number = FORGOT_MIN_DURATION_MS): Promise<void> {
-  const remaining = minMs - (performance.now() - startedAt);
-  if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+// SEC-33: quando o trabalho JÁ passou do piso (`remaining <= 0`) o piso deixou de mascarar e o tempo volta a revelar o caminho. Isso é sinal de
+// operação (banco lento, CPU saturada, piso curto para a topologia): conta em `floorExceeded` e registra o aviso `<rota>_floor_exceeded` com o tempo
+// gasto e o piso (sem e-mail nem conta), no máximo 1 por minuto por rota para não virar ruído sob carga.
+export type FloorRoute = "forgot" | "reset";
+export const floorExceeded: Record<FloorRoute, number> = { forgot: 0, reset: 0 };
+const lastFloorWarn: Record<FloorRoute, number> = { forgot: 0, reset: 0 };
+const FLOOR_WARN_EVERY_MS = 60_000;
+export function resetFloorStats() {
+  floorExceeded.forgot = floorExceeded.reset = 0;
+  lastFloorWarn.forgot = lastFloorWarn.reset = 0;
+}
+
+export async function padToMinimum(startedAt: number, minMs: number = FORGOT_MIN_DURATION_MS, route: FloorRoute = "forgot"): Promise<void> {
+  const elapsed = performance.now() - startedAt;
+  const remaining = minMs - elapsed;
+  if (remaining > 0) {
+    await new Promise((resolve) => setTimeout(resolve, remaining));
+    return;
+  }
+  floorExceeded[route] += 1;
+  const now = Date.now();
+  if (now - lastFloorWarn[route] >= FLOOR_WARN_EVERY_MS) {
+    lastFloorWarn[route] = now;
+    console.warn(`[${route}_floor_exceeded] a resposta passou do piso de tempo: ${Math.round(elapsed)} ms > ${minMs} ms (total no processo: ${floorExceeded[route]}); revisar docs/forgot-password-tempo.md`);
+  }
 }
 
 // SEC-29 (ST-67): na redefinição, o e-mail digitado é comparado com o da conta do token SEM revelar nada: tempo constante (comparamos os

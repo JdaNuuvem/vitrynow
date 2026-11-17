@@ -201,7 +201,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         // com o erro de validação, que não depende do token e por isso não é oráculo.
         const onlyEmail = parsed.error.issues.length > 0 && parsed.error.issues.every((issue) => issue.path[0] === "email");
         if (onlyEmail) {
-          await padToMinimum(startedAt, RESET_FAIL_MIN_DURATION_MS);
+          await padToMinimum(startedAt, RESET_FAIL_MIN_DURATION_MS, "reset");
           return reply.code(400).send({ error: "token inválido ou expirado" });
         }
         return reply.code(400).send({ error: parsed.error.flatten() });
@@ -242,7 +242,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         return resetToken.userId;
       });
       if (!outcome || !resetToken) {
-        await padToMinimum(startedAt, RESET_FAIL_MIN_DURATION_MS);
+        await padToMinimum(startedAt, RESET_FAIL_MIN_DURATION_MS, "reset");
         return reply.code(400).send({ error: "token inválido ou expirado" });
       }
 
