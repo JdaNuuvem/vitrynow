@@ -100,6 +100,7 @@ namespace MeuCardapio.PrintClient.Services
         public TimeSpan AlertDedupeWindow = TimeSpan.FromMinutes(10);
         public TimeSpan AlertTimeout = TimeSpan.FromSeconds(3);
         public TimeSpan AlertSuppression = TimeSpan.FromMinutes(10);   // 404 (API sem a rota): para de tentar por um prazo
+        public TimeSpan ModeAlertRetry = TimeSpan.FromSeconds(60);     // MODE_UNCONFIRMED/MODE_RECOVERED perdidos: tenta de novo, no minimo apos este prazo
         const int MaxAlertsInFlight = 5;
         static readonly System.Text.RegularExpressions.Regex OrderIdFormat = new System.Text.RegularExpressions.Regex(@"^c[a-z0-9]{24}$");
         static readonly System.Text.RegularExpressions.Regex VersionFormat = new System.Text.RegularExpressions.Regex(@"^[0-9A-Za-z._-]{1,20}$");
@@ -108,6 +109,7 @@ namespace MeuCardapio.PrintClient.Services
         bool _unconfirmedAlertSent;
         int _alertsInFlight;
         long _alertSuppressedUntilTicks;
+        long _modeAlertRetryAfterTicks;
 
         public static string ClientVersion
         {
@@ -136,9 +138,11 @@ namespace MeuCardapio.PrintClient.Services
             lock (_alertLock)
             {
                 // MODE_UNCONFIRMED so uma vez ate recuperar; MODE_RECOVERED so depois de um MODE_UNCONFIRMED enviado.
+                // Se o envio se perder (rede, 5xx, 404), SendAlertAsync desfaz a marca e o proximo ConfigFailed/ConfigAnswered tenta de novo (apos ModeAlertRetry).
+                var now = DateTime.UtcNow;
+                if ((code == DeviceAlertCode.ModeRecovered || code == DeviceAlertCode.ModeUnconfirmed) && now.Ticks < Interlocked.Read(ref _modeAlertRetryAfterTicks)) return false;
                 if (code == DeviceAlertCode.ModeRecovered) { if (!_unconfirmedAlertSent) return false; }
                 else if (code == DeviceAlertCode.ModeUnconfirmed) { if (_unconfirmedAlertSent) return false; }
-                var now = DateTime.UtcNow;
                 var key = code + "|" + (oid ?? "");
                 if (code != DeviceAlertCode.ModeRecovered && code != DeviceAlertCode.ModeUnconfirmed)
                 {
@@ -156,12 +160,24 @@ namespace MeuCardapio.PrintClient.Services
             if (oid != null) body["orderId"] = oid;
             body["clientVersion"] = ClientVersion;
             var json = body.ToString(Formatting.None);
-            Task.Run(() => SendAlertAsync(json));
+            Task.Run(() => SendAlertAsync(json, code));
             return true;
         }
 
-        async Task SendAlertAsync(string json)
+        // Alerta de modo que NAO chegou: desfaz a marca "ja enviei" (so se o estado ainda e o que o envio criou) e segura novas tentativas por ModeAlertRetry.
+        void RevertModeAlert(string code)
         {
+            lock (_alertLock)
+            {
+                Interlocked.Exchange(ref _modeAlertRetryAfterTicks, (DateTime.UtcNow + ModeAlertRetry).Ticks);
+                if (code == DeviceAlertCode.ModeUnconfirmed) { if (_unconfirmedAlertSent) _unconfirmedAlertSent = false; }
+                else if (code == DeviceAlertCode.ModeRecovered) { if (!_unconfirmedAlertSent) _unconfirmedAlertSent = true; }
+            }
+        }
+
+        async Task SendAlertAsync(string json, string alertCode)
+        {
+            bool delivered = false;
             try
             {
                 using (var cts = new CancellationTokenSource(AlertTimeout))
@@ -172,11 +188,16 @@ namespace MeuCardapio.PrintClient.Services
                     int code = (int)response.StatusCode;
                     if (code == 401 || code == 403) { NoteAuthFailure(code, false); return; }
                     if (code == 404) Interlocked.Exchange(ref _alertSuppressedUntilTicks, (DateTime.UtcNow + AlertSuppression).Ticks);
-                    // 2xx, 429, 5xx e o resto: descartado. O corpo da resposta NUNCA e lido.
+                    delivered = code >= 200 && code < 300;
+                    // O corpo da resposta NUNCA e lido. Alerta comum perdido e descartado; so os de modo (estado) sao reenviados.
                 }
             }
             catch { /* melhor esforco: alerta perdido nao atrapalha nada */ }
-            finally { Interlocked.Decrement(ref _alertsInFlight); }
+            finally
+            {
+                Interlocked.Decrement(ref _alertsInFlight);
+                if (!delivered && (alertCode == DeviceAlertCode.ModeUnconfirmed || alertCode == DeviceAlertCode.ModeRecovered)) { try { RevertModeAlert(alertCode); } catch { } }
+            }
         }
         public string CurrentMode { get { return _mode; } }
         public event Action<string> ModeChanged;
@@ -389,17 +410,19 @@ namespace MeuCardapio.PrintClient.Services
         void ConfigAnswered()
         {
             Interlocked.Exchange(ref _configFailures, 0);
-            if (_modeUnconfirmed) { _modeUnconfirmed = false; StatusChanged?.Invoke("Modo de impressão da loja confirmado novamente."); ReportAlert(DeviceAlertCode.ModeRecovered); }
+            if (_modeUnconfirmed) { _modeUnconfirmed = false; StatusChanged?.Invoke("Modo de impressão da loja confirmado novamente."); }
+            ReportAlert(DeviceAlertCode.ModeRecovered);   // so sai se um MODE_UNCONFIRMED chegou a ser enviado (e repete se o MODE_RECOVERED anterior se perdeu)
         }
 
         void ConfigFailed()
         {
             int n = Interlocked.Increment(ref _configFailures);
-            if (n >= ConfigFailuresBeforeWarning && !_modeUnconfirmed)
+            if (n >= ConfigFailuresBeforeWarning)
             {
+                bool first = !_modeUnconfirmed;
                 _modeUnconfirmed = true;
-                ReportAlert(DeviceAlertCode.ModeUnconfirmed);
-                StatusChanged?.Invoke("Não consigo confirmar o modo de impressão da loja (a configuração não responde). Continuo no modo atual; se a loja mudou de modo, os pedidos podem não sair: avise o suporte.");
+                ReportAlert(DeviceAlertCode.ModeUnconfirmed);   // uma vez; se o envio se perdeu, repete a cada falha (com ModeAlertRetry de intervalo)
+                if (first) StatusChanged?.Invoke("Não consigo confirmar o modo de impressão da loja (a configuração não responde). Continuo no modo atual; se a loja mudou de modo, os pedidos podem não sair: avise o suporte.");
             }
         }
 

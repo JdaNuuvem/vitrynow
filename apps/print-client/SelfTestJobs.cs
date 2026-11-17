@@ -951,6 +951,30 @@ namespace MeuCardapio.PrintClient
                     }
                 }
 
+                // 11b) o MODE_UNCONFIRMED que se perdeu (500) e REENVIADO enquanto o modo segue sem confirmar; depois de entregue, nao repete
+                using (var api = new FakeApi { AlertStatus = 500 })
+                {
+                    api.PrintMode = "LEGACY"; api.ConfigStatus = 500;
+                    var o = Order("mr", "7414"); LegacyOrder(api, o);
+                    using (var rig = StartedRig(api, new VirtualPrintTarget(Path.Combine(dir, "a11b")), null, "mcd_impressora1_segredo", usePrintJobs: false))
+                    {
+                        rig.Device.ConfigFailuresBeforeWarning = 3; rig.Device.ModeAlertRetry = TimeSpan.FromMilliseconds(300);
+                        bool lost = WaitFor(() => rig.Device.ModeUnconfirmed && api.AlertCalls >= 1, 20000);
+                        api.AlertStatus = 204;
+                        bool resent = WaitFor(() => api.AlertCalls >= 2 && api.AlertSnapshot().Count(b => (string)Newtonsoft.Json.Linq.JObject.Parse(b)["code"] == "MODE_UNCONFIRMED") >= 2, 30000);
+                        int calls = api.AlertCalls; System.Threading.Thread.Sleep(1500);
+                        Check("alerta: MODE_UNCONFIRMED perdido (500) e reenviado enquanto o modo segue sem confirmar (chamadas: " + calls + ")", lost && resent);
+                        Check("alerta: MODE_UNCONFIRMED entregue (204) NAO se repete (chamadas antes/depois: " + calls + "/" + api.AlertCalls + ")", api.AlertCalls == calls);
+                        // MODE_RECOVERED perdido: a config volta, o alerta falha, e e reenviado na proxima resposta
+                        api.AlertStatus = 500; api.ConfigStatus = 200; int before = api.AlertCalls;
+                        bool recLost = WaitFor(() => api.AlertCalls > before, 20000);
+                        api.AlertStatus = 204;
+                        bool recResent = WaitFor(() => api.AlertSnapshot().Count(b => (string)Newtonsoft.Json.Linq.JObject.Parse(b)["code"] == "MODE_RECOVERED") >= 2, 30000);
+                        int after = api.AlertCalls; System.Threading.Thread.Sleep(1500);
+                        Check("alerta: MODE_RECOVERED perdido (500) e reenviado na config seguinte, depois nao repete", recLost && recResent && api.AlertCalls == after);
+                    }
+                }
+
                 // 12) teto de alertas em voo: uma rajada de pedidos distintos nao inunda o servidor nem trava nada
                 using (var api = new FakeApi { AlertDelayMs = 2500 })
                 {
