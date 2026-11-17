@@ -329,12 +329,12 @@ docker exec "$CID" sh -c 'touch /etc/caddy/x 2>/dev/null' && check fail "o Caddy
 docker exec "$CID" sh -c 'touch /data/.w && rm /data/.w && touch /config/.w && rm /config/.w' && check ok "/data (conta ACME) e /config são graváveis pelo usuário sem privilégio" || check fail "o Caddy sem root não consegue gravar em /data ou /config"
 for i in $(seq 1 20); do hs="$(docker inspect -f '{{.State.Health.Status}}' "$CID")"; [ "$hs" = healthy ] && break; sleep 3; done
 [ "$hs" = healthy ] && check ok "healthcheck do Caddy: healthy" || check fail "healthcheck do Caddy: $hs"
-# NG-16 (Deming): o log de acesso do Caddy também gravaria a URL com ?token=. O Caddyfile não tem `log`, então não deve gravar; confere
-# no comportamento: um valor único na query não pode aparecer nos logs do Caddy. (Sem controle positivo: se o Caddy não logasse NADA
-# por outro motivo, o teste também passaria; por isso o texto diz "não registra", não "redige".)
+# NG-16 (Deming): o log de ACESSO do Caddy também gravaria a URL com ?token=. O Caddyfile não tem `log` de site, então esse log NÃO EXISTE; confere
+# no comportamento: um valor único na query não pode aparecer nos logs do Caddy. ATENÇÃO: isto cobre SÓ o log de ACESSO. O log de ERRO (upstream
+# fora do ar) é outro caminho e é provado na seção 11 (C1, INF-19), com controle positivo. Este teste NÃO tem controle positivo.
 qtok="smoke-q-$RANDOM$RANDOM$RANDOM"
 curl -s -o /dev/null "http://127.0.0.1:$PORT/health?token=$qtok&code=$qtok"; sleep 2
-[ "$("${DC[@]}" logs caddy 2>&1 | grep -c "$qtok")" = 0 ] && check ok "NG-16: o Caddy não registra a URL com token/code na query (nenhuma linha de acesso nos logs)" || check fail "NG-16: o valor do token apareceu nos logs do Caddy"
+[ "$("${DC[@]}" logs caddy 2>&1 | grep -c "$qtok")" = 0 ] && check ok "NG-16: o log de ACESSO não existe: a URL com token/code na query não aparece nos logs do Caddy (o log de ERRO é a seção 11)" || check fail "NG-16: o valor do token apareceu nos logs do Caddy"
 # redes: o banco só existe na rede de dados (interna). Caddy e web não o enxergam; a API sim (controle positivo).
 # Prova por CONEXÃO ao IP do banco (um timeout de DNS não prova nada: o resolvedor do Docker demora a responder nomes que não conhece).
 ares="$("${DC[@]}" exec -T api node -e "require('dns').lookup('postgres',(e,a)=>console.log(e?'ERRO '+e.code:'ok '+a))" 2>&1 | tr -d '\r' | tail -1)"
@@ -353,5 +353,27 @@ echo "   módulo no binário: $(docker exec "$CID" caddy build-info 2>&1 | tr -d
 echo "   imagem final (id): $(docker inspect -f '{{.Image}}' "$CID")"
 docker exec "$CID" caddy build-info 2>&1 | tr -d '\r' | grep -qi 'caddy-ratelimit.*5625512f24f6' && check ok "o binário contém o módulo no commit travado 5625512f24f6" || check fail "build-info não mostra o commit esperado do módulo"
 
+
+echo "== 11 C1 (INF-19): o log de ERRO do Caddy, com web/API fora do ar, não grava token, caminho nem cabeçalhos"
+# Tem de ser a ÚLTIMA seção: derruba web e api. Valores ÚNICOS por execução. O log de erro padrão do Caddy (`http.log.error`) existe MESMO sem
+# diretiva `log` e, sem filtro, grava o objeto `request` inteiro (medido em 17/11: ?token=, token no caminho e cabeçalhos custom saíam em claro;
+# só Authorization/Cookie/Set-Cookie/Proxy-Authorization saíam REDACTED). O filtro do Caddyfile apaga `request>headers` e reduz o `uri`.
+u1="smoke-u1-$RANDOM$RANDOM"; u2="smoke-u2-$RANDOM$RANDOM"; u3="smoke-u3-$RANDOM$RANDOM"; u4="smoke-u4-$RANDOM$RANDOM"; u5="smoke-u5-$RANDOM$RANDOM"; u6="smoke-u6-$RANDOM$RANDOM"; u7="smoke-u7-$RANDOM$RANDOM"
+"${DC[@]}" stop web api >/dev/null 2>&1
+c1="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "http://127.0.0.1:$PORT/reset-senha?token=$u1")"                       # web fora: token na QUERY
+c2="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "http://127.0.0.1:$PORT/loja/x/m/$u2")"                                # web fora: token no CAMINHO (QR de mesa)
+c3="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 -H "X-Mfa-Challenge: $u3" -H "X-Order-Token: $u5" -H "X-Admin-Token: $u6" -H "Authorization: $u4" -H "Cookie: sid=$u7" "http://127.0.0.1:$PORT/stores/x/menu")"   # API fora: cabeçalhos
+sleep 2
+cl="$("${DC[@]}" logs caddy 2>&1)"
+# autoverificação: se alguma requisição NÃO chegou ao proxy e falhou (ex.: 429 do limite por IP, 404), o teste não provou nada
+if [ "$c1/$c2/$c3" = "502/502/502" ]; then check ok "as 3 requisições chegaram ao proxy e falharam com 502 (web e API fora do ar): o teste vale"
+else check fail "TESTE INVÁLIDO: esperava 502/502/502 (proxy sem upstream) e veio $c1/$c2/$c3 (429 = limite por IP ainda ativo)"; fi
+leaks=0; for u in "$u1" "$u2" "$u3" "$u4" "$u5" "$u6" "$u7"; do leaks=$((leaks + $(printf '%s' "$cl" | grep -c "$u"))); done
+[ "$leaks" = 0 ] && check ok "C1: nenhum dos 7 valores únicos (query, caminho, X-Mfa-Challenge, X-Order-Token, X-Admin-Token, Authorization, Cookie) aparece no log de erro do Caddy" || check fail "C1: $leaks ocorrência(s) de segredo no log de erro do Caddy"
+# CONTROLE POSITIVO: o log de erro continua existindo (mensagem e status 502) e é o FILTRO que age (uri reduzido), não a ausência de log
+nerr="$(printf '%s' "$cl" | grep -c '"logger":"http.log.error".*"status":502')"
+[ "$nerr" -ge 3 ] && check ok "controle: o log de erro AINDA existe ($nerr linhas http.log.error com status 502 e a mensagem do erro)" || check fail "controle: só $nerr linha(s) de erro 502 no log do Caddy (esperava >= 3): o filtro virou 'sem log'?"
+red=0; for f in '/reset-senha/REDACTED' '/loja/REDACTED' '/stores/REDACTED'; do printf '%s' "$cl" | grep -q "\"uri\":\"$f\"" && red=$((red+1)); done
+[ "$red" = 3 ] && check ok "controle: o filtro agiu nas 3 rotas (uri reduzido ao 1º segmento + /REDACTED; cabeçalhos removidos)" || check fail "controle: o filtro só reduziu $red de 3 uri (confira o bloco log do Caddyfile)"
 echo; echo "RESULTADO: $PASS ok, $FAILS falhas"
 [ "$FAILS" -eq 0 ]

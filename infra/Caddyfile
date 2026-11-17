@@ -1,5 +1,26 @@
 {
 	email {$ACME_EMAIL}
+
+	# INF-19 / C1 (Nightingale, Sun Tzu): o log de ERRO padrão do Caddy (`http.log.error`, que existe MESMO sem diretiva `log`) grava o
+	# objeto `request` inteiro quando o upstream falha (web ou API fora do ar): URL com ?token=, token no CAMINHO (QR de mesa, link de
+	# acompanhamento) e cabeçalhos custom (x-order-token, x-mfa-challenge, x-admin-token) saíam EM CLARO. Medido em 17/11 (Caddy 2.11.9):
+	# só Authorization/Cookie/Set-Cookie/Proxy-Authorization saem REDACTED por padrão. Filtro SEGURO POR PADRÃO (não é lista negra): apaga
+	# TODOS os cabeçalhos e deixa só o primeiro segmento do caminho, sem query. Aplica-se ao logger PADRÃO (erros do proxy e logs de
+	# runtime). ATENÇÃO: um `log` de SITE tem encoder PRÓPRIO e NÃO herda este filtro: quem ligar log de acesso precisa repetir o filtro
+	# lá. Provado por scripts/smoke-stack.sh (seção 11, upstream fora do ar) e, isolado, para a resposta abortada no meio
+	# (`http.handlers.reverse_proxy`, 17/11). Os `delete` de resposta abaixo são DEFENSIVOS: nenhum cenário medido gravou esses campos.
+	log {
+		output stderr
+		format filter {
+			wrap json
+			fields {
+				request>headers delete
+				request>uri regexp ^(/[^/?]*).*$ $1/REDACTED
+				resp_headers delete
+				headers delete
+			}
+		}
+	}
 }
 
 {$DOMAIN} {
