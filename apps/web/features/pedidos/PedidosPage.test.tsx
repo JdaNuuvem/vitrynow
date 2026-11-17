@@ -317,15 +317,25 @@ describe("PedidosPage: faixa dos abertos escondidos pelo teto (API-70, WEB-37)",
   it("com abertos de fora mostra a faixa com o número e o caminho, como aviso (role=status, não alerta)", () => {
     state.openHidden = 7;
     render(<PedidosPage />);
-    const note = screen.getByText("7 pedidos antigos em aberto não aparecem aqui. Veja em Histórico › Em aberto.");
-    expect(note.closest("[role=status]")).not.toBeNull();
+    const region = screen.getByRole("status");
+    expect(region).toHaveTextContent("7 pedidos antigos em aberto não aparecem aqui. Veja em Histórico › Em aberto.");
+    expect(region.textContent?.replace(/\s+/g, " ").trim()).toBe("7 pedidos antigos em aberto não aparecem aqui. Veja em Histórico › Em aberto.");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    // o caminho da frase é um LINK para a tela que ela promete (WEB-44): a faixa nunca aponta para o vazio
+    expect(screen.getByRole("link", { name: "Histórico › Em aberto" })).toHaveAttribute("href", "/dashboard/pedidos/historico?status=ABERTO");
   });
 
   it("um só: singular", () => {
     state.openHidden = 1;
     render(<PedidosPage />);
-    expect(screen.getByText("1 pedido antigo em aberto não aparece aqui. Veja em Histórico › Em aberto.")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("1 pedido antigo em aberto não aparece aqui. Veja em Histórico › Em aberto.");
+  });
+
+  it("o cabeçalho de Pedidos tem o botão 'Histórico' para a tela nova, com alvo de 44 px", () => {
+    render(<PedidosPage />);
+    const link = screen.getByRole("link", { name: "Histórico" });
+    expect(link).toHaveAttribute("href", "/dashboard/pedidos/historico");
+    expect(link).toHaveClass("pedidos__history-link");
   });
 
   it("sem nenhum escondido, nada de faixa", () => {

@@ -1,6 +1,7 @@
 import type { HttpResult, RequestOptions } from "../http/HttpClient";
 import type { Deliverer, Order, OrderStatus } from "../domain/orders";
 import type { OrderDetail } from "../domain/orderDetail";
+import type { HistoryQuery, HistoryResponse } from "../domain/orderHistory";
 
 // Resposta de cancelar/estornar (contrato B3 §2.2): `refund` só vem quando havia dinheiro online.
 // "DONE" = estorno aceito e pedido cancelado; "PENDING" (HTTP 202) = estorno ainda não aceito, o pedido NÃO mudou.
@@ -17,6 +18,8 @@ export type OrdersListResponse = { orders: Order[]; openCapped?: boolean; openHi
 
 export interface OrdersGateway {
   list(): Promise<HttpResult<OrdersListResponse>>;
+  // Histórico (API-54/API-70): lista paginada por cursor; o telefone vem sempre mascarado.
+  history(query: HistoryQuery): Promise<HttpResult<HistoryResponse>>;
   // Detalhe de um pedido (contato já mascarado no servidor conforme papel e idade do pedido).
   get(orderId: string): Promise<HttpResult<{ order: OrderDetail }>>;
   // Rotas novas do contrato B3 (API-02). As legadas /status e /refund deixam de ser usadas pela tela.

@@ -1,6 +1,7 @@
 import type { HttpClient, RequestOptions } from "../../http/HttpClient";
 import type { CancelBody, CancelResult, DeliverersGateway, OrdersGateway, OrdersListResponse } from "../OrdersGateway";
 import type { Deliverer, Order, OrderStatus } from "../../domain/orders";
+import type { HistoryQuery, HistoryResponse } from "../../domain/orderHistory";
 import type { OrderDetail } from "../../domain/orderDetail";
 
 export class HttpOrdersGateway implements OrdersGateway {
@@ -8,6 +9,15 @@ export class HttpOrdersGateway implements OrdersGateway {
 
   list() {
     return this.http.get<OrdersListResponse>("/api/orders");
+  }
+
+  history(query: HistoryQuery) {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== "") params.set(key, String(value));
+    }
+    const text = params.toString();
+    return this.http.get<HistoryResponse>(`/api/orders/history${text ? `?${text}` : ""}`);
   }
 
   get(orderId: string) {

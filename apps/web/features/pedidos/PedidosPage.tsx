@@ -9,9 +9,11 @@ import { useMediaQuery } from "@/lib/useMediaQuery";
 import type { CardAction } from "./orderActions";
 import { CancelOrderDialog } from "./components/CancelOrderDialog";
 import { OrderCard } from "./components/OrderCard";
-import { hiddenOpenMessage } from "./hiddenOpen";
+import { HISTORY_OPEN_HREF, HISTORY_HREF, hiddenOpenParts } from "./hiddenOpen";
 import { UndoToast } from "./components/UndoToast";
+import Link from "next/link";
 import { OrderDetailPanel } from "./detail/OrderDetailPanel";
+import { detailRefreshKey } from "./detail/detailRefreshKey";
 import { useNow } from "./hooks/useNow";
 import { usePedidos } from "./hooks/usePedidos";
 import { KANBAN_COLUMNS, groupOrders } from "./kanban";
@@ -23,10 +25,6 @@ type CancelTarget = { order: Order; action: CardAction } | null;
 
 // "Tentar estorno": a folha reabre já no passo de repetir o estorno (o estado vem do pedido, não da folha).
 const RETRY_REFUND_ACTION: CardAction = { to: "CANCELADO", label: "Tentar estorno", kind: "CANCEL", primary: false, requiresReason: false, refund: true, disabledReason: null };
-
-// O que o detalhe precisa saber que mudou no quadro: ao mudar, ele recarrega sozinho (tempo real, outra aba, outra ação).
-const detailRefreshKey = (order: Order | undefined) =>
-  order ? [order.status, order.payment?.status, order.payment?.refundPending, order.delivererId, order.canUndo].join("|") : "";
 
 export function PedidosPage() {
   const p = usePedidos();
@@ -95,7 +93,12 @@ export function PedidosPage() {
   return (
     <main className={`pedidos${selectedId && desktop ? " pedidos--with-detail" : ""}`}>
       <div className="pedidos__content">
-      <h1>Pedidos</h1>
+      <div className="pedidos__titlebar">
+        <h1>Pedidos</h1>
+        <Link href={HISTORY_HREF} className="pedidos__history-link">
+          Histórico
+        </Link>
+      </div>
 
       {p.notice && (
         <div role="alert" className="pedidos__notice">
@@ -130,7 +133,13 @@ export function PedidosPage() {
             <line x1="12" y1="9" x2="12" y2="13" />
             <line x1="12" y1="17" x2="12.01" y2="17" />
           </svg>
-          <p>{hiddenOpenMessage(p.openHidden)}</p>
+          <p>
+            {hiddenOpenParts(p.openHidden).before}
+            <Link href={HISTORY_OPEN_HREF} className="pedidos__capped-link">
+              {hiddenOpenParts(p.openHidden).link}
+            </Link>
+            {hiddenOpenParts(p.openHidden).after}
+          </p>
         </div>
       )}
 

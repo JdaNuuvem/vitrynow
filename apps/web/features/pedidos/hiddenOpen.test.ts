@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hiddenOpenCount, hiddenOpenMessage } from "./hiddenOpen";
+import { HISTORY_HREF, HISTORY_OPEN_HREF, hiddenOpenCount, hiddenOpenMessage, hiddenOpenParts } from "./hiddenOpen";
 
 describe("hiddenOpenCount (API-70): só um inteiro >= 1 vira faixa", () => {
   it("lê o número da API", () => {
@@ -41,5 +41,20 @@ describe("hiddenOpenMessage: texto aprovado pelo Ogilvy no plural; singular a va
 
   it("diz onde achar, mas nunca o código da API", () => {
     expect(hiddenOpenMessage(3)).not.toMatch(/openHidden|openCapped|ABERTO/);
+  });
+});
+
+describe("hiddenOpenParts: a frase em 3 partes, com o caminho como link", () => {
+  it("as partes juntas dão EXATAMENTE a frase aprovada, no plural e no singular", () => {
+    for (const n of [1, 2, 37, 1234]) {
+      const { before, link, after } = hiddenOpenParts(n);
+      expect(`${before}${link}${after}`).toBe(hiddenOpenMessage(n));
+    }
+    expect(hiddenOpenParts(5).link).toBe("Histórico › Em aberto");
+  });
+
+  it("o destino do link é a tela do histórico já filtrada em aberto", () => {
+    expect(HISTORY_HREF).toBe("/dashboard/pedidos/historico");
+    expect(HISTORY_OPEN_HREF).toBe("/dashboard/pedidos/historico?status=ABERTO");
   });
 });
