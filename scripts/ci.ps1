@@ -214,7 +214,7 @@ if ($continue -and -not $SkipTests) {
 # pedido/cursor do histórico) contra CÓPIAS do banco de teste com o fuso mudado. NÃO prova ausência de bug de fuso: só pega os dos fluxos listados.
 # O arquivo canário tz-probe-canary.test.ts é o CONTROLE POSITIVO (a sessão do Prisma enxerga o fuso pedido).
 $tzFiles = @('tests/auth.test.ts', 'tests/tokens-hash.test.ts', 'tests/login-throttle.test.ts', 'tests/session.test.ts',
-             'tests/order-token.test.ts', 'tests/orders-history-kanban.test.ts', 'tests/tz-probe-canary.test.ts')
+             'tests/order-token.test.ts', 'tests/orders-history-kanban.test.ts', 'tests/jobs/tech-cleanup.test.ts', 'tests/tz-probe-canary.test.ts')
 $tzProbes = @(@{ Tz = 'America/Sao_Paulo'; Db = 'meucardapio_test71' }, @{ Tz = 'Asia/Tokyo'; Db = 'meucardapio_test72' })
 if ($continue -and -not $SkipTests -and -not $SkipTzProbe) {
   $ct = "mc-test-$Agent-$Port"
