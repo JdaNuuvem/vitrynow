@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { prisma } from "@meucardapio/db";
 import { HISTORY_PHONE_RATE_LIMIT, HISTORY_RATE_LIMIT, assertHistoryRate, assertPhoneSearchRate, foldText, parseSearch, recordPhoneRefusal, resetHistoryRate, resolvePeriod } from "../src/modules/orders/orders.history";
 import { OrderService } from "../src/modules/orders/orders.service";
+import { contactAccessFor, isWithinRecentWindow, RECENT_WINDOW_MS } from "../src/modules/orders/orders.view";
 import { prismaAuditLogger, type AuditLogger } from "../src/shared/audit";
 import { startOfStoreDay } from "../src/lib/storeTime";
 import { buildPrintableOrder } from "../src/lib/printable";
@@ -407,6 +408,32 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
       expect((await busca(ctx.staff, "antigo")).rows.map((r: { id: string }) => r.id)).toEqual([antigo]);
     });
 
+    it("fronteira de 24 h EXATA: a busca por telefone do STAFF e o contato do detalhe usam a MESMA regra (idade < 24 h); exatamente 24 h já é antigo nos dois", async () => {
+      const ctx = await setup();
+      const AGORA = new Date();
+      const W = RECENT_WINDOW_MS;
+      const idades = [W - 1000, W - 1, W, W + 1, W + 1000]; // ms de idade no instante do encerramento
+      const criados: { id: string; idade: number; closedAt: Date }[] = [];
+      for (const idade of idades) {
+        const closedAt = new Date(AGORA.getTime() - idade);
+        const id = await mk(ctx, { ago: 2 * DAY, status: "CONCLUIDO", phone: "11987654321", history: [{ status: "CONCLUIDO", ago: idade }] });
+        // `mk` usa Date.now() do próprio teste: reescreve o instante exato do encerramento a partir do AGORA fixo
+        await prisma.orderStatusHistory.updateMany({ where: { orderId: id }, data: { createdAt: closedAt } });
+        criados.push({ id, idade, closedAt });
+      }
+      const service = new OrderService(prisma, { log: () => {}, logStrict: async () => {} }, () => {}, () => AGORA);
+      const staff = { storeId: ctx.storeId, userId: "u-staff", role: "STAFF" as const };
+      const achados = new Set((await service.history(staff, { q: "11987654321" })).rows.map((r) => r.id));
+      for (const { id, idade, closedAt } of criados) {
+        const detalhe = contactAccessFor("STAFF", { status: "CONCLUIDO" }, closedAt, AGORA) === "FULL";
+        expect(achados.has(id), `idade ${idade - W >= 0 ? "W+" : "W"}${idade - W} ms: busca`).toBe(detalhe); // busca e detalhe nunca divergem
+        expect(isWithinRecentWindow(closedAt, AGORA)).toBe(detalhe);
+      }
+      // e a fronteira em si: 24 h - 1 ms ainda é recente; 24 h EXATAS não é
+      expect(achados.has(criados[1].id)).toBe(true);
+      expect(achados.has(criados[2].id)).toBe(false);
+    });
+
     it("cota de 10 buscas por telefone por hora (STAFF) esgotada: busca SÓ de telefone leva 429; busca que cabe num CÓDIGO cai para código/nome; nome e OWNER seguem livres", async () => {
       const ctx = await setup();
       const pedido = await mk(ctx, { phone: "11987654321", name: "Zeca", code: "1234" });
@@ -533,16 +560,81 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
       expect(gravado.normalize("NFD")).not.toBe(gravado); // o nome tem acento: só a forma mudou
     });
 
-    it("status ABERTO: tudo que o kanban considera em andamento (fora PIX não pago, concluídos e cancelados), no período escolhido", async () => {
+    it("status ABERTO: tudo que o kanban considera em andamento (fora PIX não pago, concluídos e cancelados), de QUALQUER data", async () => {
       const ctx = await setup();
       const pendente = await mk(ctx, { status: "PENDENTE" });
       const preparo = await mk(ctx, { ago: 20 * DAY, status: "EM_PREPARO" });
+      const esquecido = await mk(ctx, { ago: 120 * DAY, status: "PRONTO" }); // mais velho que a janela máxima de 90 dias
       await mk(ctx, { status: "CONCLUIDO" });
+      await mk(ctx, { ago: 120 * DAY, status: "CONCLUIDO" });
       await mk(ctx, { status: "CANCELADO" });
       await mk(ctx, { status: "PENDENTE", awaiting: true });
       const ids = async (qs: string) => (json(await hist(ctx.owner, qs)).rows.map((r: { id: string }) => r.id) as string[]).sort();
-      expect(await ids("?status=ABERTO&period=30d")).toEqual([pendente, preparo].sort());
-      expect(await ids("?status=ABERTO")).toEqual([pendente]); // 7 dias: o de 20 dias fica de fora
+      expect(await ids("?status=ABERTO")).toEqual([pendente, preparo, esquecido].sort()); // sem período: o de 120 dias aparece
+      expect(await ids("?status=ABERTO&period=today")).toEqual([pendente, preparo, esquecido].sort()); // período, from e to são IGNORADOS
+      expect(await ids("?status=ABERTO&period=custom&from=2026-11-01&to=2026-11-02")).toEqual([pendente, preparo, esquecido].sort());
+      expect(await ids("?status=ABERTO&period=custom&from=lixo&to=lixo")).toEqual([pendente, preparo, esquecido].sort()); // nem é validado
+      // os outros status mantêm a janela: o de 120 dias NÃO aparece no padrão de 7 dias nem no ALL
+      expect(await ids("")).not.toContain(esquecido);
+      expect(await ids("?status=ALL")).not.toContain(esquecido);
+      expect(await ids("?period=30d")).not.toContain(esquecido);
+      expect(await ids("?period=30d")).toContain(preparo);
+      const body = json(await hist(ctx.owner, "?status=ABERTO"));
+      expect(body).toMatchObject({ total: 3, period: null, timezone: TZ });
+      expect(json(await hist(ctx.owner, "")).period).toMatchObject({ from: expect.any(String), to: expect.any(String) }); // os demais seguem com período
+    });
+
+    it("ABERTO: cursor percorre TODOS os abertos (mais recente primeiro) sem repetir nem perder; a contagem é a de TODOS", async () => {
+      const ctx = await setup();
+      const criados: string[] = [];
+      for (const dias of [0, 1, 40, 100, 200]) criados.push(await mk(ctx, { ago: dias * DAY + 1000, status: "EM_PREPARO" }));
+      const vistos: string[] = [];
+      let cursor: string | null = null;
+      let paginas = 0;
+      do {
+        const res = await hist(ctx.owner, `?status=ABERTO&limit=2${cursor ? `&cursor=${cursor}` : ""}`);
+        expect(res.statusCode, res.body).toBe(200);
+        const corpo = json(res);
+        expect(corpo.total).toBe(5);
+        vistos.push(...corpo.rows.map((r: { id: string }) => r.id));
+        cursor = corpo.nextCursor;
+        paginas += 1;
+      } while (cursor);
+      expect(paginas).toBe(3);
+      expect(vistos).toEqual(criados); // do mais novo ao mais antigo
+    });
+
+    it("ABERTO é isolado por loja e o STAFF vê o telefone mascarado; a busca por telefone do STAFF acha o pedido aberto de qualquer idade", async () => {
+      const a = await setup();
+      const b = await setup();
+      const antigo = await mk(a, { ago: 150 * DAY, status: "CONFIRMADO", phone: "11987654321", name: "Esquecido" });
+      await mk(a, { ago: 150 * DAY, status: "CONCLUIDO", phone: "11987654321", name: "Fechado", history: [{ status: "CONCLUIDO", ago: 149 * DAY }] }); // encerrado: fora do ABERTO
+      const deB = await mk(b, { ago: 150 * DAY, status: "CONFIRMADO" });
+      for (const cookie of [a.owner, a.staff]) {
+        const rows = json(await hist(cookie, "?status=ABERTO")).rows as { id: string; customerPhone: string }[];
+        expect(rows.map((r) => r.id)).toEqual([antigo]);
+        expect(rows[0].customerPhone).toBe("*******4321");
+      }
+      expect(JSON.stringify(json(await hist(a.owner, "?status=ABERTO")))).not.toContain(deB);
+      // STAFF: telefone completo acha o aberto antigo (o aberto está dentro da regra do contato)
+      const achados = (json(await hist(a.staff, `?status=ABERTO&q=${encodeURIComponent("11987654321")}`)).rows as { id: string }[]).map((r) => r.id);
+      expect(achados).toEqual([antigo]);
+    });
+
+    it("a contagem do ABERTO é IGUAL aos abertos do kanban (exibidos + openHidden), com o teto estourado", async () => {
+      const ctx = await setup();
+      const base = Date.now() - 3 * DAY;
+      await prisma.order.createMany({
+        data: Array.from({ length: 502 }, (_, i) => ({
+          storeId: ctx.storeId, code: `W${String(i).padStart(4, "0")}`, type: "BALCAO" as const, status: i % 2 ? ("PRONTO" as const) : ("PENDENTE" as const), customerName: "Antigo",
+          totalCents: 1000, awaitingPayment: false, createdAt: new Date(base + i * 1000), updatedAt: new Date(base + i * 1000),
+        })),
+      });
+      await mk(ctx, { ago: 60_000 });
+      await mk(ctx, { ago: 30_000, awaiting: true }); // PIX não pago: fora dos dois
+      const kb = await kanban(ctx.owner);
+      expect(kb).toMatchObject({ openCapped: true, openHidden: 2 });
+      expect(json(await hist(ctx.owner, "?status=ABERTO&limit=1")).total).toBe(kb.openCount + kb.openHidden); // 503 + 2 = 505
     });
 
     it("a busca não vaza pedidos de outra loja (nem por código, nome ou telefone)", async () => {
