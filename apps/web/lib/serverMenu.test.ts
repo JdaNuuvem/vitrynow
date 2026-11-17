@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Menu } from "@/core/domain/storefront";
-import { absoluteImageUrl, fetchMenuOnServer, getMenuOnServer, INTERNAL_SECRET_HEADER, isInternalHost, menuCacheTag, MENU_REVALIDATE_SECONDS, MAX_STALE_SECONDS, MISSING_MEMORY_SECONDS, NEGATIVE_CACHE_SECONDS, resetServerMenuState, storeDescription } from "./serverMenu";
+import { absoluteImageUrl, fetchMenuOnServer, getMenuOnServer, INTERNAL_SECRET_HEADER, isInternalHost, menuCacheTag, MENU_FETCH_TIMEOUT_MS, MENU_REVALIDATE_SECONDS, MAX_STALE_SECONDS, MISSING_MEMORY_SECONDS, NEGATIVE_CACHE_SECONDS, resetServerMenuState, storeDescription } from "./serverMenu";
 
 // unstable_cache só existe dentro do Next; aqui um duplo que repete o que importa: guarda o valor que a função
 // RETORNA (por chave) e, se ela lançar, não grava nada. Registra as opções recebidas.
@@ -68,6 +68,31 @@ describe("fetchMenuOnServer (ADR-0013)", () => {
   it("API fora do ar: indisponível, sem exceção", async () => {
     const down = vi.fn().mockRejectedValue(new Error("ECONNREFUSED")) as unknown as typeof fetch;
     expect(await fetchMenuOnServer("x", down)).toEqual({ status: "unavailable" });
+  });
+
+  // Parecer de segurança (Nightingale): sem timeout, API lenta pendura cada renderização e trava a fila de SSR.
+  it("a busca leva um sinal de tempo limite de 3 s", async () => {
+    const fetchMock = respond(200);
+    await fetchMenuOnServer("boa", fetchMock);
+    const init = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    expect(MENU_FETCH_TIMEOUT_MS).toBe(3000);
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init.signal.aborted).toBe(false);
+  });
+
+  it("API que não responde: estoura o tempo e vira 'unavailable' (não pendura nem lança)", async () => {
+    const hanging = vi.fn((_url: string, init: RequestInit) => new Promise((_resolve, reject) => init.signal!.addEventListener("abort", () => reject(init.signal!.reason)))) as unknown as typeof fetch;
+    const started = Date.now();
+    expect(await fetchMenuOnServer("x", hanging, 20)).toEqual({ status: "unavailable" });
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("API que responde os cabeçalhos mas trava o corpo: também estoura e vira 'unavailable'", async () => {
+    const slowBody = vi.fn(
+      (_url: string, init: RequestInit) =>
+        Promise.resolve({ status: 200, ok: true, json: () => new Promise((_resolve, reject) => init.signal!.addEventListener("abort", () => reject(init.signal!.reason))) }),
+    ) as unknown as typeof fetch;
+    expect(await fetchMenuOnServer("x", slowBody, 20)).toEqual({ status: "unavailable" });
   });
 });
 

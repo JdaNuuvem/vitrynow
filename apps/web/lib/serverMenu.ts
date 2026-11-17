@@ -8,6 +8,9 @@ import type { Menu } from "@/core/domain/storefront";
 // Segundos até o servidor do Next buscar o cardápio de novo. Curto: preço e disponibilidade
 // mudam, e o servidor sempre recalcula o pedido de qualquer forma.
 export const MENU_REVALIDATE_SECONDS = 30;
+// Tempo máximo de UMA busca à API (conexão, cabeçalhos e corpo). Sem limite, uma API lenta deixa cada renderização pendurada e a
+// fila de SSR do Next trava para todas as lojas. Estourou: `unavailable` (a página abre sem dados e o navegador busca sozinho).
+export const MENU_FETCH_TIMEOUT_MS = 3000;
 
 export type ServerMenuResult =
   | { status: "ok"; menu: Menu }
@@ -61,13 +64,14 @@ export function menuCacheTag(slug: string): string {
 
 // UMA busca à API, sem cache (o cache é do getMenuOnServer). `redirect: "error"` (ST-41): o Node mantém cabeçalhos
 // personalizados num redirecionamento entre hosts, então um redirecionamento nunca é seguido com o segredo.
-export async function fetchMenuOnServer(slug: string, fetchImpl: typeof fetch = fetch): Promise<ServerMenuResult> {
+export async function fetchMenuOnServer(slug: string, fetchImpl: typeof fetch = fetch, timeoutMs = MENU_FETCH_TIMEOUT_MS): Promise<ServerMenuResult> {
   try {
     const baseUrl = internalApiUrl();
     const response = await fetchImpl(`${baseUrl}/stores/${encodeURIComponent(slug)}/menu`, {
       headers: internalHeaders(baseUrl),
       cache: "no-store",
       redirect: "error",
+      signal: AbortSignal.timeout(timeoutMs), // vale também para a leitura do corpo (json())
     });
     // 404 = a loja não existe. 503 STORE_UNAVAILABLE = suspensa. Qualquer outro erro não prova nada disso.
     if (response.status === 404) return { status: "not-found" };
