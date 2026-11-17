@@ -6,7 +6,7 @@ const healthRoutes: FastifyPluginAsync = async (app) => {
     try {
       await prisma.$queryRaw`SELECT 1`;
     } catch (error) {
-      app.log.error(error);
+      app.log.error({ err: error }, "health: banco de dados inacessível");
       return reply.code(503).send({ status: "error", error: "banco de dados inacessível" });
     }
     return { status: "ok", time: new Date().toISOString() };

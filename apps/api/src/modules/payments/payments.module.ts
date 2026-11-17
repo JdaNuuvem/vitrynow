@@ -32,7 +32,7 @@ const paymentRoutes: FastifyPluginAsync = async (app) => {
     try {
       await paymentService.handleNotification(String(providerPaymentId));
     } catch (error) {
-      app.log.error(error, "falha ao processar webhook do mercado pago");
+      app.log.error({ err: error }, "falha ao processar webhook do mercado pago");
       return reply.code(503).send({ error: "falha transitória" });
     }
     return reply.code(200).send({ ok: true });

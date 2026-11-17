@@ -5,14 +5,40 @@ export const REDACT_PATHS = [
   'req.headers["x-order-token"]',
   'req.headers["x-mfa-challenge"]',
   'req.headers["x-admin-token"]',
+  'req.headers["x-internal-service-secret"]',
   "req.headers.authorization",
   "req.headers.cookie",
   'res.headers["set-cookie"]',
   'headers["x-order-token"]',
   'headers["x-mfa-challenge"]',
   'headers["x-admin-token"]',
+  'headers["x-internal-service-secret"]',
   "headers.authorization",
   "headers.cookie",
+  // SEC-31 (ST-72): curingas e campos do OAuth/provedor. O pino só casa `*` em UM nível, então cada profundidade usada por erro de
+  // biblioteca HTTP (`err.config.headers`, `err.response.config.headers`) e por objeto de resposta do provedor está listada. O caso
+  // do erro inteiro é coberto também pelo serializador `err` (abaixo), que nem leva `config`/`response`; aqui é a segunda camada.
+  "*.authorization",
+  "*.Authorization",
+  "*.cookie",
+  "*.Cookie",
+  "*.headers.*",
+  "*.*.headers.*",
+  "*.*.*.headers.*",
+  "*.*.*.*.headers.*",
+  "err.config.headers.*",
+  "*.access_token",
+  "*.refresh_token",
+  "*.client_secret",
+  "*.accessToken",
+  "*.refreshToken",
+  "*.clientSecret",
+  "*.password",
+  "*.passwordHash",
+  "access_token",
+  "refresh_token",
+  "client_secret",
+  "password",
 ];
 
 // A URL da requisição entra no log com a query inteira. O contrato manda o token do pedido SÓ por cabeçalho, mas um cliente
@@ -56,9 +82,19 @@ export function redactLogUrl(url: string | undefined): string | undefined {
 // requisição. Por isso o log leva o MODELO da rota (`/stores/:slug/orders/:orderId/payment-status`), nunca o valor do parâmetro dinâmico.
 // Seguro por padrão: o que passa a ser logado é uma constante do código, então rota nova com segredo no caminho já nasce coberta.
 // Sem rota casada (404), o caminho é de quem chamou e pode ter um segredo digitado: fica só o 1º segmento.
+// ST-74: o 1º segmento (e o `hostname`, cabeçalho Host) é digitado por quem chama e não tem teto próprio: um 404 de 8 KB por requisição
+// enche o disco do log. Por isso o texto logado de entrada do cliente é cortado (32 no segmento, 255 no Host).
+export const LOG_CLIENT_TEXT_MAX = 32;
+// o Host legítimo pode ser longo (subdomínios): o teto é o do DNS (255), suficiente contra um cabeçalho de 8 KB
+export const LOG_HOSTNAME_MAX = 255;
+export function clip(text: string | undefined, max: number = LOG_CLIENT_TEXT_MAX): string | undefined {
+  if (text === undefined || text.length <= max) return text;
+  return `${text.slice(0, max)}…`;
+}
+
 function unmatchedPath(path: string): string {
   const [, first = "", ...rest] = path.split("/");
-  const head = BARE_CREDENTIAL.test(first) ? "[redigido]" : first;
+  const head = BARE_CREDENTIAL.test(first) ? "[redigido]" : clip(first)!;
   return rest.length > 0 ? `/${head}/[redigido]` : `/${head}`;
 }
 
@@ -71,14 +107,64 @@ export function routeLogUrl(request: { url?: string; routeOptions?: { url?: stri
   return `${request.routeOptions?.url ?? unmatchedPath(path)}${query}`;
 }
 
+// SEC-31 (ST-71/ST-72): o serializador de erro padrão do pino copia TODAS as propriedades do erro (`config.headers.Authorization` de um erro
+// de biblioteca HTTP, `response.data` do provedor) e a mensagem do Prisma traz o trecho da chamada com os VALORES dos argumentos (nome,
+// e-mail, telefone). Aqui o erro é reduzido a uma lista fixa de campos; erro do Prisma perde `message` e `stack` e fica com o que o
+// diagnóstico precisa: código, tabela/campo (`meta.target`) e a operação (`prisma.store.create`).
+const PRISMA_OPERATION = /Invalid `(prisma\.[\w$.]+)\(\)` invocation/;
+const SAFE_META_KEYS = ["target", "modelName", "column", "table", "constraint", "field_name"] as const;
+
+export function isPrismaError(error: unknown): boolean {
+  return error instanceof Error && (/^PrismaClient/.test(error.name) || "clientVersion" in error);
+}
+
+function safeMeta(meta: unknown): Record<string, unknown> | undefined {
+  if (!meta || typeof meta !== "object") return undefined;
+  const source = meta as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of SAFE_META_KEYS) {
+    const value = source[key];
+    if (typeof value === "string") out[key] = clip(value, 120);
+    else if (Array.isArray(value) && value.every((item) => typeof item === "string")) out[key] = value.map((item) => clip(item as string, 120));
+  }
+  // erro de SQL cru (P2010): o SQLSTATE (22P02, 23505…) ajuda e não é valor; `meta.message` traz o valor, então fica de fora
+  if (typeof source.code === "string" && /^[0-9A-Z]{5}$/.test(source.code)) out.sqlState = source.code;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+export function safeError(error: unknown): Record<string, unknown> {
+  if (!(error instanceof Error)) return { type: "NaoErro" }; // valor lançado que não é Error: nada dele vai para o log
+  const code = (error as { code?: unknown }).code;
+  const statusCode = (error as { statusCode?: unknown }).statusCode;
+  if (isPrismaError(error)) {
+    const errorCode = (error as { errorCode?: unknown }).errorCode;
+    return {
+      type: error.name,
+      code: typeof code === "string" ? code : undefined,
+      errorCode: typeof errorCode === "string" ? errorCode : undefined,
+      meta: safeMeta((error as { meta?: unknown }).meta),
+      operation: PRISMA_OPERATION.exec(error.message)?.[1],
+    };
+  }
+  return {
+    type: error.name,
+    message: error.message,
+    stack: error.stack,
+    code: typeof code === "string" || typeof code === "number" ? code : undefined,
+    statusCode: typeof statusCode === "number" ? statusCode : undefined,
+  };
+}
+
 export function loggerOptions() {
   return {
     redact: { paths: REDACT_PATHS, censor: "[redigido]" },
     serializers: {
       // mesmo formato do serializador padrão do Fastify (método, URL, host, IP), com o MODELO da rota e a query sem segredos
       req(request: { method?: string; url?: string; routeOptions?: { url?: string }; hostname?: string; ip?: string; socket?: { remotePort?: number } }) {
-        return { method: request.method, url: routeLogUrl(request), hostname: request.hostname, remoteAddress: request.ip, remotePort: request.socket?.remotePort };
+        return { method: request.method, url: routeLogUrl(request), hostname: clip(request.hostname, LOG_HOSTNAME_MAX), remoteAddress: request.ip, remotePort: request.socket?.remotePort };
       },
+      // o tipo do Fastify exige type/message/stack; o conteúdo real (sem message/stack para erro do Prisma) é o de `safeError`
+      err: safeError as unknown as (error: Error) => { type: string; message: string; stack: string },
     },
   };
 }

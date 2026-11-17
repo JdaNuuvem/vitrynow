@@ -70,7 +70,7 @@ const subscriptionRoutes: FastifyPluginAsync = async (app) => {
           },
         });
       } catch (error) {
-        app.log.error(error);
+        app.log.error({ err: error }, "falha ao gerar o pagamento PIX da assinatura");
         await prisma.subscriptionPayment.delete({ where: { id: payment.id } });
         return reply.code(502).send({ error: "não foi possível gerar o pagamento PIX, tente novamente" });
       }
