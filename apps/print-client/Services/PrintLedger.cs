@@ -155,6 +155,23 @@ namespace MeuCardapio.PrintClient.Services
             lock (_lock) { return _inFlight.Keys.Any(k => k.StartsWith("job:", StringComparison.Ordinal)); }
         }
 
+        // Troca de modo (PC-18): nunca mistura os dois modos. Antes de pedir job, nada do modo legado pode estar em impressão nem com
+        // aviso pendente; antes de rodar o legado, nada do modo fila. Senão o servidor ofereceria o mesmo pedido pelo outro caminho.
+        public bool AnyLegacyInFlight()
+        {
+            lock (_lock) { return _inFlight.Keys.Any(k => !k.StartsWith("job:", StringComparison.Ordinal)); }
+        }
+
+        public bool AnyLegacyAckPending()
+        {
+            lock (_lock) { return _entries.Any(kv => !kv.Key.StartsWith("job:", StringComparison.Ordinal) && kv.Value.AckPending); }
+        }
+
+        public bool AnyJobAckPending()
+        {
+            lock (_lock) { return _entries.Any(kv => kv.Key.StartsWith("job:", StringComparison.Ordinal) && kv.Value.AckPending); }
+        }
+
         // Modo PrintJob: há job que falhou aqui e ainda está no recuo? Reclamar agora prenderia um job que o cliente não vai
         // imprimir até o fim do recuo (segurando-o pela lease inteira e bloqueando as outras impressoras).
         public bool AnyJobInBackoff()

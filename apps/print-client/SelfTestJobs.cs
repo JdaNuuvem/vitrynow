@@ -29,11 +29,11 @@ namespace MeuCardapio.PrintClient
             public DateTime Now = new DateTime(2026, 11, 16, 12, 0, 0, DateTimeKind.Utc);
             int _alerts; public int Alerts { get { return Volatile.Read(ref _alerts); } }
 
-            public Rig(FakeApi api, VirtualPrintTarget printer, string ledgerPath, string token, int pollMs = 60, int paperMm = 58)
+            public Rig(FakeApi api, VirtualPrintTarget printer, string ledgerPath, string token, int pollMs = 60, int paperMm = 58, bool usePrintJobs = true)
             {
                 Api = api; Printer = printer;
                 Ledger = new PrintLedger(ledgerPath, () => Now);
-                var settings = new AppSettings { ApiBaseUrl = "http://127.0.0.1:" + api.Port, DeviceToken = token, UsePrintJobs = true };
+                var settings = new AppSettings { ApiBaseUrl = "http://127.0.0.1:" + api.Port, DeviceToken = token, UsePrintJobs = usePrintJobs };
                 Device = new DeviceClient(Ledger, settings) { PollIntervalMs = pollMs, WsRetryMs = 150, RevokedProbeMs = 600000 };
                 Coordinator = new PrintCoordinator(Device, printer, () => paperMm, SelfTestPrint.Tz);
                 Coordinator.Message += m => { lock (Messages) Messages.Add(m); };
@@ -79,6 +79,7 @@ namespace MeuCardapio.PrintClient
             BadJobDoesNotBlockQueue();
             TestJobWithTicket();
             LegacyUnchanged();
+            ModeFollowsServer();
         }
 
         // 1) caminho feliz: claim -> imprime 1x -> ack PRINTED
@@ -714,5 +715,259 @@ namespace MeuCardapio.PrintClient
             }
             finally { Clean(dir); }
         }
+        // ===============================================================================================================
+        // PC-18: o modo (LEGACY x QUEUE) vem do servidor, por loja (ADR-0004 §8 itens 12-13). Contrato executavel no FakeApi:
+        //   LEGACY: claim devolve {job:null, mode:"LEGACY"}; endpoint legado funciona.
+        //   QUEUE : claim normal com mode; endpoint legado responde 409 MODE_QUEUE.
+        // O cliente comeca no modo de UsePrintJobs (interruptor de desenvolvimento) e segue o servidor.
+        // ===============================================================================================================
+        static int Paper(VirtualPrintTarget p, string code)
+        {
+            string[] files; lock (p.Printed) files = p.Printed.ToArray();
+            return files.Count(f => { try { return File.ReadAllText(f).Contains("#" + code); } catch { return false; } });
+        }
+        static void LegacyOrder(FakeApi api, PrintableOrder o)
+        {
+            lock (api.Lock) api.Pending.Add(new[] { o.OrderId, o.Code });
+            var known = new Dictionary<string, PrintableOrder>();
+            var prev = api.PrintableBody;
+            api.PrintableBody = x => x[0] == o.OrderId ? Newtonsoft.Json.JsonConvert.SerializeObject(new PrintableOrderResponse { Order = o }) : (prev != null ? prev(x) : "{}");
+        }
+        static int PendingCount(FakeApi api) { lock (api.Lock) return api.Pending.Count; }
+
+        static void ModeFollowsServer()
+        {
+            // M1: servidor LEGACY, cliente no padrao: imprime pelo legado e NUNCA chama o claim.
+            var dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.PrintMode = "LEGACY";
+                    var o = Order("M1", "5101"); LegacyOrder(api, o);
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: false))
+                    {
+                        rig.Start();
+                        bool done = WaitFor(() => Paper(printer, "5101") == 1 && PendingCount(api) == 0, 20000);
+                        Thread.Sleep(300);
+                        Check("modo: servidor LEGACY e cliente padrao: imprime pelo legado 1 vez", done && Paper(printer, "5101") == 1);
+                        Check("modo: em LEGACY o cliente nunca pede job (claim nao e chamado)", api.ClaimCalls == 0 && rig.Device.CurrentMode == DeviceClient.ModeLegacy);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+
+            // M2: cliente no legado, servidor passa a QUEUE (legado responde 409 MODE_QUEUE): o cliente troca sozinho e imprime o JOB.
+            dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.PrintMode = "QUEUE";
+                    var o = Order("M2", "5102");
+                    api.AddJob("m2", o);
+                    lock (api.Lock) api.Pending.Add(new[] { o.OrderId, o.Code });   // o servidor ainda lista o pedido, mas o legado esta fechado
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    int changes = 0;
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: false))
+                    {
+                        rig.Device.ModeChanged += m => Interlocked.Increment(ref changes);
+                        rig.Start();
+                        bool done = WaitFor(() => api.JobState("m2") == "PRINTED" && Paper(printer, "5102") == 1, 20000);
+                        Thread.Sleep(300);
+                        Check("modo: cliente no legado, servidor QUEUE (409 MODE_QUEUE): troca sozinho e imprime o job 1 vez", done && Paper(printer, "5102") == 1);
+                        Check("modo: ficou em QUEUE, avisou a troca 1 vez e nunca buscou o tiquete legado", rig.Device.CurrentMode == DeviceClient.ModeQueue && changes == 1 && api.Count("/printable") == 0);
+                        Check("modo: 409 MODE_QUEUE nao conta como chave recusada nem como erro", !rig.Device.IsRevoked && !rig.HasMessage("Erro ("));
+                    }
+                }
+            }
+            finally { Clean(dir); }
+
+            // M3: cliente na fila, servidor LEGACY: o claim responde mode LEGACY, o cliente volta ao legado no mesmo ciclo; o job NAO e impresso.
+            dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.PrintMode = "LEGACY";
+                    var o = Order("M3", "5103"); LegacyOrder(api, o);
+                    api.AddJob("m3", o);   // o servidor existe com job, mas em LEGACY nunca o entrega
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: true))
+                    {
+                        rig.Start();
+                        bool done = WaitFor(() => Paper(printer, "5103") >= 1 && PendingCount(api) == 0, 20000);
+                        Thread.Sleep(400);
+                        Check("modo: cliente na fila, servidor LEGACY (claim com mode LEGACY): volta ao legado e imprime o pedido 1 vez", done && Paper(printer, "5103") == 1 && rig.Device.CurrentMode == DeviceClient.ModeLegacy);
+                        Check("modo: o job nunca foi entregue nem impresso em LEGACY (e o ack legado fechou o job do pedido)", api.JobAttempts("m3") == 0 && api.JobState("m3") == "PRINTED" && api.AcksOf("m3", "PRINTED") == 0);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+
+            // M4: virada no meio da impressao LEGACY -> QUEUE. O pedido em impressao nao pode ser reclamado como job; o aviso legado
+            // chega depois da troca (409 MODE_QUEUE) e e encerrado; o job do mesmo pedido so recebe PRINTED (cinto), sem 2o tiquete.
+            dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.PrintMode = "LEGACY";
+                    var o = Order("M4", "5104"); LegacyOrder(api, o);
+                    api.AddJob("m4", o);
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out")) { DelayMs = 1500 };
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: false))
+                    {
+                        rig.Start();
+                        bool started = WaitFor(() => api.Count("/printable") >= 1, 20000);
+                        api.PrintMode = "QUEUE";                       // a loja virou no meio da impressao
+                        Thread.Sleep(500);
+                        int claimsWhilePrinting = api.ClaimCalls;
+                        bool done = WaitFor(() => api.JobState("m4") == "PRINTED" && Paper(printer, "5104") >= 1, 30000);
+                        Thread.Sleep(500);
+                        Check("virada no meio da impressao: nao pede job enquanto o pedido legado esta em impressao", started && claimsWhilePrinting == 0);
+                        Check("virada no meio da impressao: o pedido sai 1 vez so (o job do mesmo pedido nao reimprime)", done && Paper(printer, "5104") == 1);
+                        Check("virada no meio da impressao: job fechado com PRINTED (cinto) e o aviso legado 409 nao e repetido", api.AcksOf("m4", "PRINTED") >= 1 && api.Count("/printed") == 1 && rig.Ledger.PendingAcks().Count == 0);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+
+            // M5: virada no meio da impressao de um JOB (QUEUE -> LEGACY). O legado so roda depois do job fechado e acked.
+            dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.PrintMode = "QUEUE";
+                    var o = Order("M5", "5105"); LegacyOrder(api, o);   // o servidor tambem lista o pedido no legado (printedAt nulo ate o ack do job)
+                    api.AddJob("m5", o);
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out")) { DelayMs = 1500 };
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: true))
+                    {
+                        rig.Start();
+                        bool started = WaitFor(() => api.JobState("m5") == "CLAIMED", 20000);
+                        api.PrintMode = "LEGACY";
+                        Thread.Sleep(500);
+                        int legacyWhilePrinting = api.LegacyCalls;
+                        bool done = WaitFor(() => api.JobState("m5") == "PRINTED" && Paper(printer, "5105") >= 1, 30000);
+                        Thread.Sleep(800);
+                        Check("virada no meio de um job: o legado nao roda enquanto o job esta em impressao", started && legacyWhilePrinting == 0);
+                        Check("virada no meio de um job: o pedido sai 1 vez (o legado nao o pega depois)", done && Paper(printer, "5105") == 1 && api.Count("/printable") == 0);
+                        Check("virada no meio de um job: depois do job fechado o cliente segue o servidor (LEGACY)", rig.Device.CurrentMode == DeviceClient.ModeLegacy);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+
+            // M6: cinto de seguranca. Pedido ja impresso AQUI no legado + job ORDER_KITCHEN do mesmo pedido: so PRINTED, sem papel.
+            // Controle: ORDER_REPRINT do mesmo pedido IMPRIME (2a via e legitima).
+            dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.PrintMode = "QUEUE";
+                    var ledgerPath = Path.Combine(dir, "printed.json");
+                    var pre = new PrintLedger(ledgerPath);
+                    pre.TryBeginPrint("M6"); pre.MarkPrinted("M6"); pre.MarkAcked("M6");   // impresso e confirmado pelo modo legado
+                    var o = Order("M6", "5106");
+                    api.AddJob("m6", o);
+                    var re = SelfTestPrint.Reprint(); re.OrderId = "M6"; re.Code = "5107";
+                    api.AddJob("m6r", re, "ORDER_REPRINT");
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, ledgerPath, "mcd_impressora1_segredo", usePrintJobs: true))
+                    {
+                        rig.Start();
+                        bool done = WaitFor(() => api.JobState("m6") == "PRINTED" && api.JobState("m6r") == "PRINTED", 20000);
+                        Thread.Sleep(300);
+                        Check("cinto: job ORDER_KITCHEN de pedido que este PC ja imprimiu no legado NAO reimprime", done && Paper(printer, "5106") == 0);
+                        Check("cinto: ... e o servidor recebe PRINTED desse job", api.AcksOf("m6", "PRINTED") >= 1);
+                        Check("cinto: a 2a via (ORDER_REPRINT) do mesmo pedido continua imprimindo", Paper(printer, "5107") == 1);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+
+            // M7: "mode" desconhecido ou ausente nao muda nada; fila e legado antigos seguem como antes.
+            dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.PrintMode = "TALVEZ";
+                    var o = Order("M7", "5108");
+                    api.AddJob("m7", o);
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: true))
+                    {
+                        rig.Start();
+                        bool done = WaitFor(() => api.JobState("m7") == "PRINTED" && Paper(printer, "5108") == 1, 20000);
+                        Thread.Sleep(300);
+                        Check("modo: valor desconhecido de mode e ignorado (continua na fila e imprime)", done && rig.Device.CurrentMode == DeviceClient.ModeQueue);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+
+            // M9: o job foi impresso mas o aviso PRINTED esta falhando (servidor 500); o servidor vira para LEGACY e ainda lista o
+            // pedido (printedAt so e gravado quando o ack do job chega). O legado NAO pode rodar antes do ack do job: reimprimiria.
+            dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.PrintMode = "QUEUE";
+                    var o = Order("M9", "5109"); LegacyOrder(api, o);
+                    api.AddJob("m9", o);
+                    api.JobAckStatus = 500; api.JobAckFailFirst = 5;   // os 5 primeiros avisos do job falham
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: true))
+                    {
+                        rig.Start();
+                        bool printed = WaitFor(() => Paper(printer, "5109") == 1, 20000);
+                        api.PrintMode = "LEGACY";                        // virou depois de imprimir, com o aviso ainda pendente
+                        bool done = WaitFor(() => api.JobState("m9") == "PRINTED", 30000);
+                        Thread.Sleep(800);
+                        Check("aviso do job falhando + servidor vira LEGACY: o pedido sai 1 vez so (o legado espera o ack do job)", printed && done && Paper(printer, "5109") == 1);
+                        Check("aviso do job falhando + servidor vira LEGACY: o legado nunca buscou o tiquete desse pedido", api.Count("/printable") == 0);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+
+            // M8: o servidor oscila o modo varias vezes com 6 pedidos (cada um aparece como pedido legado e como job): cada pedido sai 1 vez.
+            dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.PrintMode = "LEGACY";
+                    for (int i = 1; i <= 6; i++)
+                    {
+                        var o = Order("F" + i, "52" + i.ToString("00"));
+                        LegacyOrder(api, o);
+                        api.AddJob("f" + i, o);
+                    }
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out")) { DelayMs = 120 };
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: false))
+                    {
+                        rig.Start();
+                        var end = DateTime.UtcNow.AddSeconds(5);
+                        bool queue = false;
+                        while (DateTime.UtcNow < end) { queue = !queue; api.PrintMode = queue ? "QUEUE" : "LEGACY"; Thread.Sleep(170); }
+                        api.PrintMode = "LEGACY";   // termina no legado: o que sobrou na lista legada sai por la
+                        bool all = WaitFor(() => Enumerable.Range(1, 6).All(i => Paper(printer, "52" + i.ToString("00")) >= 1), 40000);
+                        Thread.Sleep(1500);
+                        var counts = Enumerable.Range(1, 6).Select(i => Paper(printer, "52" + i.ToString("00"))).ToArray();
+                        Check("oscilacao do modo: todos os 6 pedidos saem", all);
+                        Check("oscilacao do modo: nenhum pedido sai 2 vezes (contagem por pedido: " + string.Join(",", counts) + ")", counts.All(c => c == 1));
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
+
     }
 }

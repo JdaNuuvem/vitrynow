@@ -12,6 +12,12 @@ using MeuCardapio.PrintClient.Models;
 
 namespace MeuCardapio.PrintClient.Services
 {
+    // 409 MODE_QUEUE do endpoint legado: a loja passou para a fila de impressao (ADR-0004 §8 item 12).
+    public class ModeQueueException : Exception
+    {
+        public ModeQueueException() : base("a loja usa a fila de impressão (409 MODE_QUEUE)") { }
+    }
+
     // 401/403 da API: a chave de impressora foi revogada, trocada ou nunca valeu.
     public class DeviceAuthException : Exception
     {
@@ -60,6 +66,15 @@ namespace MeuCardapio.PrintClient.Services
 
         public bool IsRevoked => _revoked;
 
+        // Modo de impressao (ADR-0004 §8 itens 12-13): quem decide e o SERVIDOR, por loja. O cliente comeca no modo indicado por
+        // UsePrintJobs (interruptor de desenvolvimento; padrao LEGACY) e segue o servidor: o endpoint legado avisa a fila com
+        // 409 MODE_QUEUE e o claim avisa o legado com mode:"LEGACY". API sem "mode" nao muda nada.
+        public const string ModeLegacy = "LEGACY";
+        public const string ModeQueue = "QUEUE";
+        volatile string _mode;
+        public string CurrentMode { get { return _mode; } }
+        public event Action<string> ModeChanged;
+
         // AllowAutoRedirect=false: a API nunca redireciona, e o Bearer não pode seguir para outro host.
         readonly HttpClient _http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = HttpTimeout };
         readonly SemaphoreSlim _cycleGate = new SemaphoreSlim(1, 1);
@@ -80,6 +95,22 @@ namespace MeuCardapio.PrintClient.Services
         {
             _ledger = ledger;
             _settings = settings ?? AppSettings.Current;
+            _mode = _settings.UsePrintJobs ? ModeQueue : ModeLegacy;
+        }
+
+        void SetMode(string mode, string why)
+        {
+            if (mode == _mode) return;
+            _mode = mode;
+            StatusChanged?.Invoke("Modo de impressão da loja: " + (mode == ModeQueue ? "fila" : "legado") + " (" + why + ")");
+            ModeChanged?.Invoke(mode);
+        }
+
+        // "mode" do claim. Valor desconhecido ou ausente: ignora (nao troca nada).
+        void ApplyServerMode(string mode)
+        {
+            var m = (mode ?? "").Trim().ToUpperInvariant();
+            if (m == ModeLegacy || m == ModeQueue) SetMode(m, "definido pelo servidor");
         }
 
         public void Start()
@@ -188,9 +219,27 @@ namespace MeuCardapio.PrintClient.Services
             foreach (var id in _ledger.PendingAcks()) await TryAckAsync(id, token);
 
             // 1b) modo PrintJob (PC-03, ADR-0004): o servidor decide o que imprimir (claim com lease) e o cliente obedece.
-            if (_settings.UsePrintJobs) { await ClaimJobsAsync(token); return; }
+            // Quem decide o modo e o servidor (PC-18): se o claim disser LEGACY, segue para o legado no mesmo ciclo.
+            if (_mode == ModeQueue)
+            {
+                await ClaimJobsAsync(token);
+                if (_mode == ModeQueue) return;
+            }
 
-            // 2) pedidos pendentes na API.
+            // 2) modo legado. Nunca junto com o modo fila: job em impressao ou com aviso PRINTED pendente ainda "possui" o pedido
+            // no servidor, e a lista legada o ofereceria de novo.
+            if (_ledger.AnyJobInFlight() || _ledger.AnyJobAckPending()) return;
+            try { await LegacyCycleAsync(token); }
+            catch (ModeQueueException)
+            {
+                SetMode(ModeQueue, "o servidor respondeu MODE_QUEUE");
+                await ClaimJobsAsync(token);
+            }
+        }
+
+        async Task LegacyCycleAsync(CancellationToken token)
+        {
+            // pedidos pendentes na API.
             var json = await GetStringAsync("/api/device/orders/pending", token);
             var pending = JsonConvert.DeserializeObject<PendingOrdersResponse>(json);
             if (pending?.Orders == null) return;
@@ -247,6 +296,8 @@ namespace MeuCardapio.PrintClient.Services
             {
                 token.ThrowIfCancellationRequested();
                 if (_ledger.AnyJobInFlight() || _ledger.AnyJobInBackoff()) return;
+                // Troca LEGACY -> QUEUE: pedido ainda em impressao (ou com aviso pendente) pelo legado nao pode ser reclamado como job.
+                if (_ledger.AnyLegacyInFlight() || _ledger.AnyLegacyAckPending()) return;
                 var job = await ClaimNextAsync(token);
                 if (job == null) return; // fila vazia
                 if (!await HandleJobAsync(job, token)) return;
@@ -284,6 +335,16 @@ namespace MeuCardapio.PrintClient.Services
             if (ticket == null)
             {
                 await SendJobAckAsync(job.Id, "FAILED", PrintFailure.Other, "tíquete ausente no job", token);
+                return true;
+            }
+
+            // Cinto de segurança da virada (ADR-0004 §8 item 13): este PC já imprimiu o pedido no modo legado (ack legado perdido,
+            // ou aviso que chegou depois da troca). Não reimprime: só avisa PRINTED do job. Vale só para o tíquete original.
+            if (kind == PrintJobDto.KindKitchen && !string.IsNullOrEmpty(ticket.OrderId) && _ledger.IsPrinted(ticket.OrderId))
+            {
+                StatusChanged?.Invoke("O pedido já foi impresso aqui pelo modo anterior: não vou imprimir de novo, só avisar o servidor.");
+                if (_ledger.TryBeginPrint(key)) _ledger.MarkPrinted(key);
+                await TryAckAsync(key, token);
                 return true;
             }
 
@@ -325,6 +386,9 @@ namespace MeuCardapio.PrintClient.Services
                 Interlocked.Exchange(ref _authFailures, 0);
                 var body = await response.Content.ReadAsStringAsync();
                 var claim = JsonConvert.DeserializeObject<ClaimResponse>(body);
+                if (claim != null) ApplyServerMode(claim.Mode);
+                // Em LEGACY o servidor nao entrega job; se entregar mesmo assim, nao imprime (o legado cuidaria do pedido: duplicaria).
+                if (_mode != ModeQueue) return null;
                 var job = claim == null ? null : claim.Job;
                 if (job == null) return null;
                 if (string.IsNullOrWhiteSpace(job.Id)) throw new InvalidOperationException("job sem id na resposta do claim");
@@ -420,6 +484,14 @@ namespace MeuCardapio.PrintClient.Services
                 {
                     var code = (int)response.StatusCode;
                     if (code == 401 || code == 403) { NoteAuthFailure(code, false); return; }
+                    // 409 MODE_QUEUE: a loja já passou para a fila; o servidor não aceita mais o aviso legado. Encerra (repetir não
+                    // adianta) e mantém o registro de impresso: o cinto de segurança impede a reimpressão se vier um job deste pedido.
+                    if (code == 409 && await IsModeQueueAsync(response))
+                    {
+                        _ledger.MarkAcked(orderId);
+                        SetMode(ModeQueue, "o servidor respondeu MODE_QUEUE ao aviso");
+                        return;
+                    }
                     // 2xx: confirmado. 404: o pedido não existe mais na API; não há o que repetir.
                     if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.NotFound)
                     {
@@ -443,11 +515,18 @@ namespace MeuCardapio.PrintClient.Services
                 if (code >= 300 && code < 400)
                     throw new InvalidOperationException("a API respondeu com redirecionamento (" + code + "); confira a URL");
                 if (code == 401 || code == 403) throw new DeviceAuthException(code);
+                if (code == 409 && await IsModeQueueAsync(response)) { Interlocked.Exchange(ref _authFailures, 0); throw new ModeQueueException(); }
                 response.EnsureSuccessStatusCode();
                 var body = await response.Content.ReadAsStringAsync();
                 Interlocked.Exchange(ref _authFailures, 0);
                 return body;
             }
+        }
+
+        static async Task<bool> IsModeQueueAsync(HttpResponseMessage response)
+        {
+            try { return ((await response.Content.ReadAsStringAsync()) ?? "").IndexOf("MODE_QUEUE", StringComparison.Ordinal) >= 0; }
+            catch { return false; }
         }
 
         // O token é lido a cada requisição: uma chave nova gravada em "Configurar chave..." vale na hora.

@@ -51,3 +51,21 @@ mostrar ao dono a frase traduzida do `code`.
 - **Falha local esquecida:** se o servidor deixar de oferecer o job por 30 min, o indicador "sem imprimir" daquele job some (o aviso passa a ser o do painel).
 - **Reimpressão (`ORDER_REPRINT`):** imprime com "2ª VIA (n)" (`reprintCount`) e "1ª impressão: …" (`printedAtOriginal`). **Cancelamento:** o job `ORDER_CANCEL_NOTICE` (emitido pela API-12 quando o pedido já tinha sido impresso) imprime só o aviso "CANCELADO / NÃO PREPARAR"; o **tipo do job** manda (o cliente liga `cancelNotice` mesmo que o servidor esqueça), e `cancelNotice: true` num job de outro tipo também imprime só o aviso. Não toca o alarme de "novo pedido". *Achado da conferência cruzada com a API-12 real (PC-03c): antes o cliente recusava esse tipo e a cozinha nunca saberia do cancelamento.*
 - **Alerta sonoro** só para `ORDER_KITCHEN` novo.
+
+## Modo da loja: LEGACY × QUEUE (PC-18, ADR-0004 §8 itens 12-13)
+Quem decide como imprimir é o **servidor, por loja** (`Store.printMode`, padrão `LEGACY`; só o OWNER altera). O cliente não decide nada: segue o servidor a cada ciclo.
+
+| Situação | Resposta do servidor | O que o cliente faz |
+|---|---|---|
+| Loja em `LEGACY` | `claim` → `{"job":null,"mode":"LEGACY"}` (nunca entrega job); endpoint legado funciona | usa `/api/device/orders/pending` e `/printed` |
+| Loja em `QUEUE` | `claim` normal, com `"mode":"QUEUE"`; endpoint legado → `409` com `code: "MODE_QUEUE"` | usa `claim`/`ack`; o `409` do legado não conta como chave recusada nem como erro |
+| `mode` ausente (API antiga) ou valor desconhecido | — | ignora: nada muda |
+
+- **Ponto de partida:** `UsePrintJobs` do `settings.json` é só um interruptor de desenvolvimento (padrão `false` = começa no legado). Depois do primeiro ciclo quem manda é o servidor: o legado descobre a fila pelo `409 MODE_QUEUE`; a fila descobre o legado pelo `mode:"LEGACY"` do `claim`.
+- **Nunca mistura os dois modos** (a virada acontece com impressão em andamento):
+  - não pede job enquanto há pedido legado **em impressão ou com aviso `/printed` pendente**;
+  - não roda o legado enquanto há **job em impressão ou com aviso `PRINTED` pendente** (o servidor só grava `printedAt` quando o ack do job chega);
+  - ack legado respondido com `409 MODE_QUEUE` **encerra** (não repete) e muda para a fila; o registro de "impresso" fica.
+- **Cinto de segurança (R1b):** job `ORDER_KITCHEN` de um pedido que **este PC já imprimiu no legado** não reimprime: o cliente só envia `PRINTED`. Vale só para o tíquete original (2ª via e aviso de cancelamento sempre imprimem).
+- **Se um job chegar em `LEGACY`** (servidor fora do contrato), o cliente **não imprime** (o legado cuidaria do mesmo pedido).
+- Teste executável: `SelfTestJobs.ModeFollowsServer` (M1–M9) sobre o `FakeApi` com `PrintMode`; o plano de virada fica em `docs\plano-virada-printjobs.md`.

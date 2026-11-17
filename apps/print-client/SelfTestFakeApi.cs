@@ -56,6 +56,11 @@ namespace MeuCardapio.PrintClient
         public int LeaseMs = 120000;                                  // ADR-0004 §8: lease padrao 120 s
         public int FailBackoffMs = 300;                               // recuo do servidor depois de FAILED (no ADR: 15 s, 60 s, 5 min); curto para o teste
         public bool EmptyAs204;                                       // fila vazia: 204 em vez de {"job":null}
+        // Modo de impressao da loja decidido pelo servidor (ADR-0004 §8 itens 12-13): null = API antiga (sem "mode"); "LEGACY" = claim
+        // devolve {job:null, mode:"LEGACY"} e o endpoint legado funciona; "QUEUE" = claim normal com mode e o legado responde 409 MODE_QUEUE.
+        public volatile string PrintMode;
+        public int LegacyCalls { get { lock (Lock) return _legacyCalls; } }
+        int _legacyCalls;
         public int ClaimStatus = 200;                                 // 401/403/500 para simular falha do claim
         public int JobAckStatus = 200; public int JobAckFailFirst;    // primeiros N acks respondem JobAckStatus sem aplicar
         int _claimCalls, _jobAckCalls;
@@ -74,6 +79,11 @@ namespace MeuCardapio.PrintClient
         public string AllAckBodies() { lock (Lock) return string.Join("\n", JobAckBodies); }
         public string JobLastError(string id) { lock (Lock) { var j = Jobs.FirstOrDefault(x => x.Id == id); return j == null ? null : j.LastError; } }
         public int AcksOf(string id, string status) { lock (Lock) return JobAcks.Count(a => a.StartsWith(id + "|" + status + "|", StringComparison.Ordinal)); }
+        static string OrderIdOf(FakeJob j)
+        {
+            if (j.TicketJson == null) return null;
+            try { return (string)Newtonsoft.Json.Linq.JObject.Parse(j.TicketJson)["orderId"]; } catch { return null; }
+        }
         void ExpireLeases() { var now = DateTime.UtcNow; foreach (var j in Jobs) if (j.State == "CLAIMED" && j.LeaseUntilUtc < now) j.State = "PENDING"; }
         // Consulta segura: o servidor falso grava em Requests em outra thread; enumerar sem travar lanca "colecao modificada".
         public bool Has(Func<string, bool> predicate) { lock (Lock) return Requests.Any(predicate); }
@@ -168,12 +178,13 @@ namespace MeuCardapio.PrintClient
                         // PENDING com availableAt <= agora (um job que falha sempre nao trava a fila) e nunca devolve PRINTED.
                         var j = Jobs.FirstOrDefault(x => x.State == "CLAIMED" && x.ClaimedBy == auth && x.LeaseUntilUtc >= now)
                                 ?? Jobs.FirstOrDefault(x => x.State == "PENDING" && x.AvailableAtUtc <= now);
-                        if (j == null) { if (EmptyAs204) status = 204; else body = "{\"job\":null}"; }
+                        if (PrintMode == "LEGACY") j = null;   // em LEGACY o servidor nunca entrega job
+                        if (j == null) { if (EmptyAs204 && PrintMode == null) status = 204; else body = "{\"job\":null" + (PrintMode != null ? ",\"mode\":\"" + PrintMode + "\"" : "") + "}"; }
                         else
                         {
                             if (j.State != "CLAIMED") { j.State = "CLAIMED"; j.ClaimedBy = auth; j.LeaseUntilUtc = now.AddMilliseconds(LeaseMs); j.Attempts++; }
                             body = "{\"job\":{\"id\":\"" + j.Id + "\",\"kind\":\"" + j.Kind + "\",\"attempt\":" + j.Attempts + ",\"leaseSeconds\":" + Math.Max(1, (int)Math.Ceiling(LeaseMs / 1000.0))
-                                + (j.TicketJson != null ? ",\"ticket\":" + j.TicketJson : "") + "}}";
+                                + (j.TicketJson != null ? ",\"ticket\":" + j.TicketJson : "") + "}" + (PrintMode != null ? ",\"mode\":\"" + PrintMode + "\"" : "") + "}";
                         }
                     }
                 }
@@ -202,7 +213,7 @@ namespace MeuCardapio.PrintClient
                     else if (j.State == "PRINTED" && st == "PRINTED" && j.ClaimedBy == auth) reply = 200;          // idempotente
                     else if (j.State == "CLAIMED" && j.ClaimedBy == auth)                                         // lease valida e dono
                     {
-                        if (st == "PRINTED") j.State = "PRINTED";
+                        if (st == "PRINTED") { j.State = "PRINTED"; var oid = OrderIdOf(j); if (oid != null) Pending.RemoveAll(x => x[0] == oid); }   // R2: o ack do job grava printedAt
                         else { j.LastError = err; j.LastCode = codeIn; j.State = j.Attempts >= j.MaxAttempts ? "FAILED" : "PENDING"; j.AvailableAtUtc = DateTime.UtcNow.AddMilliseconds(FailBackoffMs); }
                         reply = 200;
                     }
@@ -211,6 +222,13 @@ namespace MeuCardapio.PrintClient
                 Reply(c, reply, "{}");
                 return;
             }
+            if (path.StartsWith("/api/device/orders/") && PrintMode == "QUEUE")
+            {
+                lock (Lock) _legacyCalls++;
+                Reply(c, 409, "{\"error\":\"A loja usa a fila de impressao.\",\"code\":\"MODE_QUEUE\"}");
+                return;
+            }
+            if (path.StartsWith("/api/device/orders/")) lock (Lock) _legacyCalls++;
             if (path == "/api/device/orders/pending")
             {
                 int n; lock (Lock) n = ++_pendingCalls;
@@ -235,7 +253,8 @@ namespace MeuCardapio.PrintClient
                 if (status == 200 && RemoveOnAck)
                 {
                     var id = path.Substring("/api/device/orders/".Length).Replace("/printed", "");
-                    lock (Lock) Pending.RemoveAll(x => x[0] == id);
+                    // §8 item 13a: o ack legado fecha o job do pedido na mesma transacao do printedAt.
+                    lock (Lock) { Pending.RemoveAll(x => x[0] == id); foreach (var jb in Jobs) if (jb.State != "PRINTED" && OrderIdOf(jb) == id) jb.State = "PRINTED"; }
                 }
                 Reply(c, status, "{}");
                 return;
