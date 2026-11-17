@@ -250,10 +250,19 @@ describe("FUNC-01/02 — cupom e total zero", () => {
     const dono = await coupon(ctx, { code: "DONO99", discountType: "PERCENT", discountValue: 99 });
     expect(dono.statusCode, dono.body).toBe(201);
     const donoId = json(dono).coupon.id as string;
-    for (const payload of [{ discountValue: 10 }, { active: false }, { maxUses: 2 }, { discountValue: 10, maxUses: 2 }]) {
+    for (const payload of [{ discountValue: 10 }, { maxUses: 2 }, { discountValue: 10, maxUses: 2 }, { expiresAt: "2099-01-01" }]) {
       const r = await asStaff(`/api/coupons/${donoId}`, payload);
       expect([r.statusCode, json(r).code], JSON.stringify(payload)).toEqual([403, "FORBIDDEN_ROLE"]);
     }
+    // PARAR um cupom perigoso reduz risco: o STAFF pode DESATIVAR (só isso) o cupom do dono acima do teto; reativar e misturar, não
+    const desativa = await asStaff(`/api/coupons/${donoId}`, { active: false });
+    expect(desativa.statusCode, desativa.body).toBe(200);
+    expect((await prisma.coupon.findUniqueOrThrow({ where: { id: donoId } })).active).toBe(false);
+    const reativa = await asStaff(`/api/coupons/${donoId}`, { active: true });
+    expect([reativa.statusCode, json(reativa).code]).toEqual([403, "FORBIDDEN_ROLE"]);
+    const mistura = await asStaff(`/api/coupons/${donoId}`, { active: false, discountValue: 10 });
+    expect([mistura.statusCode, json(mistura).code]).toEqual([403, "FORBIDDEN_ROLE"]);
+    expect((await prisma.coupon.findUniqueOrThrow({ where: { id: donoId } })).discountValue).toBe(99);
     // o STAFF não consegue ESTOURAR o teto editando um cupom dele
     const meu = json(await asStaff("/api/coupons", { code: "MEU", discountType: "PERCENT", discountValue: 10, maxUses: 4 })).coupon.id as string;
     expect((await asStaff(`/api/coupons/${meu}`, { discountValue: 51 })).statusCode).toBe(403);

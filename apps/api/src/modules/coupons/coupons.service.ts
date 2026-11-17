@@ -74,6 +74,14 @@ export class CouponsService {
   async update(actor: CouponActor, id: string, input: UpdateCouponInput) {
     const { storeId } = actor;
     const current = await this.require(storeId, id);
+    // Parar um cupom perigoso reduz risco: o STAFF pode DESATIVAR qualquer cupom, mas só isso (`{ active: false }` sozinho).
+    // Reativar, ou desativar junto com outra mudança, segue a regra do teto.
+    const onlyDeactivate = Object.keys(input).length === 1 && input.active === false;
+    if (onlyDeactivate && actor.role === "STAFF") {
+      const stopped = await this.repo.update(id, { active: false });
+      this.auditChange(actor, "coupon.update", stopped);
+      return stopped;
+    }
     const final = {
       discountType: input.discountType ?? current.discountType,
       discountValue: input.discountValue ?? current.discountValue,
