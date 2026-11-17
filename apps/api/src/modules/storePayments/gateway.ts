@@ -1,6 +1,6 @@
 import { mercadoPagoGateway, type PixCharge, type PixChargeInput, type PixGateway, type ProviderPayment } from "../../lib/mercadopago";
 import { oauthProvider } from "./oauth";
-import { PixUnavailableError } from "./storePayments.service";
+import { AccountChangedError, NeedsReconnectError, PixUnavailableError } from "./storePayments.service";
 import { storePaymentsService } from "./storePayments.module";
 
 // A PORTA que quem cria, consulta, cancela ou estorna PIX de pedido usa (ADR-0001 §3.6): o gateway da LOJA, com o token
@@ -123,7 +123,10 @@ function wrap(gateway: PixGateway, accountId: string, storeId: string): StoreGat
 
 export async function gatewayForStore(storeId: string): Promise<StoreGateway> {
   const account = await storePaymentsService.accountForCharge(storeId);
-  const accessToken = await storePaymentsService.accessTokenFor(account);
+  // Quem COBRA é o cliente do cardápio: ele nunca vê "reconecte" (isso é do dono). Sem token válido, o PIX simplesmente não existe.
+  const accessToken = await storePaymentsService.accessTokenFor(account).catch((error) => {
+    throw error instanceof NeedsReconnectError ? new PixUnavailableError() : error;
+  });
   return wrap(maker({ accessToken, owner: account.sellerUserId }), account.id, account.storeId);
 }
 
@@ -132,6 +135,8 @@ export async function gatewayForAccount(accountId: string, expectedStoreId: stri
   // `Payment.paymentAccountId` não tem FK composta por loja: a conferência é feita aqui. Conta de OUTRA loja = indisponível,
   // sem dizer que ela existe (isolamento entre lojas, ADR-0009).
   if (!account || account.storeId !== expectedStoreId) throw new PixUnavailableError();
+  // Pago numa conta que a loja já desconectou/trocou: só sai pelo app do Mercado Pago (RN-B1-16). NUNCA "reconecte".
+  if (account.status === "DISCONNECTED") throw new AccountChangedError();
   const accessToken = await storePaymentsService.accessTokenFor(account);
   return wrap(maker({ accessToken, owner: account.sellerUserId }), account.id, account.storeId);
 }
