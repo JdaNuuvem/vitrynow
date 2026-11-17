@@ -336,7 +336,9 @@ describe("FUNC-01/02 — cupom e total zero", () => {
     await coupon(ctx, { code: "TUDO", discountType: "PERCENT", discountValue: 100, maxUses: 10 });
     const r = await order(ctx, { couponCode: "TUDO", paymentMethod: "PIX", changeForCents: 5000 });
     expect(r.statusCode, r.body).toBe(201);
-    expect(Object.keys(json(r)).sort()).toEqual(["code", "orderId"]); // sem `payment`/QR
+    // sem cobrança na resposta: nenhuma chave de pagamento/QR/PIX (outras chaves, como o token de acompanhamento da NG-16, podem existir)
+    expect(Object.keys(json(r)).filter((k) => /payment|qr|pix/i.test(k))).toEqual([]);
+    expect(json(r)).toMatchObject({ orderId: expect.any(String), code: expect.any(String) });
     const o = await prisma.order.findUniqueOrThrow({ where: { id: json(r).orderId }, include: { payment: true } });
     expect(o).toMatchObject({ subtotalCents: 4000, discountCents: 4000, totalCents: 0, paymentMethod: null, changeForCents: null, awaitingPayment: false, payment: null });
     expect(vi.mocked(mp.createPixPayment)).not.toHaveBeenCalled();
