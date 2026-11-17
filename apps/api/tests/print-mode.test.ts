@@ -519,6 +519,38 @@ describe("API-12b — modo de impressão e virada", () => {
     }
   });
 
+  it("VARREDURA: o ÚNICO lugar que grava status CANCELADO num pedido é o applyCancel (qualquer cancelamento novo entra por cancelBySystem/cancelOrder e herda o lock da loja)", async () => {
+    const { readdirSync, readFileSync, statSync } = await import("node:fs");
+    const { join, relative } = await import("node:path");
+    const raiz = join(__dirname, "../src");
+    const arquivos: string[] = [];
+    const andar = (dir: string) => {
+      for (const nome of readdirSync(dir)) {
+        const caminho = join(dir, nome);
+        if (statSync(caminho).isDirectory()) andar(caminho);
+        else if (caminho.endsWith(".ts")) arquivos.push(caminho);
+      }
+    };
+    andar(raiz);
+    // escrita = `data: { ... status: "CANCELADO" ... }` (dentro do mesmo objeto, sem fechar chave antes)
+    const escrita = /data:\s*\{[^{}]*status:\s*"CANCELADO"/g;
+    const fora: string[] = [];
+    for (const arq of arquivos) {
+      const texto = readFileSync(arq, "utf8").split("\r\n").join("\n");
+      const nome = relative(raiz, arq).split("\\").join("/");
+      // corpo do applyCancel: do início da função até a próxima função da classe
+      const ini = nome === "modules/orders/orders.service.ts" ? texto.indexOf("private async applyCancel(") : -1;
+      const fim = ini >= 0 ? texto.indexOf("\n  async ", ini) : -1;
+      for (const m of texto.matchAll(escrita)) {
+        const antes = texto.slice(Math.max(0, m.index! - 160), m.index!);
+        if (/payment\.(update|updateMany)/.test(antes)) continue; // o enum do PAGAMENTO também tem CANCELADO
+        const dentro = ini >= 0 && m.index! > ini && (fim < 0 || m.index! < fim);
+        if (!dentro) fora.push(nome + "@" + m.index);
+      }
+    }
+    expect(fora, "escrita de status CANCELADO em pedido fora do applyCancel (sem o lock da loja): use cancelBySystem").toEqual([]);
+  });
+
   it("ACK TARDIO em QUEUE: job PENDING ⇒ 200 idempotente, fecha o job (PRINTED) e grava printedAt NA MESMA transação; a lista legada segue vazia e a fila não reimprime", async () => {
     const ctx = await setup();
     const id = await order(ctx);
