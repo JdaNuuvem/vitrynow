@@ -120,7 +120,9 @@ describe("ST-71: erro do Prisma (e 5xx em geral) não leva valores nem caminho a
     await app.close();
 
     expect(res.statusCode).toBe(500);
-    expect(res.json()).toEqual({ statusCode: 500, error: "Internal Server Error", message: "Erro interno do servidor" });
+    expect(res.json()).toEqual({ statusCode: 500, error: "Erro interno do servidor. Tente de novo.", message: "Erro interno do servidor", requestId: expect.any(String) });
+    // ST-75: o `requestId` da resposta é o `reqId` gravado na linha de erro (o suporte liga a queixa à linha)
+    expect(parsed().find((l) => l.level === 50)!.reqId).toBe(res.json().requestId);
     const all = lines.join("\n");
     for (const secret of [PII, "11999990000", "Rua Secreta", "/srv/api/src", "orders.service.ts"]) {
       expect(all, secret).not.toContain(secret);

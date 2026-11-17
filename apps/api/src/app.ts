@@ -58,7 +58,9 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
     if (isPrismaError(error) || status === undefined || status >= 500) {
       const code = status !== undefined && status >= 500 ? status : 500;
       request.log.error({ req: request, err: error }, "erro interno não tratado"); // `req` = método, MODELO da rota e query redigida
-      return reply.code(code).send({ statusCode: code, error: "Internal Server Error", message: "Erro interno do servidor" });
+      // ST-75: `error` é o texto que o web mostra (FetchHttpClient lê `payload.error`), então vai em português; `requestId` é o mesmo `reqId` gravado
+      // em toda linha de log da requisição, para o suporte ligar a queixa do cliente à linha.
+      return reply.code(code).send({ statusCode: code, error: "Erro interno do servidor. Tente de novo.", message: "Erro interno do servidor", requestId: request.id });
     }
     return reply.send(error);
   });
