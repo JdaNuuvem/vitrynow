@@ -162,6 +162,24 @@ page="$(curl -s -w '|%{http_code}' "http://127.0.0.1:$PORT/loja/$slug")"
 if [ "$rc" = 201 ] && [ "${page##*|}" = 200 ] && printf '%s' "$page" | grep -q "Loja Smoke SSR"; then check ok "SSR: /loja/$slug traz o nome da loja no HTML (o servidor do web alcançou a API por http://api:3001)"
 else check fail "SSR não trouxe a loja (cadastro=$rc, página=${page##*|}); o web pode estar caindo no plano B do navegador"; fi
 
+echo "== 6f menor privilégio: o web NÃO recebe segredo nenhum além do necessário; a API recebe o PIX desligado; check-env.sh aprova o .env do smoke"
+# o container do web só pode ter: NODE_ENV, API_INTERNAL_URL, API_INTERNAL_SECRET e o que a imagem traz. Nenhum destes nomes:
+wenv="$("${DC[@]}" exec -T web printenv 2>/dev/null | cut -d= -f1 | tr -d '\r')"
+wleak=""
+for n in JWT_SECRET MFA_HMAC_KEY POSTGRES_PASSWORD DATABASE_URL PAYMENT_ENC_KEY PAYMENT_ENC_KEY_PREV MP_CLIENT_SECRET MP_ACCESS_TOKEN MP_WEBHOOK_SECRET RESEND_API_KEY ADMIN_TOKEN; do
+  printf '%s\n' "$wenv" | grep -qx "$n" && wleak="$wleak $n"
+done
+[ -z "$wleak" ] && check ok "o container do web não tem JWT/MFA/banco/PIX/e-mail/admin no ambiente (só o segredo de serviço e a URL interna)" || check fail "segredos demais no ambiente do web:$wleak"
+mode="$("${DC[@]}" exec -T api printenv MP_OAUTH_MODE | tr -d '\r\n')"
+[ "$mode" = off ] && check ok "a API sobe com MP_OAUTH_MODE=off por padrão (PIX por loja desligado)" || check fail "MP_OAUTH_MODE da API = '$mode' (esperado off)"
+prodenv="$ENVF.prod"
+sed -e '/^COOKIE_SECURE=/d' -e 's#^WEB_ORIGIN=.*#WEB_ORIGIN=https://exemplo.invalid#' -e 's#^NEXT_PUBLIC_API_URL=.*#NEXT_PUBLIC_API_URL=https://exemplo.invalid#' -e 's#^DOMAIN=.*#DOMAIN=exemplo.invalid#' "$ENVF" > "$prodenv"
+if bash "$ROOT/infra/check-env.sh" "$prodenv" >/dev/null 2>&1; then check ok "infra/check-env.sh APROVA um .env de produção montado com os mesmos segredos do smoke"; else check fail "check-env.sh reprovou um .env de produção válido: $(bash "$ROOT/infra/check-env.sh" "$prodenv" 2>&1 | grep ERRO | head -2 | tr '
+' ' ')"; fi
+ev="$(bash "$ROOT/infra/check-env.sh" "$ENVF" 2>&1)"
+case "$ev" in *"WEB_ORIGIN deve ser https"*"COOKIE_SECURE=false"*|*"COOKIE_SECURE=false"*"WEB_ORIGIN deve ser https"*) check ok "check-env.sh REPROVA o .env do smoke (http e COOKIE_SECURE=false), pelos motivos certos";; *) check fail "check-env.sh não acusou http/COOKIE_SECURE=false no .env do smoke";; esac
+rm -f "$prodenv"
+
 echo "== 7 backup verificado"
 for i in $(seq 1 30); do [ -s "$ROOT/infra/backups/LAST_OK" ] && break; sleep 2; done
 f="$(ls -1 "$ROOT"/infra/backups/*.dump 2>/dev/null | tail -1)"
