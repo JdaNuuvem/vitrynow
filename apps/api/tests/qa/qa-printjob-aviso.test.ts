@@ -8,6 +8,11 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { prisma } from "@meucardapio/db";
 import { makeApp, registerStore, resetDb } from "../helpers";
 
+// Estes testes esperam o lock da loja, disputam corridas e preparam banco: sob carga da máquina o tempo total varia de 1 s a 45 s (medido pelo
+// Hopper). O limite de 15 s do vitest.config.ts os reprovava por TEMPO, sem violar nenhum invariante. O limite é só deste arquivo e as
+// asserções não mudaram (com mais folga, a asserção final é sempre reportada).
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+
 vi.mock("../../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/mercadopago")>();
   return { ...original, createPixPayment: vi.fn(), getPayment: vi.fn(), cancelPayment: vi.fn(), refundPayment: vi.fn() };

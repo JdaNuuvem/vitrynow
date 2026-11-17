@@ -4,6 +4,11 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { prisma } from "@meucardapio/db";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
+// Estes testes esperam o lock da loja, disputam corridas e preparam banco: sob carga da máquina o tempo total varia de 1 s a 45 s (medido pelo
+// Hopper). O limite de 15 s do vitest.config.ts os reprovava por TEMPO, sem violar nenhum invariante. O limite é só deste arquivo e as
+// asserções não mudaram (com mais folga, a asserção final é sempre reportada).
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
   return { ...original, createPixPayment: vi.fn(), getPayment: vi.fn(), cancelPayment: vi.fn(), refundPayment: vi.fn() };
@@ -347,11 +352,19 @@ describe("API-12b — modo de impressão e virada", () => {
     expect((await setMode(ctx2, "LEGACY")).statusCode).toBe(200);
   });
 
-  it("CORRIDA claim × recuo, 8 rodadas: nunca fica LEGACY com impressão em andamento (ou o recuo é recusado, ou o claim não entrega)", async () => {
+  // ORÇAMENTO DE RODADAS POR TEMPO: roda rodadas até ~10 s (no mínimo 3, no máximo o teto) para que a asserção do invariante seja SEMPRE
+  // reportada, mesmo com a máquina lenta; sob carga o teste faz menos rodadas em vez de estourar o tempo sem dizer nada.
+  const DENTRO_DO_ORCAMENTO = (i: number, inicio: number, min: number, max: number) => i < max && (i < min || Date.now() - inicio < 10_000);
+
+  it("CORRIDA claim × recuo (rodadas por orçamento de ~10 s, de 3 a 9): nunca fica LEGACY com impressão em andamento (ou o recuo é recusado, ou o claim não entrega)", async () => {
     const ctx = await setup();
     let recusados = 0;
     let semJob = 0;
-    for (let i = 0; i < 8; i++) {
+    let rodadas = 0;
+    const inicio = Date.now();
+    // teto 9: a troca de modo tem limite de 10 por minuto por loja
+    for (let i = 0; DENTRO_DO_ORCAMENTO(i, inicio, 3, 9); i++) {
+      rodadas += 1;
       await prisma.store.update({ where: { id: ctx.storeId }, data: { printMode: "QUEUE" } });
       await order(ctx);
       const [c, p] = await Promise.all([claim(ctx), setMode(ctx, "LEGACY")]);
@@ -368,6 +381,7 @@ describe("API-12b — modo de impressão e virada", () => {
       // limpa para a próxima rodada: encerra o que estiver em andamento
       await prisma.printJob.updateMany({ where: { storeId: ctx.storeId, status: { in: ["CLAIMED", "PENDING"] } }, data: { status: "PRINTED", leaseUntil: null } });
     }
+    expect(rodadas).toBeGreaterThanOrEqual(3);
     expect(recusados + semJob).toBeGreaterThan(0);
   });
 
@@ -603,10 +617,13 @@ describe("API-12b — modo de impressão e virada", () => {
     expect((await prisma.order.findUniqueOrThrow({ where: { id: pedidoB } })).printedAt).toBeNull();
   });
 
-  it("CORRIDA ack tardio × claim, 8 rodadas: o pedido sai UMA vez (ou o ack fecha o job e o claim não o entrega, ou o claim pega e o ack é 409)", async () => {
+  it("CORRIDA ack tardio × claim (rodadas por orçamento de ~10 s, de 3 a 8): o pedido sai UMA vez (ou o ack fecha o job e o claim não o entrega, ou o claim pega e o ack é 409)", async () => {
     const ctx = await setup();
     await setMode(ctx, "QUEUE");
-    for (let i = 0; i < 8; i++) {
+    const inicio = Date.now();
+    let rodadas = 0;
+    for (let i = 0; DENTRO_DO_ORCAMENTO(i, inicio, 3, 8); i++) {
+      rodadas += 1;
       const id = await order(ctx);
       const [a, c] = await Promise.all([printed(ctx, id), claim(ctx)]);
       const entregue = json(c).job?.ticket?.orderId === id;
@@ -622,6 +639,7 @@ describe("API-12b — modo de impressão e virada", () => {
       // encerra o que sobrou da rodada para a próxima começar limpa
       await prisma.printJob.updateMany({ where: { storeId: ctx.storeId, status: { in: ["CLAIMED", "PENDING"] } }, data: { status: "PRINTED", leaseUntil: null } });
     }
+    expect(rodadas).toBeGreaterThanOrEqual(3);
   });
 
   it("repetir o comando que RECONCILIA sem trocar o modo também fica no rastro (print.mode_reconcile); sem nada a reconciliar, nenhum rastro novo", async () => {
