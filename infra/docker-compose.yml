@@ -75,6 +75,10 @@ services:
       TRUST_PROXY_CIDR: ${CADDY_IP:-172.29.250.10}/32   # derivado do IP fixo do Caddy: não há como divergir
       SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
       SESSION_ABSOLUTE_DAYS: ${SESSION_ABSOLUTE_DAYS:-14}
+      # Segredo de serviço (SEC-24), o MESMO do web. Rotação sem queda: ponha o novo em API_INTERNAL_SECRET e o antigo em
+      # API_INTERNAL_SECRET_PREVIOUS (a API aceita os dois), suba api e web, e depois esvazie o PREVIOUS.
+      API_INTERNAL_SECRET: ${API_INTERNAL_SECRET:?defina API_INTERNAL_SECRET no .env (32+ caracteres; openssl rand -hex 32)}
+      API_INTERNAL_SECRET_PREVIOUS: ${API_INTERNAL_SECRET_PREVIOUS:-}
       JOBS_ENABLED: ${JOBS_ENABLED:-true}   # jobs no processo da API (ADR-0011); false só para depurar
       MP_ACCESS_TOKEN: ${MP_ACCESS_TOKEN:-}
       MP_WEBHOOK_SECRET: ${MP_WEBHOOK_SECRET:-}
@@ -108,6 +112,12 @@ services:
         condition: service_healthy
     environment:
       NODE_ENV: production
+      # Chamadas servidor-a-servidor do cardápio (SSR/ISR) vão direto à API pela rede interna: sem isto o padrão do código é
+      # http://localhost:3001, que dentro deste container NÃO é a API (o cardápio cairia no plano B do navegador sem avisar).
+      API_INTERNAL_URL: http://api:3001
+      # Segredo de serviço (SEC-24): só em tempo de EXECUÇÃO e só no servidor. Nunca NEXT_PUBLIC_*, nunca ARG de build,
+      # nunca no código. A API só confia no IP repassado pelo web quando este segredo confere.
+      API_INTERNAL_SECRET: ${API_INTERNAL_SECRET:?defina API_INTERNAL_SECRET no .env (32+ caracteres; openssl rand -hex 32)}
     expose:
       - "3000"
     cap_drop: [ALL]

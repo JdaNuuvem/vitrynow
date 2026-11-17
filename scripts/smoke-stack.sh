@@ -17,6 +17,7 @@ cat > "$ENVF" <<EOF
 POSTGRES_PASSWORD=$(rnd)
 JWT_SECRET=$(rnd)$(rnd)
 MFA_HMAC_KEY=$(rnd)$(rnd)
+API_INTERNAL_SECRET=$(rnd)$(rnd)
 COOKIE_SECURE=false   # o smoke é http (sem TLS)
 WEB_ORIGIN=http://localhost:$PORT
 NEXT_PUBLIC_API_URL=http://localhost:$PORT
@@ -42,7 +43,7 @@ echo "== validando e subindo a stack ($PROJ)"
 "${DC[@]}" config -q || { echo "compose inválido"; exit 1; }
 "${DC[@]}" up -d --build 2>&1 | tail -5
 docker run -d --name "$PROJ-xffecho" --network "${PROJ}_default" --network-alias xffecho node:20-alpine node -e \
-  "require('http').createServer((q,s)=>s.end(JSON.stringify({xff:q.headers['x-forwarded-for']||null,ip:q.socket.remoteAddress}))).listen(8080)" >/dev/null
+  "require('http').createServer((q,s)=>s.end(JSON.stringify({xff:q.headers['x-forwarded-for']||null,ip:q.socket.remoteAddress,secret:q.headers['x-internal-service-secret']||null,visitor:q.headers['x-visitor-ip']||null}))).listen(8080)" >/dev/null
 
 echo "== aguardando saúde (até 180s)"
 for i in $(seq 1 90); do
@@ -101,6 +102,19 @@ if [ -z "$r" ]; then
 fi
 case "$r" in *6.6.6.6*|*7.7.7.7*) check fail "XFF forjado chegou ao backend";; *'"xff":"'*) check ok "XFF do cliente descartado; Caddy envia o IP real da conexão";; *) check fail "resposta inesperada: $r";; esac
 
+echo "== 6e Caddy remove x-internal-service-secret e x-visitor-ip vindos da internet (SEC-24)"
+# controle: DENTRO da rede o eco devolve os cabeçalhos se eles chegarem (senão o teste abaixo seria vazio)
+ctl="$(docker run --rm --network "${PROJ}_default" node:20-alpine node -e "require('http').get('http://xffecho:8080',{headers:{'x-internal-service-secret':'ctl-secreto','x-visitor-ip':'9.9.9.9'}},r=>{let b='';r.on('data',d=>b+=d);r.on('end',()=>console.log(b))})" 2>&1)"
+case "$ctl" in *ctl-secreto*9.9.9.9*|*9.9.9.9*ctl-secreto*) check ok "controle: o eco devolve os dois cabeçalhos quando eles CHEGAM (o teste abaixo não é vazio)";; *) check fail "controle falhou: o eco não devolveu os cabeçalhos ($ctl)";; esac
+# pela internet (via Caddy), com variações de caixa: nada pode chegar ao backend
+leak=""
+for h in "X-Internal-Service-Secret: forjado-1" "x-internal-service-secret: forjado-2" "X-INTERNAL-SERVICE-SECRET: forjado-3"; do
+  r="$(curl -s -H "$h" -H 'X-Visitor-IP: 6.6.6.6' "http://127.0.0.1:$PORT/__xff")"
+  case "$r" in *forjado*|*6.6.6.6*) leak="$leak [$h => $r]";; esac
+  case "$r" in *'"secret":null'*'"visitor":null'*) ;; *) leak="$leak [resposta inesperada: $r]";; esac
+done
+[ -z "$leak" ] && check ok "3 variações de caixa do x-internal-service-secret + x-visitor-ip forjado: nenhum chega ao backend" || check fail "cabeçalho de serviço vindo da internet chegou ao backend:$leak"
+
 echo "== 6b trustProxy: CIDR confiável = IP real do Caddy; XFF forjado não escapa do limite de login"
 CIP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$("${DC[@]}" ps -q caddy)")"
 TPC="$("${DC[@]}" exec -T api printenv TRUST_PROXY_CIDR | tr -d '\r')"
@@ -124,6 +138,28 @@ same="$("${DC[@]}" exec -T postgres psql -U meucardapio -d meucardapio -At -c "s
 { [ "$ltz" = UTC ] || [ "$ltz" = Etc/UTC ]; } && check ok "log_timezone = $ltz" || check fail "log_timezone = '$ltz' (esperado UTC)"
 [ "$same" = t ] && check ok "hora local do banco == CURRENT_TIMESTAMP AT TIME ZONE 'UTC' (sem deslocamento)" || check fail "hora local do banco difere de UTC"
 
+echo "== 6d segredo de serviço web→API (SEC-24) e SSR pela rede interna"
+SECRET="$(grep '^API_INTERNAL_SECRET=' "$ENVF" | cut -d= -f2-)"
+hw="$("${DC[@]}" exec -T web printenv API_INTERNAL_SECRET | tr -d '\r\n' | sha256sum | cut -c1-16)"
+ha="$("${DC[@]}" exec -T api printenv API_INTERNAL_SECRET | tr -d '\r\n' | sha256sum | cut -c1-16)"
+[ -n "$hw" ] && [ "$hw" = "$ha" ] && check ok "web e API têm o MESMO segredo de serviço (hash $hw; o valor não é impresso)" || check fail "segredo diferente entre web ($hw) e API ($ha)"
+iu="$("${DC[@]}" exec -T web printenv API_INTERNAL_URL | tr -d '\r\n')"
+[ "$iu" = "http://api:3001" ] && check ok "web chama a API pela rede interna ($iu)" || check fail "API_INTERNAL_URL do web = '$iu' (esperado http://api:3001)"
+# o segredo NÃO pode estar na imagem (ENV/ARG) nem no que o navegador baixa
+img="$("${DC[@]}" images web --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | head -1)"
+if docker image inspect "$img" 2>/dev/null | grep -qF "$SECRET"; then check fail "o segredo aparece na CONFIG da imagem $img (ENV/ARG de build)"; else check ok "segredo ausente da config da imagem web (só existe em tempo de execução)"; fi
+html="$(curl -s "http://127.0.0.1:$PORT/")"; leak=0; n=0
+chunks="$(printf '%s' "$html" | grep -oE '/_next/static/[^"'"'"' )]+\.(js|css)' | sort -u | head -40)"
+for u in $chunks; do n=$((n+1)); if curl -s "http://127.0.0.1:$PORT$u" | grep -qF "$SECRET"; then leak=1; echo "   VAZOU em $u"; fi; done
+if printf '%s' "$html" | grep -qF "$SECRET"; then leak=1; echo "   VAZOU no HTML da home"; fi
+if [ "$n" -ge 3 ] && [ "$leak" = 0 ]; then check ok "segredo ausente do HTML e de $n arquivos estáticos que o navegador baixa"; else check fail "vazamento ($leak) ou poucos arquivos conferidos ($n)"; fi
+# SSR de ponta a ponta: cadastra uma loja de teste e abre o cardápio dela; o nome só vem no HTML se o servidor do web alcançou a API
+slug="smoke-ssr-$RANDOM"
+rc="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "{\"storeName\":\"Loja Smoke SSR\",\"slug\":\"$slug\",\"code\":\"SM$RANDOM\",\"email\":\"smoke$RANDOM@exemplo.invalid\",\"password\":\"SenhaLonga-12345\"}" "http://127.0.0.1:$PORT/auth/register")"
+page="$(curl -s -w '|%{http_code}' "http://127.0.0.1:$PORT/loja/$slug")"
+if [ "$rc" = 201 ] && [ "${page##*|}" = 200 ] && printf '%s' "$page" | grep -q "Loja Smoke SSR"; then check ok "SSR: /loja/$slug traz o nome da loja no HTML (o servidor do web alcançou a API por http://api:3001)"
+else check fail "SSR não trouxe a loja (cadastro=$rc, página=${page##*|}); o web pode estar caindo no plano B do navegador"; fi
+
 echo "== 7 backup verificado"
 for i in $(seq 1 30); do [ -s "$ROOT/infra/backups/LAST_OK" ] && break; sleep 2; done
 f="$(ls -1 "$ROOT"/infra/backups/*.dump 2>/dev/null | tail -1)"
@@ -135,7 +171,7 @@ pf="$("${DC[@]}" exec -T postgres-backup sh -c 'stat -c %a /backups/*.dump /back
 bh="$("${DC[@]}" exec -T postgres-backup /bin/sh /scripts/healthcheck.sh >/dev/null 2>&1 && echo ok || echo no)"; [ "$bh" = ok ] && check ok "healthcheck do backup saudável" || check fail "healthcheck do backup falhou"
 
 echo "== 8 compose recusa .env sem segredos"
-for v in JWT_SECRET MFA_HMAC_KEY POSTGRES_PASSWORD WEB_ORIGIN; do
+for v in JWT_SECRET MFA_HMAC_KEY API_INTERNAL_SECRET POSTGRES_PASSWORD WEB_ORIGIN; do
   grep -v "^$v=" "$ENVF" > "$ENVF.sem"
   out="$(docker compose -p "$PROJ-neg" -f "$ROOTW/infra/docker-compose.yml" --env-file "$(cygpath -m "$ENVF.sem")" config -q 2>&1)"
   case "$out" in *"required variable $v is missing"*) check ok "sem $v o compose recusa: $(echo "$out" | head -1 | cut -c1-90)";; *) check fail "compose aceitou .env sem $v";; esac

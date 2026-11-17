@@ -12,6 +12,12 @@
 		-Server
 	}
 
+	# SEC-24: o segredo de serviço e o IP do visitante repassado só existem entre o web (SSR) e a API pela rede interna.
+	# Nada que venha da internet pode carregá-los: removidos aqui, antes de qualquer proxy, em TODAS as rotas. Sem isto um
+	# visitante forjaria o segredo (ou o IP, escapando do rate limit). Provado por scripts/smoke-stack.sh (eco + controle).
+	request_header -x-internal-service-secret
+	request_header -x-visitor-ip
+
 	# Rotas administrativas da plataforma (x-admin-token) NÃO ficam na internet pública: só pela rede
 	# interna ou por túnel SSH até a API (ST-18). Para publicar um aviso, use o runbook.
 	handle /api/admin/* {
