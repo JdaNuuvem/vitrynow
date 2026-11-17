@@ -90,6 +90,37 @@ export function trustProxySetting(): string[] | false {
   return list.length > 0 ? list : false;
 }
 
+// SEC-24: segredo de SERVIÇO entre o web (SSR) e a API. Quem o conhece pode informar o IP do visitante em `x-visitor-ip`
+// (sem ele, todo o tráfego do SSR chegaria como UM cliente e dividiria o limite de 300 req/min). Vale só de origem interna
+// (ver clientIp.ts). Rotação sem derrubar o site: durante a troca a API aceita o valor novo e o anterior.
+//  - API_INTERNAL_SECRET: obrigatório em produção; `none` declara, de propósito, "o web não repassa o IP" (desliga).
+//  - API_INTERNAL_SECRET_PREVIOUS: opcional, só durante a rotação.
+// Mesmas exigências dos demais segredos: >= 32 caracteres, nunca valor de exemplo, nunca igual ao JWT_SECRET/MFA_HMAC_KEY.
+function assertServiceSecret(name: string, value: string): void {
+  if (REPO_TEST_VALUES.has(value) || KNOWN_PLACEHOLDERS.has(value) || value.length < MIN_SECRET_LENGTH) {
+    throw new Error(`${name} fraco ou de exemplo: use ao menos ${MIN_SECRET_LENGTH} caracteres aleatórios (gen:secrets).`);
+  }
+  if (value === process.env.JWT_SECRET || value === process.env.MFA_HMAC_KEY) {
+    throw new Error(`${name} deve ser diferente do JWT_SECRET e do MFA_HMAC_KEY.`);
+  }
+}
+
+export function internalServiceSecrets(): string[] {
+  const current = process.env.API_INTERNAL_SECRET?.trim();
+  const previous = process.env.API_INTERNAL_SECRET_PREVIOUS?.trim();
+  if (!current) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error('API_INTERNAL_SECRET não configurado em produção: gere um segredo forte (gen:secrets) ou use "none" se o web não chama a API pelo servidor.');
+    }
+    return [];
+  }
+  if (current.toLowerCase() === "none") return [];
+  assertServiceSecret("API_INTERNAL_SECRET", current);
+  if (!previous) return [current];
+  assertServiceSecret("API_INTERNAL_SECRET_PREVIOUS", previous);
+  return previous === current ? [current] : [current, previous];
+}
+
 export function allowedOrigin(): string {
   return process.env.WEB_ORIGIN ?? "http://localhost:3000";
 }

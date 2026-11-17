@@ -9,6 +9,7 @@ import { SESSION_COOKIE, revokeSession, sessionCookieOptions, signSession } from
 import { disconnectSession, disconnectUser } from "../realtime/hub";
 import { hashToken } from "../lib/tokenHash";
 import { LoginThrottle } from "../lib/loginThrottle";
+import { clientIpOf } from "../lib/clientIp";
 
 // Hash de uma senha que ninguém conhece, no mesmo custo dos hashes reais: login com e-mail inexistente
 // gasta o mesmo tempo do login com senha errada (ST-05, sem enumeração de contas por tempo).
@@ -78,7 +79,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
 
     // Reserva a tentativa ANTES de qualquer await (ST-32): uma rajada paralela não passa toda pela checagem.
     // Limite estrito por (conta, IP); o total da conta só atrasa e avisa o dono, nunca tranca (ST-33).
-    const slot = throttle.reserve(email, request.ip);
+    const slot = throttle.reserve(email, clientIpOf(request));
     if (!slot.allowed) {
       reply.header("Retry-After", String(slot.retryAfterSeconds));
       return reply.code(429).send({ error: "muitas tentativas de login; tente de novo em alguns minutos", code: "LOGIN_LOCKED" });
@@ -93,7 +94,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     if (!user || !passwordOk) {
       return reply.code(401).send({ error: "credenciais inválidas" });
     }
-    throttle.succeed(email, request.ip);
+    throttle.succeed(email, clientIpOf(request));
 
     reply.setCookie(SESSION_COOKIE, signSession(app, user), sessionCookieOptions());
     return { ok: true };

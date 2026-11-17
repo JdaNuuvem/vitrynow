@@ -26,11 +26,12 @@ import feedbackRoutes from "./routes/feedback";
 import subscriptionRoutes from "./routes/subscription";
 import noticeRoutes from "./routes/notices";
 import mfaRoutes from "./routes/mfa";
-import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
-import { clientKey } from "./lib/clientKey";
+import { allowedOrigin, internalServiceSecrets, trustProxySetting } from "./lib/securityConfig";
+import { rateLimitKey, rateLimitMax } from "./lib/clientIp";
 import jobsPlugin from "./jobs/plugin";
 
 export function buildApp() {
+  internalServiceSecrets(); // SEC-24: em produção, sem segredo de serviço válido a API nem sobe
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
   // e o rate limit deixa de contar o IP do proxy. Vazio = ignora X-Forwarded-For (não forjável).
   const app = Fastify({ logger: process.env.NODE_ENV !== "test", trustProxy: trustProxySetting() });
@@ -50,7 +51,7 @@ export function buildApp() {
   // Teto global por IP; rotas sensíveis (login, cadastro, pedido público, webhook) têm limites
   // mais estritos definidos na própria rota via `config.rateLimit`.
   // SEC-23: a chave do limite é o cliente normalizado (IPv6 /64, alias IPv4-mapeado ⇒ IPv4), não o endereço cru.
-  app.register(rateLimit, { max: 300, timeWindow: "1 minute", keyGenerator: (request) => clientKey(request.ip) });
+  app.register(rateLimit, { max: (_request, key) => rateLimitMax(String(key)), timeWindow: "1 minute", keyGenerator: (request) => rateLimitKey(request) });
   app.register(websocket);
   app.register(authPlugin);
   app.register(jobsPlugin);
