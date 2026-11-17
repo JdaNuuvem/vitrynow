@@ -1,4 +1,4 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyServerOptions } from "fastify";
 import { prisma } from "@meucardapio/db";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
@@ -28,12 +28,14 @@ import noticeRoutes from "./routes/notices";
 import mfaRoutes from "./routes/mfa";
 import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
 import { clientKey } from "./lib/clientKey";
+import { loggerOptions } from "./lib/logging";
+import { ORDER_TOKEN_HEADER } from "./lib/orderToken";
 import jobsPlugin from "./jobs/plugin";
 
-export function buildApp() {
+export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = {}) {
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
   // e o rate limit deixa de contar o IP do proxy. Vazio = ignora X-Forwarded-For (não forjável).
-  const app = Fastify({ logger: process.env.NODE_ENV !== "test", trustProxy: trustProxySetting() });
+  const app = Fastify({ logger: options.logger ?? (process.env.NODE_ENV !== "test" ? loggerOptions() : false), trustProxy: trustProxySetting() });
 
   // app.close() (graceful shutdown) também desconecta o Prisma — ele é um singleton
   // importado direto de @meucardapio/db, não um plugin fastify com ciclo de vida próprio.
@@ -44,6 +46,8 @@ export function buildApp() {
   app.register(cors, {
     origin: allowedOrigin(),
     credentials: true,
+    // Lista explícita (NG-16): só estes cabeçalhos de requisição passam no preflight do navegador.
+    allowedHeaders: ["content-type", ORDER_TOKEN_HEADER, "x-mfa-challenge"],
   });
   // API JSON pura — CSP não se aplica a respostas que o browser nunca renderiza como HTML.
   app.register(helmet, { contentSecurityPolicy: false });

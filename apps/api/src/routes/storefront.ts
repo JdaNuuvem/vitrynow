@@ -10,6 +10,7 @@ import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { customerMessageFor, messageActorFor, moneyLineFor } from "../lib/cancelMessages";
 import { DomainError } from "../shared/errors";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
+import { newOrderToken, orderTokenMatches, ORDER_TOKEN_HEADER } from "../lib/orderToken";
 
 const COUPON_EXHAUSTED_MESSAGE = "Esse cupom acabou.";
 class CouponExhaustedError extends Error {}
@@ -183,6 +184,8 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       }
     }
     const usePix = paymentMethod === "PIX";
+    // NG-16: o cliente recebe este token UMA vez; só o hash vai ao banco.
+    const accessToken = newOrderToken();
 
     // Código e pedido na MESMA transação: o contador da loja fica travado até o commit, então
     // pedidos simultâneos são serializados e nunca colidem (B01).
@@ -220,6 +223,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         changeForCents: zeroTotal ? undefined : input.changeForCents,
         couponId: coupon?.id,
         awaitingPayment: usePix,
+        publicTokenHash: accessToken.hash,
         // PIX: o registro do pagamento nasce na MESMA transação do pedido, com a chave de idempotência, ANTES de
         // falar com o provedor — se algo cair no meio, a cobrança é encontrada (e a conciliação resolve), nunca órfã.
         ...(usePix ? { payment: { create: { amountCents: totalCents, idempotencyKey: randomUUID() } } } : {}),
@@ -250,7 +254,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     if (!usePix) {
       publishToStore(store.id, { type: "order.created", orderId: order.id });
       if (ticketQueued) publishToStore(store.id, { type: "print.available" });
-      return reply.code(201).send({ orderId: order.id, code: order.code });
+      return reply.code(201).send({ orderId: order.id, code: order.code, token: accessToken.token });
     }
 
     const payment = await prisma.payment.findUniqueOrThrow({ where: { orderId: order.id } });
@@ -274,6 +278,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(201).send({
         orderId: order.id,
         code: order.code,
+        token: accessToken.token,
         payment: { pixQrCode: pix.pixQrCode, pixQrCodeBase64: pix.pixQrCodeBase64, expiresAt: pix.expiresAt },
       });
     } catch (error) {
@@ -296,7 +301,10 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       where: { id: orderId, storeId: store.id },
       include: { payment: true },
     });
-    if (!order) return reply.code(404).send({ error: "pedido não encontrado" });
+    // NG-16: sem o token certo a resposta é IGUAL à de pedido inexistente (não confirma que o pedido existe).
+    if (!order || !orderTokenMatches(request.headers[ORDER_TOKEN_HEADER], order.publicTokenHash)) {
+      return reply.code(404).send({ error: "pedido não encontrado" });
+    }
 
     // `terminal`: o polling do checkout para (pedido cancelado ou pagamento em estado final).
     const paymentStatus = order.payment?.status ?? null;
@@ -328,6 +336,11 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     const { slug, orderId } = request.params as { slug: string; orderId: string };
     const store = await prisma.store.findUnique({ where: { slug } });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });
+    // NG-16: o cliente só cancela o PRÓPRIO pedido (token do pedido); falha ⇒ mesmo 404 de pedido inexistente.
+    const owned = await prisma.order.findFirst({ where: { id: orderId, storeId: store.id }, select: { publicTokenHash: true } });
+    if (!owned || !orderTokenMatches(request.headers[ORDER_TOKEN_HEADER], owned.publicTokenHash)) {
+      return reply.code(404).send({ error: "pedido não encontrado" });
+    }
     try {
       return await orderService.cancelByCustomer(store.id, orderId);
     } catch (error) {

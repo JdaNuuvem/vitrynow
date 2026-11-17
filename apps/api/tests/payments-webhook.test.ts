@@ -6,7 +6,7 @@ import { prisma } from "@meucardapio/db";
 import { mapMpStatus } from "../src/lib/mercadopago";
 import { PAYMENT_STATUSES, canMovePayment, isFinalPayment, originsFor } from "../src/lib/paymentStateMachine";
 import { subscribe } from "../src/realtime/hub";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { makeApp, registerStore, resetDb, orderTokenHeader } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -239,7 +239,7 @@ describe("API-03 — webhook e PIX", () => {
     const { orderId, providerPaymentId } = await pixOrder(ctx);
     const ws = wsSocket(ctx.storeId);
     if (cancelAtProviderFails) cancelPayment.mockRejectedValueOnce(new Error("MP: já pago"));
-    expect((await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${orderId}/cancel` })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${orderId}/cancel`, headers: orderTokenHeader(orderId) })).statusCode).toBe(200);
     expect((await orderOf(orderId))?.payment?.status).toBe(cancelAtProviderFails ? "PENDENTE" : "CANCELADO");
 
     await provider(providerPaymentId, "approved");
@@ -255,7 +255,7 @@ describe("API-03 — webhook e PIX", () => {
   it("aprovado depois de cancelado e o estorno falha: fica ESTORNO_PENDENTE com o pedido cancelado; a nova tentativa conclui sem novo cancelamento", async () => {
     const ctx = await setup();
     const { orderId, providerPaymentId } = await pixOrder(ctx);
-    await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${orderId}/cancel` });
+    await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${orderId}/cancel`, headers: orderTokenHeader(orderId) });
     await provider(providerPaymentId, "approved");
     refundPayment.mockRejectedValueOnce(new Error("timeout"));
     expect((await webhook(providerPaymentId)).statusCode).toBe(200);

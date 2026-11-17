@@ -2,7 +2,7 @@
 // Mercado Pago é SEMPRE mockado.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { login, makeApp, registerStore, resetDb } from "./helpers";
+import { login, makeApp, registerStore, resetDb, orderTokenHeader } from "./helpers";
 import { subscribe } from "../src/realtime/hub";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
@@ -76,7 +76,7 @@ describe("API-02 — estados do pedido", () => {
   const cancel = (cookie: string, id: string, reason?: Record<string, unknown>) =>
     app.inject({ method: "POST", url: `/api/orders/${id}/cancel`, headers: { cookie }, payload: reason ? { reason } : {} });
   const undo = (cookie: string, id: string) => app.inject({ method: "POST", url: `/api/orders/${id}/undo`, headers: { cookie } });
-  const customerCancel = (slug: string, id: string) => app.inject({ method: "POST", url: `/stores/${slug}/orders/${id}/cancel` });
+  const customerCancel = (slug: string, id: string) => app.inject({ method: "POST", url: `/stores/${slug}/orders/${id}/cancel`, headers: orderTokenHeader(id) });
 
   // ───────────── Avançar ─────────────
   it("BALCAO percorre PENDENTE→…→CONCLUIDO e grava autor/origem no histórico; DELIVERY passa por SAIU_PARA_ENTREGA", async () => {
@@ -533,10 +533,10 @@ describe("API-02 — estados do pedido", () => {
   it("payment-status do checkout indica terminal e o motivo quando o pedido foi cancelado", async () => {
     const ctx = await setup();
     const id = await newOrder(ctx);
-    const before = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status` }));
+    const before = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status`, headers: orderTokenHeader(id) }));
     expect(before).toMatchObject({ orderStatus: "PENDENTE", terminal: false, cancelReason: null });
     await cancel(ctx.cookie, id, { code: "ITEM_EM_FALTA" });
-    const after = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status` }));
+    const after = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status`, headers: orderTokenHeader(id) }));
     expect(after).toMatchObject({ orderStatus: "CANCELADO", terminal: true, cancelReason: { customerMessage: "Item indisponível no momento.", moneyLine: null } });
   });
 

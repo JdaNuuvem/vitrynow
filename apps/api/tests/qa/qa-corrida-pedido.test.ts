@@ -7,7 +7,7 @@
 // inconsistente. O resultado esperado é SEMPRE: exatamente um vencedor, um 409, histórico coerente.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { makeApp, registerStore, resetDb } from "../helpers";
+import { makeApp, registerStore, resetDb, orderTokenHeader } from "../helpers";
 
 // Mercado Pago sempre simulado: nenhuma chamada de rede real.
 vi.mock("../../src/lib/mercadopago", async (importOriginal) => {
@@ -66,7 +66,7 @@ describe("QA corridas do pedido (barreira FOR UPDATE)", () => {
     const l = await loja();
     const orderId = await novoPedido(l);
     const [cliente, painel] = await comBarreira(orderId, () => [
-      app.inject({ method: "POST", url: `/stores/${l.store.slug}/orders/${orderId}/cancel` }),
+      app.inject({ method: "POST", url: `/stores/${l.store.slug}/orders/${orderId}/cancel`, headers: orderTokenHeader(orderId) }),
       app.inject({ method: "POST", url: `/api/orders/${orderId}/transition`, headers: { cookie: l.cookie }, payload: { to: "CONFIRMADO" } }),
     ]);
     const codigos = [cliente.statusCode, painel.statusCode].sort();
@@ -92,7 +92,7 @@ describe("QA corridas do pedido (barreira FOR UPDATE)", () => {
     const orderId = await novoPedido(l, { couponCode: "dez" });
     expect((await prisma.coupon.findFirstOrThrow({ where: { storeId: l.store.id } })).usedCount).toBe(1);
     const [cliente, painel] = await comBarreira(orderId, () => [
-      app.inject({ method: "POST", url: `/stores/${l.store.slug}/orders/${orderId}/cancel` }),
+      app.inject({ method: "POST", url: `/stores/${l.store.slug}/orders/${orderId}/cancel`, headers: orderTokenHeader(orderId) }),
       app.inject({ method: "POST", url: `/api/orders/${orderId}/cancel`, headers: { cookie: l.cookie }, payload: { reason: { code: "ITEM_EM_FALTA" } } }),
     ]);
     // Cancelar é idempotente: o perdedor pode receber 200 (já cancelado) ou 409. O que NÃO pode é efeito duplo.

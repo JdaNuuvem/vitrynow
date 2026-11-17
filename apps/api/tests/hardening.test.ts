@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { makeApp, registerStore, resetDb, orderTokenHeader } from "./helpers";
 
 describe("hardening", () => {
   let app: ReturnType<typeof makeApp>;
@@ -82,7 +82,7 @@ describe("hardening", () => {
 
     const cancelAfterConfirm = await app.inject({
       method: "POST",
-      url: `/stores/loja-cancela/orders/${orderId}/cancel`,
+      url: `/stores/loja-cancela/orders/${orderId}/cancel`, headers: orderTokenHeader(orderId),
     });
     expect(cancelAfterConfirm.statusCode).toBe(409);
 
@@ -94,7 +94,7 @@ describe("hardening", () => {
     const order2Id = JSON.parse(order2.body).orderId;
     const cancelPending = await app.inject({
       method: "POST",
-      url: `/stores/loja-cancela/orders/${order2Id}/cancel`,
+      url: `/stores/loja-cancela/orders/${order2Id}/cancel`, headers: orderTokenHeader(order2Id),
     });
     expect(cancelPending.statusCode).toBe(200);
   });
