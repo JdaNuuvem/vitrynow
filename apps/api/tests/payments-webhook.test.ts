@@ -488,7 +488,7 @@ describe("API-03 — webhook e PIX", () => {
     seq += 1;
     const providerPaymentId = `mp-sub-${Date.now()}-${seq}`;
     createPix.mockResolvedValueOnce({ providerPaymentId, status: "pending", pixQrCode: "x", pixQrCodeBase64: "y", expiresAt: new Date(Date.now() + 60_000) });
-    const res = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: ctx.cookie }, payload: { planCode: "PRO" } });
+    const res = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: ctx.cookie }, payload: { planCode: "BASICO" } }); // PRO está inativo até lançar (ADR-0003 §2.6)
     expect(res.statusCode).toBe(201);
     const sp = await prisma.subscriptionPayment.findUniqueOrThrow({ where: { providerPaymentId } });
     return { providerPaymentId, sp };
