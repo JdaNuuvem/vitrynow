@@ -2,6 +2,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { sendMfaCodeEmail } from "../src/lib/email";
+import { AccountAttemptCap } from "../src/lib/accountAttemptCap";
 import { login, makeApp, registerStore, resetDb } from "./helpers";
 
 vi.mock("../src/lib/email", () => ({
@@ -196,6 +197,60 @@ describe("privacidade: anonimizar cliente", { timeout: 60_000 }, () => {
     expect(json(barrado).code).toBe("RATE_LIMITED");
     expect(barrado.headers["retry-after"]).toBeDefined();
     expect(await prisma.order.count({ where: { storeId: ctx.storeId, anonymizedAt: { not: null } } })).toBe(0);
+  });
+
+  it("teto por CONTA de qualquer IP (sessão roubada troca de IP): 10 erros de IPs DIFERENTES ⇒ a 11ª tentativa, de IP novo e com a senha CERTA, leva 429 e nada é anonimizado; outro dono segue livre", async () => {
+    const ctx = await setup();
+    const outro = await setup();
+    await mk(ctx.storeId);
+    await mk(outro.storeId);
+    const deIp = (cookie: string, ip: string, password: string, expectedOrders = 1) =>
+      app.inject({ method: "POST", url: "/api/privacy/anonymize", headers: { cookie }, remoteAddress: ip, payload: { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders, currentPassword: password } });
+    for (let i = 0; i < 10; i++) {
+      const res = await deIp(ctx.owner, `203.0.113.${10 + i}`, `errada-${i}-xxxx`); // cada IP erra UMA vez: o limite por (conta, IP) nunca dispara
+      expect(res.statusCode, `erro ${i}`).toBe(403);
+    }
+    const barrada = await deIp(ctx.owner, "203.0.113.200", SENHA); // IP novo, senha CERTA
+    expect(barrada.statusCode).toBe(429);
+    expect(json(barrada).code).toBe("RATE_LIMITED");
+    expect(barrada.headers["retry-after"]).toBeDefined();
+    expect(await prisma.order.count({ where: { storeId: ctx.storeId, anonymizedAt: { not: null } } })).toBe(0);
+    // o teto é POR CONTA: o dono de outra loja não é afetado
+    expect((await deIp(outro.owner, "203.0.113.201", SENHA)).statusCode).toBe(200);
+  });
+
+  it("AccountAttemptCap: reserva síncrona (rajada paralela não passa do teto), a senha certa devolve, a janela anda e as contas são independentes", () => {
+    let t = 1_000_000;
+    const cap = new AccountAttemptCap(3, 60_000, () => t);
+    expect([cap.reserve("a").allowed, cap.reserve("a").allowed, cap.reserve("a").allowed, cap.reserve("a").allowed]).toEqual([true, true, true, false]);
+    const negada = cap.reserve("a");
+    expect(negada).toMatchObject({ allowed: false });
+    expect((negada as { retryAfterSeconds: number }).retryAfterSeconds).toBeGreaterThan(0);
+    expect(cap.reserve("b").allowed).toBe(true); // outra conta
+    cap.succeed("a"); // senha certa devolve uma reserva
+    expect(cap.reserve("a").allowed).toBe(true);
+    expect(cap.reserve("a").allowed).toBe(false);
+    t += 60_001; // a janela passou
+    expect(cap.reserve("a").allowed).toBe(true);
+    // rajada de 50 reservas no mesmo tique: só o teto passa
+    const rajada = Array.from({ length: 50 }, () => cap.reserve("c").allowed).filter(Boolean).length;
+    expect(rajada).toBe(3);
+  });
+
+  it("RN-PV-28: senha AUSENTE não gasta tentativa (só a errada conta): 8 pedidos sem senha ⇒ 403 REAUTH_REQUIRED e depois a senha certa ainda passa; a prévia diz `reauth: PASSWORD` (ou `MFA` com MFA ativa)", async () => {
+    const ctx = await setup();
+    await mk(ctx.storeId);
+    // 8 < 10 (limite de rota por minuto) e > 5 (se gastassem tentativa, o par (conta, IP) fecharia e a senha certa levaria 429)
+    for (let i = 0; i < 8; i++) {
+      const res = await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1, currentPassword: undefined });
+      expect(res.statusCode, `sem senha ${i}`).toBe(403);
+      expect(json(res).code).toBe("REAUTH_REQUIRED");
+    }
+    expect(json(await preview(ctx.owner, { phone: PHONE })).reauth).toBe("PASSWORD");
+    process.env.MFA_ENFORCED = "true";
+    expect(json(await preview(ctx.owner, { phone: PHONE })).reauth).toBe("MFA");
+    delete process.env.MFA_ENFORCED;
+    expect((await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1 })).statusCode).toBe(200); // nenhuma tentativa foi gasta
   });
 
   it("auditoria em LOTES de 500 ids: 1.001 pedidos ⇒ 3 linhas (500+500+1), com todos os `orderIds` (reaplicação depois de restaurar backup) e sem dado pessoal", async () => {
