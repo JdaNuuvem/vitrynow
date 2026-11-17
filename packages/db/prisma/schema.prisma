@@ -304,7 +304,7 @@ model OrderItemAdditional {
 enum PaymentAccountStatus {
   CONNECTED
   NEEDS_RECONNECT // renovação falhou ou o provedor revogou: o PIX some do checkout e o dono é avisado
-  DISCONNECTED // histórico: sem tokens; pagamentos já criados com ela seguem resolvíveis pelo accountId do Payment
+  DISCONNECTED // histórico: SEM tokens. Pagamentos pendentes/em estorno impedem desconectar ou trocar de vendedor; os já ENCERRADOS ficam presos a esta conta, então um estorno tardio deles só sai pelo app do próprio Mercado Pago
 }
 
 // Uma conta ativa (CONNECTED/NEEDS_RECONNECT) por loja e um vendedor do provedor em uma só loja: índices únicos PARCIAIS
