@@ -25,6 +25,14 @@ vi.mock("./hooks/usePedidos", () => ({
   usePedidos: () => ({ ...state, deliverers: [], busyId: null, ...fns }),
 }));
 
+// Roteador e parâmetros: objetos ESTÁVEIS (um novo a cada render refaria os efeitos em laço).
+const router = { push: vi.fn(), replace: vi.fn(), back: vi.fn() };
+let query = "";
+vi.mock("next/navigation", () => ({ useRouter: () => router, useSearchParams: () => new URLSearchParams(query) }));
+vi.mock("./detail/OrderDetailPanel", () => ({
+  OrderDetailPanel: (props: { orderId: string; desktop: boolean }) => <div data-testid="detalhe" data-order={props.orderId} data-desktop={String(props.desktop)} />,
+}));
+
 let role: "OWNER" | "STAFF" | null = "OWNER";
 vi.mock("@/core/session/useCurrentRole", () => ({ useCurrentRole: () => role }));
 
@@ -42,6 +50,8 @@ beforeEach(() => {
   state.notice = null;
   state.undoOffer = null;
   role = "OWNER";
+  query = "";
+  Object.values(router).forEach((fn) => fn.mockReset());
   Object.values(fns).forEach((fn) => fn.mockReset());
 });
 
@@ -58,7 +68,9 @@ describe("PedidosPage: quadro tolerante a status novo (WEB-21)", () => {
     const others = column("Outros");
     expect(within(others).getByText("#0099")).toBeInTheDocument();
     expect(within(others).getByText(/ainda não conhece/)).toBeInTheDocument();
-    expect(within(others).queryByRole("button")).not.toBeInTheDocument();
+    // sem ações (avançar, recusar, entregador); só abrir o detalhe, que é leitura (spec 11 §2)
+    expect(within(others).getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual(["Abrir pedido 0099"]);
+    expect(within(others).queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.queryByText("ESTADO_DO_FUTURO")).not.toBeInTheDocument();
   });
 
@@ -259,3 +271,41 @@ describe("PedidosPage: tentar o estorno de novo depois de fechar a folha (Deming
     expect(screen.queryByRole("button", { name: "Tentar estorno" })).not.toBeInTheDocument();
   });
 });
+
+describe("PedidosPage: abrir o detalhe do pedido (WEB-26, UI-D-01)", () => {
+  it("tocar no número do pedido abre o detalhe pela URL e NÃO avança o pedido", async () => {
+    state.orders = [order("7", "PENDENTE", "0042", { allowedTransitions: [accept as never] })];
+    render(<PedidosPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Abrir pedido 0042" }));
+    expect(router.push).toHaveBeenCalledWith("/dashboard/pedidos?pedido=7");
+    expect(fns.transition).not.toHaveBeenCalled();
+    expect(fns.cancel).not.toHaveBeenCalled();
+  });
+
+  it("pedido no coletor 'Outros' também abre o detalhe", async () => {
+    state.orders = [order("9", "ESTADO_DO_FUTURO", "0099")];
+    render(<PedidosPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Abrir pedido 0099" }));
+    expect(router.push).toHaveBeenCalledWith("/dashboard/pedidos?pedido=9");
+  });
+
+  it("sem ?pedido= não há detalhe; com ?pedido= o painel recebe o id", () => {
+    state.orders = [order("7", "PENDENTE", "0042")];
+    const { unmount } = render(<PedidosPage />);
+    expect(screen.queryByTestId("detalhe")).not.toBeInTheDocument();
+    unmount();
+    query = "pedido=7";
+    render(<PedidosPage />);
+    expect(screen.getByTestId("detalhe")).toHaveAttribute("data-order", "7");
+  });
+
+  it("o botão 'Aceitar' do cartão continua avançando (abrir e avançar são toques diferentes)", async () => {
+    state.orders = [order("7", "PENDENTE", "0042", { allowedTransitions: [accept as never] })];
+    fns.transition.mockResolvedValue(undefined);
+    render(<PedidosPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Aceitar" }));
+    expect(fns.transition).toHaveBeenCalledTimes(1);
+    expect(router.push).not.toHaveBeenCalled();
+  });
+});
+

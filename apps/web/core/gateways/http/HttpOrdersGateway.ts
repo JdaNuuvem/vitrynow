@@ -1,12 +1,17 @@
 import type { HttpClient, RequestOptions } from "../../http/HttpClient";
 import type { CancelBody, CancelResult, DeliverersGateway, OrdersGateway } from "../OrdersGateway";
 import type { Deliverer, Order, OrderStatus } from "../../domain/orders";
+import type { OrderDetail } from "../../domain/orderDetail";
 
 export class HttpOrdersGateway implements OrdersGateway {
   constructor(private readonly http: HttpClient) {}
 
   list() {
     return this.http.get<{ orders: Order[] }>("/api/orders");
+  }
+
+  get(orderId: string) {
+    return this.http.get<{ order: OrderDetail }>(`/api/orders/${orderId}`);
   }
 
   transition(orderId: string, to: OrderStatus) {

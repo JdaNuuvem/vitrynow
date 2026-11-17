@@ -1,25 +1,43 @@
 "use client";
 
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { statusLabel } from "@/core/domain/orderLabels";
 import type { Order } from "@/core/domain/orders";
 import { useCurrentRole } from "@/core/session/useCurrentRole";
+import { useMediaQuery } from "@/lib/useMediaQuery";
 import type { CardAction } from "./orderActions";
 import { CancelOrderDialog } from "./components/CancelOrderDialog";
 import { OrderCard } from "./components/OrderCard";
 import { UndoToast } from "./components/UndoToast";
+import { OrderDetailPanel } from "./detail/OrderDetailPanel";
 import { useNow } from "./hooks/useNow";
 import { usePedidos } from "./hooks/usePedidos";
 import { KANBAN_COLUMNS, groupOrders } from "./kanban";
 import "./pedidos.css";
 import "./pedidos-acoes.css";
+import "./pedidos-detalhe.css";
 
 type CancelTarget = { order: Order; action: CardAction } | null;
+
+// "Tentar estorno": a folha reabre já no passo de repetir o estorno (o estado vem do pedido, não da folha).
+const RETRY_REFUND_ACTION: CardAction = { to: "CANCELADO", label: "Tentar estorno", kind: "CANCEL", primary: false, requiresReason: false, refund: true, disabledReason: null };
+
+// O que o detalhe precisa saber que mudou no quadro: ao mudar, ele recarrega sozinho (tempo real, outra aba, outra ação).
+const detailRefreshKey = (order: Order | undefined) =>
+  order ? [order.status, order.payment?.status, order.payment?.refundPending, order.delivererId, order.canUndo].join("|") : "";
 
 export function PedidosPage() {
   const p = usePedidos();
   const nowMs = useNow();
   const role = useCurrentRole();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  // Detalhe aberto = `?pedido=<id>` na URL (compartilhável entre abas; o botão voltar do navegador fecha o detalhe).
+  const selectedId = searchParams.get("pedido");
+  const desktop = useMediaQuery("(min-width: 1100px)");
+  const openedHere = useRef(false);
+  const lastOpened = useRef<string | null>(null);
   const groups = groupOrders(p.orders);
   const [cancelTarget, setCancelTarget] = useState<CancelTarget>(null);
   // No celular o quadro vira abas por estado (spec 02 §3); no desktop todas as colunas aparecem.
@@ -27,6 +45,33 @@ export function PedidosPage() {
 
   // Pedido que o servidor já mudou/sumiu enquanto a folha estava aberta: a folha acompanha o pedido atual.
   const current = cancelTarget ? (p.orders.find((order) => order.id === cancelTarget.order.id) ?? cancelTarget.order) : null;
+
+  const openDetail = useCallback(
+    (orderId: string) => {
+      openedHere.current = true;
+      lastOpened.current = orderId;
+      router.push(`/dashboard/pedidos?pedido=${encodeURIComponent(orderId)}`);
+    },
+    [router],
+  );
+  // Fechar volta uma entrada se fomos nós que abrimos; se a pessoa chegou direto pelo link, só tira o parâmetro.
+  const closeDetail = useCallback(() => {
+    if (openedHere.current) {
+      openedHere.current = false;
+      router.back();
+    } else {
+      router.replace("/dashboard/pedidos");
+    }
+  }, [router]);
+
+  // Painel lateral fechado: o foco volta ao cartão que o abriu (a folha modal já devolve sozinha ao fechar).
+  useEffect(() => {
+    if (selectedId || !desktop || !lastOpened.current) return;
+    const id = lastOpened.current;
+    lastOpened.current = null;
+    const button = Array.from(document.querySelectorAll<HTMLElement>("[data-order-id]")).find((node) => node.getAttribute("data-order-id") === id)?.querySelector<HTMLElement>(".pedidos-card__open");
+    button?.focus();
+  }, [selectedId, desktop]);
 
   const card = (order: Order, readOnly = false) => (
     <OrderCard
@@ -37,16 +82,18 @@ export function PedidosPage() {
       busy={p.busyId === order.id}
       readOnly={readOnly}
       canRetryRefund={role === "OWNER"}
+      onOpen={(target) => openDetail(target.id)}
       onAdvance={p.transition}
       onOpenCancel={(target, action) => setCancelTarget({ order: target, action })}
       onUndo={(target) => p.undo(target.id)}
-      onRetryRefund={(target) => setCancelTarget({ order: target, action: { to: "CANCELADO", label: "Tentar estorno", kind: "CANCEL", primary: false, requiresReason: false, refund: true, disabledReason: null } })}
+      onRetryRefund={(target) => setCancelTarget({ order: target, action: RETRY_REFUND_ACTION })}
       onAssignDeliverer={p.assignDeliverer}
     />
   );
 
   return (
-    <main className="pedidos">
+    <main className={`pedidos${selectedId && desktop ? " pedidos--with-detail" : ""}`}>
+      <div className="pedidos__content">
       <h1>Pedidos</h1>
 
       {p.notice && (
@@ -117,6 +164,26 @@ export function PedidosPage() {
           onConfirm={(draft) => p.cancel(current, draft)}
           onRetryRefund={() => p.retryRefund(current)}
           onClose={() => setCancelTarget(null)}
+        />
+      )}
+      </div>
+
+      {selectedId && (
+        <OrderDetailPanel
+          orderId={selectedId}
+          listOrder={p.orders.find((order) => order.id === selectedId)}
+          refreshKey={detailRefreshKey(p.orders.find((order) => order.id === selectedId))}
+          deliverers={p.deliverers}
+          nowMs={nowMs}
+          busy={p.busyId === selectedId}
+          canRetryRefund={role === "OWNER"}
+          desktop={desktop}
+          onClose={closeDetail}
+          onAdvance={p.transition}
+          onOpenCancel={(target, action) => setCancelTarget({ order: target, action })}
+          onUndo={(target) => p.undo(target.id)}
+          onRetryRefund={(target) => setCancelTarget({ order: target, action: RETRY_REFUND_ACTION })}
+          onAssignDeliverer={p.assignDeliverer}
         />
       )}
     </main>

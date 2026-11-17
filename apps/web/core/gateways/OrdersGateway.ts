@@ -1,5 +1,6 @@
 import type { HttpResult, RequestOptions } from "../http/HttpClient";
 import type { Deliverer, Order, OrderStatus } from "../domain/orders";
+import type { OrderDetail } from "../domain/orderDetail";
 
 // Resposta de cancelar/estornar (contrato B3 §2.2): `refund` só vem quando havia dinheiro online.
 // "DONE" = estorno aceito e pedido cancelado; "PENDING" (HTTP 202) = estorno ainda não aceito, o pedido NÃO mudou.
@@ -12,6 +13,8 @@ export type CancelBody = {
 
 export interface OrdersGateway {
   list(): Promise<HttpResult<{ orders: Order[] }>>;
+  // Detalhe de um pedido (contato já mascarado no servidor conforme papel e idade do pedido).
+  get(orderId: string): Promise<HttpResult<{ order: OrderDetail }>>;
   // Rotas novas do contrato B3 (API-02). As legadas /status e /refund deixam de ser usadas pela tela.
   transition(orderId: string, to: OrderStatus): Promise<HttpResult<{ order: Order }>>;
   cancel(orderId: string, body: CancelBody, options?: RequestOptions): Promise<HttpResult<CancelResult>>;
