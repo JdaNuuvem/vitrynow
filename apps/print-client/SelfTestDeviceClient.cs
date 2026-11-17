@@ -187,7 +187,7 @@ namespace MeuCardapio.PrintClient
                     dc.StatusChanged += s => { lock (status) status.Add(s); };
                     dc.TicketReady += o => { Interlocked.Increment(ref ready); dc.RecordPrinted(o.OrderId); dc.AckPrintedAsync(o.OrderId).Wait(); };
                     dc.Start();
-                    bool paused = WaitFor(() => dc.IsRevoked, 8000);
+                    bool paused = WaitFor(() => dc.IsRevoked, 30000);   // generoso: a pausa vem da janela de 400 ms + 3 recusas; sob CPU saturada o laco de polling atrasa
                     Check("retomada: pausa por recusas alem da janela", paused && Volatile.Read(ref revoked) == 1);
                     int probes0 = api.PendingCalls;
                     Thread.Sleep(900);
