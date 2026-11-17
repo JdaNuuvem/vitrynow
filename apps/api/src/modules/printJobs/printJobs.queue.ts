@@ -5,7 +5,7 @@ import { dedupeKeyFor, DEFAULT_MAX_ATTEMPTS } from "../../lib/printJobs";
 // Recebem o cliente da transação, então o job nasce (ou é cancelado) junto do pedido: nunca pedido sem tíquete,
 // nunca tíquete de pedido que não existe. Idempotentes por `dedupeKey` (1 job por pedido e tipo).
 
-type Tx = Pick<Prisma.TransactionClient, "printJob" | "store">;
+type Tx = Pick<Prisma.TransactionClient, "printJob" | "store" | "$executeRaw">;
 
 // Tíquete original do pedido (ORDER_KITCHEN). Devolve true se CRIOU (quem chama publica `print.available` depois do commit).
 export async function enqueueOrderTicket(tx: Tx, order: { id: string; storeId: string }): Promise<boolean> {
@@ -38,6 +38,10 @@ export async function cancelPendingTickets(tx: Tx, order: { id: string; storeId:
 export async function enqueueCancelNoticeIfPrinted(tx: Tx, order: { id: string; storeId: string }): Promise<boolean> {
   // No modo LEGACY ninguém consome jobs: um aviso criado aqui ficaria parado e sairia, velho, na hora da virada. O legado já
   // tem o evento order.cancel_notice; o job só nasce com a loja em QUEUE.
+  // Lock consultivo da loja em modo COMPARTILHADO (o mesmo do claim): a troca de modo o pede em modo exclusivo, então ou o cancelamento
+  // termina antes da virada, ou espera por ela e LÊ o modo novo. Sem isto, o cancelamento lia LEGACY, a virada commitava QUEUE e o pedido
+  // já impresso ficava CANCELADO sem aviso. Cancelamentos não se bloqueiam entre si.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock_shared(hashtext(${"printmode:" + order.storeId}))`;
   const store = await tx.store.findUnique({ where: { id: order.storeId }, select: { printMode: true } });
   if (store?.printMode !== "QUEUE") return false;
   const out = await tx.printJob.findFirst({

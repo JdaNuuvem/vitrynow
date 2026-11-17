@@ -394,6 +394,33 @@ describe("API-12b — modo de impressão e virada", () => {
     expect((await kitchenJobs(id))[0]).toMatchObject({ status: "PENDING", attempts: 0 }); // e não gastou o job
   });
 
+  it("DETERMINÍSTICO: cancelar pedido JÁ IMPRESSO com a virada LEGACY→QUEUE em andamento espera o lock, relê o modo e o aviso NASCE (nunca CANCELADO + impresso + 0 aviso)", async () => {
+    const ctx = await setup();
+    const id = await order(ctx);
+    await app.inject({ method: "POST", url: `/api/device/orders/${id}/printed`, headers: bearer(ctx.token) }); // o legado imprimiu
+    let resposta: { statusCode: number; body: string } | undefined;
+    let terminou = false;
+    await prisma.$transaction(async (tx) => {
+      // faz o papel do PUT em andamento: lock exclusivo da loja + troca para QUEUE ainda NÃO commitada
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"printmode:" + ctx.storeId}))`;
+      const cancelamento = app
+        .inject({ method: "POST", url: `/api/orders/${id}/cancel`, headers: { cookie: ctx.owner }, payload: { reason: { code: "ITEM_EM_FALTA" } } })
+        .then((r) => {
+          terminou = true;
+          resposta = r;
+        });
+      await new Promise((r) => setTimeout(r, 700));
+      expect(terminou, "o cancelamento não pode terminar enquanto a troca segura o lock").toBe(false);
+      await tx.store.update({ where: { id: ctx.storeId }, data: { printMode: "QUEUE" } });
+      void cancelamento;
+    });
+    await vi.waitFor(() => expect(terminou).toBe(true), { timeout: 10_000 });
+    expect(resposta!.statusCode, resposta!.body).toBe(200);
+    expect((await prisma.order.findUniqueOrThrow({ where: { id } })).status).toBe("CANCELADO");
+    // a virada commitou antes: o cancelamento releu QUEUE e o job de aviso existe (o pedido já tinha sido impresso pelo legado)
+    expect(await prisma.printJob.count({ where: { orderId: id, kind: "ORDER_CANCEL_NOTICE" } })).toBe(1);
+  });
+
   it("ACK TARDIO em QUEUE: job PENDING ⇒ 200 idempotente, fecha o job (PRINTED) e grava printedAt NA MESMA transação; a lista legada segue vazia e a fila não reimprime", async () => {
     const ctx = await setup();
     const id = await order(ctx);
