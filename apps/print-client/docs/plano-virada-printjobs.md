@@ -35,30 +35,35 @@ select count(*) from "Order" o join "PrintJob" j on j."orderId" = o.id
  where j.kind = 'ORDER_KITCHEN' and j.status = 'PRINTED' and o."printedAt" is null;
 ```
 
-## 2. O que o cliente faz (PC-18, `docs\contrato-printjob-cliente.md`)
-- Segue o modo do servidor a cada ciclo: `claim` com `mode:"LEGACY"` ⇒ volta ao legado; legado com `409 MODE_QUEUE` ⇒ passa para a fila; `mode` ausente ou desconhecido ⇒ não muda nada.
-- **Nunca mistura os dois modos com impressão em andamento:** não pede job enquanto há pedido legado em impressão ou com aviso pendente; não roda o legado enquanto há job em impressão ou com `PRINTED` pendente; aviso legado respondido com `409 MODE_QUEUE` encerra sem repetir.
-- **Cinto de segurança:** job `ORDER_KITCHEN` de pedido que este PC já imprimiu no legado só envia `PRINTED`, não reimprime (2ª via e aviso de cancelamento sempre imprimem).
+## 2. O que o cliente faz (PC-18 + PC-22, `docs\contrato-printjob-cliente.md`)
+- **Segue o modo do servidor a cada ciclo.** Na fila, o `claim` traz o `mode`. No legado, descobre a fila de três jeitos (nesta ordem de confiança): o **`mode` do corpo** do `GET /api/device/orders/pending` (`{orders, mode}`; troca no próprio ciclo), o `GET /api/device/config` (`{mode}`) lido a cada ciclo, e o `409 MODE_QUEUE` dos endpoints do pedido. **Achado da conferência cruzada (PC-22):** em `QUEUE` a lista legada vem **vazia com 200**, sem erro; um cliente que só esperasse o 409 ficaria olhando uma lista vazia e a **cozinha sem tíquete**.
+- A fonte do modo é sempre o **corpo** da resposta; o cabeçalho `X-Print-Mode` é só dica e o cliente **não o lê**. `mode` ausente ou desconhecido ⇒ nada muda.
+- **Config com problema:** `404` (API antiga, deploy, proxy) suprime a pergunta por 10 min e volta; **5 falhas seguidas** (rede, 5xx, lixo) mostram na tela "Não consigo confirmar o modo de impressão da loja" **sem trocar o modo**, e limpam ao voltar. Esse aviso e os de `nothingToCharge` entram no alerta de operação e no runbook INF-11 (Hopper).
+- **Nunca mistura os dois modos com impressão em andamento:** não pede job enquanto há pedido legado em impressão; aviso pendente nunca bloqueia nada (cinto nos dois sentidos: o legado pula o pedido que um job deste PC imprimiu; o job de pedido que este PC imprimiu no legado só envia `PRINTED`); aviso legado respondido com `409 MODE_QUEUE` encerra sem repetir.
 - Todas as impressoras da loja trocam **no mesmo ciclo** (o servidor decide por loja): não há mais "um PC no legado e outro na fila" disputando o mesmo pedido.
 
-## 3. Passo a passo da virada de uma loja (fora do expediente)
-1. Pré-requisitos: API-12b e a pilha do cliente (PC-13…PC-18) na produção; app atualizado em **todos** os PCs da loja (um app antigo ignora o modo); impressora e papel conferidos; o Claudio autorizou a loja.
-2. Esperar a lista do legado esvaziar (nenhum pedido na faixa "sem imprimir").
-3. O dono muda a loja para `QUEUE` no painel (auditado). A API roda a reconciliação (§1.4) na mesma ação.
+## 3. Passo a passo da virada de uma loja (fora do pico)
+**Regra de ouro (Atlas): nenhuma loja vira para `QUEUE` com um cliente anterior à PC-22 em qualquer PC dela** (esse cliente ficaria sem ver a fila). A PC-22 já está na main; o runbook INF-11 (Hopper) confere a versão do app em todos os PCs da loja antes (o painel mostra a versão pelo `User-Agent`/`lastSeen`).
+1. Pré-requisitos: API-12b, API-66 e o cliente PC-13…PC-23 na produção; **app atualizado em TODOS os PCs da loja**; impressora e papel conferidos; o Claudio autorizou a loja.
+2. Trocar **fora do horário de pico**. Esperar a lista do legado esvaziar (nenhum pedido na faixa "sem imprimir").
+3. O dono muda a loja para `QUEUE` no painel (só OWNER, auditado; no máximo 10 trocas por minuto). A API roda a reconciliação (§1) na mesma ação e devolve as 3 consultas.
 4. Conferir as 3 consultas da §1 (= 0).
-5. Pedir o **job de teste** pelo painel (`POST /api/print-jobs/test`, só OWNER) → deve sair "TESTE DE IMPRESSÃO" (o cliente imprime o tíquete próprio; sem valor nem pagamento). O app **não tem** item "imprimir teste" no menu hoje; se o Claudio quiser testar sem o painel, é uma pequena tarefa nova.
-6. Fazer **1 pedido de teste** da loja: sai 1 vez; no painel aparece impresso; o job fica `PRINTED`.
-7. Observar 30 min com movimento real: nenhum "pedido sem imprimir" preso, nenhum tíquete repetido, `attempts` ≤ 1.
+5. Pedir o **job de teste** pelo painel (`POST /api/print-jobs/test`, só OWNER) → deve sair "TESTE DE IMPRESSÃO" (o cliente imprime o tíquete próprio, sem valor nem pagamento).
+6. Fazer **1 pedido de teste** da loja: sai 1 vez; no painel aparece impresso; o job fica `PRINTED`. Se a loja usa cupom de 100%, fazer 1 pedido com ele: deve sair "SEM COBRANÇA: NADA A COBRAR".
+7. Observar 30 min com movimento real: nenhum "pedido sem imprimir" preso, nenhum tíquete repetido, `attempts` ≤ 1, nenhum aviso "Não consigo confirmar o modo" na tela.
 
 ### Sinais para voltar (qualquer um)
-Tíquete repetido; pedido sem sair por mais de 2 min com a impressora ok; job `FAILED` definitivo sem causa de hardware; erro de chave inesperado.
+Tíquete repetido; pedido sem sair por mais de 2 min com a impressora ok; job `FAILED` definitivo sem causa de hardware; erro de chave inesperado; aviso "Não consigo confirmar o modo de impressão da loja" que não some.
 
 ## 4. Como voltar (recuo)
-1. O dono muda a loja para `LEGACY` no painel (sem ir ao PC). A API roda a reconciliação do recuo (§1.4) e as impressoras voltam ao legado no ciclo seguinte.
-2. Conferir a 3ª consulta da §1 (= 0). Se não for, **não reabra o legado** (ele reimprimiria) até corrigir `printedAt` desses pedidos.
+1. O dono muda a loja para `LEGACY` no painel (sem ir ao PC). A API roda a reconciliação do recuo (§1) e as impressoras voltam ao legado no ciclo seguinte.
+2. **Se a API responder `409 PRINT_IN_PROGRESS`** ("Há impressão em andamento. Tente em instantes."): há um job reclamado com lease vigente; **esperar até ~2 min** (a lease é de 120 s) e tentar de novo. Isso é o recuo de emergência: avisar no runbook que ele pode demorar até 2 min se um cliente cair com job reclamado.
+3. Conferir a 3ª consulta da §1 (= 0). Se não for, **não reabra o legado** (ele reimprimiria) até corrigir `printedAt` desses pedidos.
+4. Um `/printed` legado **tardio** de pedido cujo job ninguém reclamou é aceito em `QUEUE` (200, fecha o job e grava `printedAt` na mesma transação), para a fila não reimprimir; com job reclamado por outra impressora continua `409 MODE_QUEUE`.
 
 ## 5. O que este plano não cobre
 - Impressora e driver reais, tela WinForms, instalador em máquina limpa (CL-15, decisão do Claudio; só antes do piloto, `roteiro-instalador-maquina-limpa.md`), chave de release real (adiada, CL-10).
 - Lease vencida com impressão lenta e revogação de chave com job em curso, **contra a API real**.
+- O limite de 10 trocas/min, as corridas claim×recuo e a auditoria da reconciliação sem troca: provados pelos testes da API (Turing/Deming), não por mim ao vivo.
 - Observação O1 do Deming: o recuo local de falha é global, então um tíquete que quebra segura os outros por ~1 min.
 - Limite do cinto de segurança: ele só protege pedidos que este **mesmo PC** imprimiu pelo legado; a proteção entre PCs diferentes é a reconciliação do servidor.
