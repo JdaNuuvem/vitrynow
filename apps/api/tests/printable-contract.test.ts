@@ -163,12 +163,34 @@ describe("API-14 — payload do tíquete", () => {
     }
   });
 
-  it("opções da fila de impressão (API-12) chegam ao contrato: 2ª via e aviso de cancelamento", async () => {
+  it("opções da fila de impressão (API-12): 2ª via leva contador e a hora da 1ª impressão", async () => {
     const ctx = await setup();
     const id = await place(ctx);
     const original = new Date("2026-11-16T15:00:00.000Z");
-    const t = (await buildPrintableOrder(id, { reprintCount: 2, printedAtOriginal: original, cancelNotice: true }))!;
-    expect(t).toMatchObject({ reprintCount: 2, printedAtOriginal: "2026-11-16T15:00:00.000Z", cancelNotice: true });
+    const t = (await buildPrintableOrder(id, { reprintCount: 2, printedAtOriginal: original }))!;
+    expect(t).toMatchObject({ reprintCount: 2, printedAtOriginal: "2026-11-16T15:00:00.000Z", cancelNotice: false });
+    expect(t.items.length).toBeGreaterThan(0);
+  });
+
+  it("aviso de cancelamento (API-12): só o necessário — sem itens, valores, contato nem endereço; contador zerado", async () => {
+    const ctx = await setup();
+    const id = await place(ctx, { type: "DELIVERY", address: "Rua A, 1", customerPhone: "11999999999", customerName: "Ana", notes: "sem cebola" });
+    const original = new Date("2026-11-16T15:00:00.000Z");
+    const t = (await buildPrintableOrder(id, { cancelNotice: true, reprintCount: 5, printedAtOriginal: original }))!;
+    expect(printableOrderSchema.safeParse(t).success).toBe(true);
+    expect(t).toMatchObject({
+      cancelNotice: true,
+      reprintCount: 0,
+      printedAtOriginal: "2026-11-16T15:00:00.000Z",
+      items: [],
+      totalCents: 0,
+      customerName: null,
+      customerPhone: null,
+      address: null,
+      notes: null,
+    });
+    const dump = JSON.stringify(t);
+    for (const proibido of ["Ana", "11999999999", "Rua A", "sem cebola"]) expect(dump, proibido).not.toContain(proibido);
   });
 
   it("pelo caminho HTTP do dispositivo: mesma carga, isolada por loja (token de B não lê pedido de A)", async () => {
