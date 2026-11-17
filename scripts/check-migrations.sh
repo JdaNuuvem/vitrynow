@@ -197,8 +197,8 @@ for N in "${NEW[@]}"; do
   "${PSQL[@]}" -d "$D" < "$HERE/conflict-$N.sql" > /dev/null || { bad "S7: conflict-$N.sql falhou"; continue; }
   if apply "$D" "${ALL[@]}"; then bad "S7: $N APLICOU sobre dados em conflito (deveria falhar e não alterar nada)"; continue; fi
   ok "S7 $N falhou sobre dados em conflito, como esperado"
-  if [ -f "$HERE/conflict-$N.expect" ] && grep -qF "$(cat "$HERE/conflict-$N.expect")" "$TMP/last.log"; then ok "S7 mensagem de erro lista os conflitos ($(cat "$HERE/conflict-$N.expect"))"
-  else bad "S7: a mensagem de erro não contém o esperado ($(cat "$HERE/conflict-$N.expect" 2>/dev/null))"; grep -iE "ERROR|exception|E-mails" "$TMP/last.log" | head -4 | cut -c1-200; fi
+  if [ -f "$HERE/conflict-$N.expect" ] && grep -qF "$(tr -d '\r' < "$HERE/conflict-$N.expect")" "$TMP/last.log"; then ok "S7 mensagem de erro lista os conflitos ($(tr -d '\r' < "$HERE/conflict-$N.expect"))"
+  else bad "S7: a mensagem de erro não contém o esperado ($(tr -d '\r' < "$HERE/conflict-$N.expect" 2>/dev/null))"; grep -iE "ERROR|exception|E-mails" "$TMP/last.log" | head -4 | cut -c1-200; fi
   if [ -f "$HERE/conflict-post-$N.sql" ]; then
     out="$("${PSQL[@]}" -d "$D" -A -t -F '|' < "$HERE/conflict-post-$N.sql" 2>&1)" || { bad "S7: conflict-post-$N.sql falhou: $out"; continue; }
     while IFS='|' read -r name okv det; do [ -z "$name" ] && continue; case "$okv" in t) ok "S7 $N · $name";; f) bad "S7 $N · $name: $det";; esac; done <<< "$out"
