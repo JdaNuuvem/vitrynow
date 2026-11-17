@@ -238,10 +238,14 @@ describe("FUNC-01/02 — cupom e total zero", () => {
     await forbidden({ code: "CINQUENTA1", discountType: "FIXED", discountValue: 5001, maxUses: 5 });
     await forbidden({ code: "SEMLIM", discountType: "PERCENT", discountValue: 10 }); // dentro do teto, mas sem limite de usos
     await forbidden({ code: "SEMLIMF", discountType: "FIXED", discountValue: 100 });
+    await forbidden({ code: "MUITOSUSOS", discountType: "PERCENT", discountValue: 10, maxUses: 501 }); // limite de usos também tem teto (500)
+    const negado = await asStaff("/api/coupons", { code: "TEXTO", discountType: "PERCENT", discountValue: 60, maxUses: 5 });
+    expect(json(negado).error).toBe("Acima do seu limite. Peça ao dono.");
     expect(await prisma.coupon.count({ where: { storeId: ctx.storeId } })).toBe(0);
     // no teto, com limite: pode
     expect((await asStaff("/api/coupons", { code: "METADE", discountType: "PERCENT", discountValue: 50, maxUses: 3 })).statusCode).toBe(201);
     expect((await asStaff("/api/coupons", { code: "CINQUENTA", discountType: "FIXED", discountValue: 5000, maxUses: 3 })).statusCode).toBe(201);
+    expect((await asStaff("/api/coupons", { code: "QUINHENTOS", discountType: "PERCENT", discountValue: 5, maxUses: 500 })).statusCode).toBe(201);
     // o dono cria acima do teto e sem limite (99%); o STAFF não consegue editá-lo (nem para baixar o valor sem declarar limite)
     const dono = await coupon(ctx, { code: "DONO99", discountType: "PERCENT", discountValue: 99 });
     expect(dono.statusCode, dono.body).toBe(201);
