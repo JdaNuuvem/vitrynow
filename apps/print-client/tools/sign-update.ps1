@@ -13,6 +13,7 @@ param(
     [string]$MinVersion = "",                            # abaixo dela o app avisa que a atualizacao e obrigatoria
     [string[]]$RevokeKeys = @(),                         # SO a reserva (k2) revoga chaves anteriores (ex.: -RevokeKeys k1)
     [Security.SecureString]$PasswordSecure,              # so para testes (objeto em memoria); a senha NUNCA vai na linha de comando
+    [switch]$AllowPlainKey,                              # so se voce SABE que a chave esta em texto puro (desaconselhado)
     [switch]$SkipVersionCheck                            # so se o instalador nao carrega a versao no recurso de versao do .exe
 )
 $ErrorActionPreference = "Stop"
@@ -57,7 +58,12 @@ try {
     if (Test-KeyFileProtected $PrivateKeyFile) {
         $pw = if ($PasswordSecure) { $PasswordSecure } else { Read-Host -AsSecureString "Senha da chave de release" }
         $keyXml = Unprotect-KeyXml ([IO.File]::ReadAllBytes($PrivateKeyFile)) $pw
-    } else { $keyXml = [IO.File]::ReadAllText($PrivateKeyFile) }
+    } else {
+        # K2 (Nightingale): chave em texto puro e RECUSADA por padrao; quem copiou o arquivo publica atualizacoes.
+        if (-not $AllowPlainKey) { throw "A chave '$PrivateKeyFile' esta em TEXTO PURO (sem senha). Gere de novo com new-update-key.ps1 (com senha) e apague este arquivo. Para assinar mesmo assim, use -AllowPlainKey (desaconselhado)." }
+        Write-Warning "Assinando com chave em TEXTO PURO ($PrivateKeyFile): apague-a e gere uma com senha."
+        $keyXml = [IO.File]::ReadAllText($PrivateKeyFile)
+    }
     $rsa.FromXmlString($keyXml)
     $keyXml = $null   # a chave ja esta no objeto RSA; solta a string (o .NET nao permite apagar o conteudo da memoria)
     if ($rsa.KeySize -lt 3072) { throw "Chave de $($rsa.KeySize) bits: o app exige 3072 ou mais." }

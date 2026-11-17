@@ -75,6 +75,7 @@ namespace MeuCardapio.PrintClient.UI
 
             Updater.StatusChanged += text => BeginInvoke(new Action(() => Toast(text)));
             Updater.UpdateReady += r => BeginInvoke(new Action(() => OnUpdateReady(r)));
+            Updater.PendingLost += () => BeginInvoke(new Action(() => _installItem.Visible = false));
 
             if (App.AutoStart) WindowState = FormWindowState.Minimized;
 
@@ -104,7 +105,7 @@ namespace MeuCardapio.PrintClient.UI
         void PromptInstallUpdate()
         {
             var r = Updater.Pending;
-            if (r == null) { Toast("Nenhuma atualização pronta para instalar."); _installItem.Visible = false; return; }
+            if (r == null) { Toast(Updater.PendingLostMessage); _installItem.Visible = false; return; }
             var text = "Instalar a atualização " + r.Version + " agora?" + Environment.NewLine
                 + "Arquivo conferido (assinatura e SHA-256 " + r.ExpectedSha256.Substring(0, Math.Min(16, r.ExpectedSha256.Length)) + "...)." + Environment.NewLine + Environment.NewLine
                 + "O aplicativo será fechado e a impressão para até você abri-lo de novo (os pedidos novos ficam na fila e saem depois)."

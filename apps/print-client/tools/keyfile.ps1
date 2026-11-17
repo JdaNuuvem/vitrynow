@@ -1,8 +1,11 @@
 # Arquivo de chave privada de release PROTEGIDO POR SENHA (PC-13). Usado por new-update-key.ps1 e sign-update.ps1.
 #
 # Formato versionado ".updkey" (binario):
-#   "MCUK" | versao(1 byte = 1) | iteracoes PBKDF2 (4 bytes, big-endian) | sal (16) | IV (16) | texto cifrado | HMAC-SHA256 (32)
-#   - chaves: PBKDF2-HMAC-SHA256 (600 000 iteracoes por padrao) deriva 64 bytes: 32 de AES-256 e 32 de HMAC
+#   "MCUK" | versao(1 byte = 2) | iteracoes PBKDF2 (4 bytes, big-endian) | sal (16) | IV (16) | texto cifrado | HMAC-SHA256 (32)
+#   - UMA derivacao PBKDF2-HMAC-SHA256 (600 000 iteracoes por padrao) de 32 bytes = chave MESTRA; dela saem, por
+#     HMAC-SHA256(mestra, "enc") e HMAC-SHA256(mestra, "mac"), a chave AES-256 e a chave do HMAC (separacao de dominio).
+#     (A versao 1 pedia 64 bytes ao PBKDF2: o atacante testava palpites so com o 1o bloco de 32 bytes, metade das
+#     iteracoes. A v1 nunca guardou chave real e NAO e mais aceita: gere o arquivo de novo.)
 #   - AES-256-CBC + HMAC-SHA256 sobre (cabecalho | IV | texto cifrado) ("cifrar e depois autenticar"); o MAC e conferido em
 #     tempo constante ANTES de decifrar, entao senha errada ou arquivo adulterado falha sem decifrar nada.
 #   (O .NET Framework 4.7.2 nao tem AES-GCM; CBC + HMAC e o equivalente seguro disponivel.)
@@ -11,7 +14,7 @@
 # string do .NET, que o PowerShell nao consegue apagar da memoria; os buffers de bytes e a chave derivada sao zerados.
 
 $script:KeyMagic = [Text.Encoding]::ASCII.GetBytes("MCUK")
-$script:KeyVersion = 1
+$script:KeyVersion = 2
 $script:KeyDefaultIterations = 600000
 $script:KeyMinPasswordLength = 12
 
@@ -20,7 +23,9 @@ function ConvertTo-PasswordBytes([Security.SecureString]$secure) {
     try {
         $chars = New-Object char[] $secure.Length
         [Runtime.InteropServices.Marshal]::Copy($bstr, $chars, 0, $chars.Length)
-        try { return [Text.Encoding]::UTF8.GetBytes($chars) } finally { [Array]::Clear($chars, 0, $chars.Length) }
+        # A virgula mantem byte[] de verdade: sem ela o PowerShell solta os bytes no pipeline e quem recebe ganha um object[]
+        # (e o PBKDF2 escolheria a sobrecarga de senha em TEXTO, calculando outra coisa).
+        try { return , [Text.Encoding]::UTF8.GetBytes($chars) } finally { [Array]::Clear($chars, 0, $chars.Length) }
     } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 }
 
@@ -45,8 +50,21 @@ function Test-ConstantTimeEqual([byte[]]$x, [byte[]]$y) {
 }
 
 function Get-DerivedKeys([byte[]]$passwordBytes, [byte[]]$salt, [int]$iterations) {
+    # Chave mestra de 32 bytes (um unico bloco do PBKDF2: o atacante paga TODAS as iteracoes por palpite).
     $kdf = New-Object Security.Cryptography.Rfc2898DeriveBytes($passwordBytes, $salt, $iterations, [Security.Cryptography.HashAlgorithmName]::SHA256)
-    try { return $kdf.GetBytes(64) } finally { $kdf.Dispose() }
+    $master = $null
+    try {
+        $master = $kdf.GetBytes(32)
+        $hm = New-Object Security.Cryptography.HMACSHA256(, $master)
+        try {
+            $enc = $hm.ComputeHash([Text.Encoding]::ASCII.GetBytes("enc"))
+            $mac = $hm.ComputeHash([Text.Encoding]::ASCII.GetBytes("mac"))
+        } finally { $hm.Dispose() }
+        $both = New-Object byte[] 64
+        [Array]::Copy($enc, 0, $both, 0, 32); [Array]::Copy($mac, 0, $both, 32, 32)
+        [Array]::Clear($enc, 0, 32); [Array]::Clear($mac, 0, 32)
+        return , $both
+    } finally { $kdf.Dispose(); if ($master) { [Array]::Clear($master, 0, $master.Length) } }
 }
 
 function Test-KeyFileProtected([string]$path) {
@@ -91,6 +109,7 @@ function Protect-KeyXml([string]$xml, [Security.SecureString]$password, [int]$it
 function Unprotect-KeyXml([byte[]]$blob, [Security.SecureString]$password) {
     # Cabecalho minimo: 4+1+4+16+16 + 16 (um bloco) + 32 (MAC)
     if ($blob.Length -lt 89 -or -not (Test-ConstantTimeEqual $blob[0..3] $script:KeyMagic)) { throw "Arquivo de chave invalido (nao e um .updkey do MeuCardapio)." }
+    if ($blob[4] -eq 1) { throw "Arquivo de chave no formato v1 (so de teste, derivacao fraca): gere a chave de novo com new-update-key.ps1." }
     if ($blob[4] -ne $script:KeyVersion) { throw "Versao do arquivo de chave nao suportada: $($blob[4])." }
     $itBytes = $blob[5..8]; [Array]::Reverse($itBytes)
     $iterations = [BitConverter]::ToInt32([byte[]]$itBytes, 0)

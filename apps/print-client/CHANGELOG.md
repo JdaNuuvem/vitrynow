@@ -11,7 +11,7 @@ O hash do EXE de cada release sai em `tools\build-installer.ps1` e entra no mani
 - Faixa "N pedidos sem imprimir" fixa na janela; balão de novo pedido não some mais na hora (R12).
 - Tíquete próprio (58 e 80 mm), com sanitização do texto do cliente, bloco de pagamento e impressora virtual para teste sem papel.
 - Atualização automática segura (HTTPS, manifesto assinado com duas chaves, validade, hash conferido antes de executar). Desligada até a chave de release existir.
-- A atualização nunca instala sozinha: pede confirmação do lojista; chave de release protegida por senha.
+- A atualização nunca instala sozinha: pede confirmação do lojista; chave de release protegida por senha (formato v2; chave em texto puro é recusada na assinatura).
 - Sons de alerta gerados pelo app.
 - Build reprodutível sem dependência do `reconstruction/`; instalador Inno Setup sem identidade do terceiro (`tools\scan-identity.ps1`).
 

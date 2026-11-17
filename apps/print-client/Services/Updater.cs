@@ -56,10 +56,28 @@ namespace MeuCardapio.PrintClient.Services
 
         // Atualização já baixada e VERIFICADA, esperando o lojista aceitar (PC-13: nunca instala sozinha, porque o
         // instalador fecha o app no meio do expediente e pode interromper a impressão no horário de pico).
-        public static UpdateResult Pending { get { lock (_pendingLock) return _pending; } }
+        // K3: só devolve a pendência se o arquivo AINDA existe. Uma verificação posterior limpa a pasta de updates (e apaga o
+        // instalador pendente); se o download dessa verificação falhar, a pendência ficaria apontando para o nada.
+        public static UpdateResult Pending
+        {
+            get
+            {
+                lock (_pendingLock)
+                {
+                    if (_pending != null && !File.Exists(_pending.InstallerPath)) { _lostPending = _pending.Version; _pending = null; }
+                    return _pending;
+                }
+            }
+        }
+
+        static string _lostPending;
+        public const string PendingLostMessage = "A atualização preparada não está mais no disco (uma verificação posterior a substituiu ou o arquivo foi apagado). Use \"Verificar atualizações\" para prepará-la de novo.";
 
         // Avisa a tela: há atualização pronta (Required = versão mínima: texto mais forte, mas ainda pede confirmação).
         public static event Action<UpdateResult> UpdateReady;
+
+        // A atualização que estava pronta sumiu do disco (K3): a tela esconde "Instalar atualização" e mostra o motivo.
+        public static event Action PendingLost;
 
         // Só verifica e prepara (baixa e confere hash/assinatura). NÃO executa nada.
         public static void CheckForUpdate()
@@ -74,6 +92,7 @@ namespace MeuCardapio.PrintClient.Services
                 else Logger.Info("Atualização: " + r.Outcome + " — " + r.Message);
                 StatusChanged?.Invoke(r.Message);
                 if (Stage(r)) UpdateReady?.Invoke(r);
+                else if (Pending == null && _lostPending != null) { StatusChanged?.Invoke(PendingLostMessage); PendingLost?.Invoke(); }
             }
             finally { System.Threading.Interlocked.Exchange(ref _running, 0); }
         }
@@ -94,9 +113,13 @@ namespace MeuCardapio.PrintClient.Services
         // aberto e só então inicia o instalador (parecer U1). Devolve se iniciou; a pendência sai ao iniciar.
         public static bool InstallPending(Action<string> start, Action<string> status)
         {
-            UpdateResult r;
-            lock (_pendingLock) r = _pending;
-            if (r == null) { status?.Invoke("Nenhuma atualização pronta para instalar."); return false; }
+            var r = Pending; // valida o arquivo (K3)
+            if (r == null)
+            {
+                string lost; lock (_pendingLock) { lost = _lostPending; _lostPending = null; }
+                status?.Invoke(lost != null ? PendingLostMessage : "Nenhuma atualização pronta para instalar.");
+                return false;
+            }
             bool started = TryLaunch(r, start, status);
             if (started) lock (_pendingLock) { if (ReferenceEquals(_pending, r)) _pending = null; }
             return started;
@@ -112,7 +135,7 @@ namespace MeuCardapio.PrintClient.Services
         }
 
         // Para os testes.
-        internal static void ClearPending() { lock (_pendingLock) _pending = null; }
+        internal static void ClearPending() { lock (_pendingLock) { _pending = null; _lostPending = null; } }
 
         // Toda a decisão, sem executar nada (testável com transporte falso e relógio injetado).
         public static UpdateResult Evaluate(string baseUrl, string currentVersion, IList<TrustedKey> keys,

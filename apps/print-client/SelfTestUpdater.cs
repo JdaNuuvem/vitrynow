@@ -257,6 +257,24 @@ namespace MeuCardapio.PrintClient
             Updater.DiscardPending(); // sem pendencia: nao estoura
             Check("confirmacao: descartar sem pendencia e inofensivo", Updater.Pending == null);
 
+            // K3: a pendencia some do disco (verificacao posterior limpou a pasta e o download falhou, ou foi apagada)
+            Updater.ClearPending();
+            var rLost = Eval(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            Updater.Stage(rLost);
+            File.Delete(rLost.InstallerPath);
+            Check("K3: pendencia cujo arquivo sumiu NAO e mais devolvida (Pending = null)", Updater.Pending == null);
+            var lostMsgs = new List<string>(); int startedL = 0;
+            bool lostOk = Updater.InstallPending(p => startedL++, m => lostMsgs.Add(m));
+            Check("K3: instalar uma pendencia que sumiu NAO executa e explica o motivo (nao o generico 'nenhuma')", !lostOk && startedL == 0 && lostMsgs.Count == 1 && lostMsgs[0] == Updater.PendingLostMessage);
+            var lostMsgs2 = new List<string>();
+            Updater.InstallPending(p => startedL++, m => lostMsgs2.Add(m));
+            Check("K3: a explicacao aparece uma vez; depois volta a 'nenhuma atualizacao pronta'", lostMsgs2.Count == 1 && lostMsgs2[0] == "Nenhuma atualização pronta para instalar.");
+            // nova verificacao que acha a mesma versao e baixa de novo: a pendencia nova vale
+            var rAgain = Eval(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            Updater.Stage(rAgain);
+            Check("K3: depois de preparar de novo, a pendencia volta a valer", Updater.Pending != null && Updater.Pending.Version == "1.1.0");
+            Updater.ClearPending();
+
             // mesma versao e versao menor: nada e baixado (anti-downgrade/replay de manifesto antigo)
             var tSame = Server(man, sig, file, inst);
             Check("fluxo: mesma versao = em dia, instalador nao e baixado", Eval(baseUrl, "1.1.0", pub, tSame, upd).Outcome == UpdateOutcome.UpToDate && tSame.Downloads(file) == 0);
