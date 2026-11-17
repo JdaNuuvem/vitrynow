@@ -132,6 +132,9 @@ describe("hardening", () => {
     const orders = await app.inject({ method: "GET", url: "/api/orders", headers: { cookie: cookie! } });
     const [order] = JSON.parse(orders.body).orders;
     expect(order.items[0].productName).toBe("Produto Temporário");
-    expect(order.items[0].productId).toBeNull();
+    // O id do produto não faz parte da resposta do painel (allowlist, API-54a); o vínculo some no banco, o snapshot fica.
+    expect(order.items[0]).not.toHaveProperty("productId");
+    const stored = await prisma.orderItem.findFirstOrThrow({ where: { order: { id: order.id } } });
+    expect(stored.productId).toBeNull();
   });
 });

@@ -287,7 +287,9 @@ describe("API-02 — estados do pedido", () => {
     expect(res.statusCode).toBe(202);
     expect(json(res).refund).toBe("PENDING");
     expect(json(res).order.payment).toMatchObject({ status: "ESTORNO_PENDENTE", refundPending: true });
-    expect(json(res).order.payment.refundLastError).toBeTruthy();
+    // O texto do erro fica só no servidor (allowlist, API-54a): a tela mostra "Tentar de novo" por refundPending.
+    expect(json(res).order.payment).not.toHaveProperty("refundLastError");
+    expect((await prisma.payment.findUniqueOrThrow({ where: { orderId: id } })).refundLastError).toBeTruthy();
     expect(JSON.stringify(json(res))).not.toContain("timeout"); // detalhe técnico não vaza
     expect((await prisma.order.findUnique({ where: { id } }))?.status).toBe("PENDENTE");
 
