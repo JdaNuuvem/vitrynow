@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { printAckSchema, setPrintModeSchema } from "@meucardapio/shared-types";
 import { prismaAuditLogger } from "../../shared/audit";
@@ -34,7 +34,13 @@ const printJobRoutes: FastifyPluginAsync = async (app) => {
   // ───────────── Painel ─────────────
   // Modo de impressão da loja: só o OWNER altera (auditado). A troca RECONCILIA no mesmo ato (ADR-0004 §8.13).
   app.get("/api/store/print-mode", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request) => printModeService.get(request.user.storeId));
-  app.put("/api/store/print-mode", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request, reply) => {
+  // Quem não é OWNER recebe 403 e a TENTATIVA fica registrada (print.mode_change_denied).
+  const ownerOrRecordDenied = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (request.user.role === "OWNER") return;
+    await printModeService.recordDenied(request.user, (request.body as { mode?: unknown } | null)?.mode);
+    reply.code(403).send({ error: "ação restrita ao dono da loja" });
+  };
+  app.put("/api/store/print-mode", { preHandler: [app.requirePanelAuth, ownerOrRecordDenied] }, async (request, reply) => {
     const parsed = setPrintModeSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "modo inválido", code: "VALIDATION_ERROR" });
     return printModeService.set({ storeId: request.user.storeId, userId: request.user.userId }, parsed.data.mode);

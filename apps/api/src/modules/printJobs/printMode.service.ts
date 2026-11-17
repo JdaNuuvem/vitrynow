@@ -59,31 +59,48 @@ export class PrintModeService {
   // Troca o modo e RECONCILIA no mesmo ato, numa transação com lock por loja: a virada é atômica entre todas as impressoras
   // (o cliente lê o modo a cada ciclo) e idempotente (repetir o comando não muda nada). Só o OWNER chama (a rota exige).
   async set(actor: { storeId: string; userId: string }, target: PrintMode): Promise<PrintModeChange> {
-    const result = await this.db.$transaction(
+    return this.db.$transaction(
       async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"printmode:" + actor.storeId}))`;
         const current = await loadPrintMode(tx, actor.storeId);
         const reconciled = target === "QUEUE" ? await this.toQueue(tx, actor.storeId) : await this.toLegacy(tx, actor.storeId);
-        if (current !== target) await tx.store.update({ where: { id: actor.storeId }, data: { printMode: target } });
+        if (current !== target) {
+          await tx.store.update({ where: { id: actor.storeId }, data: { printMode: target } });
+          // Rastro ESTRITO e ATÔMICO com a troca (mesma transação): se não puder ser gravado, o modo NÃO muda.
+          // Só contagens: nada de pedido, cliente nem contato na linha de auditoria.
+          await tx.auditLog.create({
+            data: {
+              storeId: actor.storeId,
+              userId: actor.userId,
+              action: "print.mode_change",
+              targetType: "Store",
+              targetId: actor.storeId,
+              metadata: { from: current, to: target, ...reconciled },
+            },
+          });
+        }
         const conference = await this.conference(tx, actor.storeId);
-        return { mode: target, changed: current !== target, from: current, reconciled, conference };
+        return { mode: target, changed: current !== target, reconciled, conference };
       },
       { maxWait: 15_000, timeout: 60_000 },
     );
-    if (result.changed) {
-      // Só contagens: nada de pedido, cliente nem contato na linha de auditoria.
-      this.audit.log({
+  }
+
+  // Tentativa negada (STAFF): fica registrada com o modo pedido. Não muda nada; se o rastro falhar, a negativa continua valendo.
+  async recordDenied(actor: { storeId: string; userId: string; role: string }, requested: unknown) {
+    const to = requested === "LEGACY" || requested === "QUEUE" ? requested : "INVALID";
+    try {
+      await this.audit.logStrict({
         storeId: actor.storeId,
         userId: actor.userId,
-        action: "print.mode_change",
+        action: "print.mode_change_denied",
         targetType: "Store",
         targetId: actor.storeId,
-        metadata: { from: result.from, to: result.mode, ...result.reconciled },
+        metadata: { role: actor.role, requested: to },
       });
+    } catch (error) {
+      console.error("[audit] falha ao gravar tentativa negada de troca de modo:", error);
     }
-    const { from: _from, ...rest } = result;
-    void _from;
-    return rest;
   }
 
   // LEGACY → QUEUE

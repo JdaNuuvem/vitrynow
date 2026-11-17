@@ -64,6 +64,8 @@ describe("API-12 — PrintJob", () => {
   async function setup() {
     const { cookie, response } = await registerStore(app);
     const { id: storeId, slug } = json(response).store;
+    // A fila só opera com a loja em modo QUEUE (ADR-0004 §8.12); o padrão é LEGACY.
+    await prisma.store.update({ where: { id: storeId }, data: { printMode: "QUEUE" } });
     const cat = json(await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie: cookie! }, payload: { name: "X" } })).category.id;
     const productId = json(
       await app.inject({ method: "POST", url: "/api/catalog/products", headers: { cookie: cookie! }, payload: { categoryId: cat, name: "P", priceCents: 1000 } }),
@@ -146,7 +148,7 @@ describe("API-12 — PrintJob", () => {
     const ctx = await setup();
     const token = await ctx.mkToken("PC");
     const res = await claim(token);
-    expect([res.statusCode, json(res)]).toEqual([200, { job: null }]);
+    expect([res.statusCode, json(res)]).toEqual([200, { job: null, mode: "QUEUE" }]);
   });
 
   it("§8.4 mesmo dono com lease válida recebe o MESMO job sem gastar tentativa; outro token recebe {job:null}", async () => {
@@ -158,7 +160,7 @@ describe("API-12 — PrintJob", () => {
     const again = json(await claim(b)).job;
     expect([again.id, again.attempt]).toEqual([first.id, 1]);
     expect((await jobsOf(id))[0].attempts).toBe(1);
-    expect(json(await claim(a))).toEqual({ job: null }); // CLAIMED por outro com lease válida
+    expect(json(await claim(a))).toEqual({ job: null, mode: "QUEUE" }); // CLAIMED por outro com lease válida
   });
 
   it("§8.5 ack de OUTRO dono ⇒ 409 e o job continua CLAIMED", async () => {
@@ -183,7 +185,7 @@ describe("API-12 — PrintJob", () => {
     expect(row).toMatchObject({ status: "PENDING", lastErrorCode: "NO_PAPER", ackStatus: "FAILED" });
     expect(row.availableAt.getTime() - Date.now()).toBeGreaterThan(10_000); // 15 s de recuo, pelo relógio do banco
     expect(row.availableAt.getTime() - Date.now()).toBeLessThanOrEqual(16_000);
-    expect(json(await claim(token))).toEqual({ job: null });
+    expect(json(await claim(token))).toEqual({ job: null, mode: "QUEUE" });
     await releaseBackoff(job.id);
     const retry = json(await claim(token)).job;
     expect([retry.id, retry.attempt]).toEqual([job.id, 2]);
@@ -214,7 +216,7 @@ describe("API-12 — PrintJob", () => {
     expect((await ack(token, job.id, { status: "PRINTED" })).statusCode).toBe(200);
     expect((await ack(token, job.id, { status: "PRINTED" })).statusCode).toBe(200);
     expect((await jobsOf(id))[0]).toMatchObject({ status: "PRINTED", attempts: 1 });
-    expect(json(await claim(token))).toEqual({ job: null });
+    expect(json(await claim(token))).toEqual({ job: null, mode: "QUEUE" });
     expect((await prisma.order.findUniqueOrThrow({ where: { id } })).printedAt).not.toBeNull();
   });
 
@@ -274,7 +276,7 @@ describe("API-12 — PrintJob", () => {
     expect(ws("print.job_failed")).toHaveLength(1);
     expect(JSON.parse(ws("print.job_failed")[0])).toEqual({ type: "print.job_failed", jobId: row.id });
     await releaseBackoff(row.id);
-    expect(json(await claim(token))).toEqual({ job: null });
+    expect(json(await claim(token))).toEqual({ job: null, mode: "QUEUE" });
   });
 
   it("lease vencida na última tentativa ⇒ FAILED definitivo no próximo claim (não volta à fila para sempre) + alerta", async () => {
@@ -286,7 +288,7 @@ describe("API-12 — PrintJob", () => {
     const job = json(await claim(token)).job; // 3ª e última tentativa
     expect(job.attempt).toBe(3);
     await pastLease(job.id);
-    expect(json(await claim(token))).toEqual({ job: null });
+    expect(json(await claim(token))).toEqual({ job: null, mode: "QUEUE" });
     expect((await jobsOf(id))[0].status).toBe("FAILED");
     expect(ws("print.job_failed")).toHaveLength(1);
   });
@@ -344,7 +346,7 @@ describe("API-12 — PrintJob", () => {
     const b = await setup();
     const tokenB = await b.mkToken("PC-B");
     await order(a);
-    expect(json(await claim(tokenB))).toEqual({ job: null });
+    expect(json(await claim(tokenB))).toEqual({ job: null, mode: "QUEUE" });
   });
 
   it("o BANCO recusa job que liga um pedido de uma loja a OUTRA loja (FK composta, ADR-0009), mesmo por SQL direto", async () => {
@@ -410,7 +412,7 @@ describe("API-12 — PrintJob", () => {
     expect(res.statusCode).toBe(200);
     const jobs = await jobsOf(id);
     expect(jobs.map((j) => [j.kind, j.status])).toEqual([["ORDER_KITCHEN", "CANCELED"]]);
-    expect(json(await claim(token))).toEqual({ job: null });
+    expect(json(await claim(token))).toEqual({ job: null, mode: "QUEUE" });
   });
 
   it("pedido cancelado DEPOIS de impresso: nasce o AVISO de cancelamento (1 só), sem itens, valores nem contato", async () => {

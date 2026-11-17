@@ -1,0 +1,341 @@
+// API-12b — modo de impressão por loja decidido pelo SERVIDOR + reconciliação da virada (ADR-0004 §8.12–13; plano do Ritchie).
+// LEGACY: o cliente lista pedidos com printedAt nulo. QUEUE: o cliente consome jobs. Só um dos dois caminhos funciona por vez.
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prisma } from "@meucardapio/db";
+import { makeApp, registerStore, resetDb } from "./helpers";
+
+vi.mock("../src/lib/mercadopago", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
+  return { ...original, createPixPayment: vi.fn(), getPayment: vi.fn(), cancelPayment: vi.fn(), refundPayment: vi.fn() };
+});
+
+describe("API-12b — modo de impressão e virada", () => {
+  let app: ReturnType<typeof makeApp>;
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    app = makeApp();
+    await app.ready();
+  });
+  afterEach(async () => {
+    await app.close();
+    await resetDb();
+  });
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+
+  const json = (r: { body: string }) => JSON.parse(r.body);
+  const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
+
+  async function setup() {
+    const { cookie, response } = await registerStore(app);
+    const { id: storeId, slug } = json(response).store;
+    const cat = json(await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie: cookie! }, payload: { name: "X" } })).category.id;
+    const productId = json(
+      await app.inject({ method: "POST", url: "/api/catalog/products", headers: { cookie: cookie! }, payload: { categoryId: cat, name: "P", priceCents: 1000 } }),
+    ).product.id as string;
+    const token = json(await app.inject({ method: "POST", url: "/api/device-tokens", headers: { cookie: cookie! }, payload: { label: "caixa" } })).token.token as string;
+    return { owner: cookie!, storeId: storeId as string, slug: slug as string, productId, token };
+  }
+  type Ctx = Awaited<ReturnType<typeof setup>>;
+
+  const order = async (ctx: Ctx, extra: Record<string, unknown> = {}) => {
+    const res = await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders`, payload: { type: "BALCAO", items: [{ productId: ctx.productId, quantity: 1 }], ...extra } });
+    expect(res.statusCode, res.body).toBe(201);
+    return json(res).orderId as string;
+  };
+  const setMode = (ctx: Ctx, mode: string, cookie = ctx.owner) => app.inject({ method: "PUT", url: "/api/store/print-mode", headers: { cookie }, payload: { mode } });
+  const modeOf = async (storeId: string) => (await prisma.store.findUniqueOrThrow({ where: { id: storeId } })).printMode;
+  const kitchenJobs = (orderId: string) => prisma.printJob.findMany({ where: { orderId, kind: "ORDER_KITCHEN" } });
+  const pending = (ctx: Ctx) => app.inject({ method: "GET", url: "/api/device/orders/pending", headers: bearer(ctx.token) });
+  const claim = (ctx: Ctx) => app.inject({ method: "POST", url: "/api/device/print-jobs/claim", headers: bearer(ctx.token), payload: {} });
+  const conferenceOf = async (ctx: Ctx) => json(await app.inject({ method: "GET", url: "/api/store/print-mode", headers: { cookie: ctx.owner } })).conference;
+  const staffCookie = async (ctx: Ctx) => {
+    const invite = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: ctx.owner }, payload: { email: `staff-${Date.now()}@t.com`, password: "provisoria1" } });
+    const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: json(invite).user.email, password: "provisoria1" } });
+    return (login.headers["set-cookie"] as string).split(";")[0];
+  };
+
+  it("o padrão é LEGACY; GET /api/device/config e GET /api/store/print-mode dizem o modo (e a conferência)", async () => {
+    const ctx = await setup();
+    expect(await modeOf(ctx.storeId)).toBe("LEGACY");
+    const cfg = await app.inject({ method: "GET", url: "/api/device/config", headers: bearer(ctx.token) });
+    expect([cfg.statusCode, json(cfg)]).toEqual([200, { mode: "LEGACY" }]);
+    const panel = await app.inject({ method: "GET", url: "/api/store/print-mode", headers: { cookie: ctx.owner } });
+    expect(json(panel)).toEqual({ mode: "LEGACY", conference: { pendingJobOfPrintedOrder: 0, printableOrderWithoutJob: 0, printedJobOfUnprintedOrder: 0 } });
+    expect((await app.inject({ method: "GET", url: "/api/device/config" })).statusCode).toBe(401); // sem token
+  });
+
+  it("só o OWNER altera o modo: STAFF ⇒ 403, sem sessão ⇒ 401, valor inválido ⇒ 400; nada muda", async () => {
+    const ctx = await setup();
+    const staff = await staffCookie(ctx);
+    expect((await setMode(ctx, "QUEUE", staff)).statusCode).toBe(403);
+    expect((await app.inject({ method: "GET", url: "/api/store/print-mode", headers: { cookie: staff } })).statusCode).toBe(403);
+    expect((await app.inject({ method: "PUT", url: "/api/store/print-mode", payload: { mode: "QUEUE" } })).statusCode).toBe(401);
+    expect((await setMode(ctx, "TANTO_FAZ")).statusCode).toBe(400);
+    expect((await app.inject({ method: "PUT", url: "/api/store/print-mode", headers: { cookie: ctx.owner }, payload: {} })).statusCode).toBe(400);
+    expect(await modeOf(ctx.storeId)).toBe("LEGACY");
+    // a tentativa negada do STAFF fica registrada (com o modo pedido), e só ela
+    const denied = await prisma.auditLog.findMany({ where: { storeId: ctx.storeId, action: "print.mode_change_denied" } });
+    expect(denied).toHaveLength(1);
+    expect(denied[0].metadata).toEqual({ role: "STAFF", requested: "QUEUE" });
+    expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "print.mode_change" } })).toBe(0);
+  });
+
+  it("FALHA FECHADA: se o rastro da troca não puder ser gravado, o modo NÃO muda e a reconciliação some junto (mesma transação)", async () => {
+    const ctx = await setup();
+    const semJob = await order(ctx);
+    await prisma.printJob.deleteMany({ where: { orderId: semJob } });
+    await prisma.$executeRawUnsafe(`CREATE OR REPLACE FUNCTION recusa_audit_modo() RETURNS trigger AS $$ BEGIN IF NEW."action" = 'print.mode_change' THEN RAISE EXCEPTION 'auditoria indisponivel'; END IF; RETURN NEW; END $$ LANGUAGE plpgsql`);
+    await prisma.$executeRawUnsafe(`CREATE TRIGGER recusa_audit_modo BEFORE INSERT ON "AuditLog" FOR EACH ROW EXECUTE FUNCTION recusa_audit_modo()`);
+    try {
+      const r = await setMode(ctx, "QUEUE");
+      expect(r.statusCode).toBeGreaterThanOrEqual(500);
+      expect(await modeOf(ctx.storeId)).toBe("LEGACY");
+      expect(await kitchenJobs(semJob)).toHaveLength(0); // o job criado pela reconciliação também voltou atrás
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER recusa_audit_modo ON "AuditLog"`);
+      await prisma.$executeRawUnsafe(`DROP FUNCTION recusa_audit_modo()`);
+    }
+    // sem o gatilho, a mesma troca funciona
+    expect((await setMode(ctx, "QUEUE")).statusCode).toBe(200);
+    expect(await kitchenJobs(semJob)).toHaveLength(1);
+  });
+
+  it("o modo vem SÓ da loja do token: query, cabeçalho e corpo com 'mode'/'storeId' de outra loja são ignorados", async () => {
+    const a = await setup();
+    const b = await setup();
+    await setMode(b, "QUEUE");
+    const r = await app.inject({
+      method: "GET",
+      url: `/api/device/config?mode=QUEUE&storeId=${b.storeId}`,
+      headers: { ...bearer(a.token), "x-print-mode": "QUEUE", "x-store-id": b.storeId },
+    });
+    expect(json(r)).toEqual({ mode: "LEGACY" });
+    const c = await app.inject({ method: "POST", url: "/api/device/print-jobs/claim", headers: bearer(a.token), payload: { mode: "QUEUE", storeId: b.storeId } });
+    expect(json(c)).toEqual({ job: null, mode: "LEGACY" });
+  });
+
+  it("o 409 MODE_QUEUE tem mensagem FIXA e nenhum dado de pedido/loja", async () => {
+    const ctx = await setup();
+    const id = await order(ctx, { type: "DELIVERY", customerName: "Ana Sigilosa", customerPhone: "11987654321", address: "Rua Sigilosa, 777" });
+    await setMode(ctx, "QUEUE");
+    const r = await app.inject({ method: "GET", url: `/api/device/orders/${id}/printable`, headers: bearer(ctx.token) });
+    expect([r.statusCode, json(r)]).toEqual([409, { error: "Esta loja imprime pela fila.", code: "MODE_QUEUE" }]);
+    for (const d of ["Sigilosa", "11987654321", id, ctx.storeId, ctx.slug]) expect(r.body, d).not.toContain(d);
+  });
+
+  it("LEGACY: o claim devolve {job:null, mode:'LEGACY'} MESMO com job PENDING na fila (ninguém imprime pela fila)", async () => {
+    const ctx = await setup();
+    const id = await order(ctx);
+    expect(await kitchenJobs(id)).toHaveLength(1); // o job nasce em qualquer modo
+    const r = await claim(ctx);
+    expect([r.statusCode, json(r)]).toEqual([200, { job: null, mode: "LEGACY" }]);
+    expect((await kitchenJobs(id))[0]).toMatchObject({ status: "PENDING", attempts: 0 }); // o claim não tocou no job
+  });
+
+  it("QUEUE: o claim devolve o job com mode:'QUEUE'; a lista legada vem VAZIA e printable/printed ⇒ 409 MODE_QUEUE", async () => {
+    const ctx = await setup();
+    const id = await order(ctx);
+    expect((await setMode(ctx, "QUEUE")).statusCode).toBe(200);
+    const r = await claim(ctx);
+    expect(json(r).mode).toBe("QUEUE");
+    expect(json(r).job).toMatchObject({ kind: "ORDER_KITCHEN", ticket: { orderId: id } });
+    expect(json(await pending(ctx))).toEqual({ orders: [] });
+    const printable = await app.inject({ method: "GET", url: `/api/device/orders/${id}/printable`, headers: bearer(ctx.token) });
+    expect([printable.statusCode, json(printable).code]).toEqual([409, "MODE_QUEUE"]);
+    const printed = await app.inject({ method: "POST", url: `/api/device/orders/${id}/printed`, headers: bearer(ctx.token) });
+    expect([printed.statusCode, json(printed).code]).toEqual([409, "MODE_QUEUE"]);
+    expect((await prisma.order.findUniqueOrThrow({ where: { id } })).printedAt).toBeNull(); // o 409 não imprimiu nada
+  });
+
+  it("LEGACY: o fluxo antigo segue igual (lista → printable → printed); o ack legado fecha o job NA MESMA transação", async () => {
+    const ctx = await setup();
+    const id = await order(ctx);
+    expect(json(await pending(ctx)).orders.map((o: { id: string }) => o.id)).toEqual([id]);
+    expect((await app.inject({ method: "GET", url: `/api/device/orders/${id}/printable`, headers: bearer(ctx.token) })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: `/api/device/orders/${id}/printed`, headers: bearer(ctx.token) })).statusCode).toBe(200);
+    expect((await prisma.order.findUniqueOrThrow({ where: { id } })).printedAt).not.toBeNull();
+    expect((await kitchenJobs(id))[0]).toMatchObject({ status: "PRINTED", ackStatus: "PRINTED" });
+    expect(json(await pending(ctx))).toEqual({ orders: [] });
+    // e a virada logo depois NÃO reimprime: nada a reconciliar
+    const virada = json(await setMode(ctx, "QUEUE"));
+    expect(virada.reconciled).toEqual({ closedPendingJobs: 0, createdJobs: 0, markedOrdersPrinted: 0 });
+    expect((await claim(ctx)).body).toContain('"job":null');
+  });
+
+  it("LEGACY→QUEUE reconcilia: impresso com job PENDING ⇒ PRINTED; não impresso sem job ⇒ job criado; cancelado/aguardando pagamento ⇒ nenhum", async () => {
+    const ctx = await setup();
+    const impresso = await order(ctx);
+    const naoImpresso = await order(ctx);
+    const semJob = await order(ctx);
+    const cancelado = await order(ctx);
+    const aguardando = await order(ctx);
+    // estado herdado de uma loja que rodava no legado:
+    const antes = new Date(Date.now() - 3600_000);
+    await prisma.order.update({ where: { id: impresso }, data: { printedAt: antes } }); // legado imprimiu, job ficou PENDING
+    await prisma.printJob.deleteMany({ where: { orderId: semJob } }); // pedido antigo, de antes da fila
+    await prisma.order.update({ where: { id: cancelado }, data: { status: "CANCELADO" } });
+    await prisma.printJob.deleteMany({ where: { orderId: { in: [cancelado, aguardando] } } });
+    await prisma.order.update({ where: { id: aguardando }, data: { awaitingPayment: true } });
+
+    expect(await conferenceOf(ctx)).toEqual({ pendingJobOfPrintedOrder: 1, printableOrderWithoutJob: 1, printedJobOfUnprintedOrder: 0 });
+
+    const r = await setMode(ctx, "QUEUE");
+    expect(r.statusCode, r.body).toBe(200);
+    expect(json(r)).toMatchObject({
+      mode: "QUEUE",
+      changed: true,
+      reconciled: { closedPendingJobs: 1, createdJobs: 1, markedOrdersPrinted: 0 },
+      conference: { pendingJobOfPrintedOrder: 0, printableOrderWithoutJob: 0, printedJobOfUnprintedOrder: 0 },
+    });
+    expect((await kitchenJobs(impresso))[0]).toMatchObject({ status: "PRINTED", printedAt: antes });
+    expect((await kitchenJobs(naoImpresso))[0].status).toBe("PENDING");
+    const criado = await kitchenJobs(semJob);
+    expect(criado).toHaveLength(1);
+    expect(criado[0]).toMatchObject({ status: "PENDING", dedupeKey: `${semJob}:ORDER_KITCHEN`, attempts: 0 });
+    expect(await kitchenJobs(cancelado)).toHaveLength(0);
+    expect(await kitchenJobs(aguardando)).toHaveLength(0);
+    expect(await modeOf(ctx.storeId)).toBe("QUEUE");
+    // o claim só entrega o que ainda não foi impresso
+    const vistos = new Set<string>();
+    for (let i = 0; i < 4; i++) {
+      const j = json(await claim(ctx)).job;
+      if (!j) continue;
+      vistos.add(j.ticket.orderId);
+      await app.inject({ method: "POST", url: `/api/device/print-jobs/${j.id}/ack`, headers: bearer(ctx.token), payload: { status: "PRINTED" } }); // um token segura um job por vez
+    }
+    expect([...vistos].sort()).toEqual([naoImpresso, semJob].sort());
+  });
+
+  it("a virada é IDEMPOTENTE: repetir o comando não muda nada, não duplica job e não grava nova auditoria", async () => {
+    const ctx = await setup();
+    const semJob = await order(ctx);
+    await prisma.printJob.deleteMany({ where: { orderId: semJob } });
+    expect(json(await setMode(ctx, "QUEUE")).reconciled.createdJobs).toBe(1);
+    const again = json(await setMode(ctx, "QUEUE"));
+    expect(again).toMatchObject({ mode: "QUEUE", changed: false, reconciled: { closedPendingJobs: 0, createdJobs: 0, markedOrdersPrinted: 0 } });
+    expect(await kitchenJobs(semJob)).toHaveLength(1);
+    await vi.waitFor(async () => expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "print.mode_change" } })).toBe(1));
+  });
+
+  it("virada concorrente: dois PUTs simultâneos ⇒ um job por pedido (lock por loja + dedupeKey)", async () => {
+    const ctx = await setup();
+    const ids = [await order(ctx), await order(ctx), await order(ctx)];
+    await prisma.printJob.deleteMany({ where: { orderId: { in: ids } } });
+    const [a, b] = await Promise.all([setMode(ctx, "QUEUE"), setMode(ctx, "QUEUE")]);
+    expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
+    for (const id of ids) expect(await kitchenJobs(id)).toHaveLength(1);
+    expect(json(a).reconciled.createdJobs + json(b).reconciled.createdJobs).toBe(3);
+  });
+
+  it("QUEUE→LEGACY (recuo): pedido que a fila imprimiu ganha printedAt (o legado não reimprime) e a conferência fecha em 0", async () => {
+    const ctx = await setup();
+    const feitoPelaFila = await order(ctx);
+    const pendente = await order(ctx);
+    expect((await setMode(ctx, "QUEUE")).statusCode).toBe(200);
+    const claimed = json(await claim(ctx)).job as { id: string; ticket: { orderId: string } };
+    const job = { id: claimed.id, orderId: claimed.ticket.orderId };
+    // o job do `pendente` pode vir primeiro; imprime o que veio e o outro fica na fila
+    const ackRes = await app.inject({ method: "POST", url: `/api/device/print-jobs/${job.id}/ack`, headers: bearer(ctx.token), payload: { status: "PRINTED" } });
+    expect(ackRes.statusCode, ackRes.body).toBe(200);
+    // ack em QUEUE já grava Order.printedAt; simula o resíduo antigo (job PRINTED com printedAt nulo no pedido)
+    await prisma.order.update({ where: { id: job.orderId }, data: { printedAt: null } });
+    expect(await conferenceOf(ctx)).toMatchObject({ printedJobOfUnprintedOrder: 1 });
+
+    const r = await setMode(ctx, "LEGACY");
+    expect(json(r)).toMatchObject({ mode: "LEGACY", changed: true, reconciled: { markedOrdersPrinted: 1 }, conference: { printedJobOfUnprintedOrder: 0 } });
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: job.orderId } })).printedAt).not.toBeNull();
+    const outro = job.orderId === feitoPelaFila ? pendente : feitoPelaFila;
+    expect(json(await pending(ctx)).orders.map((o: { id: string }) => o.id)).toEqual([outro]); // só o que não foi impresso
+    expect(json(await claim(ctx))).toEqual({ job: null, mode: "LEGACY" });
+  });
+
+  it("ack PRINTED em QUEUE grava Order.printedAt junto do job; ack repetido conserta printedAt perdido", async () => {
+    const ctx = await setup();
+    const id = await order(ctx);
+    await setMode(ctx, "QUEUE");
+    const job = json(await claim(ctx)).job as { id: string };
+    const ack = () => app.inject({ method: "POST", url: `/api/device/print-jobs/${job.id}/ack`, headers: bearer(ctx.token), payload: { status: "PRINTED" } });
+    expect((await ack()).statusCode).toBe(200);
+    const impresso = (await prisma.order.findUniqueOrThrow({ where: { id } })).printedAt;
+    expect(impresso).not.toBeNull();
+    await prisma.order.update({ where: { id }, data: { printedAt: null } });
+    expect((await ack()).statusCode).toBe(200); // idempotente
+    expect((await prisma.order.findUniqueOrThrow({ where: { id } })).printedAt).not.toBeNull();
+  });
+
+  it("o ack do job segue aceito se o modo virou LEGACY no meio (a impressão já saiu; não pode ficar presa)", async () => {
+    const ctx = await setup();
+    const id = await order(ctx);
+    await setMode(ctx, "QUEUE");
+    const job = json(await claim(ctx)).job as { id: string };
+    expect((await setMode(ctx, "LEGACY")).statusCode).toBe(200); // o dono recua com o job em impressão
+    const r = await app.inject({ method: "POST", url: `/api/device/print-jobs/${job.id}/ack`, headers: bearer(ctx.token), payload: { status: "PRINTED" } });
+    expect(r.statusCode, r.body).toBe(200);
+    expect((await kitchenJobs(id))[0].status).toBe("PRINTED");
+    expect((await prisma.order.findUniqueOrThrow({ where: { id } })).printedAt).not.toBeNull(); // o legado não reimprime
+    expect(json(await pending(ctx))).toEqual({ orders: [] });
+  });
+
+  it("2ª via e tíquete de teste exigem QUEUE: em LEGACY ⇒ 409 PRINT_MODE_LEGACY e NADA é criado", async () => {
+    const ctx = await setup();
+    const id = await order(ctx);
+    const reprint = await app.inject({ method: "POST", url: `/api/orders/${id}/reprint`, headers: { cookie: ctx.owner } });
+    expect([reprint.statusCode, json(reprint).code]).toEqual([409, "PRINT_MODE_LEGACY"]);
+    const test = await app.inject({ method: "POST", url: "/api/print-jobs/test", headers: { cookie: ctx.owner } });
+    expect([test.statusCode, json(test).code]).toEqual([409, "PRINT_MODE_LEGACY"]);
+    expect(await prisma.printJob.count({ where: { storeId: ctx.storeId, kind: { in: ["ORDER_REPRINT", "TEST"] } } })).toBe(0);
+    await setMode(ctx, "QUEUE");
+    expect((await app.inject({ method: "POST", url: `/api/orders/${id}/reprint`, headers: { cookie: ctx.owner } })).statusCode).toBe(201);
+    expect((await app.inject({ method: "POST", url: "/api/print-jobs/test", headers: { cookie: ctx.owner } })).statusCode).toBe(201);
+  });
+
+  it("cancelar pedido já impresso em LEGACY NÃO cria aviso de cancelamento na fila (ninguém o imprimiria; o aviso só existe em QUEUE)", async () => {
+    const ctx = await setup();
+    const id = await order(ctx);
+    await app.inject({ method: "POST", url: `/api/device/orders/${id}/printed`, headers: bearer(ctx.token) });
+    const cancel = await app.inject({ method: "POST", url: `/api/orders/${id}/cancel`, headers: { cookie: ctx.owner }, payload: { reason: { code: "ITEM_EM_FALTA" } } });
+    expect(cancel.statusCode, cancel.body).toBe(200);
+    expect(await prisma.printJob.count({ where: { orderId: id, kind: "ORDER_CANCEL_NOTICE" } })).toBe(0);
+  });
+
+  it("a auditoria da virada guarda só CONTAGENS: nada de pedido, cliente, telefone ou endereço", async () => {
+    const ctx = await setup();
+    await order(ctx, { type: "DELIVERY", customerName: "Ana Sigilosa", customerPhone: "11987654321", address: "Rua Sigilosa, 777" });
+    await setMode(ctx, "QUEUE");
+    await vi.waitFor(async () => expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "print.mode_change" } })).toBe(1));
+    const row = await prisma.auditLog.findFirstOrThrow({ where: { storeId: ctx.storeId, action: "print.mode_change" } });
+    expect(row.metadata).toEqual({ from: "LEGACY", to: "QUEUE", closedPendingJobs: 0, createdJobs: 0, markedOrdersPrinted: 0 });
+    const dump = JSON.stringify(row);
+    for (const d of ["Sigilosa", "11987654321", "Ana"]) expect(dump, d).not.toContain(d);
+    expect(row.targetId).toBe(ctx.storeId);
+  });
+
+  it("ISOLAMENTO: virar a loja A não toca nos pedidos, jobs nem no modo da loja B; token de A não vê o modo de B", async () => {
+    const a = await setup();
+    const b = await setup();
+    const pedidoB = await order(b);
+    await prisma.printJob.deleteMany({ where: { orderId: pedidoB } });
+    await prisma.order.update({ where: { id: pedidoB }, data: { printedAt: null } });
+    const pedidoA = await order(a);
+    await prisma.printJob.deleteMany({ where: { orderId: pedidoA } });
+
+    expect(json(await setMode(a, "QUEUE")).reconciled.createdJobs).toBe(1);
+    expect(await modeOf(b.storeId)).toBe("LEGACY");
+    expect(await kitchenJobs(pedidoB)).toHaveLength(0); // B não ganhou job
+    expect(json(await app.inject({ method: "GET", url: "/api/device/config", headers: bearer(b.token) }))).toEqual({ mode: "LEGACY" });
+    expect(json(await app.inject({ method: "GET", url: "/api/device/config", headers: bearer(a.token) }))).toEqual({ mode: "QUEUE" });
+    expect(json(await pending(b)).orders.map((o: { id: string }) => o.id)).toEqual([pedidoB]); // B segue no legado
+    expect((await conferenceOf(b)).printableOrderWithoutJob).toBe(1); // a conferência de B só vê B
+  });
+
+  it("a rota de modo e a conferência nunca vazam dados de pedido (corpo só com modo e contagens)", async () => {
+    const ctx = await setup();
+    await order(ctx, { type: "DELIVERY", customerName: "Ana Sigilosa", customerPhone: "11987654321", address: "Rua Sigilosa, 777" });
+    const get = await app.inject({ method: "GET", url: "/api/store/print-mode", headers: { cookie: ctx.owner } });
+    const put = await setMode(ctx, "QUEUE");
+    for (const r of [get, put]) for (const d of ["Sigilosa", "11987654321", "Ana"]) expect(r.body, d).not.toContain(d);
+    expect(Object.keys(json(put)).sort()).toEqual(["changed", "conference", "mode", "reconciled"]);
+  });
+});
