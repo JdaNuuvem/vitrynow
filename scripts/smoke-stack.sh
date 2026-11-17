@@ -397,8 +397,8 @@ elif [ "$KNOWN_RED_ST70" = 1 ]; then KRED=$((KRED+1)); echo "  [VERMELHO CONHECI
 else check fail "C1 [api]: o orderId no CAMINHO (V4) aparece $nv4 vez(es) no log da API (ST-70)"; fi
 # --- CONTROLES POSITIVOS, um por serviço (provam que o log do serviço existe e que a ausência dos valores é significativa)
 nerr="$(printf '%s' "$LOGC" | grep -c '"logger":"http.log.error".*"status":502')"
-nred="$(for f in '/reset-senha/REDACTED' '/loja/REDACTED' '/stores/REDACTED'; do printf '%s' "$LOGC" | grep -q "\"uri\":\"$f\"" && echo 1; done | wc -l | tr -d ' ')"
-{ [ "$nerr" -ge 3 ] && [ "$nred" = 3 ]; } && check ok "controle [caddy]: o log de ERRO existe ($nerr linhas http.log.error 502) e o filtro agiu nas 3 rotas (uri reduzido; cabeçalhos removidos)" || check fail "controle [caddy]: $nerr linha(s) de erro 502 e $nred/3 uri filtrados (o filtro virou 'sem log' ou não agiu)"
+faltou=""; nred=0; for f in '/reset-senha/REDACTED' '/loja/REDACTED' '/stores/REDACTED'; do if printf '%s' "$LOGC" | grep -q "\"uri\":\"$f\""; then nred=$((nred+1)); else faltou="$faltou $f"; fi; done
+{ [ "$nerr" -ge 3 ] && [ "$nred" = 3 ]; } && check ok "controle [caddy]: o log de ERRO existe ($nerr linhas http.log.error 502) e o filtro agiu nas 3 rotas (uri reduzido; cabeçalhos removidos)" || { check fail "controle [caddy]: $nerr linha(s) de erro 502 e $nred/3 uri filtrados; FALTOU:$faltou (o filtro virou 'sem log' ou não agiu nessa rota)"; echo "   --- linhas http.log.error (já filtradas, seguras de mostrar):"; printf '%s' "$LOGC" | grep '"logger":"http.log.error"' | cut -c1-360 | head -6 | sed 's/^/   /'; }
 napi="$(printf '%s' "$LOGA" | grep -c 'payment-status')"
 [ "$napi" -ge 1 ] && check ok "controle [api]: o log da API registra a requisição ($napi linha(s) com a rota payment-status): a ausência dos valores de query/cabeçalho é significativa" || check fail "controle [api]: nenhuma linha de log da requisição à API (o teste não distingue 'redigido' de 'sem log')"
 # web: `next start` não escreve linha por requisição; o controle é a resposta (já conferida acima) e o log só ter a inicialização
