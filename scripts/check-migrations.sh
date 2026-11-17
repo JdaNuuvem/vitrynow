@@ -10,7 +10,7 @@
 # Une as migrações de todas as refs com as da BASE e prova, em bancos descartáveis:
 #   S0  mesmo nome + conteúdo diferente = erro; lista prefixos repetidos e o que ordena antes do fim da BASE
 #   S1  banco NOVO: tudo aplica em ordem alfabética
-#   S2  banco que JÁ tem só uma das novas (cada uma isolada): o resto aplica por cima
+#   S2  banco que já tem parte das novas (só N, se alcançável; ou tudo até N): o resto aplica por cima
 #   S3  idem S1 e S4 idem S2, mas COM DADOS (seed-main.sql) e conferindo os backfills (verify.sql)
 #   S5  o schema final (pg_dump -s) é IDÊNTICO em todos os cenários = a ordem de chegada não importa
 # Sai com código != 0 se qualquer prova falhar. Bancos de teste são removidos no fim.
@@ -99,20 +99,64 @@ D="$(newdb s1)"; if apply "$D" "${ALL[@]}"; then ok "aplicou ${#ALL[@]} migraç�
 
 echo "== S3 banco com DADOS na base + todas as novas (conferindo backfills)"
 D="$(newdb s3)"; apply "$D" "${BASE_NAMES[@]}" || { bad "S3: base não aplicou"; tail -5 "$TMP/last.log"; }
-"${PSQL[@]}" -d "$D" < "$HERE/seed-main.sql" >/dev/null || bad "S3: seed falhou"
+"${PSQL[@]}" -d "$D" < "$HERE/seed-main.sql" >/dev/null || bad "S3: seed falhou: FIXTURE DESATUALIZADA em relação ao schema da main (atualize scripts/migrations-check/seed-main.sql)"
 if apply "$D" "${ALL[@]}"; then ok "S3 aplicou as novas sobre dados existentes"; verify "$D" "S3"; note_hash "$D" "S3-dados"; else bad "S3 falhou"; tail -8 "$TMP/last.log"; fi
 
-# ---------- S2 / S4: banco que já tem UMA das novas ----------
+# ---------- S2 / S4: banco que já tem parte das novas ----------
+# (a) "só N": a base + apenas N. Se N depende de outra migração nova, esse estado é INALCANÇÁVEL (nenhum
+#     banco real aplica fora de ordem): vira [n/a] e o banco é descartado (o Prisma travaria com P3009).
+# (b) "tudo até N": a base + todas as novas que ordenam até N (estado de um deploy parcial; sempre alcançável).
+# Nos dois, o restante tem de aplicar por cima, com e sem dados, e os checks do verify.sql valem.
+run_state() { # rótulo modo db nomes...  -> aplica o restante sobre o estado já montado e confere
+  local rot="$1" modo="$2" d="$3"; shift 3
+  if apply "$d" "${ALL[@]}"; then
+    ok "[$modo] com $rot já aplicada, o restante aplicou por cima"; [ "$modo" = dados ] && verify "$d" "S4 $rot"; note_hash "$d" "S2-$modo-$rot"
+  else bad "[$modo] com $rot já aplicada, a união FALHOU"; tail -10 "$TMP/last.log"; fi
+}
 for N in "${NEW[@]}"; do
   [ -n "${ONLY:-}" ] && [ "$N" != "$ONLY" ] && continue   # ONLY=<nome>: roda só o cenário dessa migração
-  echo "== S2/S4 banco que já tem só: $N"
+  echo "== S2/S4 estados parciais em torno de: $N"
+  UPTO=(); for m in "${ALL[@]}"; do [[ "$m" < "$N" || "$m" == "$N" ]] && UPTO+=("$m"); done
   for modo in vazio dados; do
-    D="$(newdb s2)"; apply "$D" "${BASE_NAMES[@]}" || { bad "base não aplicou"; continue; }
-    [ "$modo" = dados ] && "${PSQL[@]}" -d "$D" < "$HERE/seed-main.sql" >/dev/null
-    if apply "$D" "${BASE_NAMES[@]}" "$N"; then :; else echo "   (isolada, $N não aplica sozinha: depende de outra; segue assim mesmo)"; fi
-    if apply "$D" "${ALL[@]}"; then ok "[$modo] com $N já aplicada, o restante aplicou por cima"; [ "$modo" = dados ] && verify "$D" "S4 $N"; note_hash "$D" "S2-$modo-$N"
-    else bad "[$modo] com $N já aplicada, a união FALHOU"; tail -10 "$TMP/last.log"; fi
+    # (a) só N
+    D="$(newdb s2a)"
+    if ! apply "$D" "${BASE_NAMES[@]}"; then bad "[$modo] a base não aplicou (log abaixo)"; tail -8 "$TMP/last.log"; else
+      [ "$modo" = dados ] && { "${PSQL[@]}" -d "$D" < "$HERE/seed-main.sql" >/dev/null || bad "[$modo] seed falhou: FIXTURE DESATUALIZADA (atualize seed-main.sql)"; }
+      if apply "$D" "${BASE_NAMES[@]}" "$N"; then run_state "só $N" "$modo" "$D"
+      else echo "  [n/a]   [$modo] só $N: estado inalcançável ($N depende de outra migração nova); pulado"; fi
+    fi
+    # (b) tudo até N
+    D="$(newdb s2b)"
+    if ! apply "$D" "${BASE_NAMES[@]}"; then bad "[$modo] a base não aplicou (log abaixo)"; tail -8 "$TMP/last.log"; continue; fi
+    [ "$modo" = dados ] && { "${PSQL[@]}" -d "$D" < "$HERE/seed-main.sql" >/dev/null || bad "[$modo] seed falhou: FIXTURE DESATUALIZADA"; }
+    if apply "$D" "${UPTO[@]}"; then run_state "tudo até $N" "$modo" "$D"
+    else bad "[$modo] as migrações até $N não aplicaram na ordem (log abaixo)"; tail -8 "$TMP/last.log"; fi
   done
+done
+
+# ---------- S6: dados "no meio do caminho" (ganchos por migração) ----------
+# Para uma migração N que tenha scripts/migrations-check/pre-N.sql: aplica tudo que ordena ANTES de N,
+# semeia os dados de pre-N.sql (válidos naquele schema intermediário), aplica o resto e roda post-N.sql,
+# que imprime linhas "nome|t/f|detalhe" como o verify.sql. Prova backfills que o schema da base não comporta.
+for N in "${NEW[@]}"; do
+  [ -f "$HERE/pre-$N.sql" ] || continue
+  [ -n "${ONLY:-}" ] && [ "$N" != "$ONLY" ] && continue
+  echo "== S6 dados intermediários antes de: $N"
+  BEFORE=(); for m in "${ALL[@]}"; do [[ "$m" < "$N" ]] && BEFORE+=("$m"); done
+  D="$(newdb s6)"
+  if ! apply "$D" "${BEFORE[@]}"; then bad "S6: as ${#BEFORE[@]} migrações anteriores a $N não aplicaram"; tail -6 "$TMP/last.log"; continue; fi
+  "${PSQL[@]}" -d "$D" < "$HERE/pre-$N.sql" > /dev/null || { bad "S6: pre-$N.sql falhou"; continue; }
+  if apply "$D" "${ALL[@]}"; then
+    ok "S6 aplicou $N e as seguintes sobre dados intermediários"
+    if [ -f "$HERE/post-$N.sql" ]; then
+      out="$("${PSQL[@]}" -d "$D" -A -t -F '|' < "$HERE/post-$N.sql" 2>&1)" || { bad "S6: post-$N.sql falhou: $out"; continue; }
+      while IFS='|' read -r name okv det; do
+        [ -z "$name" ] && continue
+        case "$okv" in t) ok "S6 $N · $name";; f) bad "S6 $N · $name — $det";; *) echo "  [n/a]   S6 $N · $name";; esac
+      done <<< "$out"
+    fi
+    note_hash "$D" "S6-$N"
+  else bad "S6: $N falhou sobre dados intermediários"; tail -10 "$TMP/last.log"; fi
 done
 
 # ---------- S5: schema final igual em todos os cenários ----------
