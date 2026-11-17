@@ -481,6 +481,18 @@ describe("API-12b — modo de impressão e virada", () => {
     expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "print.mode_reconcile" } })).toBe(1);
   });
 
+  it("LIMITE DA TENTATIVA NEGADA: o STAFF que insiste leva 403 ×10 (cada uma registrada) e depois 429 sem gravar mais; a rota nunca abre; o dono segue trocando (balde separado)", async () => {
+    const ctx = await setup();
+    const staff = await staffCookie(ctx);
+    for (let i = 0; i < 10; i++) expect((await setMode(ctx, "QUEUE", staff)).statusCode, `tentativa ${i + 1}`).toBe(403);
+    const barrado = await setMode(ctx, "QUEUE", staff);
+    expect([barrado.statusCode, json(barrado).code, barrado.headers["retry-after"]]).toEqual([429, "RATE_LIMITED", "60"]);
+    expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "print.mode_change_denied" } })).toBe(10); // a 11ª não gravou
+    expect(await modeOf(ctx.storeId)).toBe("LEGACY"); // nunca houve efeito
+    expect((await setMode(ctx, "QUEUE")).statusCode).toBe(200); // o balde do dono é outro
+    expect(await modeOf(ctx.storeId)).toBe("QUEUE");
+  });
+
   it("LIMITE DE TAXA da troca de modo: 10 por minuto POR LOJA (a 11ª ⇒ 429 RATE_LIMITED com Retry-After); outra loja não é afetada", async () => {
     const ctx = await setup();
     const outra = await setup();
