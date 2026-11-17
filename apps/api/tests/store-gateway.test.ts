@@ -5,7 +5,7 @@ import { JobRunner } from "../src/jobs/runner";
 import { decryptSecret, encryptSecret } from "../src/lib/paymentCrypto";
 import { FakePixGateway, gatewayForAccount, gatewayForStore, setGatewayMaker } from "../src/modules/storePayments/gateway";
 import { FakeMercadoPagoOAuth, setOAuthProvider } from "../src/modules/storePayments/oauth";
-import { PixUnavailableError, REFRESH_RETRY_AFTER_MS, StorePaymentsService } from "../src/modules/storePayments/storePayments.service";
+import { AccountChangedError, NeedsReconnectError, PixUnavailableError, REFRESH_RETRY_AFTER_MS, StorePaymentsService } from "../src/modules/storePayments/storePayments.service";
 import { resetDb } from "./helpers";
 
 // API-07: a PORTA que o pedido, o webhook e o estorno usam (gateway por loja) e o job de renovação. Tudo fake (CL-13).
@@ -116,7 +116,8 @@ describe("gateway por loja", () => {
 
     // a conta com TROCA de vendedor (a antiga fica DISCONNECTED, sem tokens): sem token não há como consultar ⇒ indisponível
     await prisma.paymentAccount.update({ where: { id: first.id }, data: { status: "DISCONNECTED", accessTokenEnc: null, refreshTokenEnc: null } });
-    await expect(gatewayForAccount(first.id, storeA)).rejects.toThrow(PixUnavailableError);
+    await expect(gatewayForAccount(first.id, storeA)).rejects.toMatchObject({ code: "MP_ACCOUNT_CHANGED", statusCode: 409 }); // pagou na conta antiga: só pelo app do MP
+    await expect(gatewayForAccount(first.id, storeA)).rejects.toThrow(AccountChangedError);
     await expect(gatewayForAccount("nao-existe", storeA)).rejects.toThrow(PixUnavailableError);
   });
 
@@ -133,7 +134,8 @@ describe("gateway por loja", () => {
 
   it("token vencido ⇒ indisponível (não tenta com token morto); falha do provedor é propagada para quem chamou decidir", async () => {
     const account = await connected(storeA, "vendedor-1", { expiresInMs: -1000 });
-    await expect(gatewayForStore(storeA)).rejects.toThrow(PixUnavailableError);
+    await expect(gatewayForStore(storeA)).rejects.toMatchObject({ code: "PIX_UNAVAILABLE" }); // o CLIENTE nunca vê "reconecte"
+    await expect(gatewayForAccount(account.id, storeA)).rejects.toMatchObject({ code: "MP_NEEDS_RECONNECT" });
     await prisma.paymentAccount.update({ where: { id: account.id }, data: { expiresAt: new Date(Date.now() + 90 * DAY) } });
     const gateway = await gatewayForStore(storeA);
     FakePixGateway.failNext = new Error("provedor fora do ar");

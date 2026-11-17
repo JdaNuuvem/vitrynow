@@ -7,7 +7,7 @@ import { activateSubscription } from "../src/lib/subscription";
 import { currentKey, decryptSecret, encryptSecret } from "../src/lib/paymentCrypto";
 import { redactLogUrl } from "../src/lib/logging";
 import { FakeMercadoPagoOAuth, OAuthError, RealMercadoPagoOAuth, assertPaymentsBootConfig, oauthProvider, setOAuthProvider } from "../src/modules/storePayments/oauth";
-import { MAX_REFRESH_FAILURES, PixUnavailableError, StorePaymentsService, maskSeller } from "../src/modules/storePayments/storePayments.service";
+import { MAX_REFRESH_FAILURES, NeedsReconnectError, PixUnavailableError, StorePaymentsService, maskSeller } from "../src/modules/storePayments/storePayments.service";
 import { storePaymentsService } from "../src/modules/storePayments/storePayments.module";
 import { login, makeApp, registerStore, resetDb } from "./helpers";
 
@@ -67,6 +67,7 @@ describe("PIX por loja — conexão, estado e desconexão (HTTP)", () => {
     expect(json(await get("/api/store/payments"))).toEqual({
       mercadopago: { status: "NOT_CONNECTED", sellerMasked: null, connectedAt: null, expiresAt: null },
       pixAvailable: false,
+      pending: { pixPending: 0, refundPending: 0 },
     });
     expect((await menuStore()).payment).toEqual({ pixAvailable: false });
     const refused = await pixOrder("PIX");
@@ -264,17 +265,19 @@ describe("PIX por loja — conexão, estado e desconexão (HTTP)", () => {
     return prisma.payment.create({ data: { orderId: order.id, amountCents: 1000, status, paymentAccountId: accountId } });
   }
 
-  it("RN-B1-15: o bloqueio traz o código MP_HAS_PENDING_PAYMENTS, os contadores e a frase certa (1, N e estorno pendente) e nada é apagado", async () => {
+  it("RN-B1-15: o bloqueio devolve SÓ o código e as contagens (o texto é da tela); a tela busca as contagens em GET /api/store/payments; nada é apagado", async () => {
     await connect();
     const account = await prisma.paymentAccount.findFirstOrThrow();
-    const message = async () => json(await post("/api/store/payments/mercadopago/disconnect"));
+    const blocked = async () => json(await post("/api/store/payments/mercadopago/disconnect"));
+    const counts = async () => json(await get("/api/store/payments")).pending;
 
     await pendingOrder(account.id, "PENDENTE", "PENDENTE", "0101");
-    expect(await message()).toMatchObject({ code: "MP_HAS_PENDING_PAYMENTS", error: "Há 1 PIX em andamento. Aguarde o pagamento ou cancele o pedido.", details: { pixPending: 1, refundPending: 0 } });
+    expect(await blocked()).toMatchObject({ code: "MP_HAS_PENDING_PAYMENTS", details: { pixPending: 1, refundPending: 0 } });
     await pendingOrder(account.id, "APROVADO", "CONFIRMADO", "0102");
-    expect(await message()).toMatchObject({ error: "Há 2 PIX em andamento. Aguarde o pagamento ou cancele os pedidos.", details: { pixPending: 2 } });
+    expect((await blocked()).details).toEqual({ pixPending: 2, refundPending: 0 });
     await pendingOrder(account.id, "ESTORNO_PENDENTE", "CONFIRMADO", "0103");
-    expect(await message()).toMatchObject({ error: "Há um estorno em andamento. Aguarde terminar para desconectar.", details: { refundPending: 1 } });
+    expect((await blocked()).details).toEqual({ pixPending: 2, refundPending: 1 });
+    expect(await counts()).toEqual({ pixPending: 2, refundPending: 1 });
 
     const kept = await prisma.paymentAccount.findFirstOrThrow();
     expect(kept.status).toBe("CONNECTED");
@@ -291,12 +294,29 @@ describe("PIX por loja — conexão, estado e desconexão (HTTP)", () => {
     expect((await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } })).paymentAccountId).toBe(current.id);
   });
 
+  it("pergunta do Leonardo: desconectar e depois reconectar o MESMO vendedor devolve os pagamentos antigos à conta nova; outro vendedor não herda nada", async () => {
+    await connect("fake:vendedor-1");
+    const first = await prisma.paymentAccount.findFirstOrThrow();
+    const payment = await pendingOrder(first.id, "APROVADO", "CONCLUIDO", "0200"); // já encerrado: não bloqueia a desconexão
+    expect((await post("/api/store/payments/mercadopago/disconnect")).statusCode).toBe(200);
+    expect((await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } })).paymentAccountId).toBe(first.id); // preso à conta desconectada
+
+    expect((await connect("fake:vendedor-2")).headers.location).toContain("mp=ok"); // outro vendedor: não herda
+    expect((await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } })).paymentAccountId).toBe(first.id);
+
+    expect((await connect("fake:vendedor-1")).headers.location).toContain("mp=ok"); // o mesmo vendedor volta
+    const current = await prisma.paymentAccount.findFirstOrThrow({ where: { status: "CONNECTED" } });
+    expect(current.sellerUserId).toBe("vendedor-1");
+    expect((await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } })).paymentAccountId).toBe(current.id); // religado
+  });
+
   it("trocar por OUTRA conta com PIX ou estorno pendente é BLOQUEADO (a conta antiga segue ativa); sem pendência a troca passa", async () => {
     await connect("fake:vendedor-1");
     const old = await prisma.paymentAccount.findFirstOrThrow();
     const payment = await pendingOrder(old.id, "ESTORNO_PENDENTE", "CONFIRMADO");
     const blocked = await connect("fake:vendedor-2");
     expect(blocked.headers.location).toContain("MP_HAS_PENDING_PAYMENTS");
+    expect(new URL(blocked.headers.location as string).search).toBe("?mp=erro&motivo=MP_HAS_PENDING_PAYMENTS"); // a URL leva só o código, sem contagens
     expect((await prisma.paymentAccount.findMany()).map((a) => [a.sellerUserId, a.status])).toEqual([["vendedor-1", "CONNECTED"]]);
 
     await prisma.payment.update({ where: { id: payment.id }, data: { status: "REEMBOLSADO" } });
@@ -465,11 +485,11 @@ describe("conta de pagamento — token e renovação (serviço)", () => {
     expect(await prisma.auditLog.count({ where: { action: "payment_account.needs_reconnect", targetId: account.id } })).toBe(1);
   });
 
-  it("accessTokenFor: devolve o token da conta; vencido, desconectado ou sem token ⇒ PixUnavailableError (NUNCA o token da plataforma)", async () => {
+  it("accessTokenFor: devolve o token da conta; vencido ou sem token ⇒ NeedsReconnectError, sem cair no token da plataforma", async () => {
     const account = await accountFor(storeA, "vendedor-1", 90 * DAY);
     expect(await service.accessTokenFor(account)).toMatch(/^fake-access-vendedor-1-/);
-    await expect(service.accessTokenFor({ ...account, expiresAt: new Date(clock.current.getTime() - 1000) })).rejects.toThrow(PixUnavailableError);
-    await expect(service.accessTokenFor({ ...account, accessTokenEnc: null })).rejects.toThrow(PixUnavailableError);
+    await expect(service.accessTokenFor({ ...account, expiresAt: new Date(clock.current.getTime() - 1000) })).rejects.toThrow(NeedsReconnectError);
+    await expect(service.accessTokenFor({ ...account, accessTokenEnc: null })).rejects.toThrow(NeedsReconnectError);
   });
 
   it("AAD no banco: copiar o texto cifrado da loja A para a conta da loja B não decifra", async () => {

@@ -29,6 +29,20 @@ export class PixUnavailableError extends CodedError {
   }
 }
 
+/** O pagamento foi feito numa conta que a loja já desconectou/trocou: reconectar OUTRA conta não resolve (RN-B1-16). */
+export class AccountChangedError extends CodedError {
+  constructor() {
+    super(409, "MP_ACCOUNT_CHANGED", "Este pedido foi pago em outra conta do Mercado Pago.");
+  }
+}
+
+/** A conta do pagamento existe mas está sem token válido (pede reconexão ou o token venceu). */
+export class NeedsReconnectError extends CodedError {
+  constructor() {
+    super(409, "MP_NEEDS_RECONNECT", "A conexão com o Mercado Pago precisa ser refeita.");
+  }
+}
+
 export type AccountView = {
   status: PaymentAccountStatus | "NOT_CONNECTED";
   sellerMasked: string | null;
@@ -59,8 +73,10 @@ export class StorePaymentsService {
   }
 
   /** Resposta por allowlist: status, vendedor mascarado e datas. Nunca token. */
-  async view(storeId: string): Promise<{ mercadopago: AccountView; pixAvailable: boolean }> {
+  async view(storeId: string): Promise<{ mercadopago: AccountView; pixAvailable: boolean; pending: { pixPending: number; refundPending: number } }> {
     const account = await this.activeAccount(storeId);
+    // A tela de Pagamentos busca as contagens AQUI (chamada autenticada): a volta do OAuth leva só o código do motivo na URL.
+    const pending = account ? await this.pending(account.id) : { pixPending: 0, refundPending: 0 };
     const mercadopago: AccountView = account
       ? {
           status: account.status,
@@ -69,7 +85,7 @@ export class StorePaymentsService {
           expiresAt: account.expiresAt?.toISOString() ?? null,
         }
       : { status: "NOT_CONNECTED", sellerMasked: null, connectedAt: null, expiresAt: null };
-    return { mercadopago, pixAvailable: account?.status === "CONNECTED" };
+    return { mercadopago, pixAvailable: account?.status === "CONNECTED", pending };
   }
 
   /** O cardápio só oferece PIX com conta CONNECTED (decisão D1; condição de G3). */
@@ -146,9 +162,12 @@ export class StorePaymentsService {
             connectedAt: now,
           },
         });
-        if (previous && previous.sellerUserId === tokens.sellerUserId) {
-          await tx.payment.updateMany({ where: { paymentAccountId: previous.id }, data: { paymentAccountId: created.id } });
-        }
+        // O MESMO vendedor desta loja (conta ativa agora OU desconectada antes) volta a conferir os pagamentos que já criou:
+        // o token novo é dele. Outro vendedor nunca herda nada.
+        await tx.payment.updateMany({
+          where: { paymentAccount: { storeId: actor.storeId, provider: PROVIDER, sellerUserId: tokens.sellerUserId, id: { not: created.id } } },
+          data: { paymentAccountId: created.id },
+        });
         // Rastro ATÔMICO com a mudança: sem ele a conta não é gravada (nunca "conectou sem rastro"). Sem `sid` nem token.
         await tx.auditLog.create({
           data: { storeId: actor.storeId, userId: actor.userId, action: "payment_account.connect", targetType: "PaymentAccount", targetId: created.id, metadata: { seller: maskSeller(tokens.sellerUserId) } },
@@ -179,13 +198,8 @@ export class StorePaymentsService {
   private assertNoPending(counts: { pixPending: number; refundPending: number }) {
     const { pixPending, refundPending } = counts;
     if (pixPending === 0 && refundPending === 0) return;
-    const message =
-      refundPending > 0
-        ? "Há um estorno em andamento. Aguarde terminar para desconectar."
-        : pixPending === 1
-          ? "Há 1 PIX em andamento. Aguarde o pagamento ou cancele o pedido."
-          : `Há ${pixPending} PIX em andamento. Aguarde o pagamento ou cancele os pedidos.`;
-    throw new CodedError(409, "MP_HAS_PENDING_PAYMENTS", message, { details: { pixPending, refundPending } });
+    // Só código e contagens: o texto (plural, estorno primeiro, etc.) é da tela; o catálogo de mensagens é a fonte única.
+    throw new CodedError(409, "MP_HAS_PENDING_PAYMENTS", "Há pagamentos em andamento nesta conta.", { details: { pixPending, refundPending } });
   }
 
   // ───────────── desconectar ─────────────
@@ -225,8 +239,8 @@ export class StorePaymentsService {
    * NUNCA cai no token da plataforma.
    */
   async accessTokenFor(account: Pick<PaymentAccount, "id" | "storeId" | "accessTokenEnc" | "expiresAt">): Promise<string> {
-    if (!account.accessTokenEnc) throw new PixUnavailableError();
-    if (account.expiresAt && account.expiresAt <= this.clock.now()) throw new PixUnavailableError();
+    if (!account.accessTokenEnc) throw new NeedsReconnectError();
+    if (account.expiresAt && account.expiresAt <= this.clock.now()) throw new NeedsReconnectError();
     return decryptSecret(account.accessTokenEnc, this.ctx(account.storeId, "accessToken"));
   }
 
