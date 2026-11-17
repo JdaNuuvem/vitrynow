@@ -67,3 +67,66 @@ describe("Modal compartilhado: foco (checklist UX-07 item 2)", () => {
     expect(document.body.style.overflow).toBe("");
   });
 });
+
+// Defeito achado na revisão da WEB-05: o handler novo a cada render reiniciava o efeito do Modal.
+function TypingHarness() {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  return (
+    <div className="panel-root">
+      <aside>
+        <a href="#menu">Menu lateral</a>
+      </aside>
+      <main>
+        <button onClick={() => setOpen(true)}>Abrir</button>
+        {/* onClose é uma função NOVA a cada render, como em quase todos os chamadores reais */}
+        <Modal open={open} labelledBy="t" onClose={() => setOpen(false)}>
+          <h2 id="t">Título</h2>
+          <input aria-label="Nota" value={text} onChange={(event) => setText(event.target.value)} />
+          <button>Confirmar</button>
+        </Modal>
+      </main>
+    </div>
+  );
+}
+
+describe("Modal: estável com handler novo a cada render", () => {
+  it("digitar dentro da janela NÃO tira o foco do campo (antes o foco voltava ao painel a cada tecla)", async () => {
+    render(<TypingHarness />);
+    await userEvent.click(screen.getByRole("button", { name: "Abrir" }));
+    const input = screen.getByRole("textbox", { name: "Nota" });
+    await userEvent.click(input);
+    await userEvent.keyboard("abc");
+    expect(input).toHaveValue("abc");
+    expect(input).toHaveFocus();
+  });
+
+  it("Esc depois de interagir devolve o foco ao botão que abriu, não ao topo da página", async () => {
+    render(<TypingHarness />);
+    const trigger = screen.getByRole("button", { name: "Abrir" });
+    await userEvent.click(trigger);
+    await userEvent.type(screen.getByRole("textbox", { name: "Nota" }), "x");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+});
+
+describe("Modal: o fundo fica inerte enquanto aberto (revisão da WEB-05, B1)", () => {
+  it("menu lateral e conteúdo ficam inert; a janela não; ao fechar tudo volta", async () => {
+    const { container } = render(<TypingHarness />);
+    await userEvent.click(screen.getByRole("button", { name: "Abrir" }));
+    expect(container.querySelector("aside")).toHaveAttribute("inert");
+    expect(screen.getByRole("dialog")).not.toHaveAttribute("inert");
+    expect(screen.getByRole("dialog").closest("[inert]")).toBeNull();
+    await userEvent.keyboard("{Escape}");
+    expect(container.querySelector("aside")).not.toHaveAttribute("inert");
+  });
+
+  it("não deixa inert para trás se a janela fechar", async () => {
+    const { container } = render(<TypingHarness />);
+    await userEvent.click(screen.getByRole("button", { name: "Abrir" }));
+    await userEvent.keyboard("{Escape}");
+    expect(container.querySelectorAll("[inert]")).toHaveLength(0);
+  });
+});

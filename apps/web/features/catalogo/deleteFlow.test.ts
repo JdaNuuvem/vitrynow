@@ -57,9 +57,18 @@ describe("textos da exclusão", () => {
   it("categoria com produtos só informa, com singular e plural certos", () => {
     const one = categoryDeleteCopy({ id: "c", name: "Bebidas", icon: null, products: [product()] } as Category);
     expect(one.informOnly).toBe(true);
-    expect(one.message).toContain("1 produto.");
+    expect(one.message).toContain("1 produto, mesmo os ocultos.");
+    expect(one.message).toContain("Exclua o produto antes");
+    // só indica a saída que funciona hoje: nada de "mova"/"oculte", que não destravam a exclusão
+    expect(one.message).not.toMatch(/mova|oculte/i);
     const two = categoryDeleteCopy({ id: "c", name: "Bebidas", icon: null, products: [product(), product({ id: "p2" })] } as Category);
-    expect(two.message).toContain("2 produtos.");
+    expect(two.message).toContain("2 produtos, mesmo os ocultos.");
+  });
+
+  it("os dois textos de exclusão de produto avisam que pedidos antigos continuam com nome e preço", () => {
+    for (const active of [true, false]) {
+      expect(productDeleteCopy(product({ active })).message).toContain("Pedidos antigos continuam mostrando o nome e o preço.");
+    }
   });
 
   it("categoria vazia pede confirmação de exclusão", () => {

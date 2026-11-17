@@ -36,7 +36,7 @@ export function productDeleteCopy(product: Product): DeleteCopy {
     return {
       title: `Ocultar ou excluir ${product.name}?`,
       message:
-        "Ocultar tira o produto do cardápio, mas guarda tudo para você ativar de novo quando quiser. Excluir apaga o produto de vez e não dá para desfazer.",
+        "Ocultar tira o produto do cardápio, mas guarda tudo para você ativar de novo quando quiser. Excluir apaga o produto de vez e não dá para desfazer. Pedidos antigos continuam mostrando o nome e o preço.",
       confirmLabel: "Ocultar do cardápio",
       confirmTone: "primary",
       alternativeLabel: "Excluir de vez",
@@ -45,7 +45,7 @@ export function productDeleteCopy(product: Product): DeleteCopy {
   }
   return {
     title: `Excluir ${product.name}?`,
-    message: "Este produto já está oculto. Excluir apaga o produto de vez e não dá para desfazer.",
+    message: "Este produto já está oculto. Excluir apaga o produto de vez e não dá para desfazer. Pedidos antigos continuam mostrando o nome e o preço.",
     confirmLabel: "Excluir de vez",
     confirmTone: "danger",
     alternativeLabel: null,
@@ -58,7 +58,9 @@ export function categoryDeleteCopy(category: Category): DeleteCopy {
   if (count > 0) {
     return {
       title: `Não dá para excluir ${category.name}`,
-      message: `Esta categoria ainda tem ${count} ${count === 1 ? "produto" : "produtos"}. Exclua ou mova ${count === 1 ? "o produto" : "os produtos"} antes de excluir a categoria.`,
+      // O servidor conta TODOS os produtos, inclusive os ocultos, e hoje não há como mover produto de categoria
+      // na tela: a única saída que funciona é excluir os produtos. "Mover para…" entra na página 3.
+      message: `Esta categoria ainda tem ${count} ${count === 1 ? "produto" : "produtos"}, mesmo os ocultos. Exclua ${count === 1 ? "o produto" : "os produtos"} antes de excluir a categoria.`,
       confirmLabel: "Entendi",
       confirmTone: "primary",
       alternativeLabel: null,

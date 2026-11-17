@@ -24,6 +24,12 @@ type ModalProps = {
 
 export function Modal({ open, onClose, labelledBy, width = 480, sheetOnMobile = false, closeOnScrim = true, children }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  // Quem chama costuma passar uma função NOVA a cada render. Se o efeito dependesse dela, cada re-render
+  // do conteúdo (escolher uma opção, digitar) reiniciaria o efeito: devolveria o foco ao gatilho e o
+  // puxaria de volta ao painel, e o gatilho guardado passaria a ser o próprio painel (Esc "perdia" o foco).
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) return;
@@ -31,10 +37,23 @@ export function Modal({ open, onClose, labelledBy, width = 480, sheetOnMobile = 
     const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    // O resto da página fica inerte enquanto a janela está aberta (nem Tab nem leitor de tela chegam lá).
+    const inerted: Element[] = [];
+    let node: Element | null = rootRef.current;
+    while (node?.parentElement) {
+      for (const sibling of Array.from(node.parentElement.children)) {
+        if (sibling !== node && !sibling.hasAttribute("inert")) {
+          sibling.setAttribute("inert", "");
+          inerted.push(sibling);
+        }
+      }
+      if (node.parentElement === document.body || node.parentElement.classList.contains("panel-root")) break;
+      node = node.parentElement;
+    }
     panelRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== "Tab") return;
@@ -59,15 +78,16 @@ export function Modal({ open, onClose, labelledBy, width = 480, sheetOnMobile = 
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.body.style.overflow = previousOverflow;
+      inerted.forEach((element) => element.removeAttribute("inert"));
       document.removeEventListener("keydown", onKeyDown);
       if (trigger && document.contains(trigger)) trigger.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
   return (
-    <div className={`ui-modal${sheetOnMobile ? " ui-modal--sheet" : ""}`}>
+    <div ref={rootRef} className={`ui-modal${sheetOnMobile ? " ui-modal--sheet" : ""}`}>
       <div className="ui-modal__scrim" onClick={closeOnScrim ? onClose : undefined} />
       <div
         ref={panelRef}
