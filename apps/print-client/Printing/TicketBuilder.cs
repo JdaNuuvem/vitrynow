@@ -46,7 +46,7 @@ namespace MeuCardapio.PrintClient.Printing
             bool anyCustomer = false;
             if (!string.IsNullOrWhiteSpace(order.CustomerName)) { doc.Text("Cliente: " + S(order.CustomerName)); anyCustomer = true; }
             if (!string.IsNullOrWhiteSpace(order.CustomerPhone)) { doc.Text("Telefone: " + S(order.CustomerPhone)); anyCustomer = true; }
-            if (!string.IsNullOrWhiteSpace(order.Address)) { doc.Text("Endereço: " + S(order.Address)); anyCustomer = true; }
+            if (!string.IsNullOrWhiteSpace(order.Address)) { doc.Text("Endereço: " + S(order.Address)); CutWarning(doc, order.Address, "endereço cortado"); anyCustomer = true; }
             if (anyCustomer) doc.Rule();
 
             // 3) itens: valor da LINHA (unitário + adicionais) x quantidade; adicional mostra o extra por unidade
@@ -66,6 +66,7 @@ namespace MeuCardapio.PrintClient.Printing
                 // Linha do item = produto x qtd; cada adicional = extra x qtd, com "(Nx)" escrito. Assim a coluna
                 // de valores soma exatamente o subtotal (parecer funcional do Leonardo).
                 doc.Pair(item.Quantity + "x " + S(item.ProductName), Money((long)item.UnitPriceCents * item.Quantity));
+                CutWarning(doc, item.ProductName, "nome do item cortado");
                 int shownAdds = 0, hiddenAdds = 0; long hiddenAddSum = 0;
                 foreach (var add in item.Additionals ?? new List<PrintableOrderAdditional>())
                 {
@@ -76,7 +77,10 @@ namespace MeuCardapio.PrintClient.Printing
                 }
                 if (hiddenAdds > 0) doc.Pair("  + mais " + hiddenAdds + " adicionais", "+" + Money(hiddenAddSum), scale: 0.85f);
                 if (!string.IsNullOrWhiteSpace(item.Notes))
+                {
                     doc.Text("  obs: " + S(item.Notes), italic: true, scale: 0.85f);
+                    CutWarning(doc, item.Notes, "observação cortada");
+                }
             }
             if (hiddenItems > 0) doc.Pair("... e mais " + hiddenItems + " itens (ver no painel)", Money(hiddenSum), bold: true);
 
@@ -85,6 +89,7 @@ namespace MeuCardapio.PrintClient.Printing
             {
                 doc.Rule();
                 doc.Text("OBS: " + S(order.Notes), bold: true);
+                CutWarning(doc, order.Notes, "observação cortada");
             }
             doc.Rule();
 
@@ -142,7 +147,7 @@ namespace MeuCardapio.PrintClient.Printing
             string method = (o.PaymentMethod ?? "").Trim().ToUpperInvariant();
             string total = Money(o.TotalCents);
 
-            // Fail-safe: "NÃO COBRAR" só com PROVA de pagamento online (paymentStatus APROVADO). PIX sem prova
+            // Fail-safe: "NÃO COBRAR" só com PROVA de pagamento online (paymentStatus = PAGO, ADR-0004 §6; o antigo "APROVADO" NÃO vale: não reverta esta regra, ela evita deixar de cobrar um pedido não pago). PIX sem prova
             // (ex.: pedido manual com PIX presencial) manda conferir na hora, nunca deixa de cobrar por engano.
             if (method == "PIX")
             {
@@ -173,6 +178,14 @@ namespace MeuCardapio.PrintClient.Printing
                     break;
             }
             return lines;
+        }
+
+        // Segurança alimentar (parecer Nightingale N1): se o texto foi cortado no teto, o papel AVISA em linha própria.
+        // Observação de alergia/restrição não pode sumir em silêncio.
+        static void CutWarning(TicketDocument doc, string raw, string what)
+        {
+            if (TicketText.PrintSafe(raw).Length > TicketText.MaxFieldChars)
+                doc.Text("(" + what + " — ver no painel)", bold: true, scale: 0.9f);
         }
 
         // Texto do servidor no papel: sanitizado, sem emoji e com teto (PC-15): uma observação de 100 mil caracteres

@@ -24,7 +24,7 @@ namespace MeuCardapio.PrintClient
     internal sealed class FakeApi : IDisposable
     {
         public readonly int Port;
-        readonly HttpListener _l = new HttpListener();
+        HttpListener _l;
         readonly Thread _t;
         public readonly object Lock = new object();
         public readonly List<string> Requests = new List<string>();
@@ -39,6 +39,8 @@ namespace MeuCardapio.PrintClient
         public string WsMode = "status";                           // "status" (responde WsStatus) | "accept" | "close4401"
         readonly List<WebSocket> _sockets = new List<WebSocket>();
         int _pendingCalls, _ackCalls;
+        // Consulta segura: o servidor falso grava em Requests em outra thread; enumerar sem travar lanca "colecao modificada".
+        public bool Has(Func<string, bool> predicate) { lock (Lock) return Requests.Any(predicate); }
         public int Count(string needle) { lock (Lock) return Requests.Count(r => r.Contains(needle)); }
         public int AckCalls { get { lock (Lock) return _ackCalls; } }
         public int PendingCalls { get { lock (Lock) return _pendingCalls; } }
@@ -46,15 +48,22 @@ namespace MeuCardapio.PrintClient
 
         public FakeApi()
         {
-            var rnd = new Random(); int p = 0; bool ok = false;
-            // A maquina divide portas com outras suites rodando ao mesmo tempo: tenta bastante antes de desistir.
+            var rnd = new Random(); int p = 0; bool ok = false; string last = "";
+            // A maquina divide portas com outras suites rodando ao mesmo tempo. Um HttpListener que falhou no Start fica
+            // inutilizavel: cada tentativa usa um NOVO (reusar o mesmo fazia uma colisao derrubar as 299 seguintes).
             for (int i = 0; i < 300 && !ok; i++)
             {
                 if (i > 0 && i % 50 == 0) Thread.Sleep(100);
                 p = 20000 + rnd.Next(30000);
-                try { _l.Prefixes.Clear(); _l.Prefixes.Add("http://127.0.0.1:" + p + "/"); _l.Start(); ok = true; } catch { }
+                var candidate = new HttpListener();
+                try { candidate.Prefixes.Add("http://127.0.0.1:" + p + "/"); candidate.Start(); _l = candidate; ok = true; }
+                catch (Exception ex)
+                {
+                    try { candidate.Close(); } catch { }
+                    last = ex.GetType().Name + (ex is System.ComponentModel.Win32Exception ? " (" + ((System.ComponentModel.Win32Exception)ex).NativeErrorCode + ")" : "") + ": " + ex.Message;
+                }
             }
-            if (!ok) throw new InvalidOperationException("sem porta livre");
+            if (!ok) throw new InvalidOperationException("sem porta livre; ultimo erro do HttpListener: " + last);
             Port = p;
             _t = new Thread(Loop) { IsBackground = true };
             _t.Start();

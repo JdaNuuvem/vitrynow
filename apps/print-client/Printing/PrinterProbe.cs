@@ -23,11 +23,21 @@ namespace MeuCardapio.PrintClient.Printing
 
         // Roda `probe` em outra thread e desiste depois de `timeoutMs` (devolve null = desconhecido, não bloqueia).
         // A consulta presa continua em segundo plano até o WMI soltar, sem segurar a impressão.
+        // VOO ÚNICO (parecer Nightingale N2): se uma consulta anterior ainda está presa, não cria outra tarefa
+        // (senão uma impressora travada acumularia consultas penduradas); devolve "desconhecido" na hora.
+        static readonly object Gate = new object();
+        static Task<string> _inFlight;
+
         public static string WithTimeout(Func<string> probe, int timeoutMs)
         {
             try
             {
-                var task = Task.Run(probe);
+                Task<string> task;
+                lock (Gate)
+                {
+                    if (_inFlight != null && !_inFlight.IsCompleted) return null;
+                    task = _inFlight = Task.Run(probe);
+                }
                 return task.Wait(timeoutMs) ? task.Result : null;
             }
             catch { return null; }

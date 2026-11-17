@@ -126,6 +126,12 @@ com o Windows (`/autostart`) e desinstalador. Requer o [Inno Setup 6](https://jr
 & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" .\installer.iss   # gera bin\Installer\MeuCardapio-PrintClient-Setup.exe
 ```
 
+### Ao desinstalar ou trocar de computador
+
+A desinstalação **não apaga** `%LOCALAPPDATA%\MeuCardapioPrintClient` (a chave de impressora protegida, o registro de impressos e os logs ficam). Quem sai de um computador deve,
+**no painel, usar "Substituir impressora"** (Impressoras): ela revoga a chave antiga (a esquecida no disco deixa de valer) e emite a nova para o computador novo, em um passo só e sem passar do
+limite de impressoras do plano. Depois cole a chave nova em "Configurar chave..." no computador novo. Para apagar os dados locais do computador antigo, exclua essa pasta depois de desinstalar.
+
 ### Guia de instalação para um lojista novo
 
 1. Baixe e rode `MeuCardapio-PrintClient-Setup.exe` no PC do balcão/cozinha.
@@ -171,13 +177,17 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 
 ## Limites e defesas no papel (PC-15)
 
+- **Corte nunca é silencioso (segurança alimentar):** quando uma observação (do pedido ou do item), o endereço ou o nome de um item passa de 300 caracteres, o papel imprime em
+  negrito, logo depois, `(observação cortada — ver no painel)` (ou `endereço cortado` / `nome do item cortado`); os itens escondidos saem como `... e mais N itens (ver no painel)`.
+  O começo do texto (onde costuma estar "ALERGIA A ...") continua impresso.
+
 - **Teto de tamanho:** nome, endereço, observação e demais textos do servidor saem com no máximo **300 caracteres** + "…" (sem partir emoji nem letra com acento);
   no máximo **80 itens** e **12 adicionais por item** no papel. O que passa disso vira uma linha "... e mais N itens (ver no painel)" / "+ mais N adicionais" **com o valor somado**,
   então a coluna continua somando o subtotal e o TOTAL fica certo. Texto de megabytes não é varrido inteiro.
 - **Sanitização extra:** saem U+061C, U+2060, U+180E, U+034F, U+FFF9-FFFC, uso privado (U+E000-F8FF e planos 15/16) e substitutos soltos; no máximo 2 marcas combinantes por letra ("zalgo").
   Teste de propriedade com 3 000 textos aleatórios (seed fixa): saída sem caractere proibido, `Sanitize` idempotente, sem exceção.
 - **Consulta WMI da impressora:** timeout de 3 s na enumeração e teto de 5 s no total (acima disso vale "desconhecido" e a impressão segue), cada objeto liberado.
-  Imprimir e consultar rodam **fora da thread da interface** e uma impressão por vez (tíquetes nunca se misturam).
+  A consulta é de **voo único**: se uma está presa, a próxima volta "desconhecido" na hora, sem criar outra tarefa. Imprimir e consultar rodam **fora da thread da interface** e uma impressão por vez (tíquetes nunca se misturam).
 
 ## Confiabilidade e segredos (PC-02)
 

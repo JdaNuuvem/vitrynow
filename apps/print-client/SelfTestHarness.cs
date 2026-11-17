@@ -112,7 +112,7 @@ namespace MeuCardapio.PrintClient
                 using (var rig = new Rig(NewApi(order), new VirtualPrintTarget(Path.Combine(dir, "out")), null, true, 80))
                 {
                     rig.Start();
-                    bool done = WaitFor(() => rig.Printer.Printed.Count == 1 && rig.Api.Pending.Count == 0 && rig.Ledger.PendingAcks().Count == 0, 8000);
+                    bool done = WaitFor(() => rig.Printer.Printed.Count == 1 && rig.Api.Pending.Count == 0 && rig.Ledger.PendingAcks().Count == 0, 20000);
                     Thread.Sleep(400);
                     Check("harness ok: 1 pedido => 1 tiquete e a API recebeu o aviso (fila vazia)", done && rig.Printer.Printed.Count == 1);
                     Check("harness ok: o tiquete impresso e exatamente o esperado (58 mm)", done && Read(rig.Printer.Printed) == Expected(order));
@@ -133,14 +133,14 @@ namespace MeuCardapio.PrintClient
                 using (var rig = new Rig(NewApi(order), printer, null, true, 60))
                 {
                     rig.Start();
-                    bool flagged = WaitFor(() => rig.Problem(0) == "#2002", 8000);
+                    bool flagged = WaitFor(() => rig.Problem(0) == "#2002", 20000);
                     Thread.Sleep(500);
                     Check("harness offline: avisa 'sem imprimir' com o numero do pedido, 1 vez so", flagged && rig.ProblemCount == 1 && printer.Printed.Count == 0);
                     Check("harness offline: mensagem fala em offline", rig.HasMessage("offline"));
                     Check("harness offline: recuo impede nova tentativa imediata (pedido continua na API)", rig.Api.Pending.Count == 1);
                     printer.Fault = VirtualFault.None;
                     rig.Now = rig.Now.AddSeconds(20); // passou o recuo de 15 s
-                    bool printed = WaitFor(() => printer.Printed.Count == 1 && rig.Api.Pending.Count == 0, 8000);
+                    bool printed = WaitFor(() => printer.Printed.Count == 1 && rig.Api.Pending.Count == 0, 20000);
                     Thread.Sleep(400);
                     Check("harness offline: impressora voltou => imprime e fecha, 1 tiquete so", printed && printer.Printed.Count == 1);
                     Check("harness offline: o indicador some quando imprime", WaitFor(() => rig.Problem(rig.ProblemCount - 1) == "", 3000));
@@ -161,10 +161,10 @@ namespace MeuCardapio.PrintClient
                 using (var rig = new Rig(NewApi(order), printer, null, true, 60))
                 {
                     rig.Start();
-                    bool flagged = WaitFor(() => rig.Problem(0) == "#3003", 8000);
+                    bool flagged = WaitFor(() => rig.Problem(0) == "#3003", 20000);
                     Check("harness sem papel: avisa e a mensagem fala em papel", flagged && rig.HasMessage("sem papel") && printer.Printed.Count == 0);
                     printer.Fault = VirtualFault.None; rig.Now = rig.Now.AddSeconds(20);
-                    Check("harness sem papel: papel reposto => imprime", WaitFor(() => printer.Printed.Count == 1, 8000));
+                    Check("harness sem papel: papel reposto => imprime", WaitFor(() => printer.Printed.Count == 1, 20000));
                 }
             }
             finally { Clean(dir); }
@@ -181,11 +181,11 @@ namespace MeuCardapio.PrintClient
                 using (var rig = new Rig(NewApi(order), printer, null, true, 60))
                 {
                     rig.Start();
-                    bool flagged = WaitFor(() => rig.Problem(0) == "#4004" && printer.Partials.Count == 1, 8000);
+                    bool flagged = WaitFor(() => rig.Problem(0) == "#4004" && printer.Partials.Count == 1, 20000);
                     Check("harness queda no meio: deixa 1 pedaco parcial e NAO conta como impresso", flagged && printer.Printed.Count == 0 && !rig.Ledger.IsPrinted("D"));
                     Check("harness queda no meio: o pedaco tem so o comeco do tiquete", Lines(Read(printer.Partials)).Length == 5);
                     printer.Fault = VirtualFault.None; rig.Now = rig.Now.AddSeconds(20);
-                    bool printed = WaitFor(() => printer.Printed.Count == 1 && rig.Api.Pending.Count == 0, 8000);
+                    bool printed = WaitFor(() => printer.Printed.Count == 1 && rig.Api.Pending.Count == 0, 20000);
                     Thread.Sleep(300);
                     Check("harness queda no meio: reimprime o tiquete COMPLETO uma vez (o pedaco parcial fica no papel: avisar a cozinha)", printed && printer.Printed.Count == 1 && printer.Partials.Count == 1
                         && Read(printer.Printed) == Expected(order));
@@ -207,10 +207,10 @@ namespace MeuCardapio.PrintClient
                 using (var rig = new Rig(api, printer, null, true, 40))
                 {
                     rig.Start();
-                    WaitFor(() => api.OpenSockets == 1, 8000);
+                    WaitFor(() => api.OpenSockets == 1, 20000);
                     for (int i = 0; i < 25; i++) { api.SendWs("{\"type\":\"print.available\"}"); Thread.Sleep(20); }
                     Thread.Sleep(600);
-                    Check("harness polling+WS: conectou por WebSocket de verdade", api.Requests.Any(r => r.Contains("/ws/device")));
+                    Check("harness polling+WS: conectou por WebSocket de verdade", api.Has(r => r.Contains("/ws/device")));
                     Check("harness polling+WS: 25 avisos + polling a cada 40 ms com o pedido ainda listado => 1 so tiquete", printer.Printed.Count == 1);
                     Check("harness polling+WS: ack feito e sem duplicidade no ledger", rig.Ledger.IsPrinted("E") && rig.Ledger.PendingAcks().Count == 0);
                 }
@@ -232,7 +232,7 @@ namespace MeuCardapio.PrintClient
                 using (var rig1 = new Rig(api, printer, ledgerPath, false, 60))
                 {
                     rig1.Start();
-                    bool printed = WaitFor(() => printer.Printed.Count == 1 && rig1.Ledger.PendingAcks().Contains("F"), 8000);
+                    bool printed = WaitFor(() => printer.Printed.Count == 1 && rig1.Ledger.PendingAcks().Contains("F"), 20000);
                     Check("harness reinicio: imprimiu e o aviso a API falhou (ficou pendente em disco)", printed && api.Pending.Count == 1);
                 }
                 Thread.Sleep(200);
@@ -240,7 +240,7 @@ namespace MeuCardapio.PrintClient
                 using (var rig2 = new Rig(api, printer, ledgerPath, false, 60))
                 {
                     rig2.Start();
-                    bool acked = WaitFor(() => api.Pending.Count == 0 && rig2.Ledger.PendingAcks().Count == 0, 8000);
+                    bool acked = WaitFor(() => api.Pending.Count == 0 && rig2.Ledger.PendingAcks().Count == 0, 20000);
                     Thread.Sleep(400);
                     Check("harness reinicio: reabriu, enviou o aviso pendente e NAO reimprimiu", acked && printer.Printed.Count == 1);
                 }
@@ -262,7 +262,7 @@ namespace MeuCardapio.PrintClient
                 using (var rig = new Rig(api, printer, null, true, 50))
                 {
                     rig.Start();
-                    bool printed = WaitFor(() => printer.Printed.Count == 1 && api.Pending.Count == 0, 10000);
+                    bool printed = WaitFor(() => printer.Printed.Count == 1 && api.Pending.Count == 0, 25000);
                     Thread.Sleep(300);
                     Check("harness API fora do ar: 6 respostas 503 seguidas, depois imprime 1 vez", printed && printer.Printed.Count == 1 && api.PendingCalls > 6);
                     Check("harness API fora do ar: nao confunde com chave revogada", !rig.Device.IsRevoked);
@@ -283,9 +283,9 @@ namespace MeuCardapio.PrintClient
                 using (var rig = new Rig(api, printer, null, true, 60))
                 {
                     rig.Start();
-                    WaitFor(() => rig.Problem(0) == "#8008", 8000);
+                    WaitFor(() => rig.Problem(0) == "#8008", 20000);
                     lock (api.Lock) api.Pending.Clear();                 // a loja cancelou o pedido
-                    bool cleared = WaitFor(() => rig.Problem(rig.ProblemCount - 1) == "", 8000);
+                    bool cleared = WaitFor(() => rig.Problem(rig.ProblemCount - 1) == "", 20000);
                     printer.Fault = VirtualFault.None; rig.Now = rig.Now.AddMinutes(10);
                     Thread.Sleep(500);
                     Check("harness cancelado: indicador some e nada e impresso depois", cleared && printer.Printed.Count == 0);
@@ -304,7 +304,7 @@ namespace MeuCardapio.PrintClient
                 using (var rig = new Rig(NewApi(order), new VirtualPrintTarget(Path.Combine(dir, "out")), null, true, 60, 80))
                 {
                     rig.Start();
-                    bool done = WaitFor(() => rig.Printer.Printed.Count == 1, 8000);
+                    bool done = WaitFor(() => rig.Printer.Printed.Count == 1, 20000);
                     Check("harness 80 mm: tiquete montado em 48 colunas", done && Read(rig.Printer.Printed) == Expected(order, 80)
                         && Lines(Read(rig.Printer.Printed)).Any(l => l.Length > 32));
                 }

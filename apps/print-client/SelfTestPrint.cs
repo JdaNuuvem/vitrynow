@@ -313,6 +313,28 @@ namespace MeuCardapio.PrintClient
             Check("teto: nome, endereco e observacao de 100 000 caracteres saem com 300 + reticencias", bd.Lines.All(l => l.Text.Length <= TicketText.MaxFieldChars + 20));
             Check("teto: tiquete com campos gigantes continua pequeno no papel (58 mm: < 120 linhas)", TextTicketWriter.Render(bd, 32).Count < 120);
 
+            // N1 (seguranca alimentar): cortar texto NUNCA e silencioso
+            Func<PrintableOrder, TicketDocument> bd2 = o => Build(o);
+            var allergy = Basic(); allergy.Notes = "ALERGIA A AMENDOIM " + new string('x', 400);
+            var ad = bd2(allergy);
+            int oi = ad.Lines.FindIndex(l => l.Text.StartsWith("OBS: ALERGIA"));
+            Check("N1: observacao do pedido cortada => linha propria '(observação cortada — ver no painel)' logo depois, em negrito",
+                oi >= 0 && ad.Lines[oi].Text.EndsWith(C(0x2026)) && ad.Lines[oi + 1].Text == "(observação cortada — ver no painel)" && ad.Lines[oi + 1].Bold);
+            Check("N1: a alergia (o comeco da observacao) continua impressa", ad.Lines[oi].Text.Contains("ALERGIA A AMENDOIM"));
+            var exact = Basic(); exact.Notes = new string('y', 300);
+            Check("N1: observacao com exatamente 300 caracteres NAO tem aviso (nao foi cortada)", !bd2(exact).Lines.Any(l => l.Text.Contains("cortada")));
+            var over = Basic(); over.Notes = new string('y', 301);
+            Check("N1: observacao com 301 caracteres tem aviso", bd2(over).Lines.Any(l => l.Text == "(observação cortada — ver no painel)"));
+            var itemCut = Basic(); itemCut.Items[0].Notes = "sem gluten " + new string('z', 400);
+            var icd = bd2(itemCut);
+            int ii = icd.Lines.FindIndex(l => l.Text.StartsWith("  obs: sem gluten"));
+            Check("N1: observacao do ITEM cortada => aviso logo depois do item", ii >= 0 && icd.Lines[ii + 1].Text == "(observação cortada — ver no painel)");
+            var addrCut = Basic(); addrCut.Address = new string('a', 500);
+            Check("N1: endereco cortado => aviso (entregador nao pode ir a um endereco incompleto sem saber)", bd2(addrCut).Lines.Any(l => l.Text == "(endereço cortado — ver no painel)"));
+            var nameCut = Basic(); nameCut.Items[1].ProductName = new string('n', 400);
+            Check("N1: nome de item cortado => aviso", bd2(nameCut).Lines.Any(l => l.Text == "(nome do item cortado — ver no painel)"));
+            Check("N1: pedido normal nao tem nenhum aviso de corte", !bd2(Basic()).Lines.Any(l => l.Text.Contains("cortad")));
+
             // 500 itens, 40 adicionais no primeiro: papel limitado, subtotal e TOTAL corretos, coluna ainda soma
             var many = new List<PrintableOrderItem>();
             long expected = 0;
@@ -371,6 +393,14 @@ namespace MeuCardapio.PrintClient
             var slow = PrinterProbe.WithTimeout(() => { System.Threading.Thread.Sleep(3000); return "A impressora esta offline"; }, 200);
             sw.Stop();
             Check("WMI: consulta lenta desiste no timeout (devolve 'desconhecido', nao bloqueia a cozinha)", slow == null && sw.ElapsedMilliseconds < 2500);
+            // voo unico (N2): com a consulta anterior ainda presa, a proxima NAO cria tarefa e devolve 'desconhecido' na hora
+            int started = 0;
+            sw.Restart();
+            var second = PrinterProbe.WithTimeout(() => { System.Threading.Interlocked.Increment(ref started); return "outra"; }, 1000);
+            sw.Stop();
+            Check("WMI voo unico: com uma consulta presa, a seguinte nao cria tarefa (nao e executada) e volta na hora", second == null && started == 0 && sw.ElapsedMilliseconds < 500);
+            System.Threading.Thread.Sleep(3200); // a consulta lenta termina e libera o voo
+            Check("WMI voo unico: terminada a presa, a proxima consulta roda normalmente", PrinterProbe.WithTimeout(() => "livre", 1000) == "livre");
             Check("WMI: consulta rapida devolve o motivo; excecao vira 'desconhecido'", PrinterProbe.WithTimeout(() => "sem papel", 1000) == "sem papel" && PrinterProbe.WithTimeout(() => { throw new InvalidOperationException("x"); }, 1000) == null);
             Check("WMI: tetos configurados (enumeracao 3 s, total 5 s)", PrinterProbe.EnumerationTimeoutMs == 3000 && PrinterProbe.TotalTimeoutMs == 5000);
 
