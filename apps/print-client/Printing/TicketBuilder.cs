@@ -119,6 +119,9 @@ namespace MeuCardapio.PrintClient.Printing
             return doc;
         }
 
+        // Relogio do tiquete de teste (so o selftest troca, para o golden ter hora fixa).
+        internal static Func<DateTime> Clock = () => DateTime.UtcNow;
+
         // Tíquete de teste (job TEST, RN-B4-07): confirma que a impressora responde e que acento, R$ e a régua de colunas saem
         // certos. Sem pedido, itens, valores nem dados de cliente.
         public static TicketDocument BuildTest(PrintableOrder order, int paperMm, TimeZoneInfo timeZone)
@@ -136,7 +139,7 @@ namespace MeuCardapio.PrintClient.Printing
             for (int c = 1; c <= cols; c++) ruler.Append(c % 10 == 0 ? (char)('0' + (c / 10) % 10) : '.');
             doc.Text(ruler.ToString());
             doc.Text("Bobina de " + paperMm + " mm: " + cols + " colunas", TicketAlign.Center, scale: 0.85f);
-            var when = FormatDate(DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture), timeZone);
+            var when = FormatDate(Clock().ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture), timeZone);
             if (when.Length > 0) doc.Text(when, TicketAlign.Center, scale: 0.85f);
             doc.Rule();
             return doc;
@@ -172,6 +175,10 @@ namespace MeuCardapio.PrintClient.Printing
             string method = (o.PaymentMethod ?? "").Trim().ToUpperInvariant();
             string total = Money(o.TotalCents);
 
+            // Total zero (cupom que cobre o pedido inteiro; B4.2, RN-CP-12, CA-CP-07/18): a decisao e pelo TOTAL, qualquer paymentStatus
+            // ou forma de pagamento, e vale tambem na 2a via. Nao imprime "COBRAR R$ 0,00" nem "PIX - CONFERIR NA HORA".
+            if (IsNothingToCharge(o)) { lines.Add("SEM COBRANÇA: NADA A COBRAR"); return lines; }
+
             // Fail-safe: "NÃO COBRAR" só com PROVA de pagamento online (paymentStatus = PAGO, ADR-0004 §6; o antigo "APROVADO" NÃO vale: não reverta esta regra, ela evita deixar de cobrar um pedido não pago). PIX sem prova
             // (ex.: pedido manual com PIX presencial) manda conferir na hora, nunca deixa de cobrar por engano.
             if (method == "PIX")
@@ -203,6 +210,37 @@ namespace MeuCardapio.PrintClient.Printing
                     break;
             }
             return lines;
+        }
+
+        // "Nada a cobrar" so quando a ARITMETICA fecha (parecer Nightingale, condicao do PC-19): total PRESENTE e igual a zero,
+        // o desconto cobre EXATAMENTE o valor dos itens (o cupom so desconta itens), sem taxa de entrega nem gorjeta, e o subtotal
+        // informado (se vier) bate com a soma dos itens. Qualquer divergencia (desconto menor ou maior que os itens, subtotal que nao
+        // bate, taxa, total ausente) cai no fluxo normal, que COBRA. Desconto ausente conta como zero: sem prova, nao e "de graca".
+        static bool IsNothingToCharge(PrintableOrder o)
+        {
+            if (!o.HasTotalCents || o.TotalCents != 0) return false;
+            long items = ItemsValue(o);
+            long discount = o.DiscountCents ?? 0;
+            if (o.SubtotalCents.HasValue && o.SubtotalCents.Value != items) return false;
+            return discount == items && o.DeliveryFeeCents == 0 && o.TipCents == 0;
+        }
+
+        static long ItemsValue(PrintableOrder o)
+        {
+            long total = 0;
+            foreach (var item in o.Items ?? new List<PrintableOrderItem>())
+            {
+                long extras = 0;
+                foreach (var add in item.Additionals ?? new List<PrintableOrderAdditional>()) extras += add.PriceCents;
+                total += ((long)item.UnitPriceCents + extras) * item.Quantity;
+            }
+            return total;
+        }
+
+        // Tiquete SEM itens e total zero: imprime "SEM COBRANCA" (nada a entregar), mas e malformado e o chamador registra um aviso no log.
+        public static bool IsEmptyZeroTicket(PrintableOrder o)
+        {
+            return o != null && !o.IsTest && o.CancelNotice != true && IsNothingToCharge(o) && ItemsValue(o) == 0;
         }
 
         // Segurança alimentar (parecer Nightingale N1): se o texto foi cortado no teto, o papel AVISA em linha própria.
