@@ -1,6 +1,6 @@
-// QA-23 — critérios CA-CP-01..11 e 13 do Leonardo (leonardo/regras-cupom-e-total-zero.md): FUNC-01 (limite de uso sob corrida),
-// FUNC-02 (cadastro e pedido de total zero) e FUNC-04 (teto do STAFF). Sondas do Deming (QA); todos os casos são it() porque as
-// correções estão na branch. O Mercado Pago é sempre simulado.
+// QA-23 — critérios CA-CP-01..14 do Leonardo/Atlas (leonardo/regras-cupom-e-total-zero.md): FUNC-01 (limite de uso sob corrida),
+// FUNC-02 (cadastro e pedido de total zero) e FUNC-04 (teto do STAFF e desativar). Sondas do Deming (QA); todos os casos são it()
+// porque as correções estão na branch. O Mercado Pago é sempre simulado.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { makeApp, registerStore, resetDb } from "../helpers";
@@ -120,6 +120,22 @@ describe("QA cupom: limite de uso, cadastro e pedido de total zero (CA-CP)", () 
     expect((await cupom(l, { code: "DONO99", discountType: "PERCENT", discountValue: 99 })).statusCode).toBe(201);
   });
 
+  it("CA-CP-14 (Atlas) STAFF DESATIVA (active=false) cupom do dono acima do teto ⇒ 200; REATIVAR ⇒ 403; desativar e mudar outro campo no mesmo pedido ⇒ 403", async () => {
+    const l = await loja();
+    await prisma.subscription.updateMany({ where: { storeId: l.store.id }, data: { planId: "plan_pro", status: "ACTIVE", currentPeriodEnd: new Date(Date.now() + 30 * 86400000) } });
+    await app.inject({ method: "POST", url: "/api/users", headers: { cookie: l.owner }, payload: { email: "staff-cupom2@teste.com", password: "senha-staff-12345" } });
+    const lg = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "staff-cupom2@teste.com", password: "senha-staff-12345" } });
+    const staff = (lg.headers["set-cookie"] as string).split(";")[0];
+    const grande = json(await cupom(l, { code: "GRANDE", discountType: "PERCENT", discountValue: 90, maxUses: 1000 })).coupon.id as string;
+    const patch = (body: Record<string, unknown>) => app.inject({ method: "POST", url: `/api/coupons/${grande}`, headers: { cookie: staff }, payload: body });
+    expect((await patch({ active: false })).statusCode, "STAFF desativa cupom perigoso").toBe(200);
+    expect((await patch({ active: true })).statusCode, "STAFF reativa cupom acima do teto").toBe(403);
+    expect((await patch({ active: false, discountValue: 10 })).statusCode, "desativar + editar outro campo").toBe(403);
+    expect((await patch({ active: false, expiresAt: new Date(Date.now() + 86_400_000).toISOString() })).statusCode, "desativar + validade (Nightingale)").toBe(403);
+    expect((await patch({ active: false })).statusCode, "desativar cupom já inativo é idempotente").toBe(200);
+    expect((await prisma.coupon.findUniqueOrThrow({ where: { id: grande } })).active).toBe(false);
+  });
+
   // ───── FUNC-02: total zero ─────
   it("CA-CP-05 retirada com cupom 100% (total 0): nenhuma cobrança no provedor, sem awaitingPayment e sem QR mesmo com paymentMethod=PIX", async () => {
     const l = await loja();
@@ -132,7 +148,8 @@ describe("QA cupom: limite de uso, cadastro e pedido de total zero (CA-CP)", () 
     expect(o.awaitingPayment).toBe(false);
     expect(o.payment).toBeNull();
     expect(o.paymentMethod, "forma informada é ignorada (RN-CP-11)").toBeNull();
-    expect(JSON.stringify(json(r))).not.toMatch(/qr|pix/i);
+    // só as CHAVES da resposta: o token do pedido (NG-16) é aleatório e pode conter "qr"/"pix" por acaso
+    expect(Object.keys(json(r)).filter((k) => /qr|pix/i.test(k)), "a resposta de total zero não traz QR nem PIX").toEqual([]);
   });
 
   it("CA-CP-06 entrega com taxa R$ 6,00 e cupom 100%: total R$ 6,00 (cupom não desconta a taxa) e o PIX de R$ 6,00 é criado normalmente", async () => {

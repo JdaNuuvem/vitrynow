@@ -263,6 +263,21 @@ describe("FUNC-01/02 — cupom e total zero", () => {
     const mistura = await asStaff(`/api/coupons/${donoId}`, { active: false, discountValue: 10 });
     expect([mistura.statusCode, json(mistura).code]).toEqual([403, "FORBIDDEN_ROLE"]);
     expect((await prisma.coupon.findUniqueOrThrow({ where: { id: donoId } })).discountValue).toBe(99);
+    // a exceção é estreita: a chave `active` SOZINHA; `active:false` com validade (ou qualquer outro campo) ⇒ 403
+    const comValidade = await asStaff(`/api/coupons/${donoId}`, { active: false, expiresAt: "2099-01-01" });
+    expect([comValidade.statusCode, json(comValidade).code]).toEqual([403, "FORBIDDEN_ROLE"]);
+    expect((await prisma.coupon.findUniqueOrThrow({ where: { id: donoId } })).expiresAt).toBeNull();
+    // desativar cupom já inativo é idempotente
+    expect((await asStaff(`/api/coupons/${donoId}`, { active: false })).statusCode).toBe(200);
+    // cupom de OUTRA loja não existe para este STAFF (404), nem para desativar
+    const outra = await setup();
+    const alheio = json(await coupon(outra, { code: "ALHEIO", discountType: "PERCENT", discountValue: 10 })).coupon.id as string;
+    expect((await asStaff(`/api/coupons/${alheio}`, { active: false })).statusCode).toBe(404);
+    expect((await prisma.coupon.findUniqueOrThrow({ where: { id: alheio } })).active).toBe(true);
+    // reativar DENTRO do teto é permitido ao STAFF (reduzir risco não é o caso, mas o cupom é dele)
+    const dentro = json(await asStaff("/api/coupons", { code: "DENTRO", discountType: "PERCENT", discountValue: 10, maxUses: 4 })).coupon.id as string;
+    expect((await asStaff(`/api/coupons/${dentro}`, { active: false })).statusCode).toBe(200);
+    expect((await asStaff(`/api/coupons/${dentro}`, { active: true })).statusCode).toBe(200);
     // o STAFF não consegue ESTOURAR o teto editando um cupom dele
     const meu = json(await asStaff("/api/coupons", { code: "MEU", discountType: "PERCENT", discountValue: 10, maxUses: 4 })).coupon.id as string;
     expect((await asStaff(`/api/coupons/${meu}`, { discountValue: 51 })).statusCode).toBe(403);
