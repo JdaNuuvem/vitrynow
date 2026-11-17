@@ -224,7 +224,7 @@ rm -f "$ENVF.sem"
 echo "== 9 limite de requisições por IP em /loja/* (SEC-26 / ST-44, ST-45, ST-48); fica no fim porque a rajada limita o IP do host por 1 min"
 # 9a visitantes DISTINTOS não se bloqueiam: 10 containers, cada um com o seu IP na rede, 100 requisições cada (< 120/min) => 0 x 429
 # Os 10 clientes precisam existir AO MESMO TEMPO: containers seguidos com --rm recebem o MESMO IP (o Docker reaproveita o que acabou
-# de sair; visto em 17/11: o Caddy via um IP só e, com razão, aplicou um balde só). Por isso cada um espera 10 s antes de pedir e o
+# de sair; visto em 17/11: o Caddy via um IP só e, com razão, aplicou um balde só). Por isso cada um espera 30 s antes de pedir (com a máquina sufocada, criar os 10 levou mais de 10 s e os primeiros já tinham saído quando li os IPs) e o
 # teste confere que os IPs são mesmo distintos; se não forem, o teste é inválido e falha dizendo isso.
 tot429=0; CIDS=()
 for n in 1 2 3 4 5 6 7 8 9 10; do
@@ -232,7 +232,7 @@ for n in 1 2 3 4 5 6 7 8 9 10; do
     const http=require('http');let c429=0,ok=0,i=0;
     const next=()=>{ if(i>=100){console.log(c429+' '+ok);return;} i++;
       http.get('http://caddy:80/loja/distinto-$n-'+i,r=>{ r.resume(); if(r.statusCode===429)c429++; else ok++; r.on('end',next); }).on('error',()=>{ ok++; next(); }); };
-    setTimeout(next,10000);")")
+    setTimeout(next,30000);")")
 done
 ipsd="$(for c in "${CIDS[@]}"; do docker inspect -f "{{(index .NetworkSettings.Networks \"${PROJ}_default\").IPAddress}}" "$c"; done | sort -u | wc -l | tr -d ' ')"
 for c in "${CIDS[@]}"; do
