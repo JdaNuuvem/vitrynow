@@ -28,7 +28,7 @@ const printJobRoutes: FastifyPluginAsync = async (app) => {
 
   // ───────────── Painel ─────────────
   const panel = { preHandler: app.requirePanelAuth };
-  const actorOf = (request: { user: { storeId: string; userId: string } }) => ({ storeId: request.user.storeId, userId: request.user.userId });
+  const actorOf = (request: { user: { storeId: string; userId: string; role: "OWNER" | "STAFF" } }) => ({ storeId: request.user.storeId, userId: request.user.userId, role: request.user.role });
 
   app.post("/api/orders/:id/reprint", panel, async (request, reply) => {
     const { id } = request.params as { id: string };

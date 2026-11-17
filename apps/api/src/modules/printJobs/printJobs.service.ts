@@ -2,6 +2,7 @@ import { Prisma, type prisma as prismaClient, type PrintJob, type PrintKind, typ
 import type { PrintableOrder, WsServerMessage } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
 import type { AuditLogger } from "../../shared/audit";
+import { contactAccessFor } from "../orders/orders.view";
 import { buildPrintableOrder, buildTestTicket } from "../../lib/printable";
 import {
   BACKOFF_SECONDS,
@@ -180,13 +181,19 @@ export class PrintJobService {
   }
 
   // ───────────── Painel ─────────────
-  async reprint(actor: { storeId: string; userId: string }, orderId: string) {
+  async reprint(actor: { storeId: string; userId: string; role: "OWNER" | "STAFF" }, orderId: string) {
     const created = await this.db.$transaction(
       async (tx) => {
         // Trava a linha do pedido: dois cliques simultâneos numeram 2ª via 1 e 2, nunca duas "1".
         await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId} AND "storeId" = ${actor.storeId} FOR UPDATE`;
         const order = await tx.order.findFirst({ where: { id: orderId, storeId: actor.storeId }, select: { id: true, status: true, awaitingPayment: true } });
         if (!order) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
+        // A 2ª via sai com telefone e endereço COMPLETOS: reimprimir não pode burlar a máscara do PRD-15. STAFF só reimprime
+        // pedido aberto ou encerrado há < 24 h (mesma regra do detalhe, `contactAccessFor`); OWNER sem limite.
+        const closing = await tx.orderStatusHistory.findFirst({ where: { orderId }, orderBy: { seq: "desc" }, select: { createdAt: true } });
+        if (contactAccessFor(actor.role, order, closing?.createdAt ?? null, this.now()) === "MASKED") {
+          throw err(403, "FORBIDDEN_ROLE", "Só o dono pode reimprimir um pedido antigo.");
+        }
         if (order.status === "CANCELADO") throw err(409, "ORDER_CANCELED", "Pedido cancelado: não há o que reimprimir.");
         if (order.awaitingPayment) throw err(409, "ORDER_AWAITING_PAYMENT", "Pedido aguardando pagamento: ainda não foi para a cozinha.");
         const count = await tx.printJob.count({ where: { storeId: actor.storeId, orderId, kind: "ORDER_REPRINT" } });

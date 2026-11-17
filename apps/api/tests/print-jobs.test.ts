@@ -471,6 +471,29 @@ describe("API-12 — PrintJob", () => {
     expect([r.statusCode, json(r).code]).toEqual([409, "ORDER_CANCELED"]);
   });
 
+  it("J1 (Nightingale): STAFF só reimprime pedido ABERTO ou encerrado há < 24 h; pedido antigo ⇒ 403 e nada é criado; OWNER sempre pode", async () => {
+    const ctx = await setup();
+    const invite = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: ctx.owner }, payload: { email: `staff-${Date.now()}@t.com`, password: "provisoria1" } });
+    const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: json(invite).user.email, password: "provisoria1" } });
+    const staff = (login.headers["set-cookie"] as string).split(";")[0];
+    const reprint = (cookie: string, oid: string) => app.inject({ method: "POST", url: `/api/orders/${oid}/reprint`, headers: { cookie } });
+
+    const id = await order(ctx, { customerPhone: "11987654321", address: "Rua Sigilosa, 77", type: "DELIVERY", customerName: "Ana" });
+    expect((await reprint(staff, id)).statusCode).toBe(201); // aberto
+
+    for (const to of ["CONFIRMADO", "EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA", "CONCLUIDO"]) {
+      expect((await app.inject({ method: "POST", url: `/api/orders/${id}/transition`, headers: { cookie: ctx.owner }, payload: { to } })).statusCode, to).toBe(200);
+    }
+    expect((await reprint(staff, id)).statusCode).toBe(201); // encerrado agora (< 24 h)
+
+    await prisma.orderStatusHistory.updateMany({ where: { orderId: id }, data: { createdAt: new Date(Date.now() - 25 * 3600_000) } });
+    const antes = await prisma.printJob.count({ where: { orderId: id, kind: "ORDER_REPRINT" } });
+    const negado = await reprint(staff, id);
+    expect([negado.statusCode, json(negado).code]).toEqual([403, "FORBIDDEN_ROLE"]);
+    expect(await prisma.printJob.count({ where: { orderId: id, kind: "ORDER_REPRINT" } })).toBe(antes); // nada criado
+    expect((await reprint(ctx.owner, id)).statusCode).toBe(201); // o dono não tem limite de idade
+  });
+
   it("job de TESTE: só o dono cria; o claim traz ticket FICTÍCIO (nenhum dado de loja/cliente); fecha com PRINTED", async () => {
     const ctx = await setup();
     const token = await ctx.mkToken("PC");
