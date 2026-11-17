@@ -84,6 +84,12 @@
   transform: translateY(10px);
 }
 
+/* Rede de segurança: cartão que já estava na tela e continuava escondido aparece NA HORA, sem animação (conteúdo
+   invisível é pior do que animação perdida; o observador pode demorar em aba de fundo ou aparelho lento). */
+.loja .loja__item[data-reveal="shown"] {
+  transition: none;
+}
+
 /* M-05: "+" vira stepper e o selo da quantidade aparece: cresce de 0,8 a 1 com leve overshoot (200 ms, mola) */
 .loja .loja__stepper-card,
 .loja .loja__add-count {
