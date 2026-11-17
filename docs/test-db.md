@@ -12,7 +12,7 @@ pnpm --filter @meucardapio/api test
 ```
 
 - Sem o `TEST_DATABASE_URL` a suíte **falha com erro claro** (INF-14): ela não escolhe banco sozinha. Só aceita banco terminado em `_test` e nunca a porta de dev `55432`.
-- **Uma suíte pesada por vez na sua máquina:** `scripts/ci.ps1` usa um mutex global e espera o CI de outro agente terminar (`-WaitMinutes`, padrão 30); avisa se há menos de 3 GB de RAM livre. Não rode `ci.ps1 -Images`, smoke e suítes em paralelo: já derrubou containers do Docker.
+- **Regra do BOARD §0:** UMA suíte completa por agente por vez e no máximo 3 suítes completas simultâneas na máquina (`ci.ps1 -MaxSuites`, padrão 3; as demais esperam vaga por `-WaitMinutes`, padrão 30). Cada agente mantém UM Postgres de teste (`mc-test-<agente>-<porta>`). Avisa se há menos de 3 GB de RAM livre. Se uma suíte falhar em massa com "Can't reach database server"/503, rode `docker ps -a --filter name=mc-test` e recrie com `test-db.ps1` ANTES de culpar o código: o Docker já caiu 3 vezes por excesso de carga.
 - Criou migration nova no seu branch? Rode o script de novo (aplica só as pendentes).
 - Quer começar limpo? `-Fresh` (recria o container). Terminou? `-Down`.
 - Container: `mc-test-<agente>-<porta>`, só em `127.0.0.1`, senha fixa de teste. Bancos: `meucardapio` (para `DATABASE_URL`/seed/dev da API) e `meucardapio_test` (suíte).

@@ -22,7 +22,8 @@ param(
   [Parameter(Mandatory = $true)][ValidateRange(55440, 55459)][int]$Port,
   [switch]$SkipTests,
   [switch]$Images,
-  [int]$WaitMinutes = 30   # quanto esperar se outro CI estiver rodando
+  [int]$WaitMinutes = 30,   # quanto esperar por uma vaga se a máquina já estiver cheia
+  [int]$MaxSuites = 3       # suítes completas simultâneas na máquina (regra do BOARD §0)
 )
 # Continue (e não Stop): ver nota em test-db.ps1 (stderr redirecionado no PowerShell 5.1).
 $ErrorActionPreference = 'Continue'
@@ -47,17 +48,28 @@ function Step([string]$name, [scriptblock]$body) {
   return $ok
 }
 
-# Limite de paralelismo (INF-14): suíte + builds Docker são pesados; duas ao mesmo tempo na mesma máquina
-# já fizeram o Docker derrubar containers (22:03 UTC). Um mutex global faz a segunda esperar a primeira.
+# Limite de paralelismo (INF-14, regra do Atlas no BOARD §0): no máximo $MaxSuites suítes completas ao mesmo tempo
+# na máquina; as demais esperam. Duas cargas pesadas juntas já derrubaram o Docker 3 vezes. Usa N mutexes nomeados
+# (slot0..slotN-1) e não um semáforo: o SO libera o mutex se o processo morrer, o semáforo vazaria a vaga.
 $freeGb = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB, 1)
 if ($freeGb -lt 3) { Write-Host "AVISO: só $freeGb GB de RAM livre; a máquina está sobrecarregada (outras suítes/builds rodando?). Prefira esperar." -ForegroundColor Yellow }
-$ciLock = New-Object System.Threading.Mutex($false, 'Global\meucardapio-ci-pesado')
-$got = $false
-try { $got = $ciLock.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true }
-if (-not $got) {
-  Write-Host "Outro CI/suíte pesada já está rodando nesta máquina; aguardando (até $WaitMinutes min) para não sobrecarregar o Docker..." -ForegroundColor Yellow
-  try { $got = $ciLock.WaitOne([TimeSpan]::FromMinutes($WaitMinutes)) } catch [System.Threading.AbandonedMutexException] { $got = $true }
-  if (-not $got) { Write-Host "Desisti após $WaitMinutes min esperando outro CI. Tente de novo mais tarde." -ForegroundColor Red; exit 3 }
+$ciLock = $null
+function Get-CiSlot {
+  for ($i = 0; $i -lt $MaxSuites; $i++) {
+    $m = New-Object System.Threading.Mutex($false, "Global\meucardapio-ci-pesado-slot$i")
+    $got = $false
+    try { $got = $m.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true }
+    if ($got) { return $m }
+    $m.Dispose()
+  }
+  return $null
+}
+$ciLock = Get-CiSlot
+if (-not $ciLock) {
+  Write-Host "Já há $MaxSuites suítes completas rodando nesta máquina; aguardando uma vaga (até $WaitMinutes min) para não sobrecarregar o Docker..." -ForegroundColor Yellow
+  $deadline = (Get-Date).AddMinutes($WaitMinutes)
+  while (-not $ciLock -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 10; $ciLock = Get-CiSlot }
+  if (-not $ciLock) { Write-Host "Desisti após $WaitMinutes min sem vaga. Tente de novo mais tarde." -ForegroundColor Red; exit 3 }
 }
 foreach ($tool in 'node', 'pnpm', 'docker') { if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "$tool não encontrado no PATH" } }
 
@@ -118,7 +130,7 @@ Write-Host "`n(banco de teste mantido em mc-test-$Agent-$Port; remova com: .\scr
 Write-Host "`n=== RESUMO" -ForegroundColor Cyan
 $results | Format-Table -AutoSize | Out-String | Write-Host
 $failed = @($results | Where-Object Resultado -eq 'FALHA').Count
-if ($failed -gt 0) { Write-Host "CI: $failed etapa(s) com falha" -ForegroundColor Red; try { $ciLock.ReleaseMutex() } catch {}; exit 1 }
+if ($failed -gt 0) { Write-Host "CI: $failed etapa(s) com falha" -ForegroundColor Red; try { if ($ciLock) { $ciLock.ReleaseMutex() } } catch {}; exit 1 }
 Write-Host 'CI: tudo verde' -ForegroundColor Green
-try { $ciLock.ReleaseMutex() } catch {}
+try { if ($ciLock) { $ciLock.ReleaseMutex() } } catch {}
 exit 0
