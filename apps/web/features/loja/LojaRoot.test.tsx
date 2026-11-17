@@ -269,6 +269,41 @@ describe("cardápio v2: estrutura e regras no fluxo completo (spec 12)", () => {
     expect(current()).toContain("Pizzas");
   });
 
+  it("B1: tocar a última categoria no fim e SUBIR de volta ao topo destaca a PRIMEIRA, nunca a tocada", async () => {
+    const instances: { cb: () => void; observed: Element[] }[] = [];
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        instance: (typeof instances)[number];
+        constructor(cb: () => void) {
+          this.instance = { cb, observed: [] };
+          instances.push(this.instance);
+        }
+        observe(element: Element) {
+          this.instance.observed.push(element);
+        }
+        disconnect() {}
+      },
+    );
+    vi.stubGlobal("scrollTo", vi.fn());
+    Element.prototype.scrollIntoView = vi.fn();
+    vi.stubGlobal("fetch", vi.fn());
+    const { container } = render(<LojaRoot slug="boa-massa" initialMenu={rich} />);
+    const current = () => container.querySelector('.loja__chip[aria-current="true"]')?.textContent;
+    const fireAtEnd = (isIntersecting: boolean) => {
+      const observer = instances.filter((i) => i.observed.some((element) => element.classList.contains("loja__end"))).at(-1)!;
+      // o observador do fim usa a entrada; o da leitura ignora os argumentos
+      (observer.cb as unknown as (entries: { isIntersecting: boolean }[]) => void)([{ isIntersecting }]);
+    };
+
+    act(() => fireAtEnd(true));
+    await userEvent.click(screen.getByRole("button", { name: "Bebidas" }));
+    expect(current()).toContain("Bebidas");
+    act(() => fireAtEnd(false)); // subiu: saiu do fim, o pino cai
+    // nenhuma seção sob a linha (topo): a leitura é null
+    expect(current()).toContain("Lanches");
+  });
+
   it("o HTML do servidor já traz o cabeçalho, a barra de categorias e os cartões (SSR/ISR intacto)", () => {
     const html = renderToString(<LojaRoot slug="boa-massa" initialMenu={rich} />);
     for (const text of ["Pizzaria Boa Massa", "Lanches", "Bebidas", "X-Burger", "Recebendo pedidos", "Adicionar X-Burger"]) expect(html).toContain(text);

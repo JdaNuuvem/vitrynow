@@ -164,6 +164,14 @@ describe("useScrollSpy (chips sticky, sem listener de scroll)", () => {
     expect(observed).toEqual(ids);
   });
 
+  it("A2: ao (re)ligar, lê a posição NA HORA, sem esperar a próxima rolagem (volta do detalhe com a rolagem já restaurada)", () => {
+    lineIn("b");
+    const { result, rerender } = renderHook(({ on }) => useScrollSpy(ids, { topOffsetPx: OFFSET, enabled: on }), { initialProps: { on: false } });
+    expect(result.current).toBeNull();
+    rerender({ on: true });
+    expect(result.current).toBe("categoria-b"); // nenhum aviso do observador foi disparado
+  });
+
   it("sem IntersectionObserver (ambiente antigo) não quebra", () => {
     vi.stubGlobal("IntersectionObserver", undefined);
     expect(renderHook(() => useScrollSpy(ids)).result.current).toBeNull();

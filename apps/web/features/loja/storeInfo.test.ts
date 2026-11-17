@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Category, Product } from "@/core/domain/storefront";
-import { conditionsLine, isCompactCategory, quickAddMode } from "./storeInfo";
+import { activeCategoryId, conditionsLine, isCompactCategory, quickAddMode } from "./storeInfo";
 
 const store = (over: Partial<Parameters<typeof conditionsLine>[0]> = {}) => ({ minOrderCents: 2000, deliveryEnabled: true, pickupEnabled: true, deliveryFeeCents: 600, ...over });
 
@@ -61,5 +61,41 @@ describe("regra do '+' (spec 12 §3, Leonardo)", () => {
   it("com grupo obrigatório (quando o contrato trouxer): o '+' abre o detalhe", () => {
     expect(quickAddMode({ additionals: [], requiredGroups: [{ id: "g1" }] })).toBe("detail");
     expect(quickAddMode({ additionals: [{ id: "a1" }] as never, requiredGroups: [{ id: "g1" }] })).toBe("detail");
+  });
+});
+
+describe("chip destacado (parecer da Da Vinci, B1/A1)", () => {
+  const ids = ["lanches", "pizzas", "porcoes", "bebidas"];
+
+  it("acima da primeira seção (topo) é SEMPRE a primeira categoria, sem pino nem valor guardado", () => {
+    expect(activeCategoryId({ ids, spy: null, pinned: null, atEnd: false })).toBe("lanches");
+  });
+
+  it("B1: depois de tocar a última e subir, o pino já caiu (atEnd falso) e o topo volta à primeira, nunca à tocada", () => {
+    expect(activeCategoryId({ ids, spy: null, pinned: null, atEnd: false })).toBe("lanches");
+    // mesmo que sobrasse um pino, fora do fim ele não vale
+    expect(activeCategoryId({ ids, spy: null, pinned: "bebidas", atEnd: false })).toBe("lanches");
+    expect(activeCategoryId({ ids, spy: "pizzas", pinned: "bebidas", atEnd: false })).toBe("pizzas");
+  });
+
+  it("chip tocado com a página parada no fim: o tocado fica destacado", () => {
+    expect(activeCategoryId({ ids, spy: "porcoes", pinned: "bebidas", atEnd: true })).toBe("bebidas");
+  });
+
+  it("A1: no fim da página, rolando (sem toque), a ÚLTIMA categoria é a destacada", () => {
+    expect(activeCategoryId({ ids, spy: "porcoes", pinned: null, atEnd: true })).toBe("bebidas");
+  });
+
+  it("cardápio curto que cabe na tela: o fim está à vista desde o início, mas o destaque é o da PRIMEIRA", () => {
+    expect(activeCategoryId({ ids: ["lanches", "bebidas"], spy: null, pinned: null, atEnd: true })).toBe("lanches");
+  });
+
+  it("no meio da página vale a leitura da rolagem", () => {
+    expect(activeCategoryId({ ids, spy: "porcoes", pinned: null, atEnd: false })).toBe("porcoes");
+  });
+
+  it("pino de categoria que não existe mais é ignorado; sem categorias não há destaque", () => {
+    expect(activeCategoryId({ ids, spy: "pizzas", pinned: "sumiu", atEnd: true })).toBe("bebidas");
+    expect(activeCategoryId({ ids: [], spy: null, pinned: null, atEnd: true })).toBeNull();
   });
 });

@@ -34,3 +34,18 @@ export function quickAddMode(product: Pick<Product, "additionals"> & { requiredG
   if (product.requiredGroups && product.requiredGroups.length > 0) return "detail";
   return product.additionals.length > 0 ? "options" : "simple";
 }
+
+// Chip destacado na barra de categorias (spec 12 §2.1). Entradas: `spy` = categoria sob a linha de leitura (null se a
+// página está acima da primeira seção), `pinned` = chip tocado enquanto a página está no fim, `atEnd` = o fim da página
+// está à vista. Regras (parecer da Da Vinci, B1/A1):
+//  - chip tocado e a página parou no fim: ele fica destacado (a categoria curta nunca chega à linha de leitura);
+//  - no fim da página, rolando, a ÚLTIMA categoria é a destacada (idem), mas só se a leitura já saiu do topo:
+//    num cardápio curto que cabe na tela o fim está à vista desde o início e o destaque é o da PRIMEIRA;
+//  - acima da primeira seção (topo): sempre a PRIMEIRA categoria, nunca um valor guardado de antes.
+export function activeCategoryId(input: { ids: string[]; spy: string | null; pinned: string | null; atEnd: boolean }): string | null {
+  const { ids, spy, pinned, atEnd } = input;
+  if (ids.length === 0) return null;
+  if (pinned && atEnd && ids.includes(pinned)) return pinned;
+  if (atEnd && spy !== null) return ids[ids.length - 1];
+  return spy ?? ids[0];
+}
