@@ -230,14 +230,35 @@ describe("getMenuOnServer: o cache guarda o RESULTADO, não a resposta HTTP (ST-
       cacheStore.set("menu-ssr|boa", { status: "ok", menu, fetchedAt: now - ageSeconds * 1000 });
     };
 
-    it("cópia com menos de 10 min segue sendo servida (a revalidação pode estar falhando)", async () => {
+    it("cópia com menos de 10 min segue sendo servida, sem buscar de novo", async () => {
       stored(MAX_STALE_SECONDS - 5);
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
       expect((await getMenuOnServer("boa")).status).toBe("ok");
+      expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("cópia com mais de 10 min falha FECHADA: 'indisponível', sem dados da loja", async () => {
+    it("cópia com mais de 10 min NÃO fecha a loja: faz UMA busca bloqueante e a API saudável vale na hora", async () => {
       stored(MAX_STALE_SECONDS + 5);
+      const fetchMock = vi.fn().mockResolvedValue(reply(200, menu));
+      vi.stubGlobal("fetch", fetchMock);
+      expect((await getMenuOnServer("boa")).status).toBe("ok");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("cópia velha demais e a API diz 'suspensa' ou 'não existe': vale na hora", async () => {
+      stored(MAX_STALE_SECONDS + 5);
+      stubFetch(reply(503, { error: "x", code: "STORE_UNAVAILABLE" }));
       expect(await getMenuOnServer("boa")).toEqual({ status: "suspended" });
+      stored(MAX_STALE_SECONDS + 5);
+      stubFetch(reply(404, { error: "x" }));
+      expect(await getMenuOnServer("boa")).toEqual({ status: "not-found" });
+    });
+
+    it("cópia velha demais e falha transitória CONFIRMADA: fecha como 'unavailable' (sem dados e sem tela de loja suspensa)", async () => {
+      stored(MAX_STALE_SECONDS + 5);
+      stubFetch(reply(500, { error: "boom" }));
+      expect(await getMenuOnServer("boa")).toEqual({ status: "unavailable" });
     });
 
     it("o valor devolvido à página não carrega o carimbo interno de idade", async () => {

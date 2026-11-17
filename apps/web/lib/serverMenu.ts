@@ -106,14 +106,18 @@ export const isValidSlug = (slug: string) => SLUG_PATTERN.test(slug);
 export const NEGATIVE_CACHE_SECONDS = 5;
 // "Não existe" de slug desconhecido: lembrado em memória por este tempo (sem gravar em disco, sem chamar a API).
 export const MISSING_MEMORY_SECONDS = 30;
-// Teto de obsolescência: se a revalidação falha de forma transitória (500, 429, API fora) a cópia boa vale até esta
-// idade; depois a página falha FECHADA em "Loja indisponível", sem dados, em vez de servir a cópia velha para sempre.
+// Teto de obsolescência (SEC-27): a IDADE da cópia NUNCA fecha uma loja sozinha (loja pequena fica horas sem visita e a
+// API está ótima). Cópia mais velha que isto vale como "talvez velha": o servidor faz UMA busca bloqueante à API e o
+// que ela responder (ok, suspensa, não existe) vale na hora. Só uma falha transitória CONFIRMADA (500, 429, API fora)
+// fecha, e fecha como `unavailable`: página sem dados da loja, deixando o navegador falar com a API.
 export const MAX_STALE_SECONDS = 600;
 const MEMORY_MAX_ENTRIES = 500;
+// Lojas já vistas com cardápio: só um conjunto de slugs curtos; teto maior que o dos mapas de falha (LRU).
+const SEEN_OK_MAX_ENTRIES = 5000;
 
 const failedUntil = new Map<string, number>();
 const missingUntil = new Map<string, number>();
-const seenOk = new Set<string>(); // lojas que já responderam 200 neste processo (podem ter cópia boa guardada)
+const seenOk = new Map<string, true>(); // lojas vistas com cardápio neste processo (podem ter cópia boa guardada); LRU
 
 function fresh(map: Map<string, number>, slug: string, now: number): boolean {
   const until = map.get(slug);
@@ -132,8 +136,9 @@ function remember(map: Map<string, number>, slug: string, now: number, seconds: 
 }
 
 function rememberOk(slug: string) {
-  if (seenOk.size >= MEMORY_MAX_ENTRIES) seenOk.delete(seenOk.values().next().value as string);
-  seenOk.add(slug);
+  seenOk.delete(slug); // reinsere no fim: o mais antigo sem uso sai primeiro
+  seenOk.set(slug, true);
+  if (seenOk.size > SEEN_OK_MAX_ENTRIES) seenOk.delete(seenOk.keys().next().value as string);
 }
 
 // Só para testes.
@@ -182,13 +187,25 @@ export async function getMenuOnServer(slug: string): Promise<ServerMenuResult> {
   );
   try {
     const { fetchedAt, ...result } = await cached();
-    // cópia boa velha demais (a revalidação vem falhando): falha fechada, sem dados da loja
-    if (result.status === "ok" && fetchedAt !== undefined && Date.now() - fetchedAt > MAX_STALE_SECONDS * 1000) return { status: "suspended" };
-    return result;
+    // ST-53: quem o cache devolve como `ok` já foi loja aqui. Depois de reiniciar o web a cópia boa vem do disco; sem esta
+    // marca, a revalidação em segundo plano que volta 404 (loja removida) seria descartada em vez de substituir a cópia.
+    if (result.status === "ok") rememberOk(slug);
+    const tooOld = result.status === "ok" && fetchedAt !== undefined && Date.now() - fetchedAt > MAX_STALE_SECONDS * 1000;
+    return tooOld ? await refreshBlocking(slug) : result;
   } catch (error) {
     if (error instanceof NotStored) return error.result;
     return { status: "unavailable" };
   }
+}
+
+// Cópia velha demais: UMA busca bloqueante. O que a API disser vale na hora; o cache se atualiza pela revalidação que a
+// própria leitura já disparou. Falha transitória confirmada fecha como `unavailable` (sem dados da loja).
+async function refreshBlocking(slug: string): Promise<ServerMenuResult> {
+  if (fresh(failedUntil, slug, Date.now())) return { status: "unavailable" };
+  const result = await fetchMenuOnServer(slug);
+  if (result.status === "unavailable") remember(failedUntil, slug, Date.now(), NEGATIVE_CACHE_SECONDS);
+  if (result.status === "ok") rememberOk(slug);
+  return result;
 }
 
 // og:image precisa de URL absoluta; texto livre da loja pode trazer qualquer coisa.
