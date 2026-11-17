@@ -24,9 +24,10 @@ namespace MeuCardapio.PrintClient.Printing
 
         public void Print(TicketDocument document)
         {
-            if (!_settings.IsValid) throw new PrinterUnavailableException("Impressora não encontrada neste computador. Escolha outra na janela do aplicativo.");
-            var problem = PrinterProbe.Check(_settings.PrinterName);
-            if (problem != null) throw new PrinterUnavailableException(problem);
+            if (!_settings.IsValid) throw new PrinterUnavailableException("Impressora não encontrada neste computador. Escolha outra na janela do aplicativo.", "PRINTER_NOT_FOUND");
+            string probeCode;
+            var problem = PrinterProbe.Check(_settings.PrinterName, out probeCode);
+            if (problem != null) throw new PrinterUnavailableException(problem, probeCode);
 
             int mm = document.PaperMm > 0 ? document.PaperMm : PaperMm;
             float widthUnits = mm / 25.4f * 100f;
@@ -49,8 +50,8 @@ namespace MeuCardapio.PrintClient.Printing
                 e.HasMorePages = next < document.Lines.Count;
             };
             try { doc.Print(); }
-            catch (InvalidPrinterException ex) { throw new PrinterUnavailableException("A impressora recusou o trabalho: " + ex.Message, ex); }
-            catch (Win32Exception ex) { throw new PrinterUnavailableException("Falha ao enviar para a impressora: " + ex.Message, ex); }
+            catch (InvalidPrinterException ex) { throw new PrinterUnavailableException("A impressora recusou o trabalho: " + ex.Message, ex, "DRIVER_ERROR"); }
+            catch (Win32Exception ex) { throw new PrinterUnavailableException("Falha ao enviar para a impressora: " + ex.Message, ex, "DRIVER_ERROR"); }
             finally { doc.Dispose(); }
         }
     }

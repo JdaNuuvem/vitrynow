@@ -20,6 +20,7 @@ namespace MeuCardapio.PrintClient.Printing
         {
             var doc = new TicketDocument { PaperMm = paperMm };
             if (order == null) return doc;
+            if (order.IsTest) return BuildTest(order, paperMm, timeZone);
             if (order.CancelNotice == true) return BuildCancelNotice(order, paperMm, timeZone);
             var items = order.Items ?? new List<PrintableOrderItem>();
             string type = (order.Type ?? "").Trim().ToUpperInvariant();
@@ -113,6 +114,29 @@ namespace MeuCardapio.PrintClient.Printing
             // 6) pagamento em destaque (B4.2)
             doc.Rule();
             foreach (var l in PaymentLines(order, type)) doc.Text(l, TicketAlign.Center, bold: true, scale: 1.15f);
+            doc.Rule();
+            return doc;
+        }
+
+        // Tíquete de teste (job TEST, RN-B4-07): confirma que a impressora responde e que acento, R$ e a régua de colunas saem
+        // certos. Sem pedido, itens, valores nem dados de cliente.
+        public static TicketDocument BuildTest(PrintableOrder order, int paperMm, TimeZoneInfo timeZone)
+        {
+            var doc = new TicketDocument { PaperMm = paperMm };
+            var store = S(order == null ? "" : order.StoreName);
+            if (store.Length > 0) doc.Text(store, TicketAlign.Center, bold: true);
+            doc.Text("TESTE DE IMPRESSÃO", TicketAlign.Center, bold: true, scale: 1.5f);
+            doc.Rule();
+            doc.Text("Se você consegue ler este papel, a impressora está funcionando.", TicketAlign.Center);
+            doc.Text("Acentos: ação, é, ñ, ü  Valor: R$ 12,34", TicketAlign.Center);
+            int cols = TicketText.ColumnsFor(paperMm);
+            // Régua: cada bloco de 10 colunas termina em um número; se a última coluna cortar, a bobina é mais estreita que a configurada.
+            var ruler = new System.Text.StringBuilder();
+            for (int c = 1; c <= cols; c++) ruler.Append(c % 10 == 0 ? (char)('0' + (c / 10) % 10) : '.');
+            doc.Text(ruler.ToString());
+            doc.Text("Bobina de " + paperMm + " mm: " + cols + " colunas", TicketAlign.Center, scale: 0.85f);
+            var when = FormatDate(DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture), timeZone);
+            if (when.Length > 0) doc.Text(when, TicketAlign.Center, scale: 0.85f);
             doc.Rule();
             return doc;
         }

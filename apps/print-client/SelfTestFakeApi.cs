@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using MeuCardapio.PrintClient.Models;
+using Newtonsoft.Json;
 
 namespace MeuCardapio.PrintClient
 {
@@ -39,6 +42,39 @@ namespace MeuCardapio.PrintClient
         public string WsMode = "status";                           // "status" (responde WsStatus) | "accept" | "close4401"
         readonly List<WebSocket> _sockets = new List<WebSocket>();
         int _pendingCalls, _ackCalls;
+
+        // ---- Fila de PrintJob (ADR-0004 §2/§5): claim com lease, ack idempotente, 409 em lease vencida, attempts ----
+        public sealed class FakeJob
+        {
+            public string Id; public string Kind = "ORDER_KITCHEN"; public string TicketJson;
+            public string State = "PENDING";            // PENDING | CLAIMED | PRINTED | FAILED
+            public string LastCode; public string ClaimedBy; public DateTime LeaseUntilUtc; public DateTime AvailableAtUtc = DateTime.MinValue; public int Attempts; public int MaxAttempts = 3; public string LastError;
+        }
+        public readonly List<FakeJob> Jobs = new List<FakeJob>();
+        public readonly List<string> JobAcks = new List<string>();   // "id|status|erro|auth"
+        public readonly List<string> JobAckBodies = new List<string>(); // corpo CRU de cada ack (para provar o que sai do computador da loja)
+        public int LeaseMs = 120000;                                  // ADR-0004 §8: lease padrao 120 s
+        public int FailBackoffMs = 300;                               // recuo do servidor depois de FAILED (no ADR: 15 s, 60 s, 5 min); curto para o teste
+        public bool EmptyAs204;                                       // fila vazia: 204 em vez de {"job":null}
+        public int ClaimStatus = 200;                                 // 401/403/500 para simular falha do claim
+        public int JobAckStatus = 200; public int JobAckFailFirst;    // primeiros N acks respondem JobAckStatus sem aplicar
+        int _claimCalls, _jobAckCalls;
+        public int ClaimCalls { get { lock (Lock) return _claimCalls; } }
+        public int JobAckCalls { get { lock (Lock) return _jobAckCalls; } }
+
+        public FakeJob AddJob(string id, PrintableOrder ticket, string kind = "ORDER_KITCHEN")
+        {
+            var j = new FakeJob { Id = id, Kind = kind, TicketJson = ticket == null ? null : JsonConvert.SerializeObject(ticket) };
+            lock (Lock) Jobs.Add(j);
+            return j;
+        }
+        public string JobState(string id) { lock (Lock) { var j = Jobs.FirstOrDefault(x => x.Id == id); ExpireLeases(); return j == null ? null : j.State; } }
+        public int JobAttempts(string id) { lock (Lock) { var j = Jobs.FirstOrDefault(x => x.Id == id); return j == null ? -1 : j.Attempts; } }
+        public string JobLastCode(string id) { lock (Lock) { var j = Jobs.FirstOrDefault(x => x.Id == id); return j == null ? null : j.LastCode; } }
+        public string AllAckBodies() { lock (Lock) return string.Join("\n", JobAckBodies); }
+        public string JobLastError(string id) { lock (Lock) { var j = Jobs.FirstOrDefault(x => x.Id == id); return j == null ? null : j.LastError; } }
+        public int AcksOf(string id, string status) { lock (Lock) return JobAcks.Count(a => a.StartsWith(id + "|" + status + "|", StringComparison.Ordinal)); }
+        void ExpireLeases() { var now = DateTime.UtcNow; foreach (var j in Jobs) if (j.State == "CLAIMED" && j.LeaseUntilUtc < now) j.State = "PENDING"; }
         // Consulta segura: o servidor falso grava em Requests em outra thread; enumerar sem travar lanca "colecao modificada".
         public bool Has(Func<string, bool> predicate) { lock (Lock) return Requests.Any(predicate); }
         public int Count(string needle) { lock (Lock) return Requests.Count(r => r.Contains(needle)); }
@@ -114,6 +150,65 @@ namespace MeuCardapio.PrintClient
                     }
                     catch { }
                 });
+                return;
+            }
+            if (path == "/api/device/print-jobs/claim")
+            {
+                string auth = c.Request.Headers["Authorization"] ?? "";
+                string body = null; int status = 200;
+                lock (Lock)
+                {
+                    _claimCalls++;
+                    if (ClaimStatus != 200) status = ClaimStatus;
+                    else
+                    {
+                        ExpireLeases();
+                        var now = DateTime.UtcNow;
+                        // ADR-0004 §8: o mesmo dono com lease valida recebe o MESMO job, sem incrementar attempt; o claim so devolve
+                        // PENDING com availableAt <= agora (um job que falha sempre nao trava a fila) e nunca devolve PRINTED.
+                        var j = Jobs.FirstOrDefault(x => x.State == "CLAIMED" && x.ClaimedBy == auth && x.LeaseUntilUtc >= now)
+                                ?? Jobs.FirstOrDefault(x => x.State == "PENDING" && x.AvailableAtUtc <= now);
+                        if (j == null) { if (EmptyAs204) status = 204; else body = "{\"job\":null}"; }
+                        else
+                        {
+                            if (j.State != "CLAIMED") { j.State = "CLAIMED"; j.ClaimedBy = auth; j.LeaseUntilUtc = now.AddMilliseconds(LeaseMs); j.Attempts++; }
+                            body = "{\"job\":{\"id\":\"" + j.Id + "\",\"kind\":\"" + j.Kind + "\",\"attempt\":" + j.Attempts + ",\"leaseSeconds\":" + Math.Max(1, (int)Math.Ceiling(LeaseMs / 1000.0))
+                                + (j.TicketJson != null ? ",\"ticket\":" + j.TicketJson : "") + "}}";
+                        }
+                    }
+                }
+                if (status == 204) { c.Response.StatusCode = 204; c.Response.Close(); return; }
+                Reply(c, status, body ?? "{}");
+                return;
+            }
+            if (path.StartsWith("/api/device/print-jobs/") && path.EndsWith("/ack"))
+            {
+                var id = path.Substring("/api/device/print-jobs/".Length).Replace("/ack", "");
+                string auth = c.Request.Headers["Authorization"] ?? "";
+                string raw; using (var rd = new StreamReader(c.Request.InputStream, Encoding.UTF8)) raw = rd.ReadToEnd();
+                var parsed = Newtonsoft.Json.Linq.JObject.Parse(string.IsNullOrWhiteSpace(raw) ? "{}" : raw);
+                string st = (string)parsed["status"], err = (string)parsed["error"], codeIn = (string)parsed["code"];
+                int reply;
+                lock (Lock)
+                {
+                    int n = ++_jobAckCalls;
+                    JobAcks.Add(id + "|" + st + "|" + err + "|" + auth);
+                    JobAckBodies.Add(raw);
+                    ExpireLeases();
+                    var j = Jobs.FirstOrDefault(x => x.Id == id);
+                    if (JobAckFailFirst > 0 && n <= JobAckFailFirst) reply = JobAckStatus;
+                    else if (JobAckStatus != 200 && JobAckFailFirst == 0) reply = JobAckStatus;
+                    else if (j == null) reply = 404;
+                    else if (j.State == "PRINTED" && st == "PRINTED" && j.ClaimedBy == auth) reply = 200;          // idempotente
+                    else if (j.State == "CLAIMED" && j.ClaimedBy == auth)                                         // lease valida e dono
+                    {
+                        if (st == "PRINTED") j.State = "PRINTED";
+                        else { j.LastError = err; j.LastCode = codeIn; j.State = j.Attempts >= j.MaxAttempts ? "FAILED" : "PENDING"; j.AvailableAtUtc = DateTime.UtcNow.AddMilliseconds(FailBackoffMs); }
+                        reply = 200;
+                    }
+                    else reply = 409;                                                                             // lease vencida ou nao e o dono
+                }
+                Reply(c, reply, "{}");
                 return;
             }
             if (path == "/api/device/orders/pending")

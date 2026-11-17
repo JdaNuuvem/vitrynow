@@ -39,6 +39,8 @@ namespace MeuCardapio.PrintClient
             public int Downloads(string suffix) { int n = 0; foreach (var r in Requests) if (r.EndsWith(suffix)) n++; return n; }
         }
 
+        static bool Ready(Func<bool> f) { return f(); }
+
         static string Sign(byte[] data, string privateXml)
         {
             using (var rsa = new RSACryptoServiceProvider())
@@ -221,6 +223,57 @@ namespace MeuCardapio.PrintClient
             int started4 = 0;
             Check("lancamento: arquivo sumiu => NAO executa e nao estoura", !Updater.TryLaunch(r4, p => started4++, m => { }) && started4 == 0);
             Check("lancamento: resultado nao-Ready nunca executa", !Updater.TryLaunch(new UpdateResult { Outcome = UpdateOutcome.Rejected, InstallerPath = "x.exe" }, p => started4++, m => { }) && started4 == 0);
+
+            // PC-13: atualizacao verificada FICA PENDENTE e so instala depois do "sim" do lojista
+            Updater.ClearPending();
+            var rp = Eval(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            int startedP = 0;
+            Check("confirmacao: Evaluate/Stage NUNCA executam o instalador (so deixam pronto)", rp.Outcome == UpdateOutcome.Ready && Updater.Stage(rp) && Updater.Pending == rp && startedP == 0 && File.Exists(rp.InstallerPath));
+            Check("confirmacao: sem pendencia, instalar nao faz nada", Ready(() => { Updater.ClearPending(); return !Updater.InstallPending(p => startedP++, m => { }) && startedP == 0; }));
+            Updater.Stage(rp);
+            bool boom = Updater.InstallPending(p => { throw new InvalidOperationException("x"); }, m => { });
+            Check("confirmacao: instalador que falha ao iniciar volta falso e a pendencia fica (da para tentar de novo)", !boom && Updater.Pending == rp);
+            bool ok1 = Updater.InstallPending(p => startedP++, m => { });
+            Check("confirmacao: depois do 'sim', o instalador inicia 1 vez e a pendencia sai", ok1 && startedP == 1 && Updater.Pending == null);
+            Check("confirmacao: instalar de novo nao inicia segunda vez", !Updater.InstallPending(p => startedP++, m => { }) && startedP == 1);
+            var rOld = Eval(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            Check("confirmacao: resultado que nao e Ready nao fica pendente", !Updater.Stage(new UpdateResult { Outcome = UpdateOutcome.Rejected }) && !Updater.Stage(null) && Updater.Pending == null);
+            var newer = new UpdateResult { Outcome = UpdateOutcome.Ready, Version = "2.0.0", InstallerPath = rOld.InstallerPath, ExpectedSha256 = rOld.ExpectedSha256, ExpectedSize = rOld.ExpectedSize };
+            Updater.Stage(newer);
+            Check("confirmacao: versao mais nova substitui a pendente; mais antiga nao", Updater.Stage(new UpdateResult { Outcome = UpdateOutcome.Ready, Version = "3.0.0", InstallerPath = newer.InstallerPath }) && !Updater.Stage(new UpdateResult { Outcome = UpdateOutcome.Ready, Version = "1.5.0", InstallerPath = newer.InstallerPath }) && Updater.Pending.Version == "3.0.0");
+            Updater.ClearPending();
+            var rSwap = Eval(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            Updater.Stage(rSwap);
+            File.WriteAllBytes(rSwap.InstallerPath, Swapped(inst, false)); // trocado enquanto esperava o 'sim'
+            int startedS = 0;
+            Check("confirmacao: arquivo trocado enquanto a pergunta esperava => reverifica e NAO executa", !Updater.InstallPending(p => startedS++, m => { }) && startedS == 0);
+            Updater.ClearPending();
+            var rDisc = Eval(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            Updater.Stage(rDisc);
+            Updater.DiscardPending();
+            Check("confirmacao: 'nao agora' descarta a pendencia E apaga o instalador (nada executavel esperando em disco)", Updater.Pending == null && !File.Exists(rDisc.InstallerPath));
+            int startedD = 0;
+            Check("confirmacao: depois de descartar, instalar nao faz nada", !Updater.InstallPending(p => startedD++, m => { }) && startedD == 0);
+            Updater.DiscardPending(); // sem pendencia: nao estoura
+            Check("confirmacao: descartar sem pendencia e inofensivo", Updater.Pending == null);
+
+            // K3: a pendencia some do disco (verificacao posterior limpou a pasta e o download falhou, ou foi apagada)
+            Updater.ClearPending();
+            var rLost = Eval(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            Updater.Stage(rLost);
+            File.Delete(rLost.InstallerPath);
+            Check("K3: pendencia cujo arquivo sumiu NAO e mais devolvida (Pending = null)", Updater.Pending == null);
+            var lostMsgs = new List<string>(); int startedL = 0;
+            bool lostOk = Updater.InstallPending(p => startedL++, m => lostMsgs.Add(m));
+            Check("K3: instalar uma pendencia que sumiu NAO executa e explica o motivo (nao o generico 'nenhuma')", !lostOk && startedL == 0 && lostMsgs.Count == 1 && lostMsgs[0] == Updater.PendingLostMessage);
+            var lostMsgs2 = new List<string>();
+            Updater.InstallPending(p => startedL++, m => lostMsgs2.Add(m));
+            Check("K3: a explicacao aparece uma vez; depois volta a 'nenhuma atualizacao pronta'", lostMsgs2.Count == 1 && lostMsgs2[0] == "Nenhuma atualização pronta para instalar.");
+            // nova verificacao que acha a mesma versao e baixa de novo: a pendencia nova vale
+            var rAgain = Eval(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            Updater.Stage(rAgain);
+            Check("K3: depois de preparar de novo, a pendencia volta a valer", Updater.Pending != null && Updater.Pending.Version == "1.1.0");
+            Updater.ClearPending();
 
             // mesma versao e versao menor: nada e baixado (anti-downgrade/replay de manifesto antigo)
             var tSame = Server(man, sig, file, inst);

@@ -41,8 +41,8 @@ namespace MeuCardapio.PrintClient.Printing
             lock (_lock)
             {
                 if (DelayMs > 0) System.Threading.Thread.Sleep(DelayMs);
-                if (Fault == VirtualFault.Offline) throw new PrinterUnavailableException("A impressora está offline (simulado).");
-                if (Fault == VirtualFault.OutOfPaper) throw new PrinterUnavailableException("A impressora está sem papel (simulado).");
+                if (Fault == VirtualFault.Offline) throw new PrinterUnavailableException("A impressora está offline (simulado).", "PRINTER_OFFLINE");
+                if (Fault == VirtualFault.OutOfPaper) throw new PrinterUnavailableException("A impressora está sem papel (simulado).", "NO_PAPER");
 
                 int cols = TicketText.ColumnsFor(document.PaperMm);
                 var lines = TextTicketWriter.Render(document, cols);
@@ -55,7 +55,7 @@ namespace MeuCardapio.PrintClient.Printing
                     var head = lines.GetRange(0, Math.Min(DropAfterLines, lines.Count));
                     File.WriteAllText(partial, string.Join("\n", head) + "\n", new UTF8Encoding(false));
                     Partials.Add(partial);
-                    throw new PrinterUnavailableException("A conexão com a impressora caiu no meio do tíquete (simulado).");
+                    throw new PrinterUnavailableException("A conexão com a impressora caiu no meio do tíquete (simulado).", "PRINTER_OFFLINE");
                 }
 
                 var path = baseName + ".txt";

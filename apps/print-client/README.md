@@ -102,6 +102,21 @@ O app só executa o instalador se **todas** as regras valerem; qualquer falha de
   reservado do Windows; tamanho ≤ 200 MB; SHA-256 e tamanho conferidos **antes** de executar e **de novo** pelo handle aberto
   (`FileShare.Read`) no instante do `Process.Start`. Baixa para `%LOCALAPPDATA%\MeuCardapioPrintClient\updates\`.
 
+**A atualização nunca instala sozinha (PC-13).** O app verifica e baixa em segundo plano (ao abrir e pelo menu "Verificar atualizações"; não há verificação periódica),
+confere assinatura e SHA-256 e só então **avisa** (balão + item "Instalar atualização X..." no menu do ícone). O instalador só roda depois do "sim" do lojista, numa pergunta que mostra a
+versão e o início do SHA-256 já conferidos; o arquivo é **reverificado pelo mesmo handle aberto** no instante de executar (U1). "Não agora", ou fechar o app, **apaga o instalador baixado**
+(nada executável fica esperando em disco; a próxima verificação baixa de novo, uma vez). `minVersion` (versão obrigatória) **só avisa com texto mais forte e oferece**: continua pedindo confirmação.
+Instalar só "fora do expediente" não foi feito (o app não conhece o horário da loja): a confirmação do lojista cobre o horário de pico.
+
+**Chave de release com senha (PC-13, PC-13b).** `new-update-key.ps1` grava a chave privada **cifrada** (`.updkey`, formato versionado `MCUK` **v2**: uma única derivação PBKDF2-HMAC-SHA256 de 32 bytes com
+600 000 iterações, da qual saem por HMAC ("enc"/"mac") a chave AES-256-CBC e a do HMAC-SHA256, conferido **antes** de decifrar; senha mínima de 12 caracteres; o v1, só de teste e com derivação mais fraca, não é
+aceito). A senha é pedida **por prompt seguro, duas vezes**; não existe parâmetro de senha em texto nem variável de ambiente, e sem console o script **falha** (não grava texto puro em silêncio).
+`-NoPassword` grava XML puro com aviso (escolha consciente) e o `sign-update.ps1` **recusa** chave em texto puro (só com `-AllowPlainKey`, desaconselhado). `sign-update.ps1` pede a senha, decifra só em memória,
+reverifica a assinatura e solta a chave (limite honesto: o XML decifrado é uma string do .NET, que o PowerShell não consegue apagar da memória; buffers de bytes e chaves derivadas são zerados). **Perdeu a senha = perdeu a chave.**
+Teste: `.\tools\test-keyfile.ps1` (32 checagens: ida e volta, senha errada, adulteração, truncado, senha curta, não sobrescreve, sem console, texto puro recusado, release assinado aceito pelo código do app e
+um cálculo **independente** do PBKDF2 que confere o arquivo gerado). Se uma verificação posterior apagar o instalador pendente (a pasta de atualizações é limpa quando acha versão nova), a tela esconde
+"Instalar atualização" e explica o motivo; nada executa.
+
 Publicar um release (**só o Claudio**, na máquina dele; a chave privada fica fora do repositório e o script recusa caminho dentro dele):
 
 ```powershell
@@ -188,6 +203,19 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
   Teste de propriedade com 3 000 textos aleatórios (seed fixa): saída sem caractere proibido, `Sanitize` idempotente, sem exceção.
 - **Consulta WMI da impressora:** timeout de 3 s na enumeração e teto de 5 s no total (acima disso vale "desconhecido" e a impressão segue), cada objeto liberado.
   A consulta é de **voo único**: se uma está presa, a próxima volta "desconhecido" na hora, sem criar outra tarefa. Imprimir e consultar rodam **fora da thread da interface** e uma impressão por vez (tíquetes nunca se misturam).
+
+## Modo PrintJob (PC-03, ADR-0004)
+
+Com `"UsePrintJobs": true` no `settings.json` o cliente consome a fila de **jobs** (claim com lease + ack) em vez de `/api/device/orders/pending`. **Desligado por padrão** até a API-12 existir e as
+lojas-piloto migrarem. O formato JSON é uma **suposição** nossa, documentada em `docs\contrato-printjob-cliente.md` (o ADR fixa o comportamento, não os campos): o Turing precisa confirmá-la.
+
+- O servidor decide o que imprimir; o cliente obedece. Um job por vez, no máximo 20 por ciclo.
+- Dedupe local **por job** (`job:<id>`): original e 2ª via do mesmo pedido são jobs diferentes. Job já impresso que o servidor oferece de novo (ack perdido, lease vencida) **não reimprime**: só reenvia `PRINTED`.
+- **Não faz claim enquanto há job em impressão ou em recuo de falha:** não segura job que não vai imprimir (outra impressora pode pegar) e não reclama o mesmo job se a impressão passar da lease.
+- Falha de impressão: ack `FAILED` com **só um código de lista fechada** (`PRINTER_OFFLINE`, `NO_PAPER`, `DRIVER_ERROR`, `PRINTER_NOT_FOUND`, `OTHER`) e uma frase fixa nossa (melhor esforço); a mensagem detalhada da exceção (pode ter nome de impressora, caminho ou usuário do Windows) fica **só no log local** + indicador "sem imprimir" + recuo local. `PRINTED` perdido por rede fica **pendente em disco** e é repetido; `409` (lease vencida) e `404` encerram sem repetir.
+- Tipos: `ORDER_KITCHEN` (com alerta sonoro), `ORDER_REPRINT` (2ª via, aviso de cancelamento via `cancelNotice`) e `TEST` (tíquete de teste próprio com acentos e régua de colunas). Tipo desconhecido (`TAB_BILL` é do PC-08) ⇒ `FAILED`.
+- Teste: `SelfTestJobs.cs` roda o `DeviceClient` real contra uma API falsa que implementa lease, ack idempotente, 409 e attempts (feliz, fila vazia, offline, 2ª via/cancelamento/teste, tipo desconhecido,
+  lease vencida, re-oferta, ack com falha + reinício, duas impressoras, chave recusada, recuo sem laço quente, impressora com defeito não segura o job, padrão legado intacto).
 
 ## Confiabilidade e segredos (PC-02)
 

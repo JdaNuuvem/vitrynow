@@ -41,7 +41,9 @@ namespace MeuCardapio.PrintClient.Services
             {
                 // Falhou: o pedido continua pendente na API e volta depois do recuo do ledger
                 // (15 s, 30 s, ... 5 min), sem novo alerta sonoro; entra no indicador "sem imprimir".
-                _device.ReportPrintFailed(order.OrderId, order.Code);
+                // Ao servidor vai só o CÓDIGO (lista fechada); ex.Message (pode ter nome de impressora, caminho, usuário) fica local.
+                var pf = ex as PrinterUnavailableException;
+                _device.ReportPrintFailed(order.OrderId, order.Code, pf == null ? PrintFailure.Other : PrintFailure.Normalize(pf.Code));
                 var msg = "Erro na impressão do pedido #" + order.Code + ": " + ex.Message;
                 Message?.Invoke(msg);
                 return;

@@ -19,6 +19,8 @@ namespace MeuCardapio.PrintClient.UI
         readonly TrackBar _volume = new TrackBar { Minimum = 0, Maximum = 100, TickFrequency = 10, Width = 180 };
         readonly Label _toast = new Label { AutoSize = true, ForeColor = Color.DarkGreen, Location = new Point(16, 190), MaximumSize = new Size(380, 0) };
         readonly NotifyIcon _tray = new NotifyIcon();
+        ToolStripMenuItem _installItem;
+        volatile bool _manualUpdateCheck;
         // Indicador fixo (PC-06 d / PC-05): não some como o toast. Vazio = sem problema.
         readonly Label _problemLabel = new Label
         {
@@ -65,11 +67,15 @@ namespace MeuCardapio.PrintClient.UI
             var menu = new ContextMenuStrip();
             menu.Items.Add(App.AutoStart ? "Mostrar" : "Minimizar", null, (s, e) => Show());
             menu.Items.Add("Configurar chave...", null, (s, e) => OpenSetup());
-            menu.Items.Add("Verificar atualizações", null, (s, e) => Task.Run(() => Updater.CheckForUpdate()));
+            menu.Items.Add("Verificar atualizações", null, (s, e) => { _manualUpdateCheck = true; Task.Run(() => Updater.CheckForUpdate()); });
+            _installItem = new ToolStripMenuItem("Instalar atualização...", null, (s, e) => PromptInstallUpdate()) { Visible = false };
+            menu.Items.Add(_installItem);
             menu.Items.Add("Sair", null, (s, e) => Close());
             _tray.ContextMenuStrip = menu;
 
             Updater.StatusChanged += text => BeginInvoke(new Action(() => Toast(text)));
+            Updater.UpdateReady += r => BeginInvoke(new Action(() => OnUpdateReady(r)));
+            Updater.PendingLost += () => BeginInvoke(new Action(() => _installItem.Visible = false));
 
             if (App.AutoStart) WindowState = FormWindowState.Minimized;
 
@@ -79,6 +85,46 @@ namespace MeuCardapio.PrintClient.UI
                 App.StartListeners();
                 if (Updater.IsConfigured) Task.Run(() => Updater.CheckForUpdate());
             };
+        }
+
+        // PC-13: a atualização NUNCA instala sozinha. Verificada e baixada, ela espera o "sim" do lojista, porque o
+        // instalador fecha o app e pode interromper a impressão no horário de pico.
+        void OnUpdateReady(UpdateResult r)
+        {
+            _installItem.Text = "Instalar atualização " + r.Version + "...";
+            _installItem.Visible = true;
+            bool manual = _manualUpdateCheck; _manualUpdateCheck = false;
+            if (manual) { PromptInstallUpdate(); return; }
+            // Verificação automática: só avisa (balão + item no menu), sem tirar o foco da cozinha.
+            if (_tray.Visible)
+                _tray.ShowBalloonTip(10000, "MeuCardapio - Impressão",
+                    (r.Required ? "Atualização obrigatória " : "Atualização ") + r.Version + " pronta. Clique com o botão direito no ícone > Instalar atualização, num momento tranquilo.",
+                    r.Required ? ToolTipIcon.Warning : ToolTipIcon.Info);
+        }
+
+        void PromptInstallUpdate()
+        {
+            var r = Updater.Pending;
+            if (r == null) { Toast(Updater.PendingLostMessage); _installItem.Visible = false; return; }
+            var text = "Instalar a atualização " + r.Version + " agora?" + Environment.NewLine
+                + "Arquivo conferido (assinatura e SHA-256 " + r.ExpectedSha256.Substring(0, Math.Min(16, r.ExpectedSha256.Length)) + "...)." + Environment.NewLine + Environment.NewLine
+                + "O aplicativo será fechado e a impressão para até você abri-lo de novo (os pedidos novos ficam na fila e saem depois)."
+                + Environment.NewLine + "Prefira um momento sem pedidos."
+                + (r.Required ? Environment.NewLine + Environment.NewLine + "Esta versão do aplicativo não é mais suportada: atualize assim que puder." : "");
+            if (MessageBox.Show(this, text, "MeuCardapio - Impressão", MessageBoxButtons.YesNo, r.Required ? MessageBoxIcon.Warning : MessageBoxIcon.Question) != DialogResult.Yes)
+            {
+                Updater.DiscardPending(); // não deixa o instalador esperando em disco; "Verificar atualizações" baixa de novo quando quiser
+                _installItem.Visible = false;
+                Toast("Atualização adiada. Use o menu do ícone > Verificar atualizações quando quiser.");
+                return;
+            }
+            bool started = Updater.InstallPending(path => System.Diagnostics.Process.Start(path), msg => Toast(msg));
+            if (started)
+            {
+                _installItem.Visible = false;
+                Logger.Info("Atualização " + r.Version + " iniciada pelo lojista");
+                Application.Exit();
+            }
         }
 
         // Parecer Nightingale (C2): a migração da chave em texto puro precisa ser visível.

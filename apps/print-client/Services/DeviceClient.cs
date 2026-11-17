@@ -187,6 +187,9 @@ namespace MeuCardapio.PrintClient.Services
             // 1) acks que ficaram pendentes (rede caiu depois de imprimir): repete, nunca reimprime.
             foreach (var id in _ledger.PendingAcks()) await TryAckAsync(id, token);
 
+            // 1b) modo PrintJob (PC-03, ADR-0004): o servidor decide o que imprimir (claim com lease) e o cliente obedece.
+            if (_settings.UsePrintJobs) { await ClaimJobsAsync(token); return; }
+
             // 2) pedidos pendentes na API.
             var json = await GetStringAsync("/api/device/orders/pending", token);
             var pending = JsonConvert.DeserializeObject<PendingOrdersResponse>(json);
@@ -220,6 +223,156 @@ namespace MeuCardapio.PrintClient.Services
             }
         }
 
+        // ---------------------------------------------------------------------------------------------------------------
+        // Modo PrintJob (PC-03). Contrato assumido: docs\contrato-printjob-cliente.md (a confirmar pelo Turing, API-12).
+        // ---------------------------------------------------------------------------------------------------------------
+        public const int MaxJobsPerCycle = 20;
+        public static readonly TimeSpan StaleFailureAge = TimeSpan.FromMinutes(30);
+        public const string JobKeyPrefix = "job:";
+
+        public static bool IsJobKey(string key) { return key != null && key.StartsWith(JobKeyPrefix, StringComparison.Ordinal); }
+
+        // Um job por vez: só pede o próximo depois de resolver o atual (imprimiu, falhou ou venceu a lease), para a lease
+        // não vencer enquanto o job espera na fila LOCAL. Se o servidor oferece um job que não podemos começar agora
+        // (em recuo depois de falha), para o laço e tenta no próximo ciclo (sem laço quente).
+        async Task ClaimJobsAsync(CancellationToken token)
+        {
+            _ledger.ForgetStaleFailures(StaleFailureAge);
+            // Não reclama enquanto há job em impressão (lease correndo; reclamar o mesmo de novo prenderia o job) nem enquanto
+            // há job em recuo de falha (a impressora acabou de falhar; reclamar seguraria o job pela lease inteira e bloquearia
+            // as outras impressoras). O job volta à fila do servidor e outra impressora pode pegá-lo.
+            // A checagem é a CADA iteração: logo depois de uma falha o laço pediria o próximo job antes de o FAILED chegar ao
+            // servidor, que re-ofereceria o mesmo job e o cliente o seguraria pela lease inteira.
+            for (int n = 0; n < MaxJobsPerCycle; n++)
+            {
+                token.ThrowIfCancellationRequested();
+                if (_ledger.AnyJobInFlight() || _ledger.AnyJobInBackoff()) return;
+                var job = await ClaimNextAsync(token);
+                if (job == null) return; // fila vazia
+                if (!await HandleJobAsync(job, token)) return;
+            }
+        }
+
+        // false = parar o laço deste ciclo.
+        async Task<bool> HandleJobAsync(PrintJobDto job, CancellationToken token)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var key = job.Key;
+            int leaseSeconds = job.LeaseSeconds.HasValue && job.LeaseSeconds.Value > 0 ? job.LeaseSeconds.Value : PrintJobDto.DefaultLeaseSeconds;
+
+            // Já impresso aqui (ack perdido ou lease vencida antes do ack): NÃO reimprime, só reenvia PRINTED.
+            if (_ledger.IsPrinted(key))
+            {
+                await TryAckAsync(key, token);
+                return true;
+            }
+
+            string kind = (job.Kind ?? "").Trim().ToUpperInvariant();
+            bool known = kind == PrintJobDto.KindKitchen || kind == PrintJobDto.KindReprint || kind == PrintJobDto.KindTest || kind == PrintJobDto.KindCancelNotice;
+            if (!known)
+            {
+                StatusChanged?.Invoke("Job de impressão de tipo não suportado (" + (kind.Length > 40 ? kind.Substring(0, 40) : kind) + "): recusado.");
+                // O tipo recebido NÃO volta ao servidor (frase fixa nossa, código OTHER).
+                await SendJobAckAsync(job.Id, "FAILED", PrintFailure.Other, "tipo de job não suportado", token);
+                return true;
+            }
+
+            var ticket = job.Ticket;
+            // TEST (ADR-0004 §8 item 11): o CLIENTE imprime o proprio tiquete de teste e ignora todo campo de pedido do servidor
+            // (valor, pagamento, itens); so o nome da loja e aproveitado. Assim o papel de teste nunca manda "COBRAR".
+            if (kind == PrintJobDto.KindTest) ticket = new PrintableOrder { IsTest = true, Code = "TESTE", StoreName = ticket == null ? null : ticket.StoreName };
+            if (ticket == null)
+            {
+                await SendJobAckAsync(job.Id, "FAILED", PrintFailure.Other, "tíquete ausente no job", token);
+                return true;
+            }
+
+            // Aviso de cancelamento: o tipo do job manda, não a bandeira do tíquete. Sem ela o papel sairia como um pedido novo completo.
+            if (kind == PrintJobDto.KindCancelNotice) ticket.CancelNotice = true;
+
+            // Em recuo depois de falha (ou já em impressão): não imprime agora; o servidor re-oferece depois.
+            if (!_ledger.TryBeginPrint(key)) return false;
+
+            ticket.OrderId = key; // a chave do ledger/ack é o JOB (original e 2ª via do mesmo pedido são jobs diferentes)
+            if (kind == PrintJobDto.KindKitchen && _ledger.ShouldAlert(key)) OrderPending?.Invoke();
+            TicketReady?.Invoke(ticket);
+
+            // Espera resolver (impresso, falhou ou watchdog). Se a lease vencer com o job ainda em impressão, para: o servidor
+            // re-oferece e o ack deste vai receber 409; o que importa é não imprimir duas vezes (o ledger lembra).
+            while (_ledger.IsInFlight(key))
+            {
+                if (clock.Elapsed.TotalSeconds >= leaseSeconds)
+                {
+                    StatusChanged?.Invoke("A impressão do job demorou mais que a lease (" + leaseSeconds + " s): o servidor pode oferecê-lo de novo.");
+                    return false;
+                }
+                try { await Task.Delay(40, token); } catch (OperationCanceledException) { throw; }
+            }
+            return true;
+        }
+
+        async Task<PrintJobDto> ClaimNextAsync(CancellationToken token)
+        {
+            using (var content = new StringContent("{}", Encoding.UTF8, "application/json"))
+            using (var request = NewRequest(HttpMethod.Post, "/api/device/print-jobs/claim", content))
+            using (var response = await _http.SendAsync(request, token))
+            {
+                int code = (int)response.StatusCode;
+                if (code >= 300 && code < 400) throw new InvalidOperationException("a API respondeu com redirecionamento (" + code + "); confira a URL");
+                if (code == 401 || code == 403) throw new DeviceAuthException(code);
+                if (code == 204) { Interlocked.Exchange(ref _authFailures, 0); return null; }
+                response.EnsureSuccessStatusCode();
+                Interlocked.Exchange(ref _authFailures, 0);
+                var body = await response.Content.ReadAsStringAsync();
+                var claim = JsonConvert.DeserializeObject<ClaimResponse>(body);
+                var job = claim == null ? null : claim.Job;
+                if (job == null) return null;
+                if (string.IsNullOrWhiteSpace(job.Id)) throw new InvalidOperationException("job sem id na resposta do claim");
+                return job;
+            }
+        }
+
+        // Ack do job. PRINTED é repetido pelo ledger (TryAckAsync); FAILED é de melhor esforço.
+        // Devolve true se o servidor tratou o assunto (200, 409 ou 404): não há o que repetir.
+        // FAILED leva só o CÓDIGO da lista fechada (PrintFailure) e uma frase FIXA nossa; nunca texto de exceção, driver, impressora
+        // ou do servidor (ADR-0004 §8 item 8). O detalhe fica no log local.
+        async Task<bool> SendJobAckAsync(string jobId, string status, string failureCode, string fixedText, CancellationToken token)
+        {
+            try
+            {
+                var failCode = PrintFailure.Normalize(failureCode);
+                var payload = status == "FAILED"
+                    ? JsonConvert.SerializeObject(new { status = status, code = failCode, error = string.IsNullOrWhiteSpace(fixedText) ? PrintFailure.Phrase(failCode) : TrimError(fixedText) })
+                    : JsonConvert.SerializeObject(new { status = status });
+                using (var content = new StringContent(payload, Encoding.UTF8, "application/json"))
+                using (var request = NewRequest(HttpMethod.Post, "/api/device/print-jobs/" + Uri.EscapeDataString(jobId) + "/ack", content))
+                using (var response = await _http.SendAsync(request, token))
+                {
+                    int code = (int)response.StatusCode;
+                    if (code == 401 || code == 403) { NoteAuthFailure(code, false); return false; }
+                    if (response.IsSuccessStatusCode) { Interlocked.Exchange(ref _authFailures, 0); return true; }
+                    if (code == 409)
+                    {
+                        StatusChanged?.Invoke(status == "PRINTED"
+                            ? "O servidor recusou o aviso de impressão (lease vencida ou outro computador assumiu o job): o pedido pode sair de novo em outra impressora."
+                            : "O servidor recusou o aviso de falha (lease vencida): ele já recolocou o job na fila.");
+                        return true;
+                    }
+                    if (code == 404) return true;
+                    StatusChanged?.Invoke("API recusou o aviso do job (" + code + ")");
+                    return false;
+                }
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch (Exception ex) { StatusChanged?.Invoke("Erro ao avisar o job: " + Describe(ex)); return false; }
+        }
+
+        static string TrimError(string error)
+        {
+            var e = (error ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
+            return e.Length > 200 ? e.Substring(0, 200) : e;
+        }
+
         // O app imprimiu com sucesso. SÍNCRONO e no disco ANTES de qualquer outra coisa (PC-06 a):
         // se o processo cair logo depois, o pedido NÃO é reimpresso. O aviso à API vem em AckPrintedAsync.
         public void RecordPrinted(string orderId)
@@ -239,14 +392,26 @@ namespace MeuCardapio.PrintClient.Services
 
         // A impressão falhou: o pedido só volta depois do recuo e sem novo alerta sonoro; entra no
         // indicador "sem imprimir" da tela.
-        public void ReportPrintFailed(string orderId, string code = null)
+        public void ReportPrintFailed(string orderId, string code = null, string failureCode = null)
         {
             _ledger.MarkPrintFailed(orderId, code);
             PublishProblems();
+            // Job: avisa o servidor com o motivo (melhor esforço; se não chegar, a lease vence e ele recoloca na fila).
+            if (IsJobKey(orderId))
+            {
+                var jobId = orderId.Substring(JobKeyPrefix.Length);
+                Task.Run(() => SendJobAckAsync(jobId, "FAILED", failureCode, null, CancellationToken.None));
+            }
         }
 
         async Task TryAckAsync(string orderId, CancellationToken token)
         {
+            if (IsJobKey(orderId))
+            {
+                // PRINTED do job: 200/409/404 encerram (409 = lease vencida, já avisado); o resto repete no próximo ciclo.
+                if (await SendJobAckAsync(orderId.Substring(JobKeyPrefix.Length), "PRINTED", null, null, token)) _ledger.MarkAcked(orderId);
+                return;
+            }
             try
             {
                 using (var content = new StringContent("{}", Encoding.UTF8, "application/json"))

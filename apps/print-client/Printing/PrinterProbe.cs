@@ -15,10 +15,19 @@ namespace MeuCardapio.PrintClient.Printing
         public const int TotalTimeoutMs = 5000;
 
         // null = pode imprimir (ou desconhecido); senão, o motivo em português para o lojista.
-        public static string Check(string printerName)
+        public static string Check(string printerName) { string code; return Check(printerName, out code); }
+
+        // Com o código de lista fechada (PRINTER_OFFLINE, NO_PAPER, PRINTER_NOT_FOUND, OTHER) para o ack do job.
+        public static string Check(string printerName, out string code)
         {
-            if (string.IsNullOrWhiteSpace(printerName)) return "Nenhuma impressora selecionada.";
-            return WithTimeout(() => CheckCore(printerName), TotalTimeoutMs);
+            code = "OTHER";
+            if (string.IsNullOrWhiteSpace(printerName)) { code = "PRINTER_NOT_FOUND"; return "Nenhuma impressora selecionada."; }
+            var coded = WithTimeout(() => CheckCore(printerName), TotalTimeoutMs);
+            if (coded == null) return null;
+            int sep = coded.IndexOf('|');
+            if (sep < 0) return coded;
+            code = coded.Substring(0, sep);
+            return coded.Substring(sep + 1);
         }
 
         // Roda `probe` em outra thread e desiste depois de `timeoutMs` (devolve null = desconhecido, não bloqueia).
@@ -60,13 +69,22 @@ namespace MeuCardapio.PrintClient.Printing
                             bool offline = p["WorkOffline"] is bool && (bool)p["WorkOffline"];
                             int status = p["PrinterStatus"] == null ? 0 : Convert.ToInt32(p["PrinterStatus"]);
                             int error = p["DetectedErrorState"] == null ? 0 : Convert.ToInt32(p["DetectedErrorState"]);
-                            return Describe(offline, status, error);
+                            var text = Describe(offline, status, error);
+                            return text == null ? null : CodeOf(offline, status, error) + "|" + text;
                         }
                     }
                 }
             }
             catch { /* WMI indisponível: segue e deixa o spooler decidir */ }
             return null;
+        }
+
+        // Código de lista fechada do problema (o texto de Describe NÃO vai ao servidor).
+        public static string CodeOf(bool workOffline, int printerStatus, int errorState)
+        {
+            if (workOffline || printerStatus == 7 || errorState == 9) return "PRINTER_OFFLINE";
+            if (errorState == 4) return "NO_PAPER";
+            return "OTHER"; // tampa aberta, papel enroscado, manutenção, fila parada
         }
 
         // PrinterStatus: 3 idle, 4 printing, 5 warmup, 6 stopped, 7 offline.
