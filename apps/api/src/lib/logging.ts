@@ -164,54 +164,106 @@ export const LOG_MAX_DEPTH = 8;
 export const LOG_MAX_STRING = 2000;
 const LOG_MAX_KEYS = 100;
 const LOG_MAX_ITEMS = 50;
-const SECRET_KEY = /token|secret|passw|passwd|authoriz|cookie|api[-_]?key|bearer|credential|signature|jwt|session/i;
-// segredo dentro de texto: `Bearer abc`, `Authorization: abc`, `"access_token":"abc"`, `password=abc`, `client_secret=abc`
-const SECRET_IN_TEXT = /\b(bearer|basic)\s+[A-Za-z0-9._~+\/=-]{6,}|((?:access_token|refresh_token|client_secret|id_token|api[-_]?key|password|passwd|authorization|x-order-token|x-mfa-challenge|x-admin-token)["']?\s*[:=]\s*["']?)(?:(?:bearer|basic)\s+)?[^"'&\s,}]+/gi;
+const SECRET_KEY = /token|secret|passw|passwd|pwd|senha|authoriz|cookie|api[-_]?key|bearer|credential|signature|jwt|session/i;
+// SEC-33 (ST-78): nomes curtos só por IGUALDADE (por trecho pegariam `author`, `spin`, `hotp`). `code` NÃO entra como chave: é o código do pedido e
+// o código de erro em quase todo log; o `code`/`state` do OAuth vai na query e é apagado do TEXTO (QUERY_OAUTH abaixo) e da URL (`redactLogUrl`).
+const SECRET_KEY_EXACT = /^(auth|pass|pin|otp|cvv)$/i;
+const isSecretKey = (key: string) => SECRET_KEY.test(key) || SECRET_KEY_EXACT.test(key);
+// segredo dentro de texto, em passes separados (a ordem importa):
+//  1) linha de cabeçalho inteira: `Authorization: Digest …`, `Cookie: a=b; c=d`, `Set-Cookie: …` (vai até o fim da linha)
+const HEADER_LINE = /\b(proxy-authorization|authorization|set-cookie|cookie)(\s*:\s*)[^\r\n]+/gi;
+//  2) `nome=valor` / `"nome":"valor"` com valor entre aspas (aceita espaço dentro) ou sem aspas
+const NAMED_VALUE = /\b((?:access_token|refresh_token|client_secret|id_token|api[-_]?key|password|passwd|pwd|senha|authorization|x-order-token|x-mfa-challenge|x-admin-token)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|(?:(?:bearer|basic|digest)\s+)?[^\s"'&,}]+)/gi;
+//  3) esquema solto (`Bearer abc`), JWT puro (três partes em base64url, a 1ª começa com `eyJ`), `?code=`/`&state=` do OAuth
+const SCHEME = /\b(bearer|basic)\s+[A-Za-z0-9._~+\/=-]{6,}/gi;
+const JWT = /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/g;
+const QUERY_OAUTH = /([?&](?:code|state)=)[^&\s]+/gi;
 // chaves tratadas por serializador do pino (cada uma sabe o que loga): req/res/err e o `errorKey`; o formatador as deixa passar
 const SERIALIZED_KEYS = new Set(["req", "res", "err"]);
 
 export function scrubText(text: string): string {
   const cut = text.length > LOG_MAX_STRING ? `${text.slice(0, LOG_MAX_STRING)}…[cortado]` : text;
-  return cut.replace(SECRET_IN_TEXT, (_match, scheme: string | undefined, assignment: string | undefined) => (scheme ? `${scheme} [redigido]` : `${assignment}[redigido]`));
+  return cut
+    .replace(HEADER_LINE, (_match, name: string, colon: string) => `${name}${colon}[redigido]`)
+    .replace(NAMED_VALUE, (_match, prefix: string, value: string) => {
+      const quote = value.startsWith('"') ? '"' : value.startsWith("'") ? "'" : "";
+      return `${prefix}${quote}[redigido]${quote}`;
+    })
+    .replace(SCHEME, (_match, scheme: string) => `${scheme} [redigido]`)
+    .replace(JWT, "[redigido]")
+    .replace(QUERY_OAUTH, (_match, prefix: string) => `${prefix}[redigido]`);
 }
+
+// `code` e `state` (OAuth) só são segredo quando o VALOR parece credencial (≥ 16 caracteres, letras e números): o `code` do pedido e o de erro
+// (`P2002`, `ERR_BAD_REQUEST`, `0042`) seguem legíveis em todo log.
+const OAUTH_KEY = /^(code|state)$/i;
+function isSecretEntry(key: string, value: unknown): boolean {
+  if (isSecretKey(key)) return true;
+  return OAUTH_KEY.test(key) && typeof value === "string" && BARE_CREDENTIAL.test(value);
+}
+
+// SEC-33 (ST-78): um LOG não pode derrubar a rota nem o tratador de 5xx. Objeto com getter que lança, Proxy hostil ou erro com `message` que
+// lança viram um marcador, nunca uma exceção para quem chamou `log.info(...)`.
+const UNREADABLE = "[ilegível]";
 
 function sanitize(value: unknown, depth: number, seen: WeakSet<object>): unknown {
   if (value === null || value === undefined) return value;
   if (typeof value === "string") return scrubText(value);
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return value;
   if (typeof value === "function" || typeof value === "symbol") return undefined;
-  if (value instanceof Error) return safeError(value);
-  if (value instanceof Date) return value;
-  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return "[binário]";
-  if (depth >= LOG_MAX_DEPTH) return "[profundo demais]";
-  const object = value as Record<string, unknown>;
-  if (seen.has(object)) return "[circular]";
-  seen.add(object);
   try {
-    if (Array.isArray(value)) return value.slice(0, LOG_MAX_ITEMS).map((item) => sanitize(item, depth + 1, seen));
-    const out: Record<string, unknown> = {};
-    let count = 0;
-    for (const key of Object.keys(object)) {
-      if (count >= LOG_MAX_KEYS) {
-        out["[…]"] = "chaves omitidas";
-        break;
+    if (value instanceof Error) return safeError(value);
+    if (value instanceof Date) return value;
+    if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return "[binário]";
+    if (depth >= LOG_MAX_DEPTH) return "[profundo demais]";
+    const object = value as Record<string, unknown>;
+    if (seen.has(object)) return "[circular]";
+    seen.add(object);
+    try {
+      if (Array.isArray(value)) return value.slice(0, LOG_MAX_ITEMS).map((item) => sanitize(item, depth + 1, seen));
+      const out: Record<string, unknown> = {};
+      let count = 0;
+      for (const key of Object.keys(object)) {
+        if (count >= LOG_MAX_KEYS) {
+          out["[…]"] = "chaves omitidas";
+          break;
+        }
+        count += 1;
+        let child: unknown;
+        try {
+          child = object[key];
+        } catch {
+          out[key] = UNREADABLE; // getter que lança: o nome fica, o valor não
+          continue;
+        }
+        out[key] = isSecretEntry(key, child) ? "[redigido]" : sanitize(child, depth + 1, seen);
       }
-      count += 1;
-      out[key] = SECRET_KEY.test(key) ? "[redigido]" : sanitize(object[key], depth + 1, seen);
+      return out;
+    } finally {
+      seen.delete(object); // só ciclo de verdade é "circular": o mesmo objeto em dois ramos irmãos é logado nos dois
     }
-    return out;
-  } finally {
-    seen.delete(object); // só ciclo de verdade é "circular": o mesmo objeto em dois ramos irmãos é logado nos dois
+  } catch {
+    return UNREADABLE;
   }
 }
 
 export function sanitizeLogObject(obj: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  const seen = new WeakSet<object>();
-  for (const key of Object.keys(obj)) {
-    const value = obj[key];
-    if (SERIALIZED_KEYS.has(key)) out[key] = value; // o serializador da chave (req/res/err) cuida; não percorrer o objeto da requisição
-    else out[key] = SECRET_KEY.test(key) ? "[redigido]" : sanitize(value, 0, seen);
+  try {
+    const seen = new WeakSet<object>();
+    for (const key of Object.keys(obj)) {
+      let value: unknown;
+      try {
+        value = obj[key];
+      } catch {
+        out[key] = UNREADABLE;
+        continue;
+      }
+      if (SERIALIZED_KEYS.has(key)) out[key] = value; // o serializador da chave (req/res/err) cuida; não percorrer o objeto da requisição
+      else out[key] = isSecretEntry(key, value) ? "[redigido]" : sanitize(value, 0, seen);
+    }
+  } catch {
+    out.logSanitizeFailed = true; // falha inesperada ao percorrer: o que já foi limpo sai, e o log segue
   }
   return out;
 }
@@ -227,7 +279,13 @@ export function loggerOptions() {
         return { method: request.method, url: routeLogUrl(request), hostname: clip(request.hostname, LOG_HOSTNAME_MAX), remoteAddress: request.ip, remotePort: request.socket?.remotePort };
       },
       // o tipo do Fastify exige type/message/stack; o conteúdo real (sem message/stack para erro do Prisma) é o de `safeError`
-      err: safeError as unknown as (error: Error) => { type: string; message: string; stack: string },
+      err: ((error: unknown) => {
+        try {
+          return safeError(error);
+        } catch {
+          return { type: "ErroIlegivel" }; // `message`/`stack` que lançam não podem derrubar quem loga (SEC-33)
+        }
+      }) as unknown as (error: Error) => { type: string; message: string; stack: string },
     },
   };
 }
