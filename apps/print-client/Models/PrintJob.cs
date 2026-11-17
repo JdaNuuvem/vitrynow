@@ -23,6 +23,12 @@ namespace MeuCardapio.PrintClient.Models
         public string Key { get { return "job:" + Id; } }
     }
 
+    // GET /api/device/config (API-12b): a configuracao do dispositivo. Hoje so o modo da loja ("LEGACY" | "QUEUE").
+    public class DeviceConfigResponse
+    {
+        [JsonProperty("mode")] public string Mode { get; set; }
+    }
+
     public class ClaimResponse
     {
         [JsonProperty("job")] public PrintJobDto Job { get; set; }

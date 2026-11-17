@@ -782,7 +782,7 @@ namespace MeuCardapio.PrintClient
             {
                 using (var api = new FakeApi())
                 {
-                    api.PrintMode = "QUEUE";
+                    api.PrintMode = "QUEUE"; api.ConfigEnabled = false; api.PendingEmptyInQueue = false;   // cinto: API sem config e legado com 409
                     var o = Order("M2", "5102");
                     api.AddJob("m2", o);
                     lock (api.Lock) api.Pending.Add(new[] { o.OrderId, o.Code });   // o servidor ainda lista o pedido, mas o legado esta fechado
@@ -1009,7 +1009,7 @@ namespace MeuCardapio.PrintClient
             {
                 using (var api = new FakeApi())
                 {
-                    api.PrintMode = "QUEUE";
+                    api.PrintMode = "QUEUE"; api.ConfigEnabled = false; api.PendingEmptyInQueue = false;
                     api.Legacy409Body = "{\"error\":\"MODE_QUEUE na mensagem\",\"code\":\"OUTRO\"}";
                     var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
                     using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: false))
@@ -1023,6 +1023,96 @@ namespace MeuCardapio.PrintClient
                         api.Legacy409Body = null;         // corpo padrao: code == MODE_QUEUE
                         bool switched = WaitFor(() => rig.Device.CurrentMode == DeviceClient.ModeQueue, 10000);
                         Check("409 com code == MODE_QUEUE: troca para a fila", switched);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+
+            // N1 (PC-22, achado da conferencia cruzada com a API-12b real): em QUEUE o /pending devolve 200 e lista VAZIA (nao 409). O cliente
+            // PADRAO (comeca no legado) precisa descobrir a fila pela configuracao do dispositivo e imprimir o job UMA vez.
+            dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.PrintMode = "QUEUE";
+                    var o = Order("N1", "5201"); api.AddJob("n1", o);
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: false))
+                    {
+                        rig.Start();
+                        bool done = WaitFor(() => api.JobState("n1") == "PRINTED" && Paper(printer, "5201") == 1, 20000);
+                        Thread.Sleep(400);
+                        Check("cliente PADRAO (legado) numa loja em QUEUE com /pending vazio: descobre a fila pela config e imprime o job 1 vez", done && Paper(printer, "5201") == 1 && rig.Device.CurrentMode == DeviceClient.ModeQueue);
+                        Check("config: o legado nao buscou nenhum tiquete nem avisou /printed (a fila cuidou)", api.Count("/printable") == 0 && api.Count("/printed") == 0);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+
+            // N2: API ANTIGA (config 404): pergunta UMA vez e para; o legado segue funcionando sem a config.
+            dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.PrintMode = null; api.ConfigEnabled = false;
+                    var o = Order("N2", "5202"); LegacyOrder(api, o);
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: false))
+                    {
+                        rig.Start();
+                        bool done = WaitFor(() => Paper(printer, "5202") == 1, 20000);
+                        int calls1 = api.ConfigCalls; Thread.Sleep(800); int calls2 = api.ConfigCalls;
+                        Check("API antiga (config 404): o legado imprime normalmente", done && rig.Device.CurrentMode == DeviceClient.ModeLegacy);
+                        Check("API antiga (config 404): pergunta UMA vez so e nao insiste a cada ciclo (chamadas: " + calls1 + " e depois " + calls2 + ")", calls1 == 1 && calls2 == 1);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+
+            // N3: config com erro (500), lixo ou valor desconhecido: ignora, o legado segue e nao troca de modo.
+            foreach (var bad in new[] { "500", "lixo", "vazio", "desconhecido" })
+            {
+                dir = Tmp();
+                try
+                {
+                    using (var api = new FakeApi())
+                    {
+                        api.PrintMode = "LEGACY";
+                        if (bad == "500") api.ConfigStatus = 500;
+                        else if (bad == "lixo") api.ConfigBody = "<html>nao e json</html>";
+                        else if (bad == "vazio") api.ConfigBody = "";
+                        else api.ConfigBody = "{\"mode\":\"TALVEZ\"}";
+                        var o = Order("N3" + bad, "5203"); LegacyOrder(api, o);
+                        var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                        using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: false))
+                        {
+                            rig.Start();
+                            bool done = WaitFor(() => Paper(printer, "5203") == 1, 20000);
+                            Thread.Sleep(300);
+                            Check("config com problema (" + bad + "): ignora, imprime pelo legado e continua LEGACY", done && rig.Device.CurrentMode == DeviceClient.ModeLegacy && !rig.Device.IsRevoked);
+                        }
+                    }
+                }
+                finally { Clean(dir); }
+            }
+
+            // N4: a config recusa a chave (401): segue a regra de chave recusada (nao imprime, nao fica em laco quente).
+            dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.PrintMode = "LEGACY"; api.ConfigStatus = 401;
+                    var o = Order("N4", "5204"); LegacyOrder(api, o);
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: false))
+                    {
+                        rig.Device.AuthFailureWindow = TimeSpan.FromMilliseconds(300);
+                        rig.Start();
+                        bool revoked = WaitFor(() => rig.Device.IsRevoked, 20000);
+                        Check("config responde 401 repetido: entra na regra de chave recusada (pausa) e nada imprime", revoked && Paper(printer, "5204") == 0);
                     }
                 }
             }

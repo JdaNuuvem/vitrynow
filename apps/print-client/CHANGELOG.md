@@ -17,6 +17,7 @@ O hash do EXE de cada release sai em `tools\build-installer.ps1` e entra no mani
 - Modo PrintJob (claim/ack do ADR-0004) pronto no cliente, desligado por padrão (`UsePrintJobs`); conferido contra a API-12 local (pedido, falha, 2ª via, teste, cancelamento e duas impressoras na mesma fila).
 
 - O modo de impressão (legado ou fila) vem do servidor, por loja; o app segue o servidor a cada ciclo e nunca mistura os dois na virada (nada em impressão é reclamado pelo outro modo; pedido já impresso no legado não reimprime pelo job).
+- O cliente que começa no legado descobre a fila lendo a configuração do dispositivo a cada ciclo (em fila a lista legada vem vazia, sem erro): sem isso uma loja virada para a fila ficaria sem tíquete.
 - Sons de alerta gerados pelo app.
 - Build reprodutível sem dependência do `reconstruction/`; instalador Inno Setup sem identidade do terceiro (`tools\scan-identity.ps1`).
 

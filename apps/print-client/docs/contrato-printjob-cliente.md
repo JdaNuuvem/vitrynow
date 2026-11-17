@@ -62,6 +62,7 @@ Quem decide como imprimir é o **servidor, por loja** (`Store.printMode`, padrã
 | `mode` ausente (API antiga) ou valor desconhecido | — | ignora: nada muda |
 
 - **Ponto de partida:** `UsePrintJobs` do `settings.json` é só um interruptor de desenvolvimento (padrão `false` = começa no legado). Depois do primeiro ciclo quem manda é o servidor: o legado descobre a fila pelo `409 MODE_QUEUE`; a fila descobre o legado pelo `mode:"LEGACY"` do `claim`.
+- **Configuração do dispositivo (PC-22, achado da conferência cruzada com a API-12b real):** em `QUEUE` a lista legada `/api/device/orders/pending` vem **vazia com 200** (não `409`); só `printable` e `/printed` dão `409 MODE_QUEUE`. Um cliente que começa no legado (o padrão) nunca descobriria a fila olhando a lista vazia. Por isso, no modo legado, o cliente lê **`GET /api/device/config` → `{"mode":"LEGACY"|"QUEUE"}` a cada ciclo** (a fila já recebe o `mode` no `claim`). `404` (API antiga sem a rota) desliga a pergunta; erro de rede, HTTP ou JSON, corpo vazio ou `mode` desconhecido são ignorados (o legado segue); `401/403` seguem a regra de chave recusada. O `409 MODE_QUEUE` dos endpoints do pedido continua valendo como cinto.
 - **Nunca mistura os dois modos** (a virada acontece com impressão em andamento):
   - não pede job enquanto há pedido legado **em impressão** (a impressão em andamento não pode ser reclamada como job);
   - **aviso pendente nunca bloqueia o outro modo** (um aviso recusado para sempre congelaria a loja): a proteção é o registro de "impresso" dos dois lados, abaixo;

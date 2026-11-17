@@ -72,6 +72,7 @@ namespace MeuCardapio.PrintClient.Services
         public const string ModeLegacy = "LEGACY";
         public const string ModeQueue = "QUEUE";
         volatile string _mode;
+        volatile bool _configUnsupported;   // a API respondeu 404 em /api/device/config (API antiga): nao pergunta de novo
         public string CurrentMode { get { return _mode; } }
         public event Action<string> ModeChanged;
 
@@ -229,12 +230,47 @@ namespace MeuCardapio.PrintClient.Services
             // 2) modo legado. Pedido que um job DESTE PC esta imprimindo ou ja imprimiu e pulado em LegacyCycleAsync (IsOrderHeldByJob),
             // com o aviso do job pendente ou nao: nada precisa ficar bloqueado esperando aviso. (Nao ha como chegar aqui com job em
             // impressao: o modo so vira LEGACY por um claim, e o claim nao roda enquanto ha job em impressao.)
+            // O modo legado NAO descobre a fila sozinho: em QUEUE a lista legada vem VAZIA (200), sem erro nenhum (achado da conferencia
+            // cruzada com a API-12b real: o cliente padrao ficava olhando uma lista vazia e a cozinha sem tiquete). Por isso pergunta o
+            // modo na configuracao do dispositivo a cada ciclo; o 409 MODE_QUEUE dos endpoints do pedido continua valendo como cinto.
+            await RefreshModeFromConfigAsync(token);
+            if (_mode == ModeQueue) { await ClaimJobsAsync(token); return; }
             try { await LegacyCycleAsync(token); }
             catch (ModeQueueException)
             {
                 SetMode(ModeQueue, "o servidor respondeu MODE_QUEUE");
                 await ClaimJobsAsync(token);
             }
+        }
+
+        // GET /api/device/config -> {"mode":"LEGACY"|"QUEUE"}. Melhor esforco: 404 (API antiga) desliga a pergunta; erro de rede/HTTP/JSON
+        // so passa (o proprio ciclo legado reclama se a API estiver fora); 401/403 seguem a regra de chave recusada.
+        async Task RefreshModeFromConfigAsync(CancellationToken token)
+        {
+            if (_configUnsupported) return;
+            try
+            {
+                using (var request = NewRequest(HttpMethod.Get, "/api/device/config", null))
+                using (var response = await _http.SendAsync(request, token))
+                {
+                    int code = (int)response.StatusCode;
+                    if (code == 401 || code == 403) throw new DeviceAuthException(code);
+                    if (code == 404) { _configUnsupported = true; return; }
+                    if (code < 200 || code >= 300) return;
+                    string body;
+                    using (var stream = await response.Content.ReadAsStreamAsync())
+                    {
+                        var buffer = new byte[4096]; int n = 0, r;
+                        while (n < buffer.Length && (r = await stream.ReadAsync(buffer, n, buffer.Length - n)) > 0) n += r;
+                        body = Encoding.UTF8.GetString(buffer, 0, n);
+                    }
+                    var cfg = JsonConvert.DeserializeObject<DeviceConfigResponse>(body);
+                    if (cfg != null) ApplyServerMode(cfg.Mode);
+                }
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+            catch (DeviceAuthException) { throw; }
+            catch { /* melhor esforco */ }
         }
 
         async Task LegacyCycleAsync(CancellationToken token)

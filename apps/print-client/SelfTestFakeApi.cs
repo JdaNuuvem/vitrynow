@@ -59,6 +59,12 @@ namespace MeuCardapio.PrintClient
         // Modo de impressao da loja decidido pelo servidor (ADR-0004 §8 itens 12-13): null = API antiga (sem "mode"); "LEGACY" = claim
         // devolve {job:null, mode:"LEGACY"} e o endpoint legado funciona; "QUEUE" = claim normal com mode e o legado responde 409 MODE_QUEUE.
         public volatile string PrintMode;
+        public bool ConfigEnabled = true;                              // GET /api/device/config (API-12b); false = API antiga (404)
+        public int ConfigStatus = 200;                                 // 500 etc. para simular erro da configuracao
+        public string ConfigBody;                                      // corpo bruto no lugar de {"mode":...} (lixo, vazio)
+        public bool PendingEmptyInQueue = true;                        // API-12b real: em QUEUE o /pending devolve 200 {orders:[]}; false = 409 (cinto antigo)
+        public int ConfigCalls { get { lock (Lock) return _configCalls; } }
+        int _configCalls;
         public string Legacy409Body;                                  // corpo do 409 do legado em QUEUE (padrao: code MODE_QUEUE)
         public volatile bool LegacyAck500;                             // /printed responde 500 SEMPRE (mesmo em QUEUE): aviso legado preso
         public int LegacyCalls { get { lock (Lock) return _legacyCalls; } }
@@ -222,6 +228,20 @@ namespace MeuCardapio.PrintClient
                     else reply = 409;                                                                             // lease vencida ou nao e o dono
                 }
                 Reply(c, reply, "{}");
+                return;
+            }
+            if (path == "/api/device/config")
+            {
+                lock (Lock) _configCalls++;
+                if (!ConfigEnabled || PrintMode == null) { Reply(c, 404, "{}"); return; }
+                if (ConfigStatus != 200) { Reply(c, ConfigStatus, "{}"); return; }
+                Reply(c, 200, ConfigBody ?? "{\"mode\":\"" + PrintMode + "\"}");
+                return;
+            }
+            if (path == "/api/device/orders/pending" && PrintMode == "QUEUE" && PendingEmptyInQueue)
+            {
+                lock (Lock) _legacyCalls++;
+                Reply(c, 200, "{\"orders\":[]}");
                 return;
             }
             if (LegacyAck500 && path.StartsWith("/api/device/orders/") && path.EndsWith("/printed")) { lock (Lock) _legacyCalls++; Reply(c, 500, "{}"); return; }
