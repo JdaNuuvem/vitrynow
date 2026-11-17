@@ -1,4 +1,5 @@
 import { Prisma, type prisma as prismaClient, type PrintJob, type PrintKind, type PrintJobStatus, type PrintMode } from "@meucardapio/db";
+import { NOW_UTC } from "../../lib/sqlTime";
 import type { PrintableOrder, WsServerMessage } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
 import type { AuditLogger } from "../../shared/audit";
@@ -21,7 +22,7 @@ type Db = typeof prismaClient;
 
 // Relógio do BANCO em UTC (as colunas são TIMESTAMP sem fuso, gravadas em UTC pelo Prisma). O cliente nunca compara
 // com o relógio do PC (ADR-0004 §8.1) e a Node nunca decide se uma lease venceu.
-const NOW = Prisma.raw("(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')");
+const NOW = NOW_UTC; // relógio do banco em UTC (lib/sqlTime)
 
 const err = (status: number, code: string, message: string) => new CodedError(status, code, message);
 

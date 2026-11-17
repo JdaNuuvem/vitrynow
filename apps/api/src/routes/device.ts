@@ -1,11 +1,12 @@
 import type { FastifyPluginAsync } from "fastify";
+import { NOW_UTC } from "../lib/sqlTime";
 import { prisma } from "@meucardapio/db";
 import { buildPrintableOrder } from "../lib/printable";
 import { Prisma } from "@meucardapio/db";
 import { loadPrintMode } from "../modules/printJobs/printMode.service";
 
 // Relógio do BANCO em UTC (mesma convenção do claim: colunas TIMESTAMP sem fuso, gravadas em UTC).
-const NOW = Prisma.raw("(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')");
+const NOW = NOW_UTC; // relógio do banco em UTC (lib/sqlTime)
 
 // Rotas consumidas pelo print-client (C#), autenticadas por token de dispositivo.
 // Equivalentes funcionais ao listarPedidos/pedidosImpressos/textSaleNew do original,

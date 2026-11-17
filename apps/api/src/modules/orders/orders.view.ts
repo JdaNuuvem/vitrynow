@@ -6,6 +6,18 @@ import type { Order, OrderItem, Payment, Deliverer } from "@meucardapio/db";
 
 export const RECENT_WINDOW_MS = 24 * 60 * 60 * 1000; // "recente" = encerrado há menos de 24 h (Leonardo, PRD-15)
 
+/**
+ * A fronteira de "recente" é UMA SÓ, usada pelo contato completo do detalhe (`contactAccessFor`) e pela busca por telefone do STAFF
+ * (`orders.history.ts`, em SQL): idade ESTRITAMENTE menor que 24 h, ou seja, `closedAt > agora - 24 h`. Exatamente 24 h já é antigo.
+ *
+ * REGRA DE REVISÃO: as duas leituras têm de usar a MESMA regra de "quando encerrou". Hoje ambas olham a ÚLTIMA mudança de estado do
+ * histórico (a busca em SQL com `max(createdAt)`, o detalhe com o registro mais recente) e, como o histórico não muda depois de
+ * encerrado, isso é o instante do encerramento. Se um dia entrar reabertura ou "desfazer" de pedido encerrado, revise os DOIS lugares
+ * juntos: a busca não pode abrir o telefone de um pedido que o detalhe mascara, nem o contrário.
+ */
+export const recentWindowCutoff = (now: Date): Date => new Date(now.getTime() - RECENT_WINDOW_MS);
+export const isWithinRecentWindow = (closedAt: Date, now: Date): boolean => closedAt.getTime() > recentWindowCutoff(now).getTime();
+
 export type ContactAccess = "FULL" | "MASKED";
 
 export function maskPhone(phone: string | null | undefined): string | null {
@@ -21,7 +33,7 @@ export function contactAccessFor(role: "OWNER" | "STAFF", order: { status: strin
   const final = order.status === "CONCLUIDO" || order.status === "CANCELADO";
   if (!final) return "FULL";
   if (!closedAt) return "MASKED"; // sem data de encerramento confiável: o mais restritivo
-  return now.getTime() - closedAt.getTime() < RECENT_WINDOW_MS ? "FULL" : "MASKED";
+  return isWithinRecentWindow(closedAt, now) ? "FULL" : "MASKED";
 }
 
 // A fonte é a linha completa; o que SAI é decidido campo a campo em toPanelOrder (a allowlist é a barreira).

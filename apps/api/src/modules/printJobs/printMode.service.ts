@@ -1,11 +1,12 @@
 import { Prisma, type prisma as prismaClient, type PrintMode } from "@meucardapio/db";
+import { NOW_UTC } from "../../lib/sqlTime";
 import type { AuditLogger } from "../../shared/audit";
 import { CodedError } from "../../shared/errors";
 
 type Db = typeof prismaClient;
 
 // Relógio do BANCO em UTC (mesma convenção do claim: colunas TIMESTAMP sem fuso, gravadas em UTC).
-const NOW = Prisma.raw("(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')");
+const NOW = NOW_UTC; // relógio do banco em UTC (lib/sqlTime)
 
 // Modo de impressão da loja decidido pelo SERVIDOR (ADR-0004 §8.12): LEGACY = o cliente lista pedidos com printedAt nulo;
 // QUEUE = o cliente consome jobs. Só um dos dois caminhos funciona por vez (o servidor impede a impressão em dobro).

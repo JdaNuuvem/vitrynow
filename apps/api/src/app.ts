@@ -1,5 +1,6 @@
 import Fastify, { type FastifyServerOptions } from "fastify";
 import { prisma } from "@meucardapio/db";
+import { nanoid } from "nanoid";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
@@ -28,14 +29,21 @@ import noticeRoutes from "./routes/notices";
 import mfaRoutes from "./routes/mfa";
 import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
 import { clientKey } from "./lib/clientKey";
-import { loggerOptions, redactLogUrl } from "./lib/logging";
+import { isPrismaError, loggerOptions, redactLogUrl } from "./lib/logging";
 import { ORDER_TOKEN_HEADER } from "./lib/orderToken";
 import jobsPlugin from "./jobs/plugin";
 
 export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = {}) {
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
   // e o rate limit deixa de contar o IP do proxy. Vazio = ignora X-Forwarded-For (não forjável).
-  const app = Fastify({ logger: options.logger ?? (process.env.NODE_ENV !== "test" ? loggerOptions() : false), trustProxy: trustProxySetting() });
+  // ST-76: o id padrão do Fastify é um contador sequencial (`req-1`, `req-2`…) e o 5xx devolve esse id ao cliente (ST-75): dois erros espaçados
+  // mediriam o tráfego da API desde o boot. Id aleatório curto, e `requestIdHeader: false` para NÃO aceitar o `request-id` do cliente como id do log.
+  const app = Fastify({
+    logger: options.logger ?? (process.env.NODE_ENV !== "test" ? loggerOptions() : false),
+    trustProxy: trustProxySetting(),
+    genReqId: () => nanoid(12),
+    requestIdHeader: false,
+  });
 
   // app.close() (graceful shutdown) também desconecta o Prisma — ele é um singleton
   // importado direto de @meucardapio/db, não um plugin fastify com ciclo de vida próprio.
@@ -47,6 +55,22 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   // (token, code e state do OAuth incluídos). Mesmo corpo de resposta, sem esse log e com os valores sensíveis trocados.
   app.setNotFoundHandler((request, reply) => {
     reply.code(404).send({ message: `Route ${request.method}:${redactLogUrl(request.url)} not found`, error: "Not Found", statusCode: 404 });
+  });
+
+  // SEC-31 (ST-71): erro 5xx (e QUALQUER erro do Prisma) nunca vai para o log nem para a resposta com `message`/`stack`: a mensagem do Prisma
+  // renderiza a chamada com os VALORES dos argumentos (nome, e-mail, telefone, endereço) e o caminho do arquivo do servidor. O log leva o erro
+  // reduzido (`safeError`: código, tabela/campo, operação) com mensagem FIXA; o cliente recebe um corpo genérico. Erros abaixo de 500 (validação,
+  // limite de taxa) seguem o tratamento padrão do Fastify. Os tratadores de DomainError dos módulos delegam para cá com `reply.send(error)`.
+  app.setErrorHandler((error, request, reply) => {
+    const status = (error as { statusCode?: number }).statusCode;
+    if (isPrismaError(error) || status === undefined || status >= 500) {
+      const code = status !== undefined && status >= 500 ? status : 500;
+      request.log.error({ req: request, err: error }, "erro interno não tratado"); // `req` = método, MODELO da rota e query redigida
+      // ST-75: `error` é o texto que o web mostra (FetchHttpClient lê `payload.error`), então vai em português; `requestId` é o mesmo `reqId` gravado
+      // em toda linha de log da requisição, para o suporte ligar a queixa do cliente à linha.
+      return reply.code(code).send({ statusCode: code, error: "Erro interno do servidor. Tente de novo.", message: "Erro interno do servidor", requestId: request.id });
+    }
+    return reply.send(error);
   });
 
   app.register(cors, {

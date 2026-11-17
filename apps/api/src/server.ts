@@ -1,13 +1,16 @@
 import "dotenv/config";
+import { prisma } from "@meucardapio/db";
 import { buildApp } from "./app";
+import { assertDatabaseTimezone } from "./lib/dbTimezone";
 
 const app = buildApp();
 const port = Number(process.env.PORT ?? 3001);
 
-app
-  .listen({ port, host: "0.0.0.0" })
+// SEC-32 (ST-77): em produção a API NÃO sobe com o banco fora de UTC (lib/dbTimezone); em desenvolvimento e teste só avisa.
+assertDatabaseTimezone(prisma, process.env.NODE_ENV, app.log)
+  .then(() => app.listen({ port, host: "0.0.0.0" }))
   .catch((error) => {
-    app.log.error(error);
+    app.log.error({ err: error }, "falha ao iniciar o servidor");
     process.exit(1);
   });
 
@@ -23,7 +26,7 @@ async function shutdown(signal: string) {
     app.log.info("encerrado.");
     process.exit(0);
   } catch (error) {
-    app.log.error(error);
+    app.log.error({ err: error }, "falha ao encerrar o servidor");
     process.exit(1);
   }
 }

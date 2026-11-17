@@ -2,7 +2,8 @@ import { Prisma, type prisma as prismaClient } from "@meucardapio/db";
 import { HISTORY_PERIODS, HISTORY_STATUS_FILTERS } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
 import { parseLocalDate, safeTimeZone, startOfStoreDay } from "../../lib/storeTime";
-import { maskPhone, RECENT_WINDOW_MS } from "./orders.view";
+import { maskPhone, recentWindowCutoff } from "./orders.view";
+import { utc } from "../../lib/sqlTime";
 import type { Role } from "../../lib/orderStateMachine";
 
 type Db = typeof prismaClient;
@@ -17,6 +18,8 @@ export const HISTORY_PHONE_MIN_DIGITS = 4;
 export const HISTORY_STAFF_FULL_PHONE_DIGITS = 10;
 /** Status "em andamento" (mesma lista do kanban e do contato completo do STAFF). */
 export const OPEN_ORDER_STATUSES = ["PENDENTE", "CONFIRMADO", "EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA"] as const;
+// Literais do enum no SQL (constantes do código, nunca dado do usuário): comparar a coluna com `status::text` desligava o índice (3 ms ⇒ 40 ms com 10 mil abertos).
+const OPEN_SQL = Prisma.raw(OPEN_ORDER_STATUSES.map((status) => `'${status}'`).join(", "));
 
 export type HistoryStatusFilter = (typeof HISTORY_STATUS_FILTERS)[number];
 export type HistoryPeriod = (typeof HISTORY_PERIODS)[number];
@@ -133,18 +136,21 @@ export async function searchOrderHistory(
   query: HistoryQuery,
   role: Role = "OWNER",
   opts: { skipPhone?: boolean } = {},
-): Promise<{ rows: HistoryRow[]; total: number; nextCursor: string | null; period: { from: string; to: string }; timezone: string }> {
+): Promise<{ rows: HistoryRow[]; total: number; nextCursor: string | null; period: { from: string; to: string } | null; timezone: string }> {
   const tz = safeTimeZone(timeZone);
-  const { start, end } = resolvePeriod(query, now, tz);
+  const status = query.status ?? "ALL";
+  if (!HISTORY_STATUS_FILTERS.includes(status)) throw bad("FILTER_INVALID", "Filtro de status inválido.");
+  // "Em aberto" NÃO tem janela (API-72): é a lista de TUDO que está aberto na loja, inclusive o pedido esquecido há meses, que é
+  // justamente o que o aviso do kanban manda resolver. Período, from e to são ignorados (e não validados) nesse filtro.
+  const period = status === "ABERTO" ? null : resolvePeriod(query, now, tz);
   const search = parseSearch(query.q, role);
   if (opts.skipPhone && search) search.phone = null; // cota do telefone esgotada: só código e nome (o serviço decide)
   const limit = Math.min(Math.max(Math.trunc(query.limit ?? HISTORY_PAGE_SIZE) || HISTORY_PAGE_SIZE, 1), HISTORY_MAX_PAGE_SIZE);
-  const status = query.status ?? "ALL";
-  if (!HISTORY_STATUS_FILTERS.includes(status)) throw bad("FILTER_INVALID", "Filtro de status inválido.");
 
-  const where: Prisma.Sql[] = [Prisma.sql`o."storeId" = ${storeId}`, Prisma.sql`o."createdAt" >= ${start}`, Prisma.sql`o."createdAt" < ${end}`];
+  const where: Prisma.Sql[] = [Prisma.sql`o."storeId" = ${storeId}`];
+  if (period) where.push(Prisma.sql`o."createdAt" >= ${utc(period.start)}`, Prisma.sql`o."createdAt" < ${utc(period.end)}`);
   // ABERTO = o que o kanban considera em andamento (fora o PIX não pago): é por onde o dono acha os pedidos antigos escondidos pelo teto.
-  if (status === "ABERTO") where.push(Prisma.sql`o."awaitingPayment" = false AND o."status"::text IN (${Prisma.join([...OPEN_ORDER_STATUSES])})`);
+  if (status === "ABERTO") where.push(Prisma.sql`o."awaitingPayment" = false AND o."status" IN (${OPEN_SQL})`);
   if (status === "CONCLUIDO") where.push(Prisma.sql`o."status" = 'CONCLUIDO'`);
   if (status === "CANCELADO") where.push(Prisma.sql`o."status" = 'CANCELADO' AND COALESCE(p."status"::text, '') <> 'EXPIRADO'`);
   if (status === "AGUARDANDO_PAGAMENTO") where.push(Prisma.sql`o."awaitingPayment" = true AND o."status" <> 'CANCELADO'`);
@@ -168,8 +174,9 @@ export async function searchOrderHistory(
       if (role === "OWNER") any.push(phoneLike);
       else {
         // STAFF: mesma janela do contato completo (aberto, ou última mudança de estado há menos de 24 h). Pedido antigo não é achado por telefone.
-        const cutoff = new Date(now.getTime() - RECENT_WINDOW_MS);
-        any.push(Prisma.sql`(${phoneLike} AND (o."status"::text IN (${Prisma.join([...OPEN_ORDER_STATUSES])}) OR (SELECT max(h."createdAt") FROM "OrderStatusHistory" h WHERE h."orderId" = o."id") >= ${cutoff}))`);
+        // Mesma fronteira do detalhe (`isWithinRecentWindow`): idade < 24 h, ou seja, ESTRITAMENTE depois do corte. Ver a regra de revisão em orders.view.ts.
+        const cutoff = recentWindowCutoff(now);
+        any.push(Prisma.sql`(${phoneLike} AND (o."status" IN (${OPEN_SQL}) OR (SELECT max(h."createdAt") FROM "OrderStatusHistory" h WHERE h."orderId" = o."id") > ${utc(cutoff)}))`);
       }
     }
     where.push(any.length ? Prisma.sql`(${Prisma.join(any, " OR ")})` : Prisma.sql`false`);
@@ -179,7 +186,7 @@ export async function searchOrderHistory(
   const keyset = query.cursor
     ? (() => {
         const c = decodeCursor(query.cursor);
-        return Prisma.sql` AND (o."createdAt", o."id") < (${new Date(c.t)}, ${c.id})`;
+        return Prisma.sql` AND (o."createdAt", o."id") < (${utc(new Date(c.t))}, ${c.id})`;
       })()
     : Prisma.empty;
 
@@ -226,7 +233,7 @@ export async function searchOrderHistory(
     rows,
     total: Number(total),
     nextCursor: last ? encodeCursor(last) : null,
-    period: { from: start.toISOString(), to: end.toISOString() },
+    period: period ? { from: period.start.toISOString(), to: period.end.toISOString() } : null,
     timezone: tz,
   };
 }
