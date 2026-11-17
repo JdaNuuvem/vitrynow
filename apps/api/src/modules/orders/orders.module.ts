@@ -53,7 +53,10 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
   app.post("/api/orders/:id/internal-note", auth, async (request, reply) => {
     const { id } = request.params as { id: string };
     const parsed = orderInternalNoteSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: "Observação inválida.", code: "VALIDATION_ERROR" });
+    if (!parsed.success) {
+      const tooLong = parsed.error.issues.some((i) => i.code === "too_big");
+      return reply.code(400).send(tooLong ? { error: "A observação pode ter até 500 caracteres.", code: "NOTE_TOO_LONG" } : { error: "Observação inválida.", code: "VALIDATION_ERROR" });
+    }
     return orderService.setInternalNote(actorOf(request), id, parsed.data.note);
   });
 

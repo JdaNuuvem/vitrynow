@@ -202,7 +202,7 @@ export const orderHistoryQuerySchema = z.object({
   cursor: z.string().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
-export const orderInternalNoteSchema = z.object({ note: z.string().max(2000).nullable() });
+export const orderInternalNoteSchema = z.object({ note: z.string().max(500).nullable() });
 
 // ---- Caixa (painel) ----
 

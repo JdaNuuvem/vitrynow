@@ -142,13 +142,17 @@ export class OrderService {
   // Histórico (RN-HP): busca e filtros por período; só linhas de lista (telefone mascarado, sem endereço).
   async history(actor: PanelActor, query: HistoryQuery) {
     const store = await this.db.store.findUnique({ where: { id: actor.storeId }, select: { timezone: true } });
-    return searchOrderHistory(this.db, actor.storeId, store?.timezone ?? "America/Sao_Paulo", this.now(), query);
+    const { phoneCriterion, ...result } = await searchOrderHistory(this.db, actor.storeId, store?.timezone ?? "America/Sao_Paulo", this.now(), query, actor.role);
+    // Busca por telefone do STAFF deixa rastro de CONTAGEM (nunca os dígitos): é um "este número é cliente?" e precisa ser auditável.
+    if (phoneCriterion && actor.role !== "OWNER") this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "order.history_phone_search", targetType: "Store", targetId: actor.storeId, metadata: { results: result.total } });
+    return result;
   }
 
   // Observação interna do pedido (API-54): texto livre da equipe, nunca ao cliente nem ao tíquete. A auditoria registra
   // QUE mudou e o tamanho, nunca o texto (pode ter dado pessoal).
   async setInternalNote(actor: PanelActor, orderId: string, note: string | null) {
-    const text = note === null ? null : note.trim().slice(0, INTERNAL_NOTE_MAX) || null;
+    const text = note === null ? null : note.trim() || null;
+    if (text && text.length > INTERNAL_NOTE_MAX) throw err(400, "NOTE_TOO_LONG", `A observação pode ter até ${INTERNAL_NOTE_MAX} caracteres.`);
     const updated = await this.db.order.updateMany({ where: { id: orderId, storeId: actor.storeId }, data: { internalNote: text } });
     if (updated.count !== 1) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
     this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "order.internal_note", targetType: "Order", targetId: orderId, metadata: { length: text?.length ?? 0 } });

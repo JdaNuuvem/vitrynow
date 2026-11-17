@@ -3,7 +3,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { prisma } from "@meucardapio/db";
 import { HISTORY_RATE_LIMIT, assertHistoryRate, foldText, parseSearch, resetHistoryRate, resolvePeriod } from "../src/modules/orders/orders.history";
 import { startOfStoreDay } from "../src/lib/storeTime";
-import { login, makeApp, registerStore, resetDb } from "./helpers";
+import { buildPrintableOrder } from "../src/lib/printable";
+import { login, makeApp, orderTokenHeader, registerStore, resetDb } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -42,10 +43,21 @@ describe("puros: período, busca e limite", () => {
     expect(foldText("Conceição ÁGUA")).toBe("conceicao agua");
     expect(parseSearch("")).toBeNull();
     expect(() => parseSearch("a")).toThrow(expect.objectContaining({ code: "SEARCH_TOO_SHORT" }));
-    expect(parseSearch("#0012")).toEqual({ code: "0012", name: null, phone: "0012" });
-    expect(parseSearch("12")).toEqual({ code: "12", name: null, phone: null });
-    expect(parseSearch("Ana")).toEqual({ code: null, name: "ana", phone: null });
+    expect(parseSearch("#0012")).toMatchObject({ code: "0012", name: null, phone: "0012" });
+    expect(parseSearch("12")).toMatchObject({ code: "12", name: null, phone: null });
+    expect(parseSearch("Ana")).toMatchObject({ code: null, name: "ana", phone: null });
     expect(parseSearch("(11) 98765-4321")).toMatchObject({ phone: "11987654321", name: null });
+  });
+
+  it("busca por telefone do STAFF: só 4 dígitos (final) ou 10+; entre 5 e 9 não é critério; OWNER mantém trecho", () => {
+    const phoneOf = (q: string, role: "OWNER" | "STAFF") => parseSearch(q, role)?.phone ?? null;
+    for (const q of ["1234", "1198765432", "11987654321"]) expect(phoneOf(q, "STAFF"), q).toBe(q);
+    for (const q of ["12345", "123456", "1234567", "12345678", "123456789"]) {
+      expect(phoneOf(q, "STAFF"), q).toBeNull();
+      expect(phoneOf(q, "OWNER"), q).toBe(q);
+    }
+    expect(parseSearch("1234", "STAFF")?.phoneMatch).toBe("suffix");
+    expect(parseSearch("1234", "OWNER")?.phoneMatch).toBe("contains");
   });
 
   it("limite de buscas: 60 por minuto por usuário; a janela anda", () => {
@@ -268,6 +280,48 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
       expect(json(curto).code).toBe("SEARCH_TOO_SHORT");
     });
 
+    it("telefone do STAFF: 4 finais achou, 4 do meio NÃO, 5–9 dígitos NÃO, número completo achou; OWNER acha por trecho (Nightingale)", async () => {
+      const ctx = await setup();
+      const id = await mk(ctx, { phone: "11987654321", name: "Zeca" });
+      const ids = async (cookie: string, q: string) => json(await hist(cookie, `?q=${encodeURIComponent(q)}`)).rows.map((r: { id: string }) => r.id);
+
+      expect(await ids(ctx.staff, "4321")).toEqual([id]); // os 4 que a máscara já mostra
+      expect(await ids(ctx.staff, "6543")).toEqual([]); // 4 do MEIO: não é critério
+      expect(await ids(ctx.staff, "8765")).toEqual([]);
+      for (const q of ["54321", "654321", "7654321", "87654321", "987654321"]) expect(await ids(ctx.staff, q), `staff ${q}`).toEqual([]); // 5–9 dígitos: o oráculo de reconstrução
+      expect(await ids(ctx.staff, "1198765432")).toEqual([]); // 10 dígitos que NÃO terminam no número: não acha
+      expect(await ids(ctx.staff, "1987654321")).toEqual([id]); // 10 dígitos ancorados no final
+      expect(await ids(ctx.staff, "11987654321")).toEqual([id]); // número completo
+      expect(await ids(ctx.staff, "(11) 98765-4321")).toEqual([id]); // com formatação
+      expect(await ids(ctx.staff, "zeca")).toEqual([id]); // nome continua funcionando
+
+      for (const q of ["4321", "6543", "54321", "987654", "11987654321"]) expect(await ids(ctx.owner, q), `owner ${q}`).toEqual([id]); // OWNER: trecho
+    });
+
+    it("telefone do STAFF não vira oráculo: tentar reconstruir o número dígito a dígito não devolve nada além dos 4 finais", async () => {
+      const ctx = await setup();
+      await mk(ctx, { phone: "11987654321" });
+      let achou = 0;
+      for (const prefix of ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]) {
+        if ((json(await hist(ctx.staff, `?q=${prefix}4321`)).rows as unknown[]).length) achou += 1; // 5 dígitos: nunca é critério
+      }
+      expect(achou).toBe(0);
+    });
+
+    it("auditoria de contagem: busca por telefone do STAFF grava `order.history_phone_search` SEM os dígitos; OWNER e busca por nome não gravam", async () => {
+      const ctx = await setup();
+      await mk(ctx, { phone: "11987654321", name: "Zeca" });
+      await hist(ctx.staff, "?q=4321");
+      await hist(ctx.staff, "?q=zeca");
+      await hist(ctx.owner, "?q=4321");
+      await vi.waitFor(async () => {
+        const rows = await prisma.auditLog.findMany({ where: { storeId: ctx.storeId, action: "order.history_phone_search" } });
+        expect(rows).toHaveLength(1);
+        expect(JSON.stringify(rows[0])).not.toContain("4321");
+        expect(rows[0].metadata).toEqual({ results: 1 });
+      });
+    });
+
     it("a busca não vaza pedidos de outra loja (nem por código, nome ou telefone)", async () => {
       const a = await setup();
       const b = await setup();
@@ -387,12 +441,16 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
       expect((await prisma.order.findUniqueOrThrow({ where: { id } })).internalNote).toBeNull();
     });
 
-    it("corta em 500 caracteres; corpo inválido ou nota enorme é recusado", async () => {
+    it("aceita 500 caracteres; acima disso é 400 NOTE_TOO_LONG e NADA é cortado nem gravado; corpo inválido é recusado", async () => {
       const ctx = await setup();
       const id = await mk(ctx, {});
-      const ok = json(await note(ctx.owner, id, { note: "x".repeat(900) }));
-      expect(ok.internalNote).toHaveLength(500);
-      expect((await note(ctx.owner, id, { note: "x".repeat(2001) })).statusCode).toBe(400);
+      expect(json(await note(ctx.owner, id, { note: "x".repeat(500) })).internalNote).toHaveLength(500);
+      for (const size of [501, 900, 5000]) {
+        const res = await note(ctx.owner, id, { note: "y".repeat(size) });
+        expect(res.statusCode, String(size)).toBe(400);
+        expect(json(res)).toMatchObject({ code: "NOTE_TOO_LONG", error: "A observação pode ter até 500 caracteres." });
+      }
+      expect((await prisma.order.findUniqueOrThrow({ where: { id } })).internalNote).toBe("x".repeat(500)); // a anterior segue intacta
       expect((await note(ctx.owner, id, { note: 123 })).statusCode).toBe(400);
       expect((await note(ctx.owner, id, {})).statusCode).toBe(400);
     });
@@ -405,6 +463,36 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
       expect(res.statusCode).toBe(404);
       expect((await prisma.order.findUniqueOrThrow({ where: { id: deB } })).internalNote).toBeNull();
       expect((await app.inject({ method: "POST", url: `/api/orders/${deB}/internal-note`, payload: { note: "x" } })).statusCode).toBe(401);
+    });
+
+    it("a nota interna NUNCA sai pelo tíquete (buildPrintableOrder), pelo payment-status nem pelo cardápio público", async () => {
+      const { cookie, response } = await registerStore(app);
+      const { slug } = json(response).store;
+      const cat = json(await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie: cookie! }, payload: { name: "X" } })).category.id;
+      const productId = json(await app.inject({ method: "POST", url: "/api/catalog/products", headers: { cookie: cookie! }, payload: { categoryId: cat, name: "P", priceCents: 1000 } })).product.id as string;
+      const created = await app.inject({
+        method: "POST",
+        url: `/stores/${slug}/orders`,
+        payload: { type: "DELIVERY", customerName: "Ana", customerPhone: "11987654321", address: "Rua A, 1", paymentMethod: "DINHEIRO", items: [{ productId, quantity: 1 }] },
+      });
+      expect(created.statusCode, created.body).toBe(201);
+      const orderId = json(created).orderId as string;
+      const SEGREDO = "NOTA-INTERNA-SEGREDO-777";
+      expect((await note(cookie!, orderId, { note: SEGREDO })).statusCode).toBe(200);
+
+      const ticket = await buildPrintableOrder(orderId);
+      expect(ticket, "o tíquete tem que existir para a varredura valer").not.toBeNull();
+      expect(JSON.stringify(ticket)).not.toContain(SEGREDO);
+      expect(JSON.stringify(ticket)).not.toContain("internalNote");
+
+      const status = await app.inject({ method: "GET", url: `/stores/${slug}/orders/${orderId}/payment-status`, headers: orderTokenHeader(orderId) });
+      expect(status.statusCode, status.body).toBe(200);
+      const menu = await app.inject({ method: "GET", url: `/stores/${slug}/menu` });
+      expect(menu.statusCode).toBe(200);
+      for (const body of [status.body, menu.body]) {
+        expect(body).not.toContain(SEGREDO);
+        expect(body).not.toContain("internalNote");
+      }
     });
 
     it("a auditoria registra QUE mudou e o tamanho, nunca o texto", async () => {

@@ -3,6 +3,7 @@ import { HISTORY_PERIODS, HISTORY_STATUS_FILTERS } from "@meucardapio/shared-typ
 import { CodedError } from "../../shared/errors";
 import { parseLocalDate, safeTimeZone, startOfStoreDay } from "../../lib/storeTime";
 import { maskPhone } from "./orders.view";
+import type { Role } from "../../lib/orderStateMachine";
 
 type Db = typeof prismaClient;
 
@@ -13,6 +14,7 @@ export const HISTORY_PAGE_SIZE = 25;
 export const HISTORY_MAX_PAGE_SIZE = 100;
 export const HISTORY_MAX_DAYS = 90;
 export const HISTORY_PHONE_MIN_DIGITS = 4;
+export const HISTORY_STAFF_FULL_PHONE_DIGITS = 10;
 
 export type HistoryStatusFilter = (typeof HISTORY_STATUS_FILTERS)[number];
 export type HistoryPeriod = (typeof HISTORY_PERIODS)[number];
@@ -67,17 +69,24 @@ export const foldText = (text: string) =>
   [...text.normalize("NFC")].map((ch) => { const i = ACCENT_FROM.indexOf(ch); return i >= 0 ? ACCENT_TO[i] : ch; }).join("").toLowerCase();
 const escapeLike = (text: string) => text.replace(/[\\%_]/g, (c) => `\\${c}`);
 
-/** O que a busca única vai procurar (RN-HP-01, RN-HP-08): código, nome e telefone; mínimo 2 caracteres, 4 dígitos para telefone. */
-export function parseSearch(raw: string | undefined): { code: string | null; name: string | null; phone: string | null } | null {
+/**
+ * O que a busca única vai procurar (RN-HP-01, RN-HP-08): código, nome e telefone; mínimo 2 caracteres, 4 dígitos para telefone.
+ * Telefone por TRECHO só para o OWNER. O STAFF só casa o FINAL do número (os 4 dígitos que a máscara já mostra, ou o número
+ * completo, 10+ dígitos): busca por trecho deixaria reconstruir o telefone dígito a dígito sem passar pela máscara (Nightingale).
+ */
+export function parseSearch(raw: string | undefined, role: Role = "OWNER"): { code: string | null; name: string | null; phone: string | null; phoneMatch: "contains" | "suffix" } | null {
   const q = (raw ?? "").trim();
   if (!q) return null;
   if (q.length < 2) throw bad("SEARCH_TOO_SHORT", "Digite ao menos 2 caracteres para buscar.");
   const digits = q.replace(/\D/g, "");
   const codeLike = /^#?\d+$/.test(q);
+  const phoneLike = digits.length >= HISTORY_PHONE_MIN_DIGITS && /^[\d\s()+\-#.]+$/.test(q);
+  const staffAllowed = digits.length === HISTORY_PHONE_MIN_DIGITS || digits.length >= HISTORY_STAFF_FULL_PHONE_DIGITS;
   return {
     code: codeLike ? digits : null,
     name: /\p{L}/u.test(q) ? foldText(q) : null,
-    phone: digits.length >= HISTORY_PHONE_MIN_DIGITS && /^[\d\s()+\-#.]+$/.test(q) ? digits : null,
+    phone: phoneLike && (role === "OWNER" || staffAllowed) ? digits : null,
+    phoneMatch: role === "OWNER" ? "contains" : "suffix",
   };
 }
 
@@ -117,10 +126,11 @@ export async function searchOrderHistory(
   timeZone: string,
   now: Date,
   query: HistoryQuery,
-): Promise<{ rows: HistoryRow[]; total: number; nextCursor: string | null; period: { from: string; to: string }; timezone: string }> {
+  role: Role = "OWNER",
+): Promise<{ rows: HistoryRow[]; total: number; nextCursor: string | null; period: { from: string; to: string }; timezone: string; phoneCriterion: boolean }> {
   const tz = safeTimeZone(timeZone);
   const { start, end } = resolvePeriod(query, now, tz);
-  const search = parseSearch(query.q);
+  const search = parseSearch(query.q, role);
   const limit = Math.min(Math.max(Math.trunc(query.limit ?? HISTORY_PAGE_SIZE) || HISTORY_PAGE_SIZE, 1), HISTORY_MAX_PAGE_SIZE);
   const status = query.status ?? "ALL";
   if (!HISTORY_STATUS_FILTERS.includes(status)) throw bad("FILTER_INVALID", "Filtro de status inválido.");
@@ -145,7 +155,7 @@ export async function searchOrderHistory(
       any.push(Prisma.sql`lower(translate(coalesce(o."customerName", ''), ${ACCENT_FROM}, ${ACCENT_TO})) LIKE ${`%${escapeLike(search.name)}%`} ESCAPE '\\'`);
     }
     if (search.phone) {
-      any.push(Prisma.sql`regexp_replace(coalesce(o."customerPhone", ''), '\\D', '', 'g') LIKE ${`%${search.phone}%`}`);
+      any.push(Prisma.sql`regexp_replace(coalesce(o."customerPhone", ''), '\\D', '', 'g') LIKE ${search.phoneMatch === "suffix" ? `%${search.phone}` : `%${search.phone}%`}`);
     }
     where.push(any.length ? Prisma.sql`(${Prisma.join(any, " OR ")})` : Prisma.sql`false`);
   }
@@ -203,6 +213,7 @@ export async function searchOrderHistory(
     nextCursor: last ? encodeCursor(last) : null,
     period: { from: start.toISOString(), to: end.toISOString() },
     timezone: tz,
+    phoneCriterion: !!search?.phone, // só para a auditoria de contagem; o serviço não devolve ao cliente
   };
 }
 
