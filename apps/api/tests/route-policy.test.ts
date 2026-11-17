@@ -89,6 +89,8 @@ describe("Consulta e Suspensão por rota (integração)", () => {
   };
   const toReadOnly = () => prisma.subscription.updateMany({ data: { trialEndsAt: new Date(Date.now() - DAY) } });
   const toSuspended = () => prisma.subscription.updateMany({ data: { trialEndsAt: new Date(Date.now() - 8 * DAY) } });
+  // `logout-all` derruba a própria sessão do teste (é o que ele faz): fica fora dos laços e tem teste próprio.
+  const loopEntries = () => Object.entries(PANEL_ROUTE_POLICY).filter(([key]) => key !== "POST /auth/logout-all");
   const concrete = (key: string) => {
     const [method, url] = key.split(" ");
     return { method: method as "GET" | "POST", url: url.replace(/:[A-Za-z]+/g, "x") };
@@ -111,7 +113,7 @@ describe("Consulta e Suspensão por rota (integração)", () => {
     });
 
   it("loja em dia (TRIAL): nenhuma rota é bloqueada pela assinatura", async () => {
-    for (const [key, policy] of Object.entries(PANEL_ROUTE_POLICY)) {
+    for (const [key, policy] of loopEntries()) {
       if (policy === "billing") continue;
       const { method, url } = concrete(key);
       const response = await inject(method, url, method === "POST" ? {} : undefined);
@@ -121,7 +123,7 @@ describe("Consulta e Suspensão por rota (integração)", () => {
 
   it("CA-MX-01: na Consulta, escrita de cadastro e config devolve 403 READ_ONLY; liberadas e 'billing' passam do portão", async () => {
     await toReadOnly();
-    for (const [key, policy] of Object.entries(PANEL_ROUTE_POLICY)) {
+    for (const [key, policy] of loopEntries()) {
       const { method, url } = concrete(key);
       const response = await inject(method, url, method === "POST" ? {} : undefined);
       if (policy === "blocked") {
@@ -135,7 +137,7 @@ describe("Consulta e Suspensão por rota (integração)", () => {
 
   it("CA-MX-02: na Suspensão só a conta/pagamento funciona; todo o resto devolve 402 SUSPENDED", async () => {
     await toSuspended();
-    for (const [key, policy] of Object.entries(PANEL_ROUTE_POLICY)) {
+    for (const [key, policy] of loopEntries()) {
       const { method, url } = concrete(key);
       const response = await inject(method, url, method === "POST" ? {} : undefined);
       if (policy === "billing") {
@@ -168,10 +170,10 @@ describe("Consulta e Suspensão por rota (integração)", () => {
 
     await toReadOnly();
 
-    const advance = await inject("POST", `/api/orders/${orderId}/status`, { status: "CONFIRMADO" });
-    expect(advance.statusCode).toBe(200);
-    const conclude = await inject("POST", `/api/orders/${orderId}/status`, { status: "CONCLUIDO" });
-    expect(conclude.statusCode).toBe(200);
+    for (const to of ["CONFIRMADO", "EM_PREPARO", "PRONTO", "CONCLUIDO"]) {
+      const step = await inject("POST", `/api/orders/${orderId}/transition`, { to });
+      expect(step.statusCode, to).toBe(200);
+    }
     expect(await prisma.order.findUnique({ where: { id: orderId } })).toMatchObject({ status: "CONCLUIDO" });
 
     // CA-MX-04: fechar o caixa pode; abrir outro e lançar sangria não
@@ -179,6 +181,36 @@ describe("Consulta e Suspensão por rota (integração)", () => {
     expect(close.statusCode).toBe(200);
     expect(codeOf(await inject("POST", "/api/cashier/open", { openingBalanceCents: 0 }))).toBe("READ_ONLY");
     expect(codeOf(await inject("POST", "/api/cashier/movements", { type: "SANGRIA", amountCents: 100 }))).toBe("READ_ONLY");
+  });
+
+  it("CA-B17-01 (API-02): na Consulta o pedido já recebido pode ser cancelado e desfeito; na Suspensão nada disso", async () => {
+    const productId = await seedCatalog();
+    const first = JSON.parse((await placeOrder(productId)).body).orderId as string;
+    const second = JSON.parse((await placeOrder(productId)).body).orderId as string;
+
+    await toReadOnly();
+    const cancel = await inject("POST", `/api/orders/${first}/cancel`, { reason: { code: "ITEM_EM_FALTA" } });
+    expect(cancel.statusCode).toBe(200);
+    expect(await prisma.order.findUnique({ where: { id: first } })).toMatchObject({ status: "CANCELADO" });
+    expect(["READ_ONLY", "SUSPENDED"]).not.toContain(codeOf(await inject("POST", `/api/orders/${first}/undo`)));
+    expect(["READ_ONLY", "SUSPENDED"]).not.toContain(codeOf(await inject("POST", `/api/orders/${second}/refund/retry`)));
+
+    await toSuspended();
+    for (const [url, body] of [
+      [`/api/orders/${second}/cancel`, { reason: { code: "ITEM_EM_FALTA" } }],
+      [`/api/orders/${second}/transition`, { to: "CONFIRMADO" }],
+      [`/api/orders/${second}/undo`, {}],
+    ] as const) {
+      const response = await inject("POST", url, body);
+      expect(response.statusCode, url).toBe(402);
+      expect(codeOf(response), url).toBe("SUSPENDED");
+    }
+  });
+
+  it("logout-all (sair de todos os dispositivos) segue permitido na Consulta e na Suspensão", async () => {
+    await toSuspended();
+    const response = await inject("POST", "/auth/logout-all");
+    expect(["READ_ONLY", "SUSPENDED"]).not.toContain(codeOf(response));
   });
 
   it("CA-B17-02: na Consulta e na Suspensão o pedido do cardápio é recusado com 409 SUBSCRIPTION_INACTIVE (sem citar plano)", async () => {
@@ -198,11 +230,14 @@ describe("Consulta e Suspensão por rota (integração)", () => {
     await seedCatalog();
     const open = JSON.parse((await app.inject({ method: "GET", url: "/stores/loja-fase/menu" })).body);
     expect(open.store.acceptingOrders).toBe(true);
+    expect(open.store.accepting).toBe(true);
+    expect(JSON.stringify(open)).not.toMatch(/phase|READ_ONLY|nextPhaseAt|subscription/i); // a vitrine não vê assinatura
 
     await toReadOnly();
     const consulta = await app.inject({ method: "GET", url: "/stores/loja-fase/menu" });
     expect(consulta.statusCode).toBe(200);
-    expect(JSON.parse(consulta.body).store).toMatchObject({ slug: "loja-fase", acceptingOrders: false });
+    expect(JSON.parse(consulta.body).store).toMatchObject({ slug: "loja-fase", acceptingOrders: false, accepting: false });
+    expect(consulta.body).not.toMatch(/phase|READ_ONLY|nextPhaseAt|subscription/i);
     expect(JSON.parse(consulta.body).categories.length).toBe(1);
 
     await toSuspended();
@@ -263,12 +298,43 @@ describe("Consulta e Suspensão por rota (integração)", () => {
     expect(["READ_ONLY", "SUSPENDED"]).not.toContain(codeOf(wrongPassword));
     const subscription = await inject("GET", "/api/store/subscription");
     expect(subscription.statusCode).toBe(200);
-    expect(JSON.parse(subscription.body).subscription).toMatchObject({ phase: "READ_ONLY", access: { panelWrite: false, publicOrders: false } });
+    expect(JSON.parse(subscription.body).subscription).toMatchObject({
+      phase: "READ_ONLY",
+      canFinishInProgress: true,
+      nextPhaseAt: expect.any(String),
+      access: { panelWrite: false, publicOrders: false },
+    });
     // a leitura da assinatura também funciona suspenso (é a tela de pagamento)
     await toSuspended();
     const suspended = await inject("GET", "/api/store/subscription");
     expect(suspended.statusCode).toBe(200);
     expect(JSON.parse(suspended.body).subscription.phase).toBe("SUSPENDED");
+  });
+
+  it("política `export`: liberada na Consulta e, na Suspensão, só para OWNER (STAFF recebe 402)", async () => {
+    const extra = makeApp();
+    PANEL_ROUTE_POLICY["GET /api/zz-export"] = "export";
+    try {
+      extra.register(async (instance) => {
+        instance.get("/api/zz-export", { preHandler: instance.requirePanelAuth }, async () => ({ csv: "ok" }));
+      });
+      await extra.ready();
+      const owner = (await registerStore(extra)).cookie!;
+      const get = () => extra.inject({ method: "GET", url: "/api/zz-export", headers: { cookie: owner } });
+      expect((await get()).statusCode).toBe(200);
+      await toReadOnly();
+      expect((await get()).statusCode).toBe(200);
+      await toSuspended();
+      expect((await get()).statusCode).toBe(200); // OWNER
+      await prisma.user.updateMany({ data: { role: "STAFF" } });
+      const staff = await get();
+      expect([401, 402]).toContain(staff.statusCode); // STAFF: 402 SUSPENDED (ou sessão relida com o novo papel)
+      expect(staff.statusCode === 200).toBe(false);
+    } finally {
+      delete PANEL_ROUTE_POLICY["GET /api/zz-export"];
+      await extra.close();
+      await resetDb();
+    }
   });
 
   it("dados NUNCA são apagados na Consulta nem na Suspensão (nenhuma rota/job apaga)", async () => {
