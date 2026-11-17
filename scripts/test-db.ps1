@@ -54,17 +54,30 @@ if (-not (Test-Container $name)) {
   docker start $name | Out-Null
 }
 
-$ready = $false
-for ($i = 0; $i -lt 60; $i++) {
-  docker exec $name pg_isready -U meucardapio -d meucardapio *> $null
-  if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+# PRONTO = ESTÁVEL. A imagem oficial do Postgres sobe um servidor TEMPORÁRIO para o init (cria o usuário e o banco), desliga e SÓ ENTÃO sobe o definitivo. O
+# servidor temporário escuta só no socket Unix e responde "ok" a `pg_isready` pelo socket; logo depois desliga ("the database system is shutting down"). Medido
+# em 17/11: 1 de 6 criações com `-Fresh` voltou exit 0 com o servidor ainda reiniciando, e as migrações rodavam sem banco (todos os testes falhavam por tabelas
+# inexistentes). Por isso: (1) checa por TCP (`-h 127.0.0.1`), que o servidor temporário NÃO atende; (2) exige 2 respostas seguidas, com 1 s entre elas.
+$ready = $false; $seguidas = 0
+for ($i = 0; $i -lt 90; $i++) {
+  docker exec $name pg_isready -h 127.0.0.1 -U meucardapio -d meucardapio *> $null
+  if ($LASTEXITCODE -eq 0) { $seguidas++ } else { $seguidas = 0 }
+  if ($seguidas -ge 2) { $ready = $true; break }
   Start-Sleep -Seconds 1
 }
-if (-not $ready) { throw "postgres de $name não ficou pronto em 60s (docker logs $name)" }
+if (-not $ready) { throw "postgres de $name não ficou pronto e estável em 90s (docker logs $name)" }
 
 foreach ($db in $dbs) {
-  $exists = docker exec $name psql -U meucardapio -d postgres -At -c "select 1 from pg_database where datname='$db'"
-  if (-not $exists) { docker exec $name psql -U meucardapio -d postgres -c "create database $db" | Out-Null }
+  $exists = docker exec $name psql -h 127.0.0.1 -U meucardapio -d postgres -At -c "select 1 from pg_database where datname='$db'"
+  if (-not $exists) {
+    docker exec $name psql -h 127.0.0.1 -U meucardapio -d postgres -v ON_ERROR_STOP=1 -c "create database $db" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "create database $db falhou em $name (docker logs $name)" }   # antes o erro era ignorado e o script voltava exit 0
+  }
+}
+# verificação final: os bancos existem MESMO (por TCP, o servidor definitivo)
+foreach ($db in $dbs) {
+  $ok = docker exec $name psql -h 127.0.0.1 -U meucardapio -d postgres -At -c "select 1 from pg_database where datname='$db'"
+  if (-not $ok) { throw "o banco $db não existe em $name depois de criado (docker logs $name)" }
 }
 
 if (-not $SkipMigrate) {
