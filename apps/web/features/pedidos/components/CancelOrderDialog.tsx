@@ -5,7 +5,7 @@ import type { Order } from "@/core/domain/orders";
 import { formatCents } from "@/shared/format/money";
 import { Modal } from "@/shared/ui/Modal";
 import { CANCEL_REASONS, customerPhraseFor, validateCancel, type CancelDraft } from "../cancelReasons";
-import { confirmCancelLabel } from "../orderActions";
+import { confirmCancelLabel, isRefundPending } from "../orderActions";
 import type { CancelOutcome } from "../hooks/usePedidos";
 
 type Props = {
@@ -25,14 +25,17 @@ export function CancelOrderDialog({ order, refund, onConfirm, onRetryRefund, onC
   const [draft, setDraft] = useState<CancelDraft>({ code: null, text: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [refundPending, setRefundPending] = useState(false);
+  // Estorno já pedido: vem do pedido (reabrir a folha cai direto em "Tentar estorno") OU de uma tentativa feita nesta folha.
+  const [attemptPending, setAttemptPending] = useState(false);
+  const refundPending = isRefundPending(order) || attemptPending;
 
   const refusing = order.status === "PENDENTE";
   const verb = refusing ? "Recusar" : "Cancelar";
-  const title = refund ? `${verb} e estornar #${order.code}` : `${verb} pedido #${order.code}`;
+  const title = refundPending ? `Estorno do pedido #${order.code}` : refund ? `${verb} e estornar #${order.code}` : `${verb} pedido #${order.code}`;
   const validation = validateCancel(draft);
   const phrase = customerPhraseFor(draft.code);
   const confirmLabel = busy ? (refund ? "Estornando…" : refusing ? "Recusando…" : "Cancelando…") : confirmCancelLabel(order, formatCents);
+  const retryLabel = busy ? "Tentando…" : `Tentar estorno de ${formatCents(order.totalCents)}`;
 
   function close() {
     // Com o estorno em andamento a folha não fecha (nem por Esc): fechar no meio esconderia o resultado.
@@ -45,7 +48,7 @@ export function CancelOrderDialog({ order, refund, onConfirm, onRetryRefund, onC
     const outcome = await action();
     setBusy(false);
     if (outcome.kind === "done") return onClose();
-    if (outcome.kind === "refund-pending") return setRefundPending(true);
+    if (outcome.kind === "refund-pending") return setAttemptPending(true);
     setError(outcome.message);
   }
 
@@ -62,33 +65,41 @@ export function CancelOrderDialog({ order, refund, onConfirm, onRetryRefund, onC
       >
         <h2 id={titleId}>{title}</h2>
 
-        {refund && (
+        {refund && !refundPending && (
           <p className="cancel-dialog__effect">
             PIX de {formatCents(order.totalCents)} pago{order.customerName ? ` por ${order.customerName}` : ""}. Ao confirmar, o valor é devolvido ao cliente e o
             pedido só é cancelado depois que o estorno for aceito.
           </p>
         )}
 
-        {refundPending && (
+        {refundPending && attemptPending && (
           <div role="alert" className="cancel-dialog__alert">
             Não foi possível estornar agora. O pedido continua como está.
           </div>
         )}
-        {error && !refundPending && (
+        {refundPending && !attemptPending && (
+          <p className="cancel-dialog__effect" role="status">
+            O estorno de {formatCents(order.totalCents)} ainda não foi aceito. O pedido continua como está e só é cancelado depois que o estorno for aceito.
+          </p>
+        )}
+        {error && !(refundPending && attemptPending) && (
           <div role="alert" className="cancel-dialog__alert">
             {error}
           </div>
         )}
 
-        <fieldset className="cancel-dialog__reasons" disabled={busy || refundPending}>
-          <legend>{refusing ? "Por que você está recusando?" : "Por que você está cancelando?"}</legend>
-          {CANCEL_REASONS.map((reason) => (
-            <label key={reason.code} className={draft.code === reason.code ? "is-checked" : undefined}>
-              <input type="radio" name="motivo" value={reason.code} checked={draft.code === reason.code} onChange={() => setDraft((previous) => ({ ...previous, code: reason.code }))} />
-              {reason.label}
-            </label>
-          ))}
-        </fieldset>
+        {/* Folha reaberta com o estorno já pedido: não há motivo a escolher, só repetir o estorno. */}
+        {!(refundPending && draft.code === null) && (
+          <fieldset className="cancel-dialog__reasons" disabled={busy || refundPending}>
+            <legend>{refusing ? "Por que você está recusando?" : "Por que você está cancelando?"}</legend>
+            {CANCEL_REASONS.map((reason) => (
+              <label key={reason.code} className={draft.code === reason.code ? "is-checked" : undefined}>
+                <input type="radio" name="motivo" value={reason.code} checked={draft.code === reason.code} onChange={() => setDraft((previous) => ({ ...previous, code: reason.code }))} />
+                {reason.label}
+              </label>
+            ))}
+          </fieldset>
+        )}
 
         {draft.code === "OUTRO" && (
           <div>
@@ -107,8 +118,14 @@ export function CancelOrderDialog({ order, refund, onConfirm, onRetryRefund, onC
         )}
 
         <div className="cancel-dialog__actions">
-          <button type="submit" className={refund || !refusing ? "is-danger" : undefined} disabled={busy || (!refundPending && !validation.ok)}>
-            {refundPending ? (busy ? "Tentando…" : "Tentar estorno de novo") : confirmLabel}
+          {/* `aria-disabled` (não `disabled`) enquanto roda: um botão desabilitado perde o foco e o passo de MFA, que
+              devolve o foco a quem estava focado ao abrir, voltaria para o body (Deming, A2). O envio fica barrado em onSubmit. */}
+          <button
+            type="submit"
+            className={refund || !refusing || refundPending ? "is-danger" : undefined}
+            aria-disabled={busy || (!refundPending && !validation.ok) || undefined}
+          >
+            {refundPending ? retryLabel : confirmLabel}
           </button>
           {!refundPending && !validation.ok && <p className="cancel-dialog__hint">{validation.hint}</p>}
           <button type="button" className="cancel-dialog__back" onClick={close} disabled={busy}>

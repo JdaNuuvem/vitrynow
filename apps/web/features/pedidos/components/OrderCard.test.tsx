@@ -24,7 +24,7 @@ const base: Order = {
   allowedTransitions: [accept, refuse],
 };
 
-function setup(order: Partial<Order> = {}, props: { readOnly?: boolean; busy?: boolean } = {}) {
+function setup(order: Partial<Order> = {}, props: { readOnly?: boolean; busy?: boolean; canRetryRefund?: boolean } = {}) {
   const handlers = { onAdvance: vi.fn(), onOpenCancel: vi.fn(), onUndo: vi.fn(), onRetryRefund: vi.fn(), onAssignDeliverer: vi.fn() };
   render(<OrderCard order={{ ...base, ...order }} deliverers={[]} nowMs={NOW} {...props} {...handlers} />);
   return handlers;
@@ -83,11 +83,19 @@ describe("OrderCard: o que o card mostra", () => {
   });
 
   it("estorno pendente aparece como selo de perigo e ganha 'Tentar estorno' no menu", async () => {
-    const { onRetryRefund } = setup({ payment: { status: "APROVADO", refundPending: true }, allowedTransitions: [] });
+    const { onRetryRefund } = setup({ payment: { status: "APROVADO", refundPending: true }, allowedTransitions: [] }, { canRetryRefund: true });
     expect(screen.getByText("Estorno pendente")).toBeInTheDocument();
     await userEvent.click(screen.getByText("⋯"));
     await userEvent.click(screen.getByRole("button", { name: "Tentar estorno" }));
     expect(onRetryRefund).toHaveBeenCalledTimes(1);
+  });
+
+  it("quem não é o dono não recebe o botão 'Tentar estorno': vê o motivo escrito (Deming, A1)", async () => {
+    const { onRetryRefund } = setup({ payment: { status: "APROVADO", refundPending: true }, allowedTransitions: [] });
+    await userEvent.click(screen.getByText("⋯"));
+    expect(screen.queryByRole("button", { name: "Tentar estorno" })).not.toBeInTheDocument();
+    expect(screen.getByText("Só o dono pode tentar o estorno de novo.")).toBeInTheDocument();
+    expect(onRetryRefund).not.toHaveBeenCalled();
   });
 });
 

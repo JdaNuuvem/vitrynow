@@ -25,6 +25,9 @@ vi.mock("./hooks/usePedidos", () => ({
   usePedidos: () => ({ ...state, deliverers: [], busyId: null, ...fns }),
 }));
 
+let role: "OWNER" | "STAFF" | null = "OWNER";
+vi.mock("@/core/session/useCurrentRole", () => ({ useCurrentRole: () => role }));
+
 const accept = { to: "CONFIRMADO", label: "Aceitar", kind: "ADVANCE", primary: true };
 const refuse = { to: "CANCELADO", label: "Recusar", kind: "CANCEL", requires: { reason: true } };
 
@@ -38,6 +41,7 @@ beforeEach(() => {
   state.loadState = "ready";
   state.notice = null;
   state.undoOffer = null;
+  role = "OWNER";
   Object.values(fns).forEach((fn) => fn.mockReset());
 });
 
@@ -187,5 +191,71 @@ describe("PedidosPage: ações, avisos e desfazer", () => {
     await userEvent.click(screen.getByRole("button", { name: "Recusar" }));
     expect(confirmSpy).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
+  });
+});
+
+// Deming, F1: com a folha fechada, o "Tentar estorno" do cartão reabria a folha com refundPending=false (estado local):
+// o botão virava "Cancelar pedido" e chamava /cancel, que responde 409 REFUND_PENDING. O estado agora vem do pedido.
+describe("PedidosPage: tentar o estorno de novo depois de fechar a folha (Deming, F1/A1/A3)", () => {
+  const pendingOrder = (extra: Partial<Order> = {}) =>
+    order("5", "CONFIRMADO", "0045", {
+      totalCents: 4500,
+      payment: { status: "ESTORNO_PENDENTE", refundPending: true },
+      allowedTransitions: [],
+      blocked: [{ to: "CANCELADO", reason: "REFUND_PENDING" }],
+      ...extra,
+    } as Partial<Order>);
+
+  async function openRetrySheet() {
+    await userEvent.click(screen.getByText("⋯"));
+    await userEvent.click(screen.getByRole("button", { name: "Tentar estorno" }));
+    return screen.findByRole("dialog");
+  }
+
+  it("a folha reaberta já está em 'Tentar estorno de R$ 45,00' e confirmar chama o retry, NUNCA o cancelar", async () => {
+    state.orders = [pendingOrder()];
+    fns.retryRefund.mockResolvedValue({ kind: "done" });
+    render(<PedidosPage />);
+    const dialog = await openRetrySheet();
+    expect(within(dialog).queryByRole("button", { name: /Cancelar pedido/ })).not.toBeInTheDocument();
+    const confirm = within(dialog).getByRole("button", { name: "Tentar estorno de R$ 45,00" });
+    await userEvent.click(confirm);
+    expect(fns.retryRefund).toHaveBeenCalledTimes(1);
+    expect(fns.cancel).not.toHaveBeenCalled();
+  });
+
+  it("explica que o estorno ainda não foi aceito e não pede motivo de novo", async () => {
+    state.orders = [pendingOrder()];
+    render(<PedidosPage />);
+    const dialog = await openRetrySheet();
+    expect(within(dialog).getByRole("status")).toHaveTextContent("O estorno de R$ 45,00 ainda não foi aceito");
+    expect(within(dialog).queryByText("Por que você está cancelando?")).not.toBeInTheDocument();
+  });
+
+  it("vale também quando a API só manda o status do pagamento (ESTORNO_PENDENTE) sem a marca refundPending", async () => {
+    state.orders = [pendingOrder({ payment: { status: "ESTORNO_PENDENTE" } } as Partial<Order>)];
+    fns.retryRefund.mockResolvedValue({ kind: "done" });
+    render(<PedidosPage />);
+    const dialog = await openRetrySheet();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Tentar estorno de R$ 45,00" }));
+    expect(fns.retryRefund).toHaveBeenCalledTimes(1);
+    expect(fns.cancel).not.toHaveBeenCalled();
+  });
+
+  it("funcionário (STAFF) não vê 'Tentar estorno' habilitado: vê o motivo escrito (A1)", async () => {
+    role = "STAFF";
+    state.orders = [pendingOrder()];
+    render(<PedidosPage />);
+    await userEvent.click(screen.getByText("⋯"));
+    expect(screen.queryByRole("button", { name: "Tentar estorno" })).not.toBeInTheDocument();
+    expect(screen.getByText("Só o dono pode tentar o estorno de novo.")).toBeInTheDocument();
+  });
+
+  it("papel ainda desconhecido (carregando ou falha) conta como não-dono: nunca libera por engano", async () => {
+    role = null;
+    state.orders = [pendingOrder()];
+    render(<PedidosPage />);
+    await userEvent.click(screen.getByText("⋯"));
+    expect(screen.queryByRole("button", { name: "Tentar estorno" })).not.toBeInTheDocument();
   });
 });

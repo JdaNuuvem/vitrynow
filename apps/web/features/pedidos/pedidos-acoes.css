@@ -297,7 +297,8 @@
 .cancel-dialog__actions button.is-danger {
   background: #b91c1c;
 }
-.cancel-dialog__actions button:disabled {
+.cancel-dialog__actions button:disabled,
+.cancel-dialog__actions button[aria-disabled="true"] {
   opacity: 0.6;
   cursor: not-allowed;
 }

@@ -4,7 +4,7 @@ import { statusLabel, TYPE_LABELS } from "@/core/domain/orderLabels";
 import type { Deliverer, Order } from "@/core/domain/orders";
 import { formatCents } from "@/shared/format/money";
 import { ageLevel, ageText, orderAgeMinutes } from "../orderAge";
-import { deriveCardActions, type CardAction } from "../orderActions";
+import { deriveCardActions, RETRY_REFUND_OWNER_ONLY_TEXT, type CardAction } from "../orderActions";
 
 type OrderCardProps = {
   order: Order;
@@ -13,6 +13,8 @@ type OrderCardProps = {
   busy?: boolean;
   // Sem ações: pedido no coletor "Outros" (status que esta tela não conhece). Mostra, não opera.
   readOnly?: boolean;
+  // Só o dono tenta o estorno de novo (a API recusa o resto). Papel desconhecido conta como "não é o dono".
+  canRetryRefund?: boolean;
   onAdvance: (order: Order, action: CardAction) => void;
   onOpenCancel: (order: Order, action: CardAction) => void;
   onUndo: (order: Order) => void;
@@ -30,7 +32,7 @@ function paymentBadges(order: Order): { text: string; tone: "ok" | "warn" | "dan
   return badges.slice(0, 2);
 }
 
-export function OrderCard({ order, deliverers, nowMs, busy = false, readOnly = false, onAdvance, onOpenCancel, onUndo, onRetryRefund, onAssignDeliverer }: OrderCardProps) {
+export function OrderCard({ order, deliverers, nowMs, busy = false, readOnly = false, canRetryRefund = false, onAdvance, onOpenCancel, onUndo, onRetryRefund, onAssignDeliverer }: OrderCardProps) {
   const actions = deriveCardActions(order);
   const selectable = deliverers.filter((deliverer) => deliverer.active || deliverer.id === order.delivererId);
   const minutes = orderAgeMinutes(order, nowMs);
@@ -122,11 +124,14 @@ export function OrderCard({ order, deliverers, nowMs, busy = false, readOnly = f
                 <span aria-hidden="true">⋯</span>
               </summary>
               <div className="pedidos-card__menu-list">
-                {actions.refundPending && (
-                  <button type="button" disabled={busy} onClick={() => onRetryRefund(order)}>
-                    Tentar estorno
-                  </button>
-                )}
+                {actions.refundPending &&
+                  (canRetryRefund ? (
+                    <button type="button" disabled={busy} onClick={() => onRetryRefund(order)}>
+                      Tentar estorno
+                    </button>
+                  ) : (
+                    <span className="pedidos-card__reason">{RETRY_REFUND_OWNER_ONLY_TEXT}</span>
+                  ))}
                 {actions.undo.enabled && (
                   <button type="button" disabled={busy} onClick={() => onUndo(order)}>
                     Voltar um passo

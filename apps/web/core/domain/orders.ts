@@ -7,7 +7,7 @@ export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
 export type OrderItem = { id: string; quantity: number; productName: string };
 
-export type PaymentStatus = "PENDENTE" | "APROVADO" | "REJEITADO" | "EXPIRADO" | "REEMBOLSADO";
+export type PaymentStatus = "PENDENTE" | "APROVADO" | "REJEITADO" | "EXPIRADO" | "REEMBOLSADO" | "ESTORNO_PENDENTE";
 
 // ---- contrato B3 (atlas\contratos\b3-estados-e-cancelamento.md §1, §8, §9) ----
 // Todos os campos abaixo são OPCIONAIS no tipo: a API atual não os envia ainda, e a tela precisa

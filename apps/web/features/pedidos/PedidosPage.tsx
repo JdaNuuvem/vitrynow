@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { statusLabel } from "@/core/domain/orderLabels";
 import type { Order } from "@/core/domain/orders";
+import { useCurrentRole } from "@/core/session/useCurrentRole";
 import type { CardAction } from "./orderActions";
 import { CancelOrderDialog } from "./components/CancelOrderDialog";
 import { OrderCard } from "./components/OrderCard";
@@ -18,6 +19,7 @@ type CancelTarget = { order: Order; action: CardAction } | null;
 export function PedidosPage() {
   const p = usePedidos();
   const nowMs = useNow();
+  const role = useCurrentRole();
   const groups = groupOrders(p.orders);
   const [cancelTarget, setCancelTarget] = useState<CancelTarget>(null);
   // No celular o quadro vira abas por estado (spec 02 §3); no desktop todas as colunas aparecem.
@@ -34,6 +36,7 @@ export function PedidosPage() {
       nowMs={nowMs}
       busy={p.busyId === order.id}
       readOnly={readOnly}
+      canRetryRefund={role === "OWNER"}
       onAdvance={p.transition}
       onOpenCancel={(target, action) => setCancelTarget({ order: target, action })}
       onUndo={(target) => p.undo(target.id)}

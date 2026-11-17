@@ -47,17 +47,17 @@ describe("CancelOrderDialog: recusar (spec 02 §5.1)", () => {
 
   it("o botão fica desabilitado até escolher o motivo, e a razão aparece escrita", () => {
     setup();
-    expect(screen.getByRole("button", { name: "Recusar pedido" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Recusar pedido" })).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByText("Escolha um motivo para continuar")).toBeInTheDocument();
   });
 
   it("'Outro' exige a nota e ela é identificada como interna", async () => {
     setup();
     await userEvent.click(screen.getByRole("radio", { name: "Outro" }));
-    expect(screen.getByRole("button", { name: "Recusar pedido" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Recusar pedido" })).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByText("Escreva o motivo para continuar")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Escreva o motivo (só a loja vê)"), "Fechamos mais cedo");
-    expect(screen.getByRole("button", { name: "Recusar pedido" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Recusar pedido" })).not.toHaveAttribute("aria-disabled");
   });
 });
 
@@ -134,7 +134,7 @@ describe("CancelOrderDialog: cancelar e estornar (spec 02 §5.3)", () => {
     await userEvent.click(screen.getByRole("button", { name: /Recusar e estornar/ }));
     expect(screen.getByRole("alert")).toHaveTextContent("Não foi possível estornar agora. O pedido continua como está.");
     expect(onClose).not.toHaveBeenCalled();
-    await userEvent.click(screen.getByRole("button", { name: "Tentar estorno de novo" }));
+    await userEvent.click(screen.getByRole("button", { name: /Tentar estorno de R\$\s?69,00/ }));
     expect(onRetryRefund).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -144,5 +144,74 @@ describe("CancelOrderDialog: cancelar e estornar (spec 02 §5.3)", () => {
     await userEvent.click(screen.getByRole("radio", { name: "Item em falta" }));
     await userEvent.click(screen.getByRole("button", { name: /Recusar e estornar/ }));
     expect(screen.getByRole("radio", { name: "Cliente desistiu" })).toBeDisabled();
+  });
+});
+
+// Deming F1/A2/A3: o estado do estorno vem do PEDIDO, e o botão de confirmar não pode perder o foco enquanto roda.
+describe("CancelOrderDialog: reaberta com o estorno já pedido (Deming, F1/A3)", () => {
+  const pending = (payment: Record<string, unknown> = { status: "ESTORNO_PENDENTE", refundPending: true }) =>
+    order({ status: "CONFIRMADO", payment: payment as never, allowedTransitions: [], blocked: [{ to: "CANCELADO", reason: "REFUND_PENDING" }] });
+
+  it("abre direto em 'Tentar estorno de R$ 69,00': sem motivos, sem 'Cancelar pedido'", () => {
+    setup({ order: pending(), refund: true });
+    expect(screen.getByRole("dialog", { name: "Estorno do pedido #0123" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tentar estorno de R$ 69,00" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Cancelar pedido|Cancelar e estornar/ })).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+    expect(screen.getByRole("status")).toHaveTextContent("O estorno de R$ 69,00 ainda não foi aceito");
+  });
+
+  it("confirmar chama o retry do estorno e NÃO o cancelar", async () => {
+    const { onConfirm, onRetryRefund, onClose } = setup({ order: pending(), refund: true });
+    await userEvent.click(screen.getByRole("button", { name: "Tentar estorno de R$ 69,00" }));
+    expect(onRetryRefund).toHaveBeenCalledTimes(1);
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("o status ESTORNO_PENDENTE sozinho (sem a marca refundPending) também vale", async () => {
+    const { onConfirm, onRetryRefund } = setup({ order: pending({ status: "ESTORNO_PENDENTE" }), refund: true });
+    await userEvent.click(screen.getByRole("button", { name: "Tentar estorno de R$ 69,00" }));
+    expect(onRetryRefund).toHaveBeenCalledTimes(1);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it("se o retry falhar, a folha fica e mostra 'Não foi possível estornar agora'", async () => {
+    const { onClose } = setup({ order: pending(), refund: true, retry: async () => ({ kind: "refund-pending" }) });
+    await userEvent.click(screen.getByRole("button", { name: "Tentar estorno de R$ 69,00" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível estornar agora. O pedido continua como está.");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe("CancelOrderDialog: o foco não se perde enquanto roda (Deming, A2)", () => {
+  it("o botão de confirmar fica com aria-disabled (não disabled) e mantém o foco durante o pedido", async () => {
+    let release: (outcome: CancelOutcome) => void = () => {};
+    setup({ confirm: () => new Promise<CancelOutcome>((resolve) => (release = resolve)) });
+    await userEvent.click(screen.getByRole("radio", { name: "Item em falta" }));
+    const confirm = screen.getByRole("button", { name: "Recusar pedido" });
+    confirm.focus();
+    await userEvent.keyboard("{Enter}");
+    const busyButton = await screen.findByRole("button", { name: "Recusando…" });
+    expect(busyButton).toHaveAttribute("aria-disabled", "true");
+    expect(busyButton).not.toBeDisabled();
+    expect(busyButton).toHaveFocus();
+    release({ kind: "done" });
+  });
+
+  it("com o motivo ainda não escolhido, tocar em confirmar não envia nada", async () => {
+    const { onConfirm } = setup();
+    await userEvent.click(screen.getByRole("button", { name: "Recusar pedido" }));
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it("clicar de novo com a chamada em andamento não envia duas vezes", async () => {
+    let release: (outcome: CancelOutcome) => void = () => {};
+    const { onConfirm } = setup({ confirm: () => new Promise<CancelOutcome>((resolve) => (release = resolve)) });
+    await userEvent.click(screen.getByRole("radio", { name: "Item em falta" }));
+    await userEvent.click(screen.getByRole("button", { name: "Recusar pedido" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Recusando…" }));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    release({ kind: "done" });
   });
 });

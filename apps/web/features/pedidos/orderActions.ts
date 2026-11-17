@@ -16,6 +16,9 @@ export const BLOCK_REASON_TEXT: Record<BlockedReasonCode, string> = {
   FORBIDDEN_ROLE: "Seu perfil não permite esta ação.",
 };
 
+// Quem não é o dono não vê "Tentar estorno" habilitado: a API recusa com FORBIDDEN_ROLE (Deming, A1).
+export const RETRY_REFUND_OWNER_ONLY_TEXT = "Só o dono pode tentar o estorno de novo.";
+
 // Em pedido NOVO a recusa de pedido pago tem texto próprio ("recusar", não "cancelar").
 const REFUND_REQUIRES_OWNER_ON_NEW = "Só o dono pode recusar pedido pago.";
 // Código que a API devolver e que este front ainda não conhece: texto seguro, nunca o código cru.
@@ -77,6 +80,12 @@ function fromBlocked(b: BlockedTransition, status: OrderStatus): CardAction {
   };
 }
 
+// O estorno desse pedido já foi pedido e ainda não foi aceito. Sai do DADO do pedido (a API manda `refundPending` e o
+// status ESTORNO_PENDENTE), nunca de estado local de tela: reabrir a folha depois tem de continuar de onde parou.
+export function isRefundPending(order: Order): boolean {
+  return Boolean(order.payment?.refundPending) || order.payment?.status === "ESTORNO_PENDENTE";
+}
+
 export function deriveCardActions(order: Order): CardActions {
   const allowed = (order.allowedTransitions ?? []).map(fromAllowed);
   const blocked = (order.blocked ?? []).map((b) => fromBlocked(b, order.status));
@@ -88,7 +97,7 @@ export function deriveCardActions(order: Order): CardActions {
   const secondary = order.status === "PENDENTE" ? (cancels[0] ?? null) : null;
   const menu = order.status === "PENDENTE" ? [] : cancels;
 
-  const refundPending = Boolean(order.payment?.refundPending);
+  const refundPending = isRefundPending(order);
   const undoBlocked = (order.blocked ?? []).find((b) => b.reason === "UNDO_WINDOW_EXPIRED");
 
   return {
