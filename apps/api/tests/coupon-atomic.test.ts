@@ -95,13 +95,30 @@ describe("FUNC-01/02 — cupom e total zero", () => {
     expect(await usedCount("MEIO", ctx.storeId)).toBe(1);
   });
 
-  it("cupom desativado entre a conferência e a reserva não passa (a reserva confere active no UPDATE)", async () => {
+  it("cupom desativado ENTRE a leitura e a reserva não passa: a reserva confere active no próprio UPDATE (corrida real no banco)", async () => {
     const ctx = await setup(1000);
     await coupon(ctx, { code: "OFF", discountType: "FIXED", discountValue: 100 });
-    await prisma.coupon.updateMany({ where: { storeId: ctx.storeId }, data: { active: false } });
-    const r = await order(ctx, { couponCode: "OFF" });
-    expect(r.statusCode).toBe(400);
+    const couponId = (await prisma.coupon.findFirstOrThrow({ where: { storeId: ctx.storeId } })).id;
+    let pedido: Promise<{ statusCode: number; body: string }> | undefined;
+    // Seguro a linha do cupom: o pedido lê o cupom (ainda ativo), entra na transação e BLOQUEIA no UPDATE da reserva.
+    // Enquanto ele espera, o dono desativa o cupom; ao liberar, o banco reavalia o WHERE e a reserva não acha linha.
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "Coupon" WHERE "id" = ${couponId} FOR UPDATE`;
+      pedido = order(ctx, { couponCode: "OFF" });
+      await vi.waitFor(
+        async () => {
+          const waiting = await prisma.$queryRaw<{ n: bigint }[]>`SELECT count(*) AS n FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%"usedCount" + 1%'`;
+          expect(Number(waiting[0].n)).toBeGreaterThan(0);
+        },
+        { timeout: 10_000, interval: 50 },
+      );
+      await tx.coupon.update({ where: { id: couponId }, data: { active: false } });
+    });
+    const r = await pedido!;
+    expect(r.statusCode, r.body).toBe(400);
+    expect(json(r).code).toBe("COUPON_EXHAUSTED");
     expect(await usedCount("OFF", ctx.storeId)).toBe(0);
+    expect(await prisma.order.count({ where: { storeId: ctx.storeId } })).toBe(0);
   });
 
   it("a devolução ao cancelar continua UMA vez só (usedCount volta de 1 para 0 e não passa disso)", async () => {
