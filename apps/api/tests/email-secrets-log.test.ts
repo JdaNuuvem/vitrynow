@@ -85,7 +85,7 @@ describe("o link de redefinição leva o token no fragmento, não na query (NG-1
     const token = new URLSearchParams(url.hash.slice(1)).get("token");
     expect(token).toHaveLength(32);
 
-    const reset = await app.inject({ method: "POST", url: "/auth/reset-password", payload: { token, newPassword: "outraSenha123" } });
+    const reset = await app.inject({ method: "POST", url: "/auth/reset-password", payload: { token, email: credentials.email, newPassword: "outraSenha123" } });
     expect(reset.statusCode).toBe(200);
     expect(await prisma.passwordResetToken.count({ where: { usedAt: { not: null } } })).toBe(1);
   });

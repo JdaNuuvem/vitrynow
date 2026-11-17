@@ -93,7 +93,7 @@ describe("assinatura (integração)", () => {
     await prisma.$disconnect();
   });
 
-  const staffPayload = { email: "staff@teste.com", password: "senha123" };
+  const staffPayload = { email: "staff@teste.com", password: "senha12345" };
 
   function signedWebhook(dataId: string) {
     const ts = String(Date.now());

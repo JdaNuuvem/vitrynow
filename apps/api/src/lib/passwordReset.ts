@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { prisma } from "@meucardapio/db";
 import { nanoid } from "nanoid";
 import { hashToken } from "./tokenHash";
@@ -44,4 +45,15 @@ export const FORGOT_MIN_DURATION_MS = 150;
 export async function padToMinimum(startedAt: number, minMs: number = FORGOT_MIN_DURATION_MS): Promise<void> {
   const remaining = minMs - (performance.now() - startedAt);
   if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+}
+
+// SEC-29 (ST-67): na redefinição, o e-mail digitado é comparado com o da conta do token SEM revelar nada: tempo constante (comparamos os
+// SHA-256 dos dois textos, que têm tamanho igual), 5 e-mails errados invalidam o token e toda recusa leva o mesmo piso de tempo.
+export const RESET_MAX_EMAIL_FAILURES = 5;
+// Maior que o piso do forgot-password: a redefinição faz 3 consultas e é rara; o piso cobre o p99 do banco em outro host (ST-64).
+export const RESET_FAIL_MIN_DURATION_MS = 300;
+
+export function constantTimeEqual(a: string, b: string): boolean {
+  const digest = (value: string) => createHash("sha256").update(value.trim().toLowerCase()).digest();
+  return timingSafeEqual(digest(a), digest(b));
 }

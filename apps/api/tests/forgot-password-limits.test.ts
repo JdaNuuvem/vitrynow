@@ -119,7 +119,7 @@ describe("forgot-password: tempo igual, limite por conta e um token ativo (SEC-2
     expect(await activeTokens(user.id)).toBe(1); // só o novo está ativo
 
     // o token antigo NÃO redefine mais a senha; o novo redefine
-    const old = await app.inject({ method: "POST", url: "/auth/reset-password", payload: { token: first, newPassword: "outraSenha123" } });
+    const old = await app.inject({ method: "POST", url: "/auth/reset-password", payload: { token: first, email: credentials.email, newPassword: "outraSenha123" } });
     expect(old.statusCode).toBeGreaterThanOrEqual(400);
 
     await backdate(RESET_COOLDOWN_MS + 5_000);
@@ -132,7 +132,7 @@ describe("forgot-password: tempo igual, limite por conta e um token ativo (SEC-2
     expect(sent).toHaveLength(RESET_MAX_PER_HOUR);
     expect(await prisma.passwordResetToken.count({ where: { userId: user.id } })).toBe(RESET_MAX_PER_HOUR);
 
-    const fresh = await app.inject({ method: "POST", url: "/auth/reset-password", payload: { token: tokenOf(sent[2].resetUrl), newPassword: "outraSenha123" } });
+    const fresh = await app.inject({ method: "POST", url: "/auth/reset-password", payload: { token: tokenOf(sent[2].resetUrl), email: credentials.email, newPassword: "outraSenha123" } });
     expect(fresh.statusCode).toBe(200);
   }, 60000);
 

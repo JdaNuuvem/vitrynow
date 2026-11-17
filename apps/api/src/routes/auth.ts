@@ -10,7 +10,7 @@ import { SESSION_COOKIE, revokeSession, sessionCookieOptions, signSession } from
 import { disconnectSession, disconnectUser } from "../realtime/hub";
 import { hashToken } from "../lib/tokenHash";
 import { LoginThrottle } from "../lib/loginThrottle";
-import { issueResetToken, padToMinimum } from "../lib/passwordReset";
+import { RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, constantTimeEqual, issueResetToken, padToMinimum } from "../lib/passwordReset";
 
 // Hash de uma senha que ninguém conhece, no mesmo custo dos hashes reais: login com e-mail inexistente
 // gasta o mesmo tempo do login com senha errada (ST-05, sem enumeração de contas por tempo).
@@ -187,11 +187,37 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     "/auth/reset-password",
     { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
+      const startedAt = performance.now();
       const parsed = resetPasswordSchema.safeParse(request.body);
-      if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+      if (!parsed.success) {
+        // Pedido SEM e-mail (ou com e-mail malformado) vindo de um bundle antigo em cache do navegador: a MESMA recusa genérica e o mesmo piso de
+        // tempo das demais (o servidor nunca trata o e-mail como opcional). Qualquer outro problema do corpo (senha curta, token ausente) segue
+        // com o erro de validação, que não depende do token e por isso não é oráculo.
+        const onlyEmail = parsed.error.issues.length > 0 && parsed.error.issues.every((issue) => issue.path[0] === "email");
+        if (onlyEmail) {
+          await padToMinimum(startedAt, RESET_FAIL_MIN_DURATION_MS);
+          return reply.code(400).send({ error: "token inválido ou expirado" });
+        }
+        return reply.code(400).send({ error: parsed.error.flatten() });
+      }
 
+      // SEC-29 (ST-67): além do token, quem redefine DIGITA o e-mail da conta, comparado AQUI com o da conta do token. Sem isto, o link da
+      // conta de um atacante, mandado à vítima, redefinia a conta DELE com a senha que a vítima reutiliza.
+      // Três recusas (token inexistente/usado/vencido, e-mail que não bate, token de outra conta) têm o MESMO status, o MESMO corpo e o
+      // MESMO trabalho no banco (3 consultas, na mesma ordem) e o MESMO piso de tempo; o token NUNCA é gasto quando o e-mail não bate.
+      const now = new Date();
       const resetToken = await prisma.passwordResetToken.findUnique({ where: { tokenHash: hashToken(parsed.data.token) } });
-      if (!resetToken || resetToken.usedAt || resetToken.expiresAt < new Date()) {
+      const live = !!resetToken && !resetToken.usedAt && resetToken.expiresAt >= now;
+      const owner = await prisma.user.findUnique({ where: { id: resetToken?.userId ?? "-" }, select: { email: true } });
+      const sameEmail = constantTimeEqual(parsed.data.email, owner?.email ?? "");
+      // Conta a falha do e-mail e, na 5ª, invalida o token (resposta igual). Para token que não existe, roda a mesma instrução sobre 0 linhas.
+      await prisma.$executeRaw`
+        UPDATE "PasswordResetToken"
+           SET "emailFailures" = "emailFailures" + 1,
+               "expiresAt" = CASE WHEN "emailFailures" + 1 >= ${RESET_MAX_EMAIL_FAILURES} THEN ${now} ELSE "expiresAt" END
+         WHERE "id" = ${resetToken?.id ?? "-"} AND "usedAt" IS NULL AND "expiresAt" >= ${now} AND ${live && !sameEmail}`;
+      if (!live || !sameEmail || !resetToken) {
+        await padToMinimum(startedAt, RESET_FAIL_MIN_DURATION_MS);
         return reply.code(400).send({ error: "token inválido ou expirado" });
       }
 

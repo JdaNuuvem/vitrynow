@@ -62,8 +62,8 @@ describe("tokens com hash e sockets revogáveis", () => {
   it("a listagem não devolve token nem hash ao dono, e STAFF nem a vê (ST-12)", async () => {
     const { cookie, user } = await owner();
     const created = await newDeviceToken(cookie);
-    await prisma.user.create({ data: { storeId: user.storeId, email: "func@teste.com", passwordHash: await bcrypt.hash("senha123", 4), role: "STAFF" } });
-    const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "func@teste.com", password: "senha123" } });
+    await prisma.user.create({ data: { storeId: user.storeId, email: "func@teste.com", passwordHash: await bcrypt.hash("senha12345", 4), role: "STAFF" } });
+    const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "func@teste.com", password: "senha12345" } });
     const staffCookie = (login.headers["set-cookie"] as string).split(";")[0];
 
     const res = await app.inject({ method: "GET", url: "/api/device-tokens", headers: { cookie } });
@@ -132,8 +132,8 @@ describe("tokens com hash e sockets revogáveis", () => {
 
   it("WebSocket do painel fecha quando o usuário é removido", async () => {
     const { cookie, user } = await owner();
-    const staff = await prisma.user.create({ data: { storeId: user.storeId, email: "func@teste.com", passwordHash: await bcrypt.hash("senha123", 4), role: "STAFF" } });
-    const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "func@teste.com", password: "senha123" } });
+    const staff = await prisma.user.create({ data: { storeId: user.storeId, email: "func@teste.com", passwordHash: await bcrypt.hash("senha12345", 4), role: "STAFF" } });
+    const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "func@teste.com", password: "senha12345" } });
     const staffCookie = (login.headers["set-cookie"] as string).split(";")[0];
     const ws = await app.injectWS("/ws/panel", { headers: { cookie: staffCookie } });
     const closed = closedWith(ws);
@@ -157,9 +157,9 @@ describe("tokens com hash e sockets revogáveis", () => {
     expect(row.tokenHash).toBe(hashToken(plain));
     expect(row.tokenHash).not.toBe(plain);
 
-    const withHash = await app.inject({ method: "POST", url: "/auth/reset-password", payload: { token: row.tokenHash, newPassword: "outra-senha-123" } });
+    const withHash = await app.inject({ method: "POST", url: "/auth/reset-password", payload: { token: row.tokenHash, email: credentials.email, newPassword: "outra-senha-123" } });
     expect(withHash.statusCode).toBe(400);
-    const ok = await app.inject({ method: "POST", url: "/auth/reset-password", payload: { token: plain, newPassword: "outra-senha-123" } });
+    const ok = await app.inject({ method: "POST", url: "/auth/reset-password", payload: { token: plain, email: credentials.email, newPassword: "outra-senha-123" } });
     expect(ok.statusCode).toBe(200);
   });
 });
