@@ -137,8 +137,8 @@ export class RealMercadoPagoOAuth implements MercadoPagoOAuth {
 
 export type PaymentsMode = "fake" | "real" | "off";
 
-/** Só nestes ambientes o fake é aceito. NODE_ENV ausente = dev local (os scripts de dev não o definem). */
-export const isDevLike = (env: NodeJS.ProcessEnv) => env.NODE_ENV === undefined || env.NODE_ENV === "" || env.NODE_ENV === "development" || env.NODE_ENV === "test";
+/** Só nestes ambientes o fake é aceito. NODE_ENV AUSENTE conta como produção (igual à SEC-22): o script `dev` define `development`. */
+export const isDevLike = (env: NodeJS.ProcessEnv) => env.NODE_ENV === "development" || env.NODE_ENV === "test";
 
 /** Pagamentos por loja desligados (MP_OAUTH_MODE=off): PIX nunca é oferecido e conectar é recusado. */
 export class PaymentsDisabledError extends Error {
@@ -153,10 +153,10 @@ export function paymentsMode(env: NodeJS.ProcessEnv = process.env): PaymentsMode
   const raw = env.MP_OAUTH_MODE?.trim();
   if (raw && raw !== "fake" && raw !== "real" && raw !== "off") throw new Error(`MP_OAUTH_MODE inválido: "${raw}" (use off, real ou, só em dev/teste, fake).`);
   if (!raw) {
-    if (!isDevLike(env)) throw new Error("MP_OAUTH_MODE não configurado: fora de dev/teste use `off` (PIX desligado) ou `real` (com as credenciais do aplicativo do Mercado Pago).");
+    if (!isDevLike(env)) throw new Error("MP_OAUTH_MODE não configurado: fora de dev/teste use `off` (PIX desligado) ou `real` (com as credenciais do aplicativo do Mercado Pago). Em desenvolvimento use NODE_ENV=development (o script `pnpm dev` já define).");
     return "fake";
   }
-  if (raw === "fake" && !isDevLike(env)) throw new Error("O provedor FAKE de OAuth só roda em dev/teste (NODE_ENV ausente, development ou test): use MP_OAUTH_MODE=off ou real.");
+  if (raw === "fake" && !isDevLike(env)) throw new Error("O provedor FAKE de OAuth só roda em dev/teste (NODE_ENV=development ou test, explícito): use MP_OAUTH_MODE=off ou real.");
   return raw as PaymentsMode;
 }
 

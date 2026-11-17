@@ -125,12 +125,16 @@ export class StorePaymentsService {
 
     try {
       await this.db.$transaction(async (tx) => {
+        const previous = await tx.paymentAccount.findFirst({ where: { storeId: actor.storeId, provider: PROVIDER, status: { not: "DISCONNECTED" } } });
+        // Trocar por OUTRO vendedor com PIX/estorno pendente é bloqueado (o token antigo ainda é necessário). Reconectar o
+        // MESMO vendedor é permitido: o token novo confere os pagamentos antigos (eles passam para a conta nova, abaixo).
+        if (previous && previous.sellerUserId !== tokens.sellerUserId) this.assertNoPending(await this.pending(previous.id, tx));
         // Conta anterior: sai de cena SEM tokens (zerados), mas o registro fica (pagamentos antigos apontam para ela).
         await tx.paymentAccount.updateMany({
           where: { storeId: actor.storeId, provider: PROVIDER, status: { not: "DISCONNECTED" } },
           data: { status: "DISCONNECTED", accessTokenEnc: null, refreshTokenEnc: null, disconnectedAt: now },
         });
-        await tx.paymentAccount.create({
+        const created = await tx.paymentAccount.create({
           data: {
             storeId: actor.storeId,
             provider: PROVIDER,
@@ -142,21 +146,46 @@ export class StorePaymentsService {
             connectedAt: now,
           },
         });
+        if (previous && previous.sellerUserId === tokens.sellerUserId) {
+          await tx.payment.updateMany({ where: { paymentAccountId: previous.id }, data: { paymentAccountId: created.id } });
+        }
+        // Rastro ATÔMICO com a mudança: sem ele a conta não é gravada (nunca "conectou sem rastro"). Sem `sid` nem token.
+        await tx.auditLog.create({
+          data: { storeId: actor.storeId, userId: actor.userId, action: "payment_account.connect", targetType: "PaymentAccount", targetId: created.id, metadata: { seller: maskSeller(tokens.sellerUserId) } },
+        });
       });
     } catch (error) {
       // Índice parcial único: esse vendedor já está ativo em OUTRA loja. Mensagem genérica, sem revelar qual (D1-3).
       if ((error as { code?: string }).code === "P2002") throw new CodedError(409, "MP_ACCOUNT_IN_USE", "Esta conta do Mercado Pago já está em uso.");
       throw error;
     }
-    // Estrita (parecer da Nightingale): o rastro de conectar/desconectar tem que existir; sem `sid` nem token no metadata.
-    await this.audit.logStrict({
-      storeId: actor.storeId,
-      userId: actor.userId,
-      action: "payment_account.connect",
-      targetType: "PaymentAccount",
-      metadata: { seller: maskSeller(tokens.sellerUserId) },
-    });
     return (await this.view(actor.storeId)).mercadopago;
+  }
+
+  /**
+   * O que ainda depende do token desta conta (RN-B1-15): PIX em andamento (aguardando ou pago de pedido não encerrado) e estorno
+   * pendente. Enquanto houver, a conta NÃO pode ser apagada nem trocada por outra.
+   */
+  private async pending(accountId: string, db: Pick<Db, "payment"> = this.db): Promise<{ pixPending: number; refundPending: number }> {
+    const [pixPending, refundPending] = await Promise.all([
+      db.payment.count({
+        where: { paymentAccountId: accountId, status: { in: ["PENDENTE", "EM_ANALISE", "APROVADO"] }, order: { status: { notIn: ["CONCLUIDO", "CANCELADO"] } } },
+      }),
+      db.payment.count({ where: { paymentAccountId: accountId, status: "ESTORNO_PENDENTE" } }),
+    ]);
+    return { pixPending, refundPending };
+  }
+
+  private assertNoPending(counts: { pixPending: number; refundPending: number }) {
+    const { pixPending, refundPending } = counts;
+    if (pixPending === 0 && refundPending === 0) return;
+    const message =
+      refundPending > 0
+        ? "Há um estorno em andamento. Aguarde terminar para desconectar."
+        : pixPending === 1
+          ? "Há 1 PIX em andamento. Aguarde o pagamento ou cancele o pedido."
+          : `Há ${pixPending} PIX em andamento. Aguarde o pagamento ou cancele os pedidos.`;
+    throw new CodedError(409, "MP_HAS_PENDING_PAYMENTS", message, { details: { pixPending, refundPending } });
   }
 
   // ───────────── desconectar ─────────────
@@ -168,29 +197,17 @@ export class StorePaymentsService {
   async disconnect(actor: Actor): Promise<void> {
     const account = await this.activeAccount(actor.storeId);
     if (!account) throw new CodedError(404, "PAYMENT_ACCOUNT_NOT_FOUND", "Não há conta do Mercado Pago conectada.");
-    const open = await this.db.payment.count({
-      where: {
-        paymentAccountId: account.id,
-        // pago em andamento, estorno pendente OU PIX ainda vigente (o cliente pode pagar depois de a conta sumir)
-        status: { in: ["APROVADO", "ESTORNO_PENDENTE", "PENDENTE", "EM_ANALISE"] },
-        order: { status: { notIn: ["CONCLUIDO", "CANCELADO"] } },
-      },
-    });
-    if (open > 0) {
-      throw new CodedError(409, "DISCONNECT_BLOCKED", `Há ${open} pedido(s) com PIX pago ou aguardando pagamento. Conclua ou cancele antes de desconectar.`, { count: open });
-    }
-    await this.db.paymentAccount.update({
-      where: { id: account.id },
-      data: { status: "DISCONNECTED", accessTokenEnc: null, refreshTokenEnc: null, disconnectedAt: this.clock.now() },
-    });
-    await this.audit.logStrict({
-      storeId: actor.storeId,
-      userId: actor.userId,
-      action: "payment_account.disconnect",
-      targetType: "PaymentAccount",
-      targetId: account.id,
-      metadata: { seller: maskSeller(account.sellerUserId) },
-    });
+    this.assertNoPending(await this.pending(account.id)); // nada é apagado no bloqueio
+    await this.db.$transaction([
+      this.db.paymentAccount.update({
+        where: { id: account.id },
+        data: { status: "DISCONNECTED", accessTokenEnc: null, refreshTokenEnc: null, disconnectedAt: this.clock.now() },
+      }),
+      // atômico: os tokens só somem junto com o rastro (sem `sid`, só o vendedor mascarado)
+      this.db.auditLog.create({
+        data: { storeId: actor.storeId, userId: actor.userId, action: "payment_account.disconnect", targetType: "PaymentAccount", targetId: account.id, metadata: { seller: maskSeller(account.sellerUserId) } },
+      }),
+    ]);
   }
 
   // ───────────── token para quem cria/consulta/estorna cobrança ─────────────
@@ -241,20 +258,13 @@ export class StorePaymentsService {
   async refreshAccount(accountId: string): Promise<"refreshed" | "skipped" | "failed" | "needs_reconnect"> {
     const outcome = await this.refreshLocked(accountId);
     if (outcome.result === "needs_reconnect") {
-      // fora da transação: a conta já está marcada. Rastro ESTRITO (propaga se não gravar) e depois o aviso, que nunca derruba nada.
-      await this.audit.logStrict({
-        storeId: outcome.storeId,
-        action: "payment_account.needs_reconnect",
-        targetType: "PaymentAccount",
-        targetId: accountId,
-        metadata: { seller: maskSeller(outcome.seller ?? ""), failures: outcome.failures },
-      });
+      // o rastro já foi gravado na MESMA transação que marcou a conta; o aviso ao dono nunca derruba nada
       await this.notifyOwner(outcome.storeId, "needs_reconnect").catch(() => undefined);
     }
     return outcome.result;
   }
 
-  private async refreshLocked(accountId: string): Promise<{ result: "refreshed" | "skipped" | "failed" | "needs_reconnect"; storeId: string; seller?: string; failures?: number }> {
+  private async refreshLocked(accountId: string): Promise<{ result: "refreshed" | "skipped" | "failed" | "needs_reconnect"; storeId: string }> {
     return this.db.$transaction(async (tx) => {
       const rows = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "PaymentAccount" WHERE "id" = ${accountId} FOR UPDATE`;
       if (rows.length === 0) return { result: "skipped" as const, storeId: "" };
@@ -296,7 +306,10 @@ export class StorePaymentsService {
           },
         });
         if (giveUp) {
-          return { result: "needs_reconnect" as const, storeId: account.storeId, seller: account.sellerUserId, failures };
+          await tx.auditLog.create({
+            data: { storeId: account.storeId, action: "payment_account.needs_reconnect", targetType: "PaymentAccount", targetId: accountId, metadata: { seller: maskSeller(account.sellerUserId), failures } },
+          });
+          return { result: "needs_reconnect" as const, storeId: account.storeId };
         }
         return { result: "failed" as const, storeId: account.storeId };
       }
