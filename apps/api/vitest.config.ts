@@ -1,42 +1,24 @@
 import { defineConfig } from "vitest/config";
+import { assertTestDatabaseUrl, describeDb } from "./tests/dbGuard";
 
-// INF-14: a suíte APAGA tabelas entre os testes (resetDb). Por isso ela nunca escolhe um banco por
-// conta própria: exige TEST_DATABASE_URL (veja docs/test-db.md e scripts/test-db.ps1) e só aceita um
-// banco cujo nome termina em "_test" e que não seja o Postgres de dev (porta 55432).
-function testDatabaseUrl(): string {
-  const url = process.env.TEST_DATABASE_URL;
-  if (!url) {
-    throw new Error(
-      [
-        "TEST_DATABASE_URL não definida: a suíte não escolhe banco sozinha (ela apaga dados).",
-        "Suba o seu Postgres de teste e exporte a variável:",
-        "  .\\scripts\\test-db.ps1 -Agent <nome> -Port <sua-porta>",
-        '  $env:TEST_DATABASE_URL = "postgresql://meucardapio:meucardapio@127.0.0.1:<sua-porta>/meucardapio_test?schema=public"',
-        "Veja docs/test-db.md.",
-      ].join("\n"),
-    );
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error("TEST_DATABASE_URL inválida (não é uma URL postgresql://...).");
-  }
-  const dbName = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
-  if (!dbName.endsWith("_test")) {
-    throw new Error(`TEST_DATABASE_URL aponta para o banco "${dbName}": o nome precisa terminar em "_test" (a suíte apaga dados).`);
-  }
-  if (parsed.port === "55432") {
-    throw new Error("TEST_DATABASE_URL aponta para o Postgres de dev (porta 55432): use o seu, da faixa 55440–55459 (scripts/test-db.ps1).");
-  }
-  return url;
+// INF-14/INF-16: a suíte APAGA tabelas (resetDb). Ela nunca escolhe um banco por conta própria: exige TEST_DATABASE_URL
+// e só aceita um Postgres de teste local (host e porta em lista explícita, nome terminado em _test). A regra fica em
+// tests/dbGuard.ts, testada em tests/unit/db-guard.test.ts, e o resetDb() a confere de novo antes de apagar.
+
+const testDatabaseUrl = assertTestDatabaseUrl(process.env.TEST_DATABASE_URL);
+// A suíte SOBRESCREVE DATABASE_URL pela de teste. Isso nunca é silencioso: se havia outra DATABASE_URL no ambiente
+// (ex.: a do dev), avisa qual foi ignorada e qual banco a suíte vai usar (sem credenciais).
+if (process.env.DATABASE_URL && process.env.DATABASE_URL !== testDatabaseUrl) {
+  console.warn(
+    `[vitest.config] AVISO: DATABASE_URL (${describeDb(process.env.DATABASE_URL)}) foi IGNORADA; a suíte usa TEST_DATABASE_URL (${describeDb(testDatabaseUrl)}).`,
+  );
 }
 
 export default defineConfig({
   test: {
     env: {
       NODE_ENV: "test",
-      DATABASE_URL: testDatabaseUrl(),
+      DATABASE_URL: testDatabaseUrl,
       JWT_SECRET: "test-secret-nao-use-em-producao",
       MP_WEBHOOK_SECRET: "test-webhook-secret",
     },
