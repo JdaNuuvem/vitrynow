@@ -160,7 +160,7 @@ describe("OrderDetailPanel: tipos de pedido e máscara do servidor (UI-D-04, CA-
       .mockResolvedValueOnce(ok({ order: detail() }));
     setup(get);
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Contato indisponível agora, tente de novo.");
+    expect(alert).toHaveTextContent("Contato indisponível agora. Tente de novo.");
     // o resto do pedido segue na tela
     expect(within(section("Itens")).getByText("2× Calabresa")).toBeInTheDocument();
     expect(within(section("Pagamento")).getByText("Cobrar R$ 95,30 em dinheiro")).toBeInTheDocument();

@@ -92,7 +92,7 @@ export function OrderDetailView({ order, deliverers, nowMs, busy, canRetryRefund
           // Falha fechada do servidor (API-54b): não foi possível registrar o acesso, então o contato não veio. O resto do
           // pedido segue na tela; repetir busca de novo.
           <div role="alert" className="pedido-detalhe__alert">
-            <span>Contato indisponível agora, tente de novo.</span>
+            <span>Contato indisponível agora. Tente de novo.</span>
             <button type="button" className="pedido-detalhe__action" onClick={onRetryContact}>
               Tentar de novo
             </button>
