@@ -83,11 +83,22 @@ describe("linha de dinheiro (CA-MC-04/05/06/13)", () => {
     expect(moneyLineFor(pay("REEMBOLSADO"), "PAGAMENTO_APOS_CANCELAMENTO")).toContain("foi estornado");
   });
 
-  it("C: 'Nenhuma cobrança foi feita' só com a cobrança confirmada como encerrada (CANCELADO/EXPIRADO); PENDENTE (cancelamento no provedor falhou) não mostra", () => {
-    expect(moneyLineFor(pay("CANCELADO"), "CLIENTE_DESISTIU")).toBe("Nenhuma cobrança foi feita.");
-    expect(moneyLineFor(pay("EXPIRADO"), "PAGAMENTO_NAO_APROVADO")).toBe("Nenhuma cobrança foi feita.");
+  it("C: 'Não há cobrança em aberto' só com a cobrança confirmada como encerrada (CANCELADO/EXPIRADO); PENDENTE (cancelamento no provedor falhou) não mostra", () => {
+    expect(moneyLineFor(pay("CANCELADO"), "CLIENTE_DESISTIU")).toBe("Não há cobrança em aberto.");
+    expect(moneyLineFor(pay("EXPIRADO"), "PAGAMENTO_NAO_APROVADO")).toBe("Não há cobrança em aberto.");
     expect(moneyLineFor(pay("PENDENTE"), "CLIENTE_DESISTIU")).toBeNull();
     expect(moneyLineFor(pay("EM_ANALISE"), "CLIENTE_DESISTIU")).toBeNull();
+  });
+
+  it("CA-MC-06/13: o texto antigo ('Nenhuma cobrança foi feita') não reaparece em nenhum estado de pagamento nem motivo", () => {
+    const statuses: PaymentStatus[] = ["PENDENTE", "EM_ANALISE", "APROVADO", "REJEITADO", "EXPIRADO", "REEMBOLSADO", "CANCELADO", "ESTORNO_PENDENTE", "CONTESTADO"];
+    for (const status of statuses) {
+      for (const reason of ["ITEM_EM_FALTA", "CLIENTE_DESISTIU", "PAGAMENTO_NAO_APROVADO", "PAGAMENTO_APOS_CANCELAMENTO", null]) {
+        expect(moneyLineFor(pay(status), reason) ?? "", `${status}/${reason}`).not.toMatch(/nenhuma cobran/i);
+      }
+    }
+    // uma linha só, sem link
+    expect("Não há cobrança em aberto.".length).toBeLessThanOrEqual(80);
   });
 
   it("G: sem pagamento online (dinheiro/cartão na entrega) não há linha", () => {

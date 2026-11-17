@@ -63,7 +63,9 @@ export function moneyLineFor(payment: { status: PaymentStatus; amountCents: numb
     case "CANCELADO":
     case "EXPIRADO":
       // Só com a cobrança confirmada como encerrada: se o cancelamento no provedor falhou o status segue PENDENTE (sem linha).
-      return "Nenhuma cobrança foi feita.";
+      // Afirma só o ESTADO ATUAL (não "nenhuma cobrança foi feita"): com a exceção CANCELADO→APROVADO da API-03 o
+      // cliente pode ter pago no mesmo instante, e aí a linha de estorno (caso D) passa a valer.
+      return "Não há cobrança em aberto.";
     default:
       return null;
   }
