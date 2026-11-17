@@ -130,7 +130,9 @@ services:
       retries: 5
 
   caddy:
-    image: caddy:2-alpine
+    build:
+      context: ./caddy
+    image: meucardapio-caddy:${APP_VERSION:-local}
     restart: unless-stopped
     logging: *default-logging
     security_opt:

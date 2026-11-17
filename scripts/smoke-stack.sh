@@ -178,5 +178,19 @@ for v in JWT_SECRET MFA_HMAC_KEY API_INTERNAL_SECRET POSTGRES_PASSWORD WEB_ORIGI
 done
 rm -f "$ENVF.sem"
 
+echo "== 9 limite de requisições por IP em /loja/* (SEC-26 / ST-44); fica no fim porque a rajada limita este IP por 1 min"
+pass=0; lim=0; ra=""
+for i in $(seq 1 150); do
+  out="$(curl -s -o /dev/null -D - -w 'CODE=%{http_code}' -H "X-Forwarded-For: 10.7.$((i % 250)).$((i % 250))" "http://127.0.0.1:$PORT/loja/slug-inexistente-$i")"
+  code="${out##*CODE=}"
+  if [ "$code" = 429 ]; then lim=$((lim+1)); [ -z "$ra" ] && ra="$(printf '%s' "$out" | tr -d '\r' | grep -i '^retry-after:' | head -1)"; else pass=$((pass+1)); fi
+done
+echo "   150 requisições a /loja/<aleatório>, cada uma com X-Forwarded-For diferente: $pass passaram, $lim limitadas (429)"
+[ "$lim" -ge 1 ] && check ok "o limite por IP real atua em /loja/* ($lim respostas 429); o X-Forwarded-For forjado não escapa" || check fail "nenhuma resposta 429 em 150 requisições: sem limite em /loja/*"
+[ "$pass" -ge 100 ] && check ok "não limita cedo demais: $pass requisições passaram antes do teto de 120/min" || check fail "só $pass passaram: o limite está apertado demais"
+[ -n "$ra" ] && check ok "a resposta 429 traz Retry-After ($ra)" || check fail "429 sem Retry-After"
+h="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health")"; s="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/stores/nao-existe")"
+[ "$h" = 200 ] && [ "$s" = 404 ] && check ok "/health ($h) e a API ($s) seguem livres durante o limite de /loja/*" || check fail "o limite de /loja/* afetou outras rotas (health=$h, api=$s)"
+
 echo; echo "RESULTADO: $PASS ok, $FAILS falhas"
 [ "$FAILS" -eq 0 ]
