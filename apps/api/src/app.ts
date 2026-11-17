@@ -28,6 +28,7 @@ import noticeRoutes from "./routes/notices";
 import mfaRoutes from "./routes/mfa";
 import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
 import jobsPlugin from "./jobs/plugin";
+import menuRevalidationPlugin from "./plugins/menuRevalidation";
 
 export function buildApp() {
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
@@ -52,6 +53,7 @@ export function buildApp() {
   app.register(websocket);
   app.register(authPlugin);
   app.register(jobsPlugin);
+  app.register(menuRevalidationPlugin);
 
   // Várias rotas são "ação sem corpo" (delete, revoke) chamadas com
   // Content-Type: application/json mas sem body — o parser padrão do Fastify rejeita

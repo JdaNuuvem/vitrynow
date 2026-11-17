@@ -286,6 +286,18 @@ model OrderItemAdditional {
   @@index([orderItemId])
 }
 
+// Pedidos de "refaça a vitrine desta loja" para o web (API-58, ADR-0013 §2.4). Uma linha pendente por slug: várias
+// mudanças seguidas viram uma só chamada. O job `menu.revalidate` envia e reenvia com recuo; o TTL do ISR cobre o intervalo.
+model MenuRevalidation {
+  slug          String   @id
+  storeId       String
+  requestedAt   DateTime @default(now()) // muda a cada novo pedido; evita apagar um pedido mais novo que chegou durante o envio
+  nextAttemptAt DateTime @default(now())
+  attempts      Int      @default(0)
+
+  @@index([nextAttemptAt])
+}
+
 model OrderStatusHistory {
   id        String      @id @default(cuid())
   orderId   String
