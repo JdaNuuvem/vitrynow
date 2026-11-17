@@ -31,10 +31,13 @@ import { rateLimitKey, rateLimitMax } from "./lib/clientIp";
 import jobsPlugin from "./jobs/plugin";
 
 export function buildApp() {
-  internalServiceSecrets(); // SEC-24: em produção, sem segredo de serviço válido a API nem sobe
+  const serviceSecrets = internalServiceSecrets(); // SEC-24: em produção, sem segredo de serviço válido a API nem sobe
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
   // e o rate limit deixa de contar o IP do proxy. Vazio = ignora X-Forwarded-For (não forjável).
   const app = Fastify({ logger: process.env.NODE_ENV !== "test", trustProxy: trustProxySetting() });
+
+  // SEC-24: uma linha por subida diz se o segredo de serviço está ligado (nunca o valor).
+  app.log.info({ serviceSecretCount: serviceSecrets.length }, serviceSecrets.length > 0 ? "serviço interno: ligado" : "serviço interno: desligado (none ou ausente)");
 
   // app.close() (graceful shutdown) também desconecta o Prisma — ele é um singleton
   // importado direto de @meucardapio/db, não um plugin fastify com ciclo de vida próprio.
