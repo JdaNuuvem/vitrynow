@@ -11,6 +11,7 @@ const PROVIDER = "mercadopago";
 export const STATE_TTL_MS = 10 * 60 * 1000; // o `state` vale 10 minutos e uma vez só
 export const REFRESH_BEFORE_MS = 30 * 24 * 60 * 60 * 1000; // renova quando faltam < 30 dias (ADR-0001 §3.4)
 export const MAX_REFRESH_FAILURES = 3; // depois disso a conta pede reconexão (NEEDS_RECONNECT) e o dono é avisado
+export const REFRESH_RETRY_AFTER_MS = 20 * 60 * 60 * 1000; // no máximo uma tentativa a cada 20 h por conta (conta 1 falha por dia)
 
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
 
@@ -43,6 +44,8 @@ export class StorePaymentsService {
     private readonly oauth: () => MercadoPagoOAuth,
     private readonly audit: AuditLogger,
     private readonly clock: { now(): Date } = { now: () => new Date() },
+    /** Avisa o(s) dono(s) da loja (e-mail). Falha de envio nunca derruba a renovação. */
+    private readonly notifyOwner: (storeId: string, event: "needs_reconnect") => Promise<void> = async () => {},
   ) {}
 
   private ctx(storeId: string, field: string) {
@@ -210,7 +213,12 @@ export class StorePaymentsService {
   /** Contas ativas cujo token vence em menos de 30 dias. */
   dueForRefresh(now: Date, limit: number): Promise<PaymentAccount[]> {
     return this.db.paymentAccount.findMany({
-      where: { provider: PROVIDER, status: "CONNECTED", expiresAt: { lt: new Date(now.getTime() + REFRESH_BEFORE_MS) } },
+      where: {
+        provider: PROVIDER,
+        status: "CONNECTED",
+        expiresAt: { lt: new Date(now.getTime() + REFRESH_BEFORE_MS) },
+        OR: [{ lastRefreshAttemptAt: null }, { lastRefreshAttemptAt: { lt: new Date(now.getTime() - REFRESH_RETRY_AFTER_MS) } }],
+      },
       orderBy: { expiresAt: "asc" },
       take: limit,
     });
@@ -222,14 +230,23 @@ export class StorePaymentsService {
    * vira NEEDS_RECONNECT e o dono é avisado. Devolve o que aconteceu (sem segredo).
    */
   async refreshAccount(accountId: string): Promise<"refreshed" | "skipped" | "failed" | "needs_reconnect"> {
+    const outcome = await this.refreshLocked(accountId);
+    if (outcome.result === "needs_reconnect") {
+      // fora da transação e sem derrubar nada: o aviso é do dono, a conta já está marcada
+      await this.notifyOwner(outcome.storeId, "needs_reconnect").catch(() => undefined);
+    }
+    return outcome.result;
+  }
+
+  private async refreshLocked(accountId: string): Promise<{ result: "refreshed" | "skipped" | "failed" | "needs_reconnect"; storeId: string }> {
     return this.db.$transaction(async (tx) => {
       const rows = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "PaymentAccount" WHERE "id" = ${accountId} FOR UPDATE`;
-      if (rows.length === 0) return "skipped";
+      if (rows.length === 0) return { result: "skipped" as const, storeId: "" };
       const account = await tx.paymentAccount.findUniqueOrThrow({ where: { id: accountId } });
       const now = this.clock.now();
       // Outra via já renovou (ou a conta saiu de cena) enquanto esperávamos a trava.
-      if (account.status !== "CONNECTED" || !account.refreshTokenEnc) return "skipped";
-      if (account.expiresAt && account.expiresAt.getTime() - now.getTime() >= REFRESH_BEFORE_MS) return "skipped";
+      if (account.status !== "CONNECTED" || !account.refreshTokenEnc) return { result: "skipped" as const, storeId: account.storeId };
+      if (account.expiresAt && account.expiresAt.getTime() - now.getTime() >= REFRESH_BEFORE_MS) return { result: "skipped" as const, storeId: account.storeId };
 
       try {
         const current = decryptSecret(account.refreshTokenEnc, this.ctx(account.storeId, "refreshToken"));
@@ -242,11 +259,12 @@ export class StorePaymentsService {
             refreshTokenEnc: encryptSecret(tokens.refreshToken, this.ctx(account.storeId, "refreshToken")),
             expiresAt: tokens.expiresAt,
             lastRefreshAt: now,
+            lastRefreshAttemptAt: now,
             refreshFailures: 0,
             lastError: null,
           },
         });
-        return "refreshed" as const;
+        return { result: "refreshed" as const, storeId: account.storeId };
       } catch (error) {
         const revoked = error instanceof OAuthError && error.kind === "revoked";
         const failures = account.refreshFailures + 1;
@@ -255,6 +273,7 @@ export class StorePaymentsService {
           where: { id: accountId },
           data: {
             refreshFailures: failures,
+            lastRefreshAttemptAt: now,
             // texto curto e fixo: nunca a mensagem do cliente HTTP (poderia carregar token)
             lastError: revoked ? "vínculo revogado pelo provedor" : "falha ao renovar o token",
             ...(giveUp ? { status: "NEEDS_RECONNECT" as const } : {}),
@@ -268,9 +287,9 @@ export class StorePaymentsService {
             targetId: accountId,
             metadata: { seller: maskSeller(account.sellerUserId), failures },
           });
-          return "needs_reconnect" as const;
+          return { result: "needs_reconnect" as const, storeId: account.storeId };
         }
-        return "failed" as const;
+        return { result: "failed" as const, storeId: account.storeId };
       }
     }, { maxWait: 15_000, timeout: 30_000 }); // quem espera a trava da conta segura uma conexão; a chamada ao provedor tem prazo próprio (10 s)
   }
