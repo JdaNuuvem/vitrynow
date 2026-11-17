@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { assertTrustProxyList } from "./trustProxyPolicy";
 
 // Configuração de segurança lida do ambiente (ADR-0008). Tudo aqui falha ALTO no boot em vez de
 // cair em padrão inseguro: segredo conhecido = qualquer um forja sessão de qualquer loja.
@@ -81,6 +82,8 @@ export function trustProxySetting(): string[] | false {
   }
   if (!raw || raw.toLowerCase() === "none") return false;
   const list = raw.split(",").map((item) => item.trim()).filter(Boolean);
+  // SEC-22 (ST-36): em produção só rede privada/loopback e faixa estreita (nada de 0.0.0.0/1, 8.0.0.0/8…).
+  if (process.env.NODE_ENV === "production" && list.length > 0) assertTrustProxyList(list);
   return list.length > 0 ? list : false;
 }
 
