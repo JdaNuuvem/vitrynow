@@ -1,3 +1,4 @@
+import Fastify from "fastify";
 import { Writable } from "node:stream";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
@@ -230,6 +231,35 @@ describe("CORS do cardápio (preflight) e redação de log", () => {
     expect(all).toContain("page=2"); // parâmetro comum continua legível para diagnóstico
     expect(all).toContain("motivo=ok");
     expect(all).toContain("token=[redigido]");
+  });
+
+  it("o 404 de rota inexistente tem o MESMO corpo e status do Fastify puro, em vários métodos e caminhos (só a query sensível some)", async () => {
+    const bare = Fastify({ logger: false });
+    await bare.ready();
+    const app = buildApp();
+    await app.ready();
+    const cases: { method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH"; url: string }[] = [
+      { method: "GET", url: "/nao-existe" },
+      { method: "POST", url: "/nao-existe/aninhado/rota" },
+      { method: "PUT", url: "/stores/x/orders/nao-e-rota" },
+      { method: "DELETE", url: "/api/store/qualquer-coisa" },
+      { method: "PATCH", url: "/%C3%A7/acentuado" },
+      { method: "GET", url: "/nao-existe?page=2&motivo=ok" },
+    ];
+    for (const c of cases) {
+      const a = await app.inject({ method: c.method, url: c.url });
+      const b = await bare.inject({ method: c.method, url: c.url });
+      expect(a.statusCode, c.url).toBe(b.statusCode);
+      expect(a.json(), c.url).toEqual(b.json());
+      expect(String(a.headers["content-type"]).split(";")[0], c.url).toBe(String(b.headers["content-type"]).split(";")[0]);
+    }
+    // com segredo na query: o corpo muda SÓ nesse valor (nunca o ecoa de volta nem cai em 500)
+    const secret = await app.inject({ method: "GET", url: "/nao-existe?token=SEGREDO-NA-URL&page=2" });
+    expect(secret.statusCode).toBe(404);
+    expect(secret.body).not.toContain("SEGREDO-NA-URL");
+    expect(secret.json()).toEqual({ message: "Route GET:/nao-existe?token=[redigido]&page=2 not found", error: "Not Found", statusCode: 404 });
+    await app.close();
+    await bare.close();
   });
 
   it("redactLogUrl: sem query intacta; sem nome sensível intacta; nome malformado não quebra; fragmento preservado", () => {
