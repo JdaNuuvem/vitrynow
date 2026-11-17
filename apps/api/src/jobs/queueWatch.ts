@@ -1,4 +1,5 @@
 import { claimWithLock } from "./lock";
+import { utc } from "../lib/sqlTime";
 import { JOB_LOCK_KEYS } from "./lockKeys";
 import type { Job } from "./types";
 import { DeviceAlertService } from "../modules/deviceAlerts/deviceAlerts.service";
@@ -22,8 +23,8 @@ export const queueWatchJob: Job = {
          WHERE s."printMode" = 'QUEUE'
            AND EXISTS (SELECT 1 FROM "PrintJob" j
                         WHERE j."storeId" = s."id" AND j."status" = 'PENDING' AND j."kind" <> 'TEST'
-                          AND j."availableAt" <= ${cutoff} AND j."createdAt" <= ${cutoff})
-           AND NOT EXISTS (SELECT 1 FROM "PrintJob" c WHERE c."storeId" = s."id" AND c."claimedAt" >= ${cutoff})
+                          AND j."availableAt" <= ${utc(cutoff)} AND j."createdAt" <= ${utc(cutoff)})
+           AND NOT EXISTS (SELECT 1 FROM "PrintJob" c WHERE c."storeId" = s."id" AND c."claimedAt" >= ${utc(cutoff)})
          ORDER BY s."id" LIMIT ${limit}`,
     );
     if (!claimed.acquired) return { processed: 0 };

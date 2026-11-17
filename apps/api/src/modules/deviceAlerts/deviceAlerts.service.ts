@@ -1,4 +1,5 @@
 import type { prisma as prismaClient, DeviceAlertCode } from "@meucardapio/db";
+import { utc } from "../../lib/sqlTime";
 import type { WsServerMessage } from "@meucardapio/shared-types";
 
 type Db = typeof prismaClient;
@@ -43,9 +44,9 @@ export class DeviceAlertService {
     const rows = await this.db.$queryRaw<{ inserted: boolean; count: number }[]>`
       INSERT INTO "DeviceAlert" ("id", "storeId", "tokenId", "code", "orderId", "orderKey", "clientVersion", "count", "windowStart", "firstAt", "lastAt", "expiresAt")
       VALUES ('c' || replace(gen_random_uuid()::text, '-', ''), ${input.storeId}, ${input.tokenId}, ${input.code}::"DeviceAlertCode", ${orderId}, ${orderKey},
-              ${input.clientVersion ?? null}, 1, ${windowStart}, ${now}, ${now}, ${expiresAt})
+              ${input.clientVersion ?? null}, 1, ${utc(windowStart)}, ${utc(now)}, ${utc(now)}, ${utc(expiresAt)})
       ON CONFLICT ("storeId", "code", "orderKey", "windowStart")
-      DO UPDATE SET "count" = "DeviceAlert"."count" + 1, "lastAt" = ${now}, "expiresAt" = ${expiresAt},
+      DO UPDATE SET "count" = "DeviceAlert"."count" + 1, "lastAt" = ${utc(now)}, "expiresAt" = ${utc(expiresAt)},
                     "clientVersion" = COALESCE(EXCLUDED."clientVersion", "DeviceAlert"."clientVersion")
       RETURNING (xmax = 0) AS inserted, "count"`;
     const row = rows[0];

@@ -68,7 +68,7 @@ const TARGETS = {
   DeviceAlert: {
     async claim(tx, cutoff, limit) {
       const rows = await tx.$queryRaw<{ id: string }[]>`
-        SELECT "id" FROM "DeviceAlert" WHERE "expiresAt" < ${cutoff}
+        SELECT "id" FROM "DeviceAlert" WHERE "expiresAt" < ${utc(cutoff)}
         ORDER BY "expiresAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED`;
       return rows.map((row) => row.id);
     },
