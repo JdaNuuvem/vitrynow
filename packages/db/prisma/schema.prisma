@@ -310,6 +310,7 @@ model PaymentAccount {
   connectedAt     DateTime             @default(now())
   disconnectedAt  DateTime?
   lastRefreshAt   DateTime?
+  lastRefreshAttemptAt DateTime? // última tentativa (certa ou errada): o job conta no máximo uma falha por dia
   refreshFailures Int                  @default(0)
   lastError       String? // texto curto, sem dado sensível
   payments        Payment[]
