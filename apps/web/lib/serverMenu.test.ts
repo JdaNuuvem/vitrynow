@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Menu } from "@/core/domain/storefront";
-import { absoluteImageUrl, fetchMenuOnServer, getMenuOnServer, INTERNAL_SECRET_HEADER, isInternalHost, menuCacheTag, MENU_REVALIDATE_SECONDS, storeDescription } from "./serverMenu";
+import { absoluteImageUrl, fetchMenuOnServer, getMenuOnServer, INTERNAL_SECRET_HEADER, isInternalHost, menuCacheTag, MENU_REVALIDATE_SECONDS, MAX_STALE_SECONDS, MISSING_MEMORY_SECONDS, NEGATIVE_CACHE_SECONDS, resetServerMenuState, storeDescription } from "./serverMenu";
 
 // unstable_cache só existe dentro do Next; aqui um duplo que repete o que importa: guarda o valor que a função
 // RETORNA (por chave) e, se ela lançar, não grava nada. Registra as opções recebidas.
-const cacheCalls: { keyParts: string[]; options: { revalidate?: number; tags?: string[] } }[] = [];
+const cacheCalls: { keyParts: string[]; options: { revalidate?: number; tags?: string[] }; fn: () => Promise<unknown> }[] = [];
 const cacheStore = new Map<string, unknown>();
 vi.mock("next/cache", () => ({
   unstable_cache: (fn: () => Promise<unknown>, keyParts: string[], options: { revalidate?: number; tags?: string[] }) => {
-    cacheCalls.push({ keyParts, options });
+    cacheCalls.push({ keyParts, options, fn });
     return async () => {
       const key = keyParts.join("|");
       if (!cacheStore.has(key)) cacheStore.set(key, await fn());
@@ -121,6 +121,8 @@ describe("getMenuOnServer: o cache guarda o RESULTADO, não a resposta HTTP (ST-
   afterEach(() => {
     cacheStore.clear();
     cacheCalls.length = 0;
+    resetServerMenuState();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -157,6 +159,147 @@ describe("getMenuOnServer: o cache guarda o RESULTADO, não a resposta HTTP (ST-
     stubFetch(reply(500, { error: "boom" }));
     expect(await getMenuOnServer("boa")).toEqual({ status: "unavailable" });
     expect(cacheStore.size).toBe(0);
+  });
+
+  describe("slug da URL pública (ST-44)", () => {
+    it("5000 slugs fora do formato: nenhuma chamada à API e nada no cache", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const alphabet = "ABCXYZ_./?%é ";
+      for (let i = 0; i < 5000; i++) {
+        const slug = "x" + i + alphabet[i % alphabet.length] + Math.random().toString(36).slice(2);
+        expect(await getMenuOnServer(slug)).toEqual({ status: "not-found" });
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(cacheCalls).toHaveLength(0);
+    });
+
+    it("vazio e acima de 80 caracteres também não passam; 80 passa", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(reply(404, { error: "x" }));
+      vi.stubGlobal("fetch", fetchMock);
+      expect(await getMenuOnServer("")).toEqual({ status: "not-found" });
+      expect(await getMenuOnServer("a".repeat(81))).toEqual({ status: "not-found" });
+      expect(fetchMock).not.toHaveBeenCalled();
+      await getMenuOnServer("a".repeat(80));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("'não existe' de slug que nunca foi loja (ST-44 c)", () => {
+    it("não é gravado no cache em disco e é lembrado em memória: 1 chamada à API por janela", async () => {
+      const fetchMock = vi.fn().mockImplementation(async () => reply(404, { error: "x" }));
+      vi.stubGlobal("fetch", fetchMock);
+      expect(await getMenuOnServer("inventado")).toEqual({ status: "not-found" });
+      expect(await getMenuOnServer("inventado")).toEqual({ status: "not-found" });
+      expect(await getMenuOnServer("inventado")).toEqual({ status: "not-found" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(cacheStore.size).toBe(0);
+    });
+
+    it("passada a janela de memória, pergunta de novo (a loja pode ter sido criada)", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-11-17T12:00:00Z"));
+      const fetchMock = vi.fn().mockImplementation(async () => reply(404, { error: "x" }));
+      vi.stubGlobal("fetch", fetchMock);
+      await getMenuOnServer("inventado");
+      vi.setSystemTime(new Date("2026-11-17T12:00:00Z").getTime() + MISSING_MEMORY_SECONDS * 1000 + 1);
+      await getMenuOnServer("inventado");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("loja que JÁ foi vista com cardápio e some (removida): o 'não existe' É gravado e substitui a cópia boa", async () => {
+      stubFetch(reply(200, menu));
+      await getMenuOnServer("boa");
+      cacheStore.clear();
+      stubFetch(reply(404, { error: "x" }));
+      expect(await getMenuOnServer("boa")).toEqual({ status: "not-found" });
+      expect(cacheStore.get("menu-ssr|boa")).toMatchObject({ status: "not-found" });
+    });
+
+    it("a memória tem teto: com muitos slugs inventados não cresce sem limite (os excedentes seguem respondendo)", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => reply(404, { error: "x" })));
+      for (let i = 0; i < 1200; i++) expect(await getMenuOnServer("s" + i)).toEqual({ status: "not-found" });
+    });
+  });
+
+  describe("teto de obsolescência da cópia boa (ST-44 d/e)", () => {
+    const stored = (ageSeconds: number) => {
+      const now = new Date("2026-11-17T12:00:00Z").getTime();
+      vi.useFakeTimers();
+      vi.setSystemTime(now);
+      cacheStore.set("menu-ssr|boa", { status: "ok", menu, fetchedAt: now - ageSeconds * 1000 });
+    };
+
+    it("cópia com menos de 10 min segue sendo servida (a revalidação pode estar falhando)", async () => {
+      stored(MAX_STALE_SECONDS - 5);
+      expect((await getMenuOnServer("boa")).status).toBe("ok");
+    });
+
+    it("cópia com mais de 10 min falha FECHADA: 'indisponível', sem dados da loja", async () => {
+      stored(MAX_STALE_SECONDS + 5);
+      expect(await getMenuOnServer("boa")).toEqual({ status: "suspended" });
+    });
+
+    it("o valor devolvido à página não carrega o carimbo interno de idade", async () => {
+      stored(1);
+      expect(await getMenuOnServer("boa")).not.toHaveProperty("fetchedAt");
+    });
+  });
+
+  describe("cache negativo curto na queda da API", () => {
+    const down = () => vi.fn().mockResolvedValue(reply(500, { error: "boom" }));
+
+    it("durante a janela de falha não chama a API de novo; passada a janela, tenta outra vez", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-11-17T12:00:00Z"));
+      const fetchMock = down();
+      vi.stubGlobal("fetch", fetchMock);
+      await getMenuOnServer("boa");
+      await getMenuOnServer("boa");
+      await getMenuOnServer("boa");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(new Date("2026-11-17T12:00:00Z").getTime() + NEGATIVE_CACHE_SECONDS * 1000 + 1);
+      await getMenuOnServer("boa");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("é por loja: a falha de uma não bloqueia as outras", async () => {
+      const fetchMock = down();
+      vi.stubGlobal("fetch", fetchMock);
+      await getMenuOnServer("boa");
+      await getMenuOnServer("outra");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("nunca substitui a última cópia boa: na janela a função em cache LANÇA sem buscar (o Next não grava nada)", async () => {
+      const fetchMock = down();
+      vi.stubGlobal("fetch", fetchMock);
+      await getMenuOnServer("boa"); // 1ª falha: busca, lança
+      const insideCache = cacheCalls[0].fn; // a mesma função que o Next executa ao revalidar a cópia expirada
+      await expect(insideCache()).rejects.toThrow();
+      await expect(insideCache()).rejects.toThrow();
+      expect(fetchMock).toHaveBeenCalledTimes(1); // nenhuma chamada nova à API
+      expect(cacheStore.size).toBe(0); // e nada foi gravado no lugar da cópia boa
+    });
+
+    it("sem falha, o cache negativo não interfere: 200 e 503 de suspensão seguem normais", async () => {
+      vi.useFakeTimers();
+      stubFetch(reply(200, menu));
+      expect((await getMenuOnServer("boa")).status).toBe("ok");
+      cacheStore.clear();
+      stubFetch(reply(503, { error: "x", code: "STORE_UNAVAILABLE" }));
+      expect(await getMenuOnServer("boa")).toEqual({ status: "suspended" });
+    });
+
+    it("volta a funcionar assim que a API volta e a janela passa", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-11-17T12:00:00Z"));
+      vi.stubGlobal("fetch", down());
+      expect((await getMenuOnServer("boa")).status).toBe("unavailable");
+      vi.setSystemTime(new Date("2026-11-17T12:00:00Z").getTime() + NEGATIVE_CACHE_SECONDS * 1000 + 1);
+      stubFetch(reply(200, menu));
+      expect((await getMenuOnServer("boa")).status).toBe("ok");
+    });
   });
 });
 
