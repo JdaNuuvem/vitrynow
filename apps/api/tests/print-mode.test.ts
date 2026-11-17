@@ -394,6 +394,163 @@ describe("API-12b — modo de impressão e virada", () => {
     expect((await kitchenJobs(id))[0]).toMatchObject({ status: "PENDING", attempts: 0 }); // e não gastou o job
   });
 
+  it("DETERMINÍSTICO: cancelar pedido JÁ IMPRESSO com a virada LEGACY→QUEUE em andamento espera o lock, relê o modo e o aviso NASCE (nunca CANCELADO + impresso + 0 aviso)", async () => {
+    const ctx = await setup();
+    const id = await order(ctx);
+    await app.inject({ method: "POST", url: `/api/device/orders/${id}/printed`, headers: bearer(ctx.token) }); // o legado imprimiu
+    let resposta: { statusCode: number; body: string } | undefined;
+    let terminou = false;
+    await prisma.$transaction(async (tx) => {
+      // faz o papel do PUT em andamento: lock exclusivo da loja + troca para QUEUE ainda NÃO commitada
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"printmode:" + ctx.storeId}))`;
+      const cancelamento = app
+        .inject({ method: "POST", url: `/api/orders/${id}/cancel`, headers: { cookie: ctx.owner }, payload: { reason: { code: "ITEM_EM_FALTA" } } })
+        .then((r) => {
+          terminou = true;
+          resposta = r;
+        });
+      await new Promise((r) => setTimeout(r, 700));
+      expect(terminou, "o cancelamento não pode terminar enquanto a troca segura o lock").toBe(false);
+      await tx.store.update({ where: { id: ctx.storeId }, data: { printMode: "QUEUE" } });
+      void cancelamento;
+    });
+    await vi.waitFor(() => expect(terminou).toBe(true), { timeout: 10_000 });
+    expect(resposta!.statusCode, resposta!.body).toBe(200);
+    expect((await prisma.order.findUniqueOrThrow({ where: { id } })).status).toBe("CANCELADO");
+    // a virada commitou antes: o cancelamento releu QUEUE e o job de aviso existe (o pedido já tinha sido impresso pelo legado)
+    expect(await prisma.printJob.count({ where: { orderId: id, kind: "ORDER_CANCEL_NOTICE" } })).toBe(1);
+  });
+
+  // ORDEM ÚNICA DE TRAVAS (loja → pedido → pagamento): enquanto o cancelamento ESPERA o lock da loja (troca de modo em andamento), ele NÃO pode
+  // estar segurando a linha do pedido nem a do pagamento; senão a troca (que atualiza pedido/job na reconciliação) forma um ciclo e o Postgres
+  // aborta um dos dois com 40P01 (achado do Deming). `FOR UPDATE NOWAIT` na linha: se alguém a segura, falha na hora.
+  const linhaLivre = async (orderId: string) => {
+    try {
+      await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId} FOR UPDATE NOWAIT`;
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  it("ORDEM DE TRAVAS (cancelar sem dinheiro): esperando o lock da loja, o cancelamento NÃO segura a linha do pedido; ao liberar, cancela", async () => {
+    const ctx = await setup();
+    const id = await order(ctx);
+    await app.inject({ method: "POST", url: `/api/device/orders/${id}/printed`, headers: bearer(ctx.token) });
+    let resposta: { statusCode: number; body: string } | undefined;
+    let terminou = false;
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"printmode:" + ctx.storeId}))`; // a troca em andamento
+      app
+        .inject({ method: "POST", url: `/api/orders/${id}/cancel`, headers: { cookie: ctx.owner }, payload: { reason: { code: "ITEM_EM_FALTA" } } })
+        .then((r) => {
+          terminou = true;
+          resposta = r;
+        });
+      await new Promise((r) => setTimeout(r, 700));
+      expect(terminou).toBe(false);
+      expect(await linhaLivre(id), "o cancelamento em espera está segurando a linha do pedido (ordem de travas invertida)").toBe(true);
+    });
+    await vi.waitFor(() => expect(terminou).toBe(true), { timeout: 10_000 });
+    expect(resposta!.statusCode, resposta!.body).toBe(200);
+  });
+
+  it("ORDEM DE TRAVAS (Tx 2 do estorno): esperando o lock da loja, a conclusão do estorno NÃO segura pedido nem pagamento; ao liberar, conclui", async () => {
+    const ctx = await setup();
+    const id = await order(ctx);
+    // pedido pago por PIX aprovado e com estorno já pedido (ESTORNO_PENDENTE + contexto de cancelamento): a retentativa faz só a Tx 2
+    await prisma.order.update({ where: { id }, data: { paymentMethod: "PIX", refundLockedAt: new Date() } });
+    const payment = await prisma.payment.create({
+      data: {
+        orderId: id,
+        providerPaymentId: `mp-${id}`,
+        amountCents: 1000,
+        status: "ESTORNO_PENDENTE",
+        refundRequestedAt: new Date(),
+        refundContext: { source: "PANEL", userId: null, actor: "OWNER", reason: { code: "ITEM_EM_FALTA" }, providerRefundedAt: new Date().toISOString() },
+      },
+    });
+    let resposta: { statusCode: number; body: string } | undefined;
+    let terminou = false;
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"printmode:" + ctx.storeId}))`;
+      app.inject({ method: "POST", url: `/api/orders/${id}/refund/retry`, headers: { cookie: ctx.owner } }).then((r) => {
+        terminou = true;
+        resposta = r;
+      });
+      await new Promise((r) => setTimeout(r, 700));
+      expect(terminou).toBe(false);
+      expect(await linhaLivre(id), "a Tx 2 em espera está segurando a linha do pedido").toBe(true);
+      const pagamentoLivre = await prisma.$transaction(async (t) => {
+        try {
+          await t.$queryRaw`SELECT "id" FROM "Payment" WHERE "id" = ${payment.id} FOR UPDATE NOWAIT`;
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      expect(pagamentoLivre, "a Tx 2 em espera está segurando a linha do pagamento").toBe(true);
+    });
+    await vi.waitFor(() => expect(terminou).toBe(true), { timeout: 10_000 });
+    expect(resposta!.statusCode, resposta!.body).toBe(200);
+    expect((await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } })).status).toBe("REEMBOLSADO");
+    expect((await prisma.order.findUniqueOrThrow({ where: { id } })).status).toBe("CANCELADO");
+  });
+
+  it("VARREDURA: toda transação que chega ao applyCancel toma lockPrintMode como a PRIMEIRA instrução (ordem única de travas: loja → pedido → pagamento)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(__dirname, "../src/modules/orders/orders.service.ts"), "utf8").split("\r\n").join("\n");
+    // Para cada chamada `this.applyCancel(` olha o texto desde o `runTx(` mais próximo ANTES dela: ali o lock precisa vir antes de qualquer acesso a pedido/pagamento/job.
+    const chamadas = [...src.matchAll(/this\.applyCancel\(/g)].map((m) => m.index!);
+    expect(chamadas.length, "esperava 2 chamadas ao applyCancel (cancelOrder e Tx 2 da saga)").toBeGreaterThanOrEqual(2);
+    for (const pos of chamadas) {
+      const inicio = src.lastIndexOf("runTx(", pos);
+      expect(inicio, "applyCancel fora de um runTx").toBeGreaterThanOrEqual(0);
+      const trecho = src.slice(inicio, pos);
+      const iLock = trecho.indexOf("lockPrintMode(tx");
+      expect(iLock, "transação com applyCancel sem lockPrintMode").toBeGreaterThanOrEqual(0);
+      for (const antes of ['FROM "Order"', "tx.order.", "tx.payment.", "tx.printJob."]) {
+        const i = trecho.indexOf(antes);
+        expect(i === -1 || i > iLock, `${antes} aparece ANTES do lockPrintMode`).toBe(true);
+      }
+    }
+  });
+
+  it("VARREDURA: o ÚNICO lugar que grava status CANCELADO num pedido é o applyCancel (qualquer cancelamento novo entra por cancelBySystem/cancelOrder e herda o lock da loja)", async () => {
+    const { readdirSync, readFileSync, statSync } = await import("node:fs");
+    const { join, relative } = await import("node:path");
+    const raiz = join(__dirname, "../src");
+    const arquivos: string[] = [];
+    const andar = (dir: string) => {
+      for (const nome of readdirSync(dir)) {
+        const caminho = join(dir, nome);
+        if (statSync(caminho).isDirectory()) andar(caminho);
+        else if (caminho.endsWith(".ts")) arquivos.push(caminho);
+      }
+    };
+    andar(raiz);
+    // escrita = `data: { ... status: "CANCELADO" ... }` (dentro do mesmo objeto, sem fechar chave antes)
+    const escrita = /data:\s*\{[^{}]*status:\s*"CANCELADO"/g;
+    const fora: string[] = [];
+    for (const arq of arquivos) {
+      const texto = readFileSync(arq, "utf8").split("\r\n").join("\n");
+      const nome = relative(raiz, arq).split("\\").join("/");
+      // corpo do applyCancel: do início da função até a próxima função da classe
+      const ini = nome === "modules/orders/orders.service.ts" ? texto.indexOf("private async applyCancel(") : -1;
+      const fim = ini >= 0 ? texto.indexOf("\n  async ", ini) : -1;
+      for (const m of texto.matchAll(escrita)) {
+        const antes = texto.slice(Math.max(0, m.index! - 160), m.index!);
+        if (/payment\.(update|updateMany)/.test(antes)) continue; // o enum do PAGAMENTO também tem CANCELADO
+        const dentro = ini >= 0 && m.index! > ini && (fim < 0 || m.index! < fim);
+        if (!dentro) fora.push(nome + "@" + m.index);
+      }
+    }
+    expect(fora, "escrita de status CANCELADO em pedido fora do applyCancel (sem o lock da loja): use cancelBySystem").toEqual([]);
+  });
+
   it("ACK TARDIO em QUEUE: job PENDING ⇒ 200 idempotente, fecha o job (PRINTED) e grava printedAt NA MESMA transação; a lista legada segue vazia e a fila não reimprime", async () => {
     const ctx = await setup();
     const id = await order(ctx);
@@ -479,6 +636,18 @@ describe("API-12b — modo de impressão e virada", () => {
     expect(rows[0].metadata).toEqual({ mode: "QUEUE", closedPendingJobs: 0, createdJobs: 1, markedOrdersPrinted: 0 });
     await setMode(ctx, "QUEUE"); // nada a reconciliar
     expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "print.mode_reconcile" } })).toBe(1);
+  });
+
+  it("LIMITE DA TENTATIVA NEGADA: o STAFF que insiste leva 403 ×10 (cada uma registrada) e depois 429 sem gravar mais; a rota nunca abre; o dono segue trocando (balde separado)", async () => {
+    const ctx = await setup();
+    const staff = await staffCookie(ctx);
+    for (let i = 0; i < 10; i++) expect((await setMode(ctx, "QUEUE", staff)).statusCode, `tentativa ${i + 1}`).toBe(403);
+    const barrado = await setMode(ctx, "QUEUE", staff);
+    expect([barrado.statusCode, json(barrado).code, barrado.headers["retry-after"]]).toEqual([429, "RATE_LIMITED", "60"]);
+    expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "print.mode_change_denied" } })).toBe(10); // a 11ª não gravou
+    expect(await modeOf(ctx.storeId)).toBe("LEGACY"); // nunca houve efeito
+    expect((await setMode(ctx, "QUEUE")).statusCode).toBe(200); // o balde do dono é outro
+    expect(await modeOf(ctx.storeId)).toBe("QUEUE");
   });
 
   it("LIMITE DE TAXA da troca de modo: 10 por minuto POR LOJA (a 11ª ⇒ 429 RATE_LIMITED com Retry-After); outra loja não é afetada", async () => {
