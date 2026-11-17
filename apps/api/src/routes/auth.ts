@@ -10,7 +10,8 @@ import { SESSION_COOKIE, revokeSession, sessionCookieOptions, signSession } from
 import { disconnectSession, disconnectUser } from "../realtime/hub";
 import { hashToken } from "../lib/tokenHash";
 import { LoginThrottle } from "../lib/loginThrottle";
-import { NOW, RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, constantTimeEqual, issueResetToken, markResetSendFailed, padToMinimum, runBeforeClaimHook } from "../lib/passwordReset";
+import { RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, constantTimeEqual, issueResetToken, markResetSendFailed, padToMinimum, runBeforeClaimHook } from "../lib/passwordReset";
+import { NOW_UTC as NOW } from "../lib/sqlTime";
 
 // Hash de uma senha que ninguém conhece, no mesmo custo dos hashes reais: login com e-mail inexistente
 // gasta o mesmo tempo do login com senha errada (ST-05, sem enumeração de contas por tempo).

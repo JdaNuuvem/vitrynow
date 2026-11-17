@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { Prisma, prisma } from "@meucardapio/db";
 import { nanoid } from "nanoid";
 import { hashToken } from "./tokenHash";
+import { utc } from "./sqlTime";
 
 // SEC-28 (ST-58): o "esqueci a senha" não pode ser uma metralhadora de e-mails contra uma conta (esgota a cota do provedor, que também entrega
 // o código de MFA e o aviso de login, e queima a reputação do domínio) nem acumular tokens válidos. Regras POR CONTA, no banco (valem entre
@@ -30,9 +31,9 @@ export async function issueResetToken(email: string, now: Date = new Date()): Pr
   return prisma.$transaction(async (tx) => {
     // Lock consultivo da conta SEM esperar: se outro pedido da mesma conta está emitindo agora, este é descartado em silêncio. Esperar
     // seguraria uma conexão do pool por pedido (rajada contra uma conta = esgotar o pool) e a resposta já é a mesma de qualquer forma.
-    // Conta inexistente: a instrução roda igual (mesma ida ao banco) com uma chave própria do e-mail; como o lock não espera, a chave não muda o
-    // resultado, só evita que dois pedidos de contas diferentes disputem o mesmo lock à toa.
-    const lockKey = user ? `pwreset:${user.id}` : `pwreset:none:${email}`;
+    // Conta inexistente: a instrução roda igual (mesma ida ao banco) com chave CONSTANTE (o e-mail digitado não entra no hashtext de 32 bits);
+    // como o lock não espera, a chave não muda o resultado.
+    const lockKey = user ? `pwreset:${user.id}` : "pwreset:none";
     const [lock] = await tx.$queryRaw<{ ok: boolean }[]>`SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})) AS ok`;
     const recent = await tx.passwordResetToken.findMany({
       where: { userId: subjectId, createdAt: { gte: new Date(now.getTime() - HOUR_MS) } },
@@ -53,7 +54,7 @@ export async function issueResetToken(email: string, now: Date = new Date()): Pr
     const id = nanoid(25); // createdAt gravado explícito (UTC, como o motor do Prisma faria): não depender do fuso da sessão do banco
     // Mesmas duas instruções em todos os caminhos: quando não pode emitir, a invalidação não casa nenhuma linha e a inserção grava zero.
     await tx.passwordResetToken.updateMany({ where: allowed ? { userId: subjectId, usedAt: null, expiresAt: { gt: now } } : { id: NOBODY }, data: { expiresAt: now } });
-    await tx.$executeRaw`INSERT INTO "PasswordResetToken" ("id", "userId", "tokenHash", "expiresAt", "createdAt") SELECT ${id}, ${subjectId}, ${tokenHash}, ${expiresAt}, ${now} WHERE ${allowed}::boolean`;
+    await tx.$executeRaw`INSERT INTO "PasswordResetToken" ("id", "userId", "tokenHash", "expiresAt", "createdAt") SELECT ${id}, ${subjectId}, ${tokenHash}, ${utc(expiresAt)}, ${utc(now)} WHERE ${allowed}::boolean`; // SEC-32 (ST-77): Date em SQL cru sempre por utc()
     return allowed && user ? { id, to: user.email, token } : null;
   }, { maxWait: 10_000, timeout: 15_000 }); // espera por conexão do pool em rajada; a transação em si é de poucos ms
 }
@@ -85,8 +86,6 @@ export function constantTimeEqual(a: string, b: string): boolean {
   return timingSafeEqual(digest(a), digest(b));
 }
 
-// Relógio do BANCO em UTC (mesma convenção do claim e da troca de modo: colunas TIMESTAMP sem fuso, gravadas em UTC).
-export const NOW = Prisma.raw("(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')");
 
 // Gancho de TESTE: atrasar um pedido entre a leitura do token e o UPDATE que decide, para reproduzir a rajada do ST-68 sem depender de
 // sorte. ST-69: "indefinido em produção" não pode ser só convenção. Fora de NODE_ENV=test o objeto nasce CONGELADO (ninguém o define) e a

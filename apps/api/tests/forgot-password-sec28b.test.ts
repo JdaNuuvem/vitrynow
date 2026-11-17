@@ -55,7 +55,10 @@ describe("ST-64: os três caminhos do forgot-password fazem a MESMA sequência d
   beforeEach(async () => {
     await resetDb();
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await resetDb(); // não deixar loja/usuário para o arquivo vizinho
+  });
 
   const EXPECTED = ["tx.$queryRaw", "tx.passwordResetToken.findMany", "tx.passwordResetToken.updateMany", "tx.$executeRaw"];
 
@@ -110,7 +113,10 @@ describe("ST-65: o pedido cujo e-mail NÃO saiu é devolvido (não gasta a cota 
     app = makeApp();
     await app.ready();
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await resetDb(); // não deixar loja/usuário para o arquivo vizinho
+  });
 
   const forgot = (email: string) => app.inject({ method: "POST", url: "/auth/forgot-password", remoteAddress: nextIp(), payload: { email } });
   const failedCount = (userId: string) => prisma.passwordResetToken.count({ where: { userId, sendFailedAt: { not: null } } });

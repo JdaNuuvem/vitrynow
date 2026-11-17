@@ -1,5 +1,6 @@
 import type { Prisma } from "@meucardapio/db";
 import { claimWithLock } from "./lock";
+import { utc } from "../lib/sqlTime";
 import { JOB_LOCK_KEYS } from "./lockKeys";
 import type { Job } from "./types";
 
@@ -22,7 +23,7 @@ const TARGETS = {
   PasswordResetToken: {
     async claim(tx, cutoff, limit) {
       const rows = await tx.$queryRaw<{ id: string }[]>`
-        SELECT "id" FROM "PasswordResetToken" WHERE "expiresAt" < ${cutoff}
+        SELECT "id" FROM "PasswordResetToken" WHERE "expiresAt" < ${utc(cutoff)}
         ORDER BY "expiresAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED`;
       return rows.map((row) => row.id);
     },
@@ -36,7 +37,7 @@ const TARGETS = {
   MfaChallenge: {
     async claim(tx, cutoff, limit) {
       const rows = await tx.$queryRaw<{ id: string }[]>`
-        SELECT "id" FROM "MfaChallenge" WHERE "expiresAt" < ${cutoff}
+        SELECT "id" FROM "MfaChallenge" WHERE "expiresAt" < ${utc(cutoff)}
         ORDER BY "expiresAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED`;
       return rows.map((row) => row.id);
     },
@@ -52,7 +53,7 @@ const TARGETS = {
   RevokedSession: {
     async claim(tx, cutoff, limit) {
       const rows = await tx.$queryRaw<{ sid: string }[]>`
-        SELECT "sid" FROM "RevokedSession" WHERE "expiresAt" < ${cutoff}
+        SELECT "sid" FROM "RevokedSession" WHERE "expiresAt" < ${utc(cutoff)}
         ORDER BY "expiresAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED`;
       return rows.map((row) => row.sid);
     },
