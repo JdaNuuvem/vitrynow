@@ -512,6 +512,8 @@ export class OrderService {
        WHERE "id" = ${paymentId} AND "status" = 'ESTORNO_PENDENTE'
    RETURNING "refundAttempts"`;
     if (rows[0]?.refundAttempts === MAX_REFUND_AUTO_ATTEMPTS) {
+      // Atenção (parecer do Deming): o alerta de auditoria NÃO é estrito (`audit.log` sem await). Se a gravação falhar, só o
+      // `console.error` abaixo (e o do próprio audit) fica; o contador já passou do teto, então o alerta não é reemitido.
       console.error(`[estorno] pagamento ${paymentId} atingiu ${MAX_REFUND_AUTO_ATTEMPTS} tentativas sem concluir: precisa de atenção`);
       this.audit.log({
         storeId: order.storeId,

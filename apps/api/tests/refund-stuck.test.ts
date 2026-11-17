@@ -40,7 +40,8 @@ describe("API-06a — estorno travado", () => {
     const orderId = json(res).orderId as string;
     await prisma.order.update({ where: { id: orderId }, data: { paymentMethod: "PIX" } });
     const payment = await prisma.payment.create({ data: { orderId, providerPaymentId: `mp-${orderId}`, amountCents: 1000, status: "APROVADO" } });
-    return { owner: cookie!, store, orderId, paymentId: payment.id };
+    // NG-16: o payment-status público exige o token que o cliente recebe UMA vez ao criar o pedido.
+    return { owner: cookie!, store, orderId, paymentId: payment.id, token: json(res).token as string };
   }
   const cancelar = (c: { owner: string; orderId: string }) =>
     app.inject({ method: "POST", url: `/api/orders/${c.orderId}/cancel`, headers: { cookie: c.owner }, payload: { reason: { code: "ITEM_EM_FALTA" } } });
@@ -70,6 +71,7 @@ describe("API-06a — estorno travado", () => {
   });
 
   it(`TETO: na ${MAX_REFUND_AUTO_ATTEMPTS}ª tentativa que falha sai UM alerta (auditoria); as seguintes não repetem; o manual continua valendo`, async () => {
+    expect(MAX_REFUND_AUTO_ATTEMPTS).toBe(5); // LITERAL: se alguém mexer no teto, este teste e o contrato abaixo avisam
     const c = await pedidoPagoPendenteDeEstorno();
     vi.spyOn(console, "error").mockImplementation(() => {});
     refundPayment.mockRejectedValue(new Error("fora do ar"));
@@ -77,13 +79,13 @@ describe("API-06a — estorno travado", () => {
     expect((await cancelar(c)).statusCode).toBe(202); // tentativa 1
     for (let i = 2; i < MAX_REFUND_AUTO_ATTEMPTS; i++) await tentar(c);
     const antes = await prisma.payment.findUniqueOrThrow({ where: { id: c.paymentId } });
-    expect(antes.refundAttempts).toBe(MAX_REFUND_AUTO_ATTEMPTS - 1);
+    expect(antes.refundAttempts).toBe(4); // literal: com teto 6 este número seria 5 e o alerta sairia tarde
     expect(refundAutoRetryable(antes)).toBe(true);
     expect(await stuckRows(c.store.id)).toBe(0);
     await tentar(c); // cruza o teto
     await vi.waitFor(async () => expect(await stuckRows(c.store.id)).toBe(1));
     const depois = await prisma.payment.findUniqueOrThrow({ where: { id: c.paymentId } });
-    expect(depois.refundAttempts).toBe(MAX_REFUND_AUTO_ATTEMPTS);
+    expect(depois.refundAttempts).toBe(5);
     expect(refundAutoRetryable(depois)).toBe(false); // o job automático (API-06) para aqui
     await tentar(c);
     await tentar(c); // o manual do dono continua sendo possível...
@@ -91,12 +93,32 @@ describe("API-06a — estorno travado", () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(await stuckRows(c.store.id)).toBe(1); // ...e o alerta NÃO se repete
     const row = await prisma.auditLog.findFirstOrThrow({ where: { storeId: c.store.id, action: "order.refund_stuck" } });
-    expect(row.metadata).toEqual({ attempts: MAX_REFUND_AUTO_ATTEMPTS });
+    expect(row.metadata).toEqual({ attempts: 5 });
     // por fim o provedor volta e o estorno conclui mesmo depois do teto
     refundPayment.mockResolvedValue(undefined);
     const ok = await tentar(c);
     expect(ok.statusCode, ok.body).toBe(200);
     expect((await prisma.payment.findUniqueOrThrow({ where: { id: c.paymentId } })).status).toBe("REEMBOLSADO");
+  });
+
+  it("falha TARDIA com o pagamento já REEMBOLSADO: contador e alerta ficam intactos (o UPDATE só vale com status ESTORNO_PENDENTE)", async () => {
+    const c = await pedidoPagoPendenteDeEstorno();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // um estorno anterior terminou no meio: o contador está em teto-1, e a PRÓXIMA falha, se contada, cruzaria o teto e alertaria
+    await prisma.payment.update({ where: { id: c.paymentId }, data: { refundAttempts: 4 } });
+    // enquanto esta tentativa fala com o provedor, outra via conclui o estorno (REEMBOLSADO) e só então a chamada falha
+    refundPayment.mockImplementation(async () => {
+      await prisma.payment.update({ where: { id: c.paymentId }, data: { status: "REEMBOLSADO" } });
+      throw new Error("falha tardia");
+    });
+    getPayment.mockRejectedValue(new Error("falha tardia"));
+    await cancelar(c);
+    await new Promise((r) => setTimeout(r, 300));
+    const p = await prisma.payment.findUniqueOrThrow({ where: { id: c.paymentId } });
+    expect(p.status).toBe("REEMBOLSADO");
+    expect(p.refundAttempts).toBe(4); // não contou a falha de um pagamento que já não está pendente
+    expect(p.refundLastError).toBeNull();
+    expect(await stuckRows(c.store.id)).toBe(0); // e não alertou
   });
 
   it("tentativas simultâneas que cruzam o teto emitem UM alerta só", async () => {
@@ -120,7 +142,7 @@ describe("API-06a — estorno travado", () => {
     await cancelar(c);
     const p = await prisma.payment.findUniqueOrThrow({ where: { id: c.paymentId } });
     expect(p.refundLastError).toBeTruthy(); // o texto existe no banco...
-    const status = await app.inject({ method: "GET", url: `/stores/${c.store.slug}/orders/${c.orderId}/payment-status` });
+    const status = await app.inject({ method: "GET", url: `/stores/${c.store.slug}/orders/${c.orderId}/payment-status`, headers: { "x-order-token": c.token } });
     expect(status.statusCode).toBe(200);
     for (const proibido of ["refundLastError", "refundAttempts", "Tentaremos novamente", "Não foi possível estornar", "refundContext", "idempotencyKey", "providerPaymentId"]) {
       expect(status.body, proibido).not.toContain(proibido);
