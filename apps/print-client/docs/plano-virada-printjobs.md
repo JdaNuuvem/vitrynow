@@ -44,13 +44,15 @@ select count(*) from "Order" o join "PrintJob" j on j."orderId" = o.id
 
 ## 3. Passo a passo da virada de uma loja (fora do pico)
 **Regra de ouro (Atlas): nenhuma loja vira para `QUEUE` com um cliente anterior à PC-22 em qualquer PC dela** (esse cliente ficaria sem ver a fila). A PC-22 já está na main; o runbook INF-11 (Hopper) confere a versão do app em todos os PCs da loja antes (o painel mostra a versão pelo `User-Agent`/`lastSeen`).
-1. Pré-requisitos: API-12b, API-66 e o cliente PC-13…PC-23 na produção; **app atualizado em TODOS os PCs da loja**; impressora e papel conferidos; o Claudio autorizou a loja.
+**Condição de G3 (Atlas): nenhuma loja vira para `QUEUE` sem a PC-24 mesclada**, isto é, a rota `POST /api/device/alerts` e o detector do servidor **`QUEUE_WITHOUT_PRINTER`** (loja em QUEUE com pedido/job `PENDING` mais antigo que 5 min e nenhum `claim` do token nesse intervalo) em produção **e o painel do dono mostrando o alerta**. É esse detector que cobre "cozinha sem tíquete" mesmo quando a API ou a configuração estão fora do alcance do cliente (o cliente não consegue avisar o que não consegue alcançar).
+1. Pré-requisitos: API-12b, API-66, PC-24 (rota + detector + alerta no painel) e o cliente PC-13…PC-24 na produção; **app atualizado em TODOS os PCs da loja**; impressora e papel conferidos; o Claudio autorizou a loja.
 2. Trocar **fora do horário de pico**. Esperar a lista do legado esvaziar (nenhum pedido na faixa "sem imprimir").
 3. O dono muda a loja para `QUEUE` no painel (só OWNER, auditado; no máximo 10 trocas por minuto). A API roda a reconciliação (§1) na mesma ação e devolve as 3 consultas.
 4. Conferir as 3 consultas da §1 (= 0).
 5. Pedir o **job de teste** pelo painel (`POST /api/print-jobs/test`, só OWNER) → deve sair "TESTE DE IMPRESSÃO" (o cliente imprime o tíquete próprio, sem valor nem pagamento).
 6. Fazer **1 pedido de teste** da loja: sai 1 vez; no painel aparece impresso; o job fica `PRINTED`. Se a loja usa cupom de 100%, fazer 1 pedido com ele: deve sair "SEM COBRANÇA: NADA A COBRAR".
-7. Observar 30 min com movimento real: nenhum "pedido sem imprimir" preso, nenhum tíquete repetido, `attempts` ≤ 1, nenhum aviso "Não consigo confirmar o modo" na tela.
+7. **Provocar a falta de impressora (teste do alerta, obrigatório):** com a loja em `QUEUE`, criar 1 pedido e **fechar o app de impressão no PC** (ou desligar a impressora) com o pedido `PENDING`; o painel do dono deve mostrar o alerta **`QUEUE_WITHOUT_PRINTER` em até 5 min** ("precisa de atenção"). Depois reabrir o app: o pedido sai 1 vez e o alerta some. Se o alerta **não** aparecer, **não ligar a loja** e voltar ao legado (§4).
+8. Observar 30 min com movimento real: nenhum "pedido sem imprimir" preso, nenhum tíquete repetido, `attempts` ≤ 1, nenhum aviso "Não consigo confirmar o modo" na tela.
 
 ### Sinais para voltar (qualquer um)
 Tíquete repetido; pedido sem sair por mais de 2 min com a impressora ok; job `FAILED` definitivo sem causa de hardware; erro de chave inesperado; aviso "Não consigo confirmar o modo de impressão da loja" que não some.
