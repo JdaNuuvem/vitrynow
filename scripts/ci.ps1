@@ -23,7 +23,9 @@ param(
   [switch]$SkipTests,
   [switch]$Images,
   [int]$WaitMinutes = 30,   # quanto esperar por uma vaga se a máquina já estiver cheia
-  [int]$MaxSuites = 3       # suítes completas simultâneas na máquina (regra do BOARD §0)
+  [int]$MaxSuites = 3,      # suítes completas simultâneas na máquina (regra do BOARD §0)
+  [string]$MigrationBase = 'main',   # base para detectar migrações novas (INF-15)
+  [switch]$SkipMigrationCheck
 )
 # Continue (e não Stop): ver nota em test-db.ps1 (stderr redirecionado no PowerShell 5.1).
 $ErrorActionPreference = 'Continue'
@@ -83,6 +85,21 @@ if ($continue) {
     if ($LASTEXITCODE -ne 0) { return }
     pnpm --filter '@meucardapio/db' exec prisma migrate diff --from-url $dbUrl --to-schema-datamodel prisma/schema.prisma --exit-code
     if ($LASTEXITCODE -eq 2) { throw 'DRIFT: o schema.prisma tem mudanças sem migration (crie a migration com o ID da tarefa)' }
+  }
+}
+if ($continue -and -not $SkipMigrationCheck) {
+  # INF-15: toda migração nova em relação à base passa pelo verificador (ordem, dados, schema final).
+  $continue = Step "migrações novas x $MigrationBase (scripts/check-migrations.sh)" {
+    $newMig = @(git diff --name-only "$MigrationBase...HEAD" -- packages/db/prisma/migrations | Where-Object { $_ -match '/migration\.sql$' })
+    if ($newMig.Count -eq 0) { Write-Host "nenhuma migração nova em relação a ${MigrationBase}: nada a verificar"; return }
+    Write-Host "$($newMig.Count) migração(ões) nova(s) (commitadas) em relação a ${MigrationBase}:"; $newMig | ForEach-Object { Write-Host "  $_" }
+    # bash do Git (nunca o launcher do WSL em WindowsApps, que resolve primeiro em alguns PATHs)
+    $gitRoot = Split-Path (Split-Path (Get-Command git -ErrorAction Stop).Source)
+    $bash = Join-Path $gitRoot 'bin\bash.exe'
+    if (-not (Test-Path $bash)) { throw "bash do Git não encontrado em $bash" }
+    $env:BASE = $MigrationBase; $env:AGENT = $Agent; $env:PORT = "$Port"
+    try { & $bash (Join-Path $repo 'scripts/check-migrations.sh') HEAD }
+    finally { Remove-Item Env:\BASE, Env:\AGENT, Env:\PORT -ErrorAction SilentlyContinue }
   }
 }
 if ($continue) {
