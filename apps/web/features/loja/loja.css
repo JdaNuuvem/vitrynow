@@ -72,7 +72,7 @@
 
 /* ---------- página principal, cardápio v2 (spec 12, UX-26 Fatia 1) ----------
    Medidas e hierarquia vêm do mockup aprovado pelo Claudio (davinci\esbocos\cardapio-v2.html), reescritas com as
-   variáveis da loja. SEM movimento nesta fatia (nenhuma transition/animation): o movimento é a Fatia 2.
+   variáveis da loja. O movimento (Fatia 2) mora em motion.css; aqui só as transições da barra fixa e dos chips.
    Largura da coluna: 720 px até 1099 (2 colunas de cartão a partir de 768), 1040 px a partir de 1100. */
 .loja {
   --loja-col: 720px;
@@ -425,7 +425,6 @@
 
 /* ---------- barras fixas: topo (celular) e chips ---------- */
 .loja__bar {
-  display: none;
   position: fixed;
   top: 0;
   left: 0;
@@ -433,12 +432,24 @@
   z-index: 30;
   height: var(--loja-stick);
   background: #ffffff;
+  /* M-02: desce (200 ms, ease-out) quando a identidade sai da tela; escondida, fica fora do Tab e do leitor de tela
+     (visibility só muda DEPOIS da saída) */
+  transform: translateY(-100%);
+  opacity: 0;
   visibility: hidden;
+  pointer-events: none;
+  transition:
+    transform var(--loja-dur-2) var(--loja-ease-out),
+    opacity var(--loja-dur-2) var(--loja-ease-out),
+    visibility 0s linear var(--loja-dur-2);
 }
 
 .loja__bar--on {
-  display: block;
+  transform: none;
+  opacity: 1;
   visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s, 0s, 0s;
 }
 
 .loja__bar-in {
@@ -519,8 +530,13 @@
   background: #ffffff;
 }
 
+.loja__chipsbox {
+  transition: transform var(--loja-dur-2) var(--loja-ease-out);
+}
+
+/* desce a altura da barra de 56 px (celular); em ≥ 768 px a barra não existe e os chips ficam no topo */
 .loja__chipsbox--stuck {
-  top: var(--loja-stick);
+  transform: translateY(var(--loja-stick));
   box-shadow: 0 1px 0 var(--loja-line);
 }
 
@@ -594,7 +610,7 @@
   }
 
   .loja__chipsbox--stuck {
-    top: 0;
+    transform: none;
   }
 
   .loja__chipsbox--stuck .loja__stick-id {
@@ -1209,9 +1225,15 @@
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
+}
+.loja__sheet::before {
+  content: "";
+  position: absolute;
+  inset: 0;
   background: rgb(0 0 0 / 0.4);
 }
 .loja__sheet-panel {
+  position: relative; /* acima do fundo escuro (::before) */
   max-height: 80vh;
   overflow-y: auto;
   border-top-left-radius: 1.5rem; /* 24 px (spec 09 §10.2) */
