@@ -20,7 +20,8 @@ const OBS = "alergia a amendoim, portão azul";
 const NOTA = "cliente VIP, ligar antes";
 const DAY = 24 * 3_600_000;
 
-describe("privacidade: anonimizar cliente", () => {
+// 60 s por teste: vários cadastram 2 lojas e cada execução paga um bcrypt; com a máquina carregada o padrão de 15 s estourava (timeout, não defeito).
+describe("privacidade: anonimizar cliente", { timeout: 60_000 }, () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -64,7 +65,9 @@ describe("privacidade: anonimizar cliente", () => {
   }
 
   const preview = (cookie: string, body: object) => app.inject({ method: "POST", url: "/api/privacy/anonymize/preview", headers: { cookie }, payload: body });
-  const run = (cookie: string, body: object, headers: Record<string, string> = {}) => app.inject({ method: "POST", url: "/api/privacy/anonymize", headers: { cookie, ...headers }, payload: body });
+  const SENHA = "senha12345"; // a senha do `registerStore`; sem MFA ativa a execução pede a senha atual (parecer da Nightingale R1)
+  const run = (cookie: string, body: object, headers: Record<string, string> = {}) =>
+    app.inject({ method: "POST", url: "/api/privacy/anonymize", headers: { cookie, ...headers }, payload: { currentPassword: SENHA, ...body } });
   const summary = async (cookie: string) => json(await app.inject({ method: "GET", url: `/api/reports/summary?from=2020-01-01&to=${new Date(Date.now() + DAY).toISOString().slice(0, 10)}`, headers: { cookie } })); // `to` fixo: o campo `to` devolvido é o relógio da consulta
 
   it("CA-PV-01: 7 encerrados + 1 em aberto ⇒ BLOQUEIA citando o aberto; depois de concluir, anonimiza os 8", async () => {
@@ -147,7 +150,7 @@ describe("privacidade: anonimizar cliente", () => {
       expect((await app.inject({ method: "POST", url, payload: body })).statusCode, `${url} sem sessão`).toBe(401);
     }
     process.env.MFA_ENFORCED = "true";
-    const semMfa = await run(ctx.owner, { phone: PHONE, reason: "STORE_DECISION", expectedOrders: 1 });
+    const semMfa = await run(ctx.owner, { phone: PHONE, reason: "STORE_DECISION", expectedOrders: 1 }); // com a senha CERTA no corpo: com MFA ativa a senha NÃO substitui o código
     expect(semMfa.statusCode).toBe(403);
     expect(json(semMfa)).toMatchObject({ code: "MFA_REQUIRED", purpose: "anonymize_customer" });
     expect(await prisma.order.count({ where: { storeId: ctx.storeId, anonymizedAt: { not: null } } })).toBe(0);
@@ -161,6 +164,73 @@ describe("privacidade: anonimizar cliente", () => {
     expect(json(await run(ctx.owner, { phone: PHONE, reason: "STORE_DECISION", expectedOrders: 1 }, { "x-mfa-challenge": desafio.challengeId })).code).toBe("MFA_REQUIRED"); // a prova não vale duas vezes
   });
 
+  it("REAUTENTICAÇÃO (R1): sem MFA ativa a execução exige a SENHA atual: ausente ⇒ 403 REAUTH_REQUIRED, errada ⇒ 403 PASSWORD_INVALID, e NADA muda; certa passa; a prévia não pede senha", async () => {
+    const ctx = await setup();
+    await mk(ctx.storeId);
+    const intacto = async () => (await prisma.order.count({ where: { storeId: ctx.storeId, anonymizedAt: { not: null } } })) === 0;
+    const semSenha = await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1, currentPassword: undefined });
+    expect(semSenha.statusCode).toBe(403);
+    expect(json(semSenha).code).toBe("REAUTH_REQUIRED");
+    const errada = await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1, currentPassword: "senha-errada-1" });
+    expect(errada.statusCode).toBe(403);
+    expect(json(errada).code).toBe("PASSWORD_INVALID");
+    expect(errada.body).not.toContain("senha-errada-1"); // nunca ecoa a senha
+    expect(await intacto()).toBe(true);
+    expect((await preview(ctx.owner, { phone: PHONE })).statusCode).toBe(200); // a prévia não é irreversível: sem senha
+    expect((await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1 })).statusCode).toBe(200);
+    // a senha nunca vai para a auditoria nem para o log
+    const audit = JSON.stringify(await prisma.auditLog.findMany({ where: { storeId: ctx.storeId } }));
+    expect(audit).not.toContain(SENHA);
+    expect(audit).not.toContain("senha-errada");
+  });
+
+  it("a senha errada conta numa trava: depois de 5 erros o 6º pedido (mesmo com a senha certa) leva 429 RATE_LIMITED sem testar a senha", async () => {
+    const ctx = await setup();
+    await mk(ctx.storeId);
+    for (let i = 0; i < 5; i++) {
+      const res = await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1, currentPassword: `errada-${i}-xxxx` });
+      expect(res.statusCode, String(i)).toBe(403);
+    }
+    const barrado = await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1 }); // senha CERTA, mas a trava já fechou
+    expect(barrado.statusCode).toBe(429);
+    expect(json(barrado).code).toBe("RATE_LIMITED");
+    expect(barrado.headers["retry-after"]).toBeDefined();
+    expect(await prisma.order.count({ where: { storeId: ctx.storeId, anonymizedAt: { not: null } } })).toBe(0);
+  });
+
+  it("auditoria em LOTES de 500 ids: 1.001 pedidos ⇒ 3 linhas (500+500+1), com todos os `orderIds` (reaplicação depois de restaurar backup) e sem dado pessoal", async () => {
+    const ctx = await setup();
+    const base = Date.now() - 5 * DAY;
+    await prisma.order.createMany({
+      data: Array.from({ length: 1001 }, (_, i) => ({
+        storeId: ctx.storeId, code: `L${String(i).padStart(5, "0")}`, type: "BALCAO" as const, status: "CONCLUIDO" as const, customerName: NOME, customerPhone: PHONE,
+        totalCents: 1000, awaitingPayment: false, createdAt: new Date(base + i * 1000), updatedAt: new Date(base + i * 1000),
+      })),
+    });
+    const res = await run(ctx.owner, { phone: PHONE, reason: "STORE_DECISION", expectedOrders: 1001 });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(json(res)).toEqual({ anonymized: 1001, nothingToRemove: false });
+    const linhas = await prisma.auditLog.findMany({ where: { storeId: ctx.storeId, action: "privacy.anonymize_customer" }, orderBy: { createdAt: "asc" } });
+    expect(linhas).toHaveLength(3);
+    const metas = linhas.map((l) => l.metadata as { orders: number; orderIds: string[]; batch: number; batches: number });
+    expect(metas.map((m) => m.orderIds.length).sort((a, b) => b - a)).toEqual([500, 500, 1]);
+    expect(metas.every((m) => m.orders === 1001 && m.batches === 3)).toBe(true);
+    const todos = new Set(metas.flatMap((m) => m.orderIds));
+    const noBanco = await prisma.order.findMany({ where: { storeId: ctx.storeId }, select: { id: true } });
+    expect(todos.size).toBe(1001);
+    expect([...todos].sort()).toEqual(noBanco.map((o) => o.id).sort());
+    const texto = JSON.stringify(linhas);
+    for (const dado of [PHONE, NOME, "Maria"]) expect(texto).not.toContain(dado);
+  }, 120_000);
+
+  it("R2: a prévia por telefone diz que casa o número EXATO; um dígito diferente não acha ninguém", async () => {
+    const ctx = await setup();
+    await mk(ctx.storeId, { phone: "11987654321" });
+    expect(json(await preview(ctx.owner, { phone: "11987654321" }))).toMatchObject({ orders: 1, phoneMatch: "EXACT_NUMBER" });
+    expect(json(await preview(ctx.owner, { phone: "11987654322" }))).toMatchObject({ orders: 0, nothingToRemove: false, phoneMatch: "EXACT_NUMBER" });
+    expect(json(await preview(ctx.owner, { phone: "1198765432" })).orders).toBe(0); // sem o último dígito
+  });
+
   it("a confirmação repete o efeito: `expectedOrders` diferente da prévia ⇒ 409 COUNT_CHANGED e nada é feito", async () => {
     const ctx = await setup();
     await mk(ctx.storeId);
@@ -171,20 +241,80 @@ describe("privacidade: anonimizar cliente", () => {
     expect(await prisma.order.count({ where: { storeId: ctx.storeId, anonymizedAt: { not: null } } })).toBe(0);
   });
 
-  it("só pedido ENCERRADO: PIX não pago e estorno pendente também bloqueiam; cancelado entra", async () => {
+  it("só pedido ENCERRADO: PIX ainda AGUARDANDO (pedido aberto) e estorno em curso bloqueiam; PIX EXPIRADO/cancelado com awaitingPayment=true NÃO trava o titular", async () => {
     const ctx = await setup();
     const cancelado = await mk(ctx.storeId, { status: "CANCELADO" });
     const pix = await mk(ctx.storeId, { status: "PENDENTE", awaiting: true, payment: "PIX" });
     const bloqueio = await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 2 });
     expect(bloqueio.statusCode).toBe(409);
-    expect(json(bloqueio).orders).toHaveLength(1); // o PIX aguardando
-    await prisma.order.update({ where: { id: pix }, data: { status: "CANCELADO", awaitingPayment: false } });
+    expect(json(bloqueio).orders).toHaveLength(1); // o PIX aguardando: pedido ainda aberto
+    expect(json(bloqueio).error).toBe("Este cliente tem 1 pedido em andamento. Conclua ou cancele antes."); // singular
+
+    // o PIX expirou e o pedido foi cancelado: `awaitingPayment` continua TRUE (só vira falso quando o pagamento é aprovado) e NÃO pode travar
+    await prisma.order.update({ where: { id: pix }, data: { status: "CANCELADO" } });
+    await prisma.payment.create({ data: { orderId: pix, amountCents: 2500, status: "EXPIRADO" } });
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: pix } })).awaitingPayment).toBe(true);
+
     await prisma.payment.create({ data: { orderId: cancelado, amountCents: 2500, status: "ESTORNO_PENDENTE" } });
     const estorno = await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 2 });
     expect(estorno.statusCode).toBe(409);
-    expect(json(estorno).orders).toEqual([expect.objectContaining({ reason: "REFUND_PENDING" })]);
+    expect(json(estorno).orders).toEqual([expect.objectContaining({ reason: "REFUND_PENDING" })]); // só o estorno bloqueia; o PIX expirado não
     await prisma.payment.update({ where: { orderId: cancelado }, data: { status: "REEMBOLSADO" } });
     expect((await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 2 })).statusCode).toBe(200);
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: pix } })).customerPhone).toBeNull(); // o do PIX expirado também foi anonimizado
+  });
+
+  it("refundLockedAt (estorno travando a linha) também bloqueia; plural na mensagem", async () => {
+    const ctx = await setup();
+    const a = await mk(ctx.storeId, { status: "CANCELADO" });
+    const b = await mk(ctx.storeId, { status: "CANCELADO" });
+    await prisma.order.updateMany({ where: { id: { in: [a, b] } }, data: { refundLockedAt: new Date() } });
+    const res = await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 2 });
+    expect(res.statusCode).toBe(409);
+    expect(json(res).error).toBe("Este cliente tem 2 pedidos em andamento. Conclua ou cancele antes."); // plural
+    expect(json(res).orders).toHaveLength(2);
+  });
+
+  it("OrderStatusHistory.reasonText (texto livre da equipe) sai; `reasonCode` FICA, então o relatório de cancelamentos não muda; e só o texto basta para o pedido ter o que anonimizar", async () => {
+    const ctx = await setup();
+    const id = await mk(ctx.storeId, { status: "CANCELADO" });
+    await prisma.orderStatusHistory.create({ data: { orderId: id, status: "CANCELADO", kind: "CANCEL", reasonCode: "ITEM_EM_FALTA", reasonText: "o João Pereira (11955554444) pediu para cancelar" } });
+    const ctas = async () => (await prisma.orderStatusHistory.findMany({ where: { orderId: id, reasonCode: { not: null } } })).map((h) => h.reasonCode);
+    expect(await ctas()).toEqual(["ITEM_EM_FALTA"]);
+    expect((await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1 })).statusCode).toBe(200);
+    const historico = await prisma.orderStatusHistory.findMany({ where: { orderId: id } });
+    expect(JSON.stringify(historico)).not.toContain("João");
+    expect(JSON.stringify(historico)).not.toContain("11955554444");
+    expect(historico.every((h) => h.reasonText === null)).toBe(true);
+    expect(await ctas()).toEqual(["ITEM_EM_FALTA"]); // o código do motivo continua
+
+    // pedido que só tem o texto livre (sem nome, telefone, endereço...) ainda conta como "tem o que remover"
+    const soTexto = await mk(ctx.storeId, { status: "CANCELADO", phone: null, name: null });
+    await prisma.order.update({ where: { id: soTexto }, data: { address: null, notes: null, internalNote: null } });
+    await prisma.orderItem.updateMany({ where: { orderId: soTexto }, data: { notes: null } });
+    const codigo = (await prisma.order.findUniqueOrThrow({ where: { id: soTexto } })).code;
+    await prisma.orderStatusHistory.create({ data: { orderId: soTexto, status: "CANCELADO", kind: "CANCEL", reasonCode: "OUTRO", reasonText: "falou com a Dona Maria" } });
+    expect(json(await preview(ctx.owner, { orderCode: codigo })).orders).toBe(1);
+    expect(json(await run(ctx.owner, { orderCode: codigo, reason: "HOLDER_REQUEST", expectedOrders: 1 }))).toEqual({ anonymized: 1, nothingToRemove: false });
+  });
+
+  it("prévia por CÓDIGO devolve `otherOrdersSamePhone` (só a CONTAGEM de outros pedidos do mesmo telefone, com formatação e 55); por telefone devolve 0; nunca o telefone", async () => {
+    const ctx = await setup();
+    const outra = await setup();
+    const alvo = await mk(ctx.storeId, { phone: "11987654321" });
+    await mk(ctx.storeId, { phone: "(11) 98765-4321" });
+    await mk(ctx.storeId, { phone: "+55 11 98765-4321" });
+    await mk(ctx.storeId, { phone: "11900000000", name: "Outra Pessoa" }); // outra pessoa: não conta
+    await mk(outra.storeId, { phone: "11987654321" }); // mesmo telefone em OUTRA loja: não conta
+    const codigo = (await prisma.order.findUniqueOrThrow({ where: { id: alvo } })).code;
+    const porCodigo = await preview(ctx.owner, { orderCode: codigo });
+    expect(json(porCodigo)).toMatchObject({ orders: 1, otherOrdersSamePhone: 2 });
+    expect(porCodigo.body).not.toContain("98765");
+    expect(porCodigo.body).not.toContain("11987654321");
+    expect(json(await preview(ctx.owner, { phone: "11987654321" }))).toMatchObject({ orders: 3, otherOrdersSamePhone: 0 });
+    // depois de anonimizar só o pedido do código, o aviso passa a refletir os que ficaram
+    expect((await run(ctx.owner, { orderCode: codigo, reason: "HOLDER_REQUEST", expectedOrders: 1 })).statusCode).toBe(200);
+    expect(json(await preview(ctx.owner, { phone: "11987654321" })).orders).toBe(2); // os outros 2 continuam com o dado (o aviso servia)
   });
 
   it("RN-PV-07 e idempotência: segunda chamada e pedido sem dado pessoal respondem 'nada a remover' sem gravar nada; busca por CÓDIGO funciona", async () => {
@@ -233,7 +363,7 @@ describe("privacidade: anonimizar cliente", () => {
 
   it("auditoria: a execução grava quantidade, período e motivo SEM o dado removido; e `feedback` e `store.settings_update` não guardam texto (CA-PV-11, varredura)", async () => {
     const ctx = await setup();
-    await mk(ctx.storeId);
+    const pedido = await mk(ctx.storeId);
     const SEGREDO_FEEDBACK = "meu telefone 11955554444 e o cliente Joaquim Pereira reclamou";
     expect((await app.inject({ method: "POST", url: "/api/feedback", headers: { cookie: ctx.owner }, payload: { message: SEGREDO_FEEDBACK } })).statusCode).toBe(201);
     const ajuste = await app.inject({ method: "POST", url: "/api/store/settings", headers: { cookie: ctx.owner }, payload: { address: "Av. Brasil 100, Centro", whatsapp: "11944443333" } });
@@ -247,7 +377,7 @@ describe("privacidade: anonimizar cliente", () => {
     const todas = JSON.stringify(await prisma.auditLog.findMany({ where: { storeId: ctx.storeId } }));
     for (const dado of [PHONE, "98765", NOME, "Maria", RUA, "Acácias", OBS, NOTA, SEGREDO_FEEDBACK, "Joaquim", "11955554444", "Av. Brasil", "11944443333"]) expect(todas, `AuditLog vazou: ${dado}`).not.toContain(dado);
     const anon = await prisma.auditLog.findFirstOrThrow({ where: { storeId: ctx.storeId, action: "privacy.anonymize_customer" } });
-    expect(anon.metadata).toMatchObject({ orders: 1, by: "PHONE", reason: "HOLDER_REQUEST" });
+    expect(anon.metadata).toMatchObject({ orders: 1, by: "PHONE", reason: "HOLDER_REQUEST", orderIds: [pedido] }); // os ids (opacos) permitem REAPLICAR depois de restaurar um backup
     // o texto do feedback existe, mas na tabela PRÓPRIA
     expect((await prisma.feedback.findMany({ where: { storeId: ctx.storeId } })).map((f) => f.message)).toEqual([SEGREDO_FEEDBACK]);
   });
