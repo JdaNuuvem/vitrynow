@@ -171,7 +171,7 @@ for try in 1 2 3; do
   [ "$lrc" != 429 ] && break
   ra="$(printf '%s' "$lh" | awk -F': ' 'tolower($1)=="retry-after"{print $2}')"; sleep "$(( ${ra:-30} + 2 ))"
 done
-if [ "$lrc" = 200 ] && grep -q mc_session "$jar" 2>/dev/null; then check ok "login BEM-SUCEDIDO pela API da imagem (bcrypt carregado, cookie de sessão emitido)"; else check fail "login do usuário recém-cadastrado falhou (HTTP $lrc)"; fi
+if [ "$lrc" = 200 ] && grep -q mc_session "$jar" 2>/dev/null; then check ok "login BEM-SUCEDIDO pela API da imagem (hash de senha carregado e conferido, cookie de sessão emitido)"; else check fail "login do usuário recém-cadastrado falhou (HTTP $lrc)"; fi
 nrc="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/orders")"
 [ "$nrc" = 401 ] && check ok "controle: /api/orders SEM cookie é recusada (401)" || check fail "/api/orders sem cookie devolveu $nrc (esperado 401)"
 for p in /auth/me /api/orders /api/catalog/categories /api/store/settings /api/store/subscription /api/reports/summary; do
