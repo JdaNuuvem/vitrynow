@@ -101,9 +101,30 @@ export const wsServerMessageSchema = z.discriminatedUnion("type", [
   // Fila de impressão (ADR-0004): só "acorde e peça job"; nenhum dado de pedido ou cliente no canal.
   z.object({ type: z.literal("print.available") }),
   z.object({ type: z.literal("print.job_failed"), jobId: z.string() }),
+  // PC-24: alerta de dispositivo para o painel do dono. Só o CÓDIGO (a frase sai do código no painel); nada de pedido, cliente ou texto livre.
+  z.object({ type: z.literal("device.alert"), code: z.string() }),
   z.object({ type: z.literal("ping") }),
 ]);
 export type WsServerMessage = z.infer<typeof wsServerMessageSchema>;
+
+// PC-24: alertas que o CLIENTE de impressão pode mandar (lista FECHADA). `QUEUE_WITHOUT_PRINTER` é só do servidor: o cliente nunca o envia.
+export const DEVICE_ALERT_CLIENT_CODES = [
+  "NOTHING_TO_CHARGE_CONFLICT",
+  "NOTHING_TO_CHARGE_INVALID",
+  "EMPTY_ZERO_TICKET",
+  "MODE_UNCONFIRMED",
+  "MODE_RECOVERED",
+] as const;
+// Corpo ESTRITO: chave desconhecida é recusada (nenhum texto livre cabe aqui). `orderId` é frouxo de propósito (o formato é conferido no
+// serviço, que NÃO recusa: grava sem o id e responde igual); `clientVersion` só com a lista curta de caracteres.
+export const deviceAlertBodySchema = z
+  .object({
+    code: z.enum(DEVICE_ALERT_CLIENT_CODES),
+    orderId: z.string().max(64).optional(),
+    clientVersion: z.string().regex(/^[0-9A-Za-z._-]{1,20}$/).optional(),
+  })
+  .strict();
+export type DeviceAlertBody = z.infer<typeof deviceAlertBodySchema>;
 
 // Tíquete pronto para impressão — contrato entre API e print-client (equivalente ao
 // textSaleNew do original, mas como JSON estruturado em vez de HTML pronto para GDI+).

@@ -84,25 +84,25 @@ enum SubscriptionStatus {
 }
 
 model Store {
-  id           String   @id @default(cuid())
-  name         String
-  slug         String   @unique
-  code         String   @unique
-  timezone     String   @default("America/Sao_Paulo")
-  logoUrl      String?
-  coverImageUrl String? // banner exibido no topo do cardápio público, separado da logo
-  primaryColor String? // ex. "#16a34a" — aplicado no storefront público
-  customDomain String? // guardado como referência; roteamento de domínio próprio é infra, não app
-  address       String? // exibido no cardápio público
-  whatsapp      String? // só dígitos com DDI, ex. "5521999999999" — vira link wa.me
-  openingHours  String? // texto livre, ex. "Seg a sáb, 09:00 às 17:00"
-  minOrderCents Int?    // pedido mínimo do storefront público; null = sem mínimo
-  deliveryEnabled Boolean @default(true)
-  pickupEnabled   Boolean @default(true)
-  acceptingOrders Boolean @default(true) // interruptor "Disponível" do painel: false = cardápio público recusa pedidos
-  deliveryFeeCents Int    @default(0) // taxa de entrega fixa somada a pedidos DELIVERY
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id               String   @id @default(cuid())
+  name             String
+  slug             String   @unique
+  code             String   @unique
+  timezone         String   @default("America/Sao_Paulo")
+  logoUrl          String?
+  coverImageUrl    String? // banner exibido no topo do cardápio público, separado da logo
+  primaryColor     String? // ex. "#16a34a" — aplicado no storefront público
+  customDomain     String? // guardado como referência; roteamento de domínio próprio é infra, não app
+  address          String? // exibido no cardápio público
+  whatsapp         String? // só dígitos com DDI, ex. "5521999999999" — vira link wa.me
+  openingHours     String? // texto livre, ex. "Seg a sáb, 09:00 às 17:00"
+  minOrderCents    Int? // pedido mínimo do storefront público; null = sem mínimo
+  deliveryEnabled  Boolean  @default(true)
+  pickupEnabled    Boolean  @default(true)
+  acceptingOrders  Boolean  @default(true) // interruptor "Disponível" do painel: false = cardápio público recusa pedidos
+  deliveryFeeCents Int      @default(0) // taxa de entrega fixa somada a pedidos DELIVERY
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   users        User[]
   deviceTokens DeviceToken[]
@@ -113,10 +113,11 @@ model Store {
   coupons      Coupon[]
   deliverers   Deliverer[]
   auditLogs    AuditLog[]
+  deviceAlerts DeviceAlert[]
   subscription Subscription?
   counter      StoreCounter?
   printJobs    PrintJob[]
-  printMode    PrintMode @default(LEGACY) // modo de impressão decidido pelo SERVIDOR por loja (ADR-0004 §8.12)
+  printMode    PrintMode     @default(LEGACY) // modo de impressão decidido pelo SERVIDOR por loja (ADR-0004 §8.12)
 }
 
 // Contador atômico por loja (hoje: sequência do código do pedido). Incrementado com
@@ -159,16 +160,16 @@ model PasswordResetToken {
 // Token do módulo de impressão local (print-client). Não é login humano:
 // é gerado no painel ("chave de impressora") e usado só pela loja/dispositivo.
 model DeviceToken {
-  id        String    @id @default(cuid())
-  storeId   String
-  store     Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  id           String    @id @default(cuid())
+  storeId      String
+  store        Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
   // NG-06: só o hash SHA-256 do token vai para o banco; o valor aparece UMA vez, ao criar.
   tokenHash    String    @unique
   tokenPreview String // últimos 4 caracteres, só para o dono reconhecer a chave na lista
-  label      String? // ex.: "PC do balcão"
-  revokedAt  DateTime?
-  lastSeenAt DateTime? // atualizado a cada chamada autenticada (heartbeat) — ver plugins/auth.ts
-  createdAt  DateTime  @default(now())
+  label        String? // ex.: "PC do balcão"
+  revokedAt    DateTime?
+  lastSeenAt   DateTime? // atualizado a cada chamada autenticada (heartbeat) — ver plugins/auth.ts
+  createdAt    DateTime  @default(now())
 
   @@index([storeId])
 }
@@ -178,7 +179,7 @@ model Category {
   storeId   String
   store     Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
   name      String
-  icon      String?   // emoji exibido antes do nome no cardápio público (chip de categoria)
+  icon      String? // emoji exibido antes do nome no cardápio público (chip de categoria)
   position  Int       @default(0)
   products  Product[]
   createdAt DateTime  @default(now())
@@ -187,21 +188,21 @@ model Category {
 }
 
 model Product {
-  id          String       @id @default(cuid())
+  id          String              @id @default(cuid())
   storeId     String
-  store       Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store       Store               @relation(fields: [storeId], references: [id], onDelete: Cascade)
   categoryId  String?
-  category    Category?    @relation(fields: [categoryId], references: [id])
+  category    Category?           @relation(fields: [categoryId], references: [id])
   name        String
   description String?
   imageUrl    String?
   priceCents  Int
-  active      Boolean      @default(true)
-  featured    Boolean      @default(false)
-  position    Int          @default(0)
+  active      Boolean             @default(true)
+  featured    Boolean             @default(false)
+  position    Int                 @default(0)
   additionals ProductAdditional[]
   orderItems  OrderItem[]
-  createdAt   DateTime     @default(now())
+  createdAt   DateTime            @default(now())
 
   @@index([storeId])
   @@index([categoryId])
@@ -218,41 +219,41 @@ model ProductAdditional {
 }
 
 model Order {
-  id            String      @id @default(cuid())
+  id               String              @id @default(cuid())
   // NG-16: SHA-256 do token de acesso do cliente (cardápio público). O token em si só existe na resposta da criação.
-  publicTokenHash String? @unique
-  storeId       String
-  store         Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  code          String // sequencial legível por loja, ex. "0007"
-  type          OrderType
-  status        OrderStatus @default(PENDENTE)
-  customerName  String?
-  customerPhone String?
-  address       String?
-  notes         String?
-  subtotalCents Int         @default(0)
-  discountCents Int         @default(0)
-  totalCents    Int         @default(0)
-  couponId      String?
-  coupon        Coupon?     @relation(fields: [couponId], references: [id], onDelete: SetNull)
-  delivererId   String?
-  deliverer     Deliverer?  @relation(fields: [delivererId], references: [id], onDelete: SetNull)
-  paymentMethod  OrderPaymentMethod? // null = forma de pagamento não identificada
-  changeForCents Int? // "troco para" informado pelo cliente (só DINHEIRO)
-  deliveryFeeCents Int      @default(0) // snapshot da taxa de entrega — já incluída em totalCents
-  tipCents       Int        @default(0) // gorjeta — já incluída em totalCents
-  awaitingPayment Boolean   @default(false) // true enquanto espera confirmação de pagamento online (ex. PIX) — não entra no kanban/impressão até confirmar
-  printedAt     DateTime?
-  canceledAt        DateTime?
-  couponReleasedAt  DateTime? // idempotência da devolução do cupom (ADR-0007)
-  refundLockedAt    DateTime? // estorno em curso: congela o pedido NA PRÓPRIA linha (ver ADR-0007 §11); nula = livre
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  publicTokenHash  String?             @unique
+  storeId          String
+  store            Store               @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  code             String // sequencial legível por loja, ex. "0007"
+  type             OrderType
+  status           OrderStatus         @default(PENDENTE)
+  customerName     String?
+  customerPhone    String?
+  address          String?
+  notes            String?
+  subtotalCents    Int                 @default(0)
+  discountCents    Int                 @default(0)
+  totalCents       Int                 @default(0)
+  couponId         String?
+  coupon           Coupon?             @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  delivererId      String?
+  deliverer        Deliverer?          @relation(fields: [delivererId], references: [id], onDelete: SetNull)
+  paymentMethod    OrderPaymentMethod? // null = forma de pagamento não identificada
+  changeForCents   Int? // "troco para" informado pelo cliente (só DINHEIRO)
+  deliveryFeeCents Int                 @default(0) // snapshot da taxa de entrega — já incluída em totalCents
+  tipCents         Int                 @default(0) // gorjeta — já incluída em totalCents
+  awaitingPayment  Boolean             @default(false) // true enquanto espera confirmação de pagamento online (ex. PIX) — não entra no kanban/impressão até confirmar
+  printedAt        DateTime?
+  canceledAt       DateTime?
+  couponReleasedAt DateTime? // idempotência da devolução do cupom (ADR-0007)
+  refundLockedAt   DateTime? // estorno em curso: congela o pedido NA PRÓPRIA linha (ver ADR-0007 §11); nula = livre
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
 
-  items           OrderItem[]
-  statusHistory    OrderStatusHistory[]
-  payment          Payment?
-  printJobs        PrintJob[]
+  items         OrderItem[]
+  statusHistory OrderStatusHistory[]
+  payment       Payment?
+  printJobs     PrintJob[]
 
   @@unique([storeId, code])
   @@unique([id, storeId]) // alvo da FK composta de PrintJob (ADR-0009: o banco recusa referência entre lojas)
@@ -262,17 +263,17 @@ model Order {
 }
 
 model OrderItem {
-  id           String   @id @default(cuid())
-  orderId      String
-  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  productId    String?
-  product      Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
-  productName  String   @default("") // snapshot do nome no momento do pedido — sobrevive a produto renomeado/excluído
-  quantity     Int
+  id             String   @id @default(cuid())
+  orderId        String
+  order          Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId      String?
+  product        Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productName    String   @default("") // snapshot do nome no momento do pedido — sobrevive a produto renomeado/excluído
+  quantity       Int
   unitPriceCents Int
-  notes        String?
+  notes          String?
 
-  additionals  OrderItemAdditional[]
+  additionals OrderItemAdditional[]
 
   @@index([orderId])
 }
@@ -290,11 +291,11 @@ model OrderItemAdditional {
 }
 
 model OrderStatusHistory {
-  id        String      @id @default(cuid())
-  orderId   String
-  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  status    OrderStatus
-  createdAt DateTime    @default(now())
+  id              String        @id @default(cuid())
+  orderId         String
+  order           Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status          OrderStatus
+  createdAt       DateTime      @default(now())
   userId          String? // quem fez (painel); null = cliente/sistema
   source          HistorySource @default(SYSTEM)
   kind            HistoryKind   @default(ADVANCE)
@@ -307,19 +308,19 @@ model OrderStatusHistory {
 }
 
 model CashSession {
-  id                 String    @id @default(cuid())
-  storeId            String
-  store              Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  openedByUserId     String
-  openingBalanceCents Int      @default(0)
-  closingBalanceCents Int?
-  openedAt           DateTime @default(now())
-  closedAt           DateTime?
-  openingNotes       String?
-  closingNotes       String?
-  closedByUserId     String?
+  id                   String    @id @default(cuid())
+  storeId              String
+  store                Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  openedByUserId       String
+  openingBalanceCents  Int       @default(0)
+  closingBalanceCents  Int?
+  openedAt             DateTime  @default(now())
+  closedAt             DateTime?
+  openingNotes         String?
+  closingNotes         String?
+  closedByUserId       String?
   expectedClosingCents Int? // saldo esperado calculado no momento do fechamento
-  differenceCents    Int? // closingBalanceCents - expectedClosingCents
+  differenceCents      Int? // closingBalanceCents - expectedClosingCents
 
   movements CashMovement[]
 
@@ -339,18 +340,18 @@ model CashMovement {
 }
 
 model Coupon {
-  id            String              @id @default(cuid())
+  id            String             @id @default(cuid())
   storeId       String
-  store         Store               @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store         Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
   code          String
   discountType  CouponDiscountType
   discountValue Int // PERCENT: 1-100 · FIXED: centavos
-  active        Boolean             @default(true)
+  active        Boolean            @default(true)
   maxUses       Int?
-  usedCount     Int                 @default(0)
+  usedCount     Int                @default(0)
   minOrderCents Int?
   expiresAt     DateTime?
-  createdAt     DateTime            @default(now())
+  createdAt     DateTime           @default(now())
 
   orders Order[]
 
@@ -388,6 +389,37 @@ model Payment {
 
 // Log de ações sensíveis (quem fez o quê) — não é feature de produto, é rastro pra
 // investigar disputa/incidente depois (ex.: "quem revogou essa chave", "quem fechou o caixa").
+// PC-24: alertas dos dispositivos de impressão (cliente) e do detector do servidor. TELEMETRIA NÃO CONFIÁVEL: serve de aviso ao dono e à
+// operação, nunca decide nada (não muda modo, não libera cobrança). Sem PII por construção: só código fechado, id opaco do pedido e versão.
+enum DeviceAlertCode {
+  NOTHING_TO_CHARGE_CONFLICT // cliente: servidor disse "nada a cobrar" mas o total não veio presente e 0 (alerta de DINHEIRO)
+  NOTHING_TO_CHARGE_INVALID // cliente: `nothingToCharge` chegou com valor que não é booleano (alerta de DINHEIRO)
+  EMPTY_ZERO_TICKET // cliente: tíquete sem itens e total zero impresso como "sem cobrança" (alerta de DINHEIRO)
+  MODE_UNCONFIRMED // cliente: não consegue confirmar o modo de impressão da loja
+  MODE_RECOVERED // cliente: voltou a confirmar (NÃO apaga alerta do detector do servidor)
+  QUEUE_WITHOUT_PRINTER // SERVIDOR: loja em QUEUE com job pendente há minutos e nenhum claim (cozinha sem tíquete)
+}
+
+model DeviceAlert {
+  id            String          @id @default(cuid())
+  storeId       String
+  store         Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  tokenId       String? // impressora que avisou (nulo no detector do servidor); sem FK de propósito: o alerta sobrevive ao token
+  code          DeviceAlertCode
+  orderId       String? // só quando o pedido é DA LOJA do token; mostrado ao dono pelo CÓDIGO do pedido
+  orderKey      String          @default("") // orderId ?? "" (chave do dedupe; índice único não aceita nulo como valor igual)
+  clientVersion String?
+  count         Int             @default(1)
+  windowStart   DateTime // início da janela de 10 min do dedupe
+  firstAt       DateTime        @default(now())
+  lastAt        DateTime        @default(now())
+  expiresAt     DateTime // lastAt + 30 dias (a `tech.cleanup` apaga depois)
+
+  @@unique([storeId, code, orderKey, windowStart])
+  @@index([storeId, lastAt])
+  @@index([expiresAt])
+}
+
 model AuditLog {
   id         String   @id @default(cuid())
   storeId    String
@@ -468,13 +500,13 @@ model SubscriptionPayment {
 // ---- Avisos da plataforma (widget de ajuda) ----
 
 model Notice {
-  id          String       @id @default(cuid())
+  id          String    @id @default(cuid())
   title       String
   body        String
   imageUrl    String?
-  publishedAt DateTime     @default(now())
+  publishedAt DateTime  @default(now())
   expiresAt   DateTime?
-  createdAt   DateTime     @default(now())
+  createdAt   DateTime  @default(now())
 
   reads NoticeRead[]
 }
@@ -539,28 +571,28 @@ enum PrintJobStatus {
 }
 
 model PrintJob {
-  id               String         @id @default(cuid())
-  storeId          String
-  store            Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  kind             PrintKind
-  orderId          String?
-  order            Order?         @relation(fields: [orderId, storeId], references: [id, storeId], onDelete: Cascade)
-  status           PrintJobStatus @default(PENDING)
-  attempts         Int            @default(0)
-  maxAttempts      Int            @default(3)
-  availableAt      DateTime       @default(now()) // só é entregue com availableAt <= agora (recuo por falha)
-  claimedAt        DateTime?
-  leaseUntil       DateTime? // vence pelo relógio do banco; vencida = pode ser reclamada por outro
-  claimedByTokenId String?
-  printedAt        DateTime?
-  ackStatus        String? // PRINTED | FAILED do último ack do dono (idempotência do ack repetido)
-  lastErrorCode    String? // lista fechada (PRINTER_OFFLINE, NO_PAPER, DRIVER_ERROR, PRINTER_NOT_FOUND, OTHER)
-  lastError        String? // texto do cliente, NÃO confiável: sanitizado e nunca mostrado/interpolado
-  reprintNumber    Int? // contador da 2ª via (ORDER_REPRINT)
+  id                String         @id @default(cuid())
+  storeId           String
+  store             Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  kind              PrintKind
+  orderId           String?
+  order             Order?         @relation(fields: [orderId, storeId], references: [id, storeId], onDelete: Cascade)
+  status            PrintJobStatus @default(PENDING)
+  attempts          Int            @default(0)
+  maxAttempts       Int            @default(3)
+  availableAt       DateTime       @default(now()) // só é entregue com availableAt <= agora (recuo por falha)
+  claimedAt         DateTime?
+  leaseUntil        DateTime? // vence pelo relógio do banco; vencida = pode ser reclamada por outro
+  claimedByTokenId  String?
+  printedAt         DateTime?
+  ackStatus         String? // PRINTED | FAILED do último ack do dono (idempotência do ack repetido)
+  lastErrorCode     String? // lista fechada (PRINTER_OFFLINE, NO_PAPER, DRIVER_ERROR, PRINTER_NOT_FOUND, OTHER)
+  lastError         String? // texto do cliente, NÃO confiável: sanitizado e nunca mostrado/interpolado
+  reprintNumber     Int? // contador da 2ª via (ORDER_REPRINT)
   requestedByUserId String? // quem pediu a reimpressão/teste (auditoria, D4-5)
-  dedupeKey        String?        @unique // "orderId:ORDER_KITCHEN" / "orderId:ORDER_CANCEL_NOTICE": 1 job por (pedido, tipo)
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  dedupeKey         String?        @unique // "orderId:ORDER_KITCHEN" / "orderId:ORDER_CANCEL_NOTICE": 1 job por (pedido, tipo)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
 
   @@unique([id, storeId])
   @@index([storeId, status, availableAt, createdAt])
