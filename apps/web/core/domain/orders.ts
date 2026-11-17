@@ -50,6 +50,8 @@ export type Order = {
   status: OrderStatus;
   customerName: string | null;
   totalCents: number;
+  // Gorjeta dentro do total (não é receita da loja, B14.1). A lista do painel manda; versões antigas não.
+  tipCents?: number;
   items: OrderItem[];
   delivererId: string | null;
   payment: OrderPayment | null;
