@@ -156,6 +156,9 @@ services:
     environment:
       DOMAIN: ${DOMAIN:?defina DOMAIN no .env}
       ACME_EMAIL: ${ACME_EMAIL:?defina ACME_EMAIL no .env}
+      # O Go passa a devolver memória ANTES de bater no teto do container (mem_limit); sem isso ele retém o heap liberado e o
+      # container pode ser morto por falta de memória. Mantenha ~20% abaixo do mem_limit.
+      GOMEMLIMIT: 400MiB
     ports:
       - "80:80"
       - "443:443"
@@ -163,8 +166,10 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
-    # Teto de memória (ST-49): mesmo com a varredura de chaves vencidas do módulo, nenhum IP forjado deve poder inflar o processo.
-    mem_limit: 256m
+    # Teto de memória (ST-49/ST-50). Medido: ~6,5 KB por IP distinto na janela; 512 MB sustentam ~64 mil IPs a 80% (o smoke confere
+    # que o teto aguenta >= 60 mil). Acima disso (ataque distribuído) o Caddy é morto e volta em segundos (restart); risco ACEITO pelo
+    # Atlas: se tratar na borda/CDN. Se baixar este valor, o smoke reprova.
+    mem_limit: 512m
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2019/config/"]   # API de administração do Caddy, só dentro do container
       interval: 15s

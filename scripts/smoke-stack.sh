@@ -238,28 +238,45 @@ mem="$(docker inspect -f '{{.HostConfig.Memory}}' "$("${DC[@]}" ps -q caddy)")"
 CID9="$("${DC[@]}" ps -q caddy)"
 # 9e ST-50 (Sun Tzu): memória do limitador por CHAVE. A chave real é o IP e do host todo tráfego tem um IP só; então a rota de teste
 # /__mem (só no Caddyfile do smoke) usa a MESMA zona (events 120, window 1m) chaveada pelo cabeçalho X-Mem-Key: 20 mil valores
-# distintos medem o custo por chave sem precisar de 20 mil IPs. Critério do Sun Tzu: > ~60 MB para 20 mil chaves => a estimativa vale.
+# distintos medem o custo por chave sem precisar de 20 mil IPs.
+# DECISÃO DO ATLAS (17/11): ST-50 é risco ACEITO com mem_limit 512 MB. Critério deste teste: o teto configurado sustenta >= 60 mil
+# IPs distintos por janela a 80% (com ~6,5 KB/chave e 512 MB dá ~64 mil). Se alguém baixar o mem_limit ou o custo por chave subir, falha.
 memmb() { docker stats --no-stream --format '{{.MemUsage}}' "$1" | awk '{v=$1; if (v ~ /GiB/) {sub(/GiB/,"",v); printf "%.1f", v*1024} else if (v ~ /MiB/) {sub(/MiB/,"",v); printf "%.1f", v} else if (v ~ /KiB/) {sub(/KiB/,"",v); printf "%.1f", v/1024} else {sub(/B/,"",v); printf "%.1f", v/1048576}}'; }
+onda() { # onda <prefixo-das-chaves>: 20 mil chaves distintas; imprime "done <429>"
+  docker run --rm --network "${PROJ}_default" node:20-alpine node -e "
+    const http=require('http');const agent=new http.Agent({keepAlive:true,maxSockets:64});
+    let sent=0,done=0,c429=0,total=20000;
+    const one=()=>{ if(sent>=total) return; const i=sent++;
+      http.get({host:'caddy',port:80,path:'/__mem',agent,headers:{'X-Mem-Key':'$1-'+i}},r=>{ r.resume(); if(r.statusCode===429)c429++; r.on('end',()=>{done++; if(done===total){console.log('done '+c429);agent.destroy();} else one();}); }).on('error',()=>{done++; if(done===total){console.log('done '+c429);agent.destroy();} else one();}); };
+    for(let k=0;k<64;k++) one();" 2>&1 | tail -1
+}
 m0="$(memmb "$CID9")"
-mres="$(docker run --rm --network "${PROJ}_default" node:20-alpine node -e "
-  const http=require('http');const agent=new http.Agent({keepAlive:true,maxSockets:64});
-  let sent=0,done=0,c429=0,total=20000;
-  const one=()=>{ if(sent>=total) return; const i=sent++;
-    http.get({host:'caddy',port:80,path:'/__mem',agent,headers:{'X-Mem-Key':'chave-'+i}},r=>{ r.resume(); if(r.statusCode===429)c429++; r.on('end',()=>{done++; if(done===total){console.log('done '+c429);agent.destroy();} else one();}); }).on('error',()=>{done++; if(done===total){console.log('done '+c429);agent.destroy();} else one();}); };
-  for(let k=0;k<64;k++) one();" 2>&1 | tail -1)"
+mres="$(onda chave)"
 m1="$(memmb "$CID9")"
 delta="$(awk -v a="$m0" -v b="$m1" 'BEGIN{printf "%.1f", b-a}')"
 perkey="$(awk -v d="$delta" 'BEGIN{printf "%.0f", d*1048576/20000}')"
-proj="$(awk -v p="$perkey" 'BEGIN{ if (p>0) printf "%.0f", (256*0.8*1048576)/p/1000; else print "n/a" }')"
-echo "   20000 chaves distintas (resultado do cliente: $mres): memória do Caddy $m0 MB -> $m1 MB (+$delta MB, ~${perkey} B/chave); projeção: ~${proj} mil IPs distintos por janela para encher 80% de 256 MB"
-if awk -v d="$delta" 'BEGIN{exit !(d <= 60)}'; then check ok "ST-50: 20 mil chaves custaram +$delta MB (<= 60 MB): a estimativa de 3 KB/chave NÃO se confirma (~${perkey} B/chave)"
-else check fail "ST-50: 20 mil chaves custaram +$delta MB (> 60 MB, ~${perkey} B/chave): mitigar (events 60 em /loja/*, mem_limit maior ou limite na borda/CDN)"; fi
+limmb="$(awk -v m="$mem" 'BEGIN{printf "%.0f", m/1048576}')"
+proj="$(awk -v p="$perkey" -v l="$limmb" 'BEGIN{ if (p>0) printf "%.0f", (l*0.8*1048576)/p/1000; else print "0" }')"
+echo "   20000 chaves distintas (resultado do cliente: $mres): memória do Caddy $m0 MB -> $m1 MB (+$delta MB, ~${perkey} B/chave); com o teto de ${limmb} MB: ~${proj} mil IPs distintos por janela a 80%"
+if [ "$proj" -ge 60 ]; then check ok "ST-50 (risco aceito): ~${perkey} B/chave; o teto de ${limmb} MB sustenta ~${proj} mil IPs distintos por janela (>= 60 mil)"
+else check fail "ST-50: o teto de ${limmb} MB sustenta só ~${proj} mil IPs distintos (~${perkey} B/chave); critério >= 60 mil: subir mem_limit, reduzir events ou limitar na borda/CDN"; fi
 echo "   aguardando ${SMOKE_SWEEP_WAIT:-130}s para a varredura de chaves vencidas (janela 1m + sweep 1m)..."
 sleep "${SMOKE_SWEEP_WAIT:-130}"
 m2="$(memmb "$CID9")"
-echo "   memória do Caddy 2 min depois: $m2 MB (antes da carga: $m0 MB; logo após: $m1 MB)"
-if awk -v a="$m1" -v b="$m2" 'BEGIN{exit !(b < a)}'; then check ok "ST-49: depois da janela + varredura a memória recuou ($m1 -> $m2 MB)"
-else echo "   [aviso] a memória não recuou ($m1 -> $m2 MB): o Go pode reter o heap liberado; o teto de 256 MB segue valendo"; fi
+echo "   memória do Caddy 2 min depois: $m2 MB (antes da carga: $m0 MB; logo após a 1ª leva: $m1 MB)"
+# Prova de que as chaves VENCIDAS são descartadas (Sun Tzu): uma 2ª leva de 20 mil chaves NOVAS. Se o pico ficar perto do da 1ª leva, a
+# memória é reaproveitada (heap retido pelo Go, não vazamento); se somar outro bloco inteiro, o módulo não libera as chaves (subir
+# mem_limit só adiaria o problema).
+mres2="$(onda nova)"
+m3="$(memmb "$CID9")"
+cresc="$(awk -v a="$m1" -v b="$m3" 'BEGIN{printf "%.1f", b-a}')"
+echo "   2ª leva de 20000 chaves NOVAS (resultado do cliente: $mres2): memória $m2 MB -> $m3 MB (1ª leva chegou a $m1 MB; diferença $cresc MB)"
+# Calibrado com o experimento de 10 levas seguidas (hopper/evidencias/ST-50-levas.md): quando as chaves NÃO são liberadas, cada leva soma o
+# bloco inteiro (~$delta MB) e o container morre em 2-3 levas; o que se observou foi crescimento por heap retido pelo Go (a 2ª leva soma
+# ~metade do bloco e depois estabiliza perto do GOMEMLIMIT). Por isso: >= 80% do bloco somado = falha; entre 30% e 80% = ok com AVISO.
+if awk -v c="$cresc" -v d="$delta" 'BEGIN{exit !(c >= 0.8*d)}'; then check fail "ST-50: a 2ª leva somou mais $cresc MB (pico $m3 MB; bloco inteiro = ~$delta MB): as chaves vencidas NÃO estão sendo liberadas; subir mem_limit só adia"
+elif awk -v c="$cresc" -v d="$delta" 'BEGIN{exit !(c <= 0.3*d)}'; then check ok "ST-50: as chaves vencidas são descartadas (2ª leva reaproveitou a memória: pico $m3 MB contra $m1 MB da 1ª)"
+else check ok "ST-50: a 2ª leva NÃO somou o bloco inteiro (+$cresc MB de ~$delta MB; pico $m3 MB): chaves vencidas são liberadas em boa parte; o resto é heap retido pelo Go [aviso: confira ST-50-levas.md]"; fi
 
 echo "== 10 Caddy com privilégio mínimo, redes separadas e rastreabilidade do build (INF-18)"
 CID="$("${DC[@]}" ps -q caddy)"
