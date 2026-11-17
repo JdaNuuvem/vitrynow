@@ -1,0 +1,12 @@
+# Override SÓ para o smoke local (scripts/smoke-stack.sh): Caddy em HTTP numa porta alta de
+# 127.0.0.1 (sem TLS, sem DNS, sem tocar nas portas 80/443 do host) e backup rápido.
+# Nunca use em produção.
+services:
+  caddy:
+    ports: !override
+      - "127.0.0.1:${SMOKE_PORT:-55443}:80"
+    volumes: !override
+      - ./Caddyfile.smoke:/etc/caddy/Caddyfile:ro
+  postgres-backup:
+    environment:
+      BACKUP_INTERVAL_SECONDS: "3600"
