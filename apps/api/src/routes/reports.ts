@@ -51,7 +51,8 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
 
     const byPaymentMethod: Record<string, { count: number; revenueCents: number }> = {};
     for (const order of orders) {
-      const bucket = order.paymentMethod ?? "NAO_IDENTIFICADO";
+      // Total zero (cupom cobriu tudo): atendido sem cobrança, em balde próprio (RN-CP-13); sem forma de pagamento e com total > 0 segue "não identificada".
+      const bucket = order.totalCents === 0 ? "SEM_COBRANCA" : (order.paymentMethod ?? "NAO_IDENTIFICADO");
       byPaymentMethod[bucket] ??= { count: 0, revenueCents: 0 };
       byPaymentMethod[bucket].count += 1;
       byPaymentMethod[bucket].revenueCents += order.totalCents;

@@ -14,7 +14,7 @@ export type CashOrderInput = {
   paymentMethod: OrderPaymentMethod | null;
 };
 
-export type PaymentBucket = OrderPaymentMethod | "NAO_IDENTIFICADO";
+export type PaymentBucket = OrderPaymentMethod | "NAO_IDENTIFICADO" | "SEM_COBRANCA";
 
 export type CashSummary = {
   openingCents: number;
@@ -60,7 +60,8 @@ export function computeCashSummary(session: CashSessionInput, orders: CashOrderI
     byType[order.type].count += 1;
     byType[order.type].revenueCents += order.totalCents;
 
-    const bucket: PaymentBucket = order.paymentMethod ?? "NAO_IDENTIFICADO";
+    // Total zero (cupom cobriu tudo): "Sem cobrança", sem efeito no dinheiro do caixa (RN-CP-13).
+    const bucket: PaymentBucket = order.totalCents === 0 ? "SEM_COBRANCA" : (order.paymentMethod ?? "NAO_IDENTIFICADO");
     const entry = (byPaymentMethod[bucket] ??= emptyBucket());
     entry.count += 1;
     entry.revenueCents += order.totalCents;

@@ -11,6 +11,9 @@ import { customerMessageFor, messageActorFor, moneyLineFor } from "../lib/cancel
 import { DomainError } from "../shared/errors";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
 
+const COUPON_EXHAUSTED_MESSAGE = "Esse cupom acabou.";
+class CouponExhaustedError extends Error {}
+
 // Rotas públicas do cardápio (sem autenticação) — equivalente ao /online/{slug} do original.
 const storefrontRoutes: FastifyPluginAsync = async (app) => {
   app.get("/stores/:slug/menu", async (request, reply) => {
@@ -151,7 +154,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(400).send({ error: "cupom expirado" });
       }
       if (coupon.maxUses !== null && coupon.usedCount >= coupon.maxUses) {
-        return reply.code(400).send({ error: "cupom esgotado" });
+        return reply.code(400).send({ error: COUPON_EXHAUSTED_MESSAGE, code: "COUPON_EXHAUSTED" });
       }
       if (coupon.minOrderCents !== null && subtotalCents < coupon.minOrderCents) {
         return reply.code(400).send({ error: `pedido mínimo para este cupom é R$ ${(coupon.minOrderCents / 100).toFixed(2)}` });
@@ -167,8 +170,11 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     const tipCents = input.tipCents ?? 0;
     const totalCents = subtotalCents - discountCents + deliveryFeeCents + tipCents;
 
-    const paymentMethod = toOrderPaymentMethod(input.paymentMethod);
-    if (input.changeForCents !== undefined) {
+    // Total ZERO (cupom cobriu todos os itens e não há taxa nem gorjeta): pedido normal, SEM cobrança. A forma de pagamento
+    // informada (inclusive PIX e "troco para") é IGNORADA, não existe PIX de R$ 0,00 e o provedor nunca é chamado (RN-CP-10/11).
+    const zeroTotal = totalCents === 0;
+    const paymentMethod = zeroTotal ? null : toOrderPaymentMethod(input.paymentMethod);
+    if (!zeroTotal && input.changeForCents !== undefined) {
       if (paymentMethod !== "DINHEIRO") {
         return reply.code(400).send({ error: "troco só se aplica a pagamento em dinheiro" });
       }
@@ -181,7 +187,20 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     // Código e pedido na MESMA transação: o contador da loja fica travado até o commit, então
     // pedidos simultâneos são serializados e nunca colidem (B01).
     let ticketQueued = false;
-    const order = await prisma.$transaction(async (tx) => {
+    let order;
+    try {
+      order = await prisma.$transaction(async (tx) => {
+      // FUNC-01: o uso do cupom é RESERVADO aqui, na mesma transação do pedido, com UPDATE condicional (usedCount < maxUses).
+      // Sem vaga ⇒ 0 linhas ⇒ recusa ANTES de gastar número de pedido; e se qualquer passo seguinte cair, o rollback desfaz
+      // pedido e uso juntos (nunca desconto sem contar o uso). A linha do cupom fica travada até o commit: usos simultâneos
+      // do mesmo cupom se enfileiram aqui, e só cabem `maxUses` deles.
+      if (coupon) {
+        const reserved = await tx.$executeRaw`
+          UPDATE "Coupon" SET "usedCount" = "usedCount" + 1
+           WHERE "id" = ${coupon.id} AND "storeId" = ${store.id} AND "active" = true
+             AND ("maxUses" IS NULL OR "usedCount" < "maxUses")`;
+        if (reserved === 0) throw new CouponExhaustedError();
+      }
       const code = await nextOrderCode(tx, store.id);
       const created = await tx.order.create({
       data: {
@@ -198,7 +217,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         tipCents,
         totalCents,
         paymentMethod,
-        changeForCents: input.changeForCents,
+        changeForCents: zeroTotal ? undefined : input.changeForCents,
         couponId: coupon?.id,
         awaitingPayment: usePix,
         // PIX: o registro do pagamento nasce na MESMA transação do pedido, com a chave de idempotência, ANTES de
@@ -222,10 +241,10 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       // Pedido que já entra no kanban (não aguarda PIX): o tíquete nasce NA MESMA transação — nunca pedido sem job.
       if (!usePix) ticketQueued = await enqueueOrderTicket(tx, { id: created.id, storeId: store.id });
       return created;
-    }, ORDER_TX_OPTIONS);
-
-    if (coupon) {
-      await prisma.coupon.update({ where: { id: coupon.id }, data: { usedCount: { increment: 1 } } });
+      }, ORDER_TX_OPTIONS);
+    } catch (error) {
+      if (error instanceof CouponExhaustedError) return reply.code(400).send({ error: COUPON_EXHAUSTED_MESSAGE, code: "COUPON_EXHAUSTED" });
+      throw error;
     }
 
     if (!usePix) {
