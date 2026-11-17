@@ -95,7 +95,8 @@
   }
 }
 
-.pedidos__column-hint {
+/* 2 classes: o reset global `.panel-root p { margin: 0 }` anulava este espaço com uma classe só */
+.pedidos .pedidos__column-hint {
   margin-bottom: 8px;
   color: var(--ink-soft);
   font-size: 12px;

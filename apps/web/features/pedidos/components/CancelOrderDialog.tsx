@@ -50,7 +50,7 @@ export function CancelOrderDialog({ order, refund, onConfirm, onRetryRefund, onC
   }
 
   return (
-    <Modal open onClose={close} labelledBy={titleId} width={480} sheetOnMobile closeOnScrim={!busy}>
+    <Modal open onClose={close} labelledBy={titleId} width={480} sheetOnMobile fitContent closeOnScrim={!busy}>
       <form
         className="cancel-dialog"
         onSubmit={(event) => {

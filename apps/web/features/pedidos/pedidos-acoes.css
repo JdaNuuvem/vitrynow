@@ -225,7 +225,9 @@
   font-size: 14px;
   line-height: 20px;
 }
-.cancel-dialog__customer {
+/* `.cancel-dialog .cancel-dialog__customer` (2 classes): o reset global `.panel-root p { padding: 0 }` tem mais
+   força que uma classe só e zerava este padding (revisão da Da Vinci, W1). */
+.cancel-dialog .cancel-dialog__customer {
   padding: 8px 12px;
   border-radius: 8px;
   background: var(--surface-soft);

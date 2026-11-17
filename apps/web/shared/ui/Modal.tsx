@@ -18,11 +18,14 @@ type ModalProps = {
   labelledBy: string;
   width?: number;
   sheetOnMobile?: boolean;
+  // Com `sheetOnMobile`, a folha ocupa a altura do CONTEÚDO (até o limite da tela) em vez de preencher a tela
+  // toda: folhas curtas (cancelar pedido) não sobram com um vazio branco embaixo.
+  fitContent?: boolean;
   closeOnScrim?: boolean;
   children: ReactNode;
 };
 
-export function Modal({ open, onClose, labelledBy, width = 480, sheetOnMobile = false, closeOnScrim = true, children }: ModalProps) {
+export function Modal({ open, onClose, labelledBy, width = 480, sheetOnMobile = false, fitContent = false, closeOnScrim = true, children }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   // Quem chama costuma passar uma função NOVA a cada render. Se o efeito dependesse dela, cada re-render
@@ -87,7 +90,7 @@ export function Modal({ open, onClose, labelledBy, width = 480, sheetOnMobile = 
   if (!open) return null;
 
   return (
-    <div ref={rootRef} className={`ui-modal${sheetOnMobile ? " ui-modal--sheet" : ""}`}>
+    <div ref={rootRef} className={`ui-modal${sheetOnMobile ? " ui-modal--sheet" : ""}${sheetOnMobile && fitContent ? " ui-modal--fit" : ""}`}>
       <div className="ui-modal__scrim" onClick={closeOnScrim ? onClose : undefined} />
       <div
         ref={panelRef}
