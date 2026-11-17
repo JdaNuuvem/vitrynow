@@ -270,12 +270,185 @@ describe("API-12b — modo de impressão e virada", () => {
     const id = await order(ctx);
     await setMode(ctx, "QUEUE");
     const job = json(await claim(ctx)).job as { id: string };
-    expect((await setMode(ctx, "LEGACY")).statusCode).toBe(200); // o dono recua com o job em impressão
+    // o recuo normal é recusado com impressão em andamento (ver PRINT_IN_PROGRESS); aqui o modo vira LEGACY por fora (operador/banco)
+    await prisma.store.update({ where: { id: ctx.storeId }, data: { printMode: "LEGACY" } });
     const r = await app.inject({ method: "POST", url: `/api/device/print-jobs/${job.id}/ack`, headers: bearer(ctx.token), payload: { status: "PRINTED" } });
     expect(r.statusCode, r.body).toBe(200);
     expect((await kitchenJobs(id))[0].status).toBe("PRINTED");
     expect((await prisma.order.findUniqueOrThrow({ where: { id } })).printedAt).not.toBeNull(); // o legado não reimprime
     expect(json(await pending(ctx))).toEqual({ orders: [] });
+  });
+
+  // ───────────── Janela entre impressoras (ADR-0004 §8 item 14) ─────────────
+  const printed = (ctx: Ctx, orderId: string) => app.inject({ method: "POST", url: `/api/device/orders/${orderId}/printed`, headers: bearer(ctx.token) });
+  const claimedLive = (storeId: string) => prisma.printJob.count({ where: { storeId, status: "CLAIMED", leaseUntil: { gt: new Date() } } });
+
+  it("RECUO com impressão em andamento ⇒ 409 PRINT_IN_PROGRESS e NADA muda; depois do ack (ou da lease vencida) o recuo funciona", async () => {
+    const ctx = await setup();
+    const id = await order(ctx);
+    await setMode(ctx, "QUEUE");
+    const job = json(await claim(ctx)).job as { id: string };
+    const negado = await setMode(ctx, "LEGACY");
+    expect([negado.statusCode, json(negado).code, json(negado).error]).toEqual([409, "PRINT_IN_PROGRESS", "Há impressão em andamento. Tente em instantes."]);
+    expect(await modeOf(ctx.storeId)).toBe("QUEUE");
+    expect((await kitchenJobs(id))[0].status).toBe("CLAIMED");
+    // a lista legada segue vazia e o job segue do dono: nada foi tocado
+    expect(json(await pending(ctx))).toEqual({ orders: [] });
+    // com o ack, o recuo passa
+    await app.inject({ method: "POST", url: `/api/device/print-jobs/${job.id}/ack`, headers: bearer(ctx.token), payload: { status: "PRINTED" } });
+    expect((await setMode(ctx, "LEGACY")).statusCode).toBe(200);
+    expect(await modeOf(ctx.storeId)).toBe("LEGACY");
+
+    // lease VENCIDA (impressora caiu) não segura o recuo
+    const ctx2 = await setup();
+    await order(ctx2);
+    await setMode(ctx2, "QUEUE");
+    const j2 = json(await claim(ctx2)).job as { id: string };
+    await prisma.printJob.update({ where: { id: j2.id }, data: { leaseUntil: new Date(Date.now() - 5000) } });
+    expect((await setMode(ctx2, "LEGACY")).statusCode).toBe(200);
+  });
+
+  it("CORRIDA claim × recuo, 8 rodadas: nunca fica LEGACY com impressão em andamento (ou o recuo é recusado, ou o claim não entrega)", async () => {
+    const ctx = await setup();
+    let recusados = 0;
+    let semJob = 0;
+    for (let i = 0; i < 8; i++) {
+      await prisma.store.update({ where: { id: ctx.storeId }, data: { printMode: "QUEUE" } });
+      await order(ctx);
+      const [c, p] = await Promise.all([claim(ctx), setMode(ctx, "LEGACY")]);
+      const modo = await modeOf(ctx.storeId);
+      expect(!(modo === "LEGACY" && (await claimedLive(ctx.storeId)) > 0), `rodada ${i}: LEGACY com job em andamento`).toBe(true);
+      if (p.statusCode === 409) {
+        recusados += 1;
+        expect(json(p).code).toBe("PRINT_IN_PROGRESS");
+        expect(json(c).job).not.toBeNull();
+      } else {
+        expect(p.statusCode, p.body).toBe(200);
+        if (json(c).job === null) semJob += 1;
+      }
+      // limpa para a próxima rodada: encerra o que estiver em andamento
+      await prisma.printJob.updateMany({ where: { storeId: ctx.storeId, status: { in: ["CLAIMED", "PENDING"] } }, data: { status: "PRINTED", leaseUntil: null } });
+    }
+    expect(recusados + semJob).toBeGreaterThan(0);
+  });
+
+  it("DETERMINÍSTICO: com a troca de modo em andamento (lock da loja seguro), o claim ESPERA e, ao liberar, relê o modo: entrega nada se virou LEGACY", async () => {
+    const ctx = await setup();
+    const id = await order(ctx);
+    await setMode(ctx, "QUEUE");
+    let resposta: { statusCode: number; body: string } | undefined;
+    let terminou = false;
+    await prisma.$transaction(async (tx) => {
+      // faz o papel do PUT em andamento: lock exclusivo da loja + troca do modo ainda NÃO commitada
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"printmode:" + ctx.storeId}))`;
+      const pendente = claim(ctx).then((r) => {
+        terminou = true;
+        resposta = r;
+      });
+      await new Promise((r) => setTimeout(r, 600));
+      expect(terminou, "o claim não pode terminar enquanto a troca segura o lock").toBe(false);
+      await tx.store.update({ where: { id: ctx.storeId }, data: { printMode: "LEGACY" } });
+      void pendente;
+    });
+    await vi.waitFor(() => expect(terminou).toBe(true), { timeout: 10_000 });
+    expect(json(resposta!)).toEqual({ job: null, mode: "LEGACY" }); // releu o modo depois do lock
+    expect((await kitchenJobs(id))[0]).toMatchObject({ status: "PENDING", attempts: 0 }); // e não gastou o job
+  });
+
+  it("ACK TARDIO em QUEUE: job PENDING ⇒ 200 idempotente, fecha o job (PRINTED) e grava printedAt NA MESMA transação; a lista legada segue vazia e a fila não reimprime", async () => {
+    const ctx = await setup();
+    const id = await order(ctx);
+    await setMode(ctx, "QUEUE");
+    expect((await kitchenJobs(id))[0].status).toBe("PENDING");
+    const r = await printed(ctx, id);
+    expect([r.statusCode, json(r)]).toEqual([200, { ok: true }]);
+    expect((await kitchenJobs(id))[0]).toMatchObject({ status: "PRINTED", ackStatus: "PRINTED" });
+    expect((await prisma.order.findUniqueOrThrow({ where: { id } })).printedAt).not.toBeNull();
+    expect((await printed(ctx, id)).statusCode).toBe(200); // repetido
+    expect(json(await pending(ctx))).toEqual({ orders: [] }); // a lista legada continua vazia em QUEUE
+    expect(json(await claim(ctx)).job).toBeNull(); // a fila não reimprime
+    const pr = await app.inject({ method: "GET", url: `/api/device/orders/${id}/printable`, headers: bearer(ctx.token) });
+    expect([pr.statusCode, json(pr).code]).toEqual([409, "MODE_QUEUE"]); // só o ACK é aceito
+  });
+
+  it("ACK TARDIO: job CLAIMED com lease vigente ⇒ 409 MODE_QUEUE e nada muda; lease vencida ⇒ 200; pedido sem job ⇒ 200 com printedAt; job cancelado ⇒ 200", async () => {
+    const ctx = await setup();
+    const emAndamento = await order(ctx);
+    await setMode(ctx, "QUEUE");
+    const job = json(await claim(ctx)).job as { id: string; ticket: { orderId: string } };
+    expect(job.ticket.orderId).toBe(emAndamento);
+    const busy = await printed(ctx, emAndamento);
+    expect([busy.statusCode, json(busy).code]).toEqual([409, "MODE_QUEUE"]);
+    expect((await kitchenJobs(emAndamento))[0].status).toBe("CLAIMED");
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: emAndamento } })).printedAt).toBeNull();
+    // a impressora que tinha o job caiu: lease vencida ⇒ o ack tardio é aceito
+    await prisma.printJob.update({ where: { id: job.id }, data: { leaseUntil: new Date(Date.now() - 5000) } });
+    expect((await printed(ctx, emAndamento)).statusCode).toBe(200);
+    expect((await kitchenJobs(emAndamento))[0].status).toBe("PRINTED");
+    // pedido sem job (antigo)
+    const semJob = await order(ctx);
+    await prisma.printJob.deleteMany({ where: { orderId: semJob } });
+    expect((await printed(ctx, semJob)).statusCode).toBe(200);
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: semJob } })).printedAt).not.toBeNull();
+    // job cancelado (pedido cancelado antes de imprimir) mas o papel saiu: aceita e marca
+    const cancelado = await order(ctx);
+    await prisma.printJob.updateMany({ where: { orderId: cancelado }, data: { status: "CANCELED" } });
+    expect((await printed(ctx, cancelado)).statusCode).toBe(200);
+  });
+
+  it("ACK TARDIO de pedido de OUTRA loja ⇒ 404 e nada muda", async () => {
+    const a = await setup();
+    const b = await setup();
+    const pedidoB = await order(b);
+    await setMode(a, "QUEUE");
+    const r = await printed(a, pedidoB);
+    expect(r.statusCode).toBe(404);
+    expect((await kitchenJobs(pedidoB))[0].status).toBe("PENDING");
+    expect((await prisma.order.findUniqueOrThrow({ where: { id: pedidoB } })).printedAt).toBeNull();
+  });
+
+  it("CORRIDA ack tardio × claim, 8 rodadas: o pedido sai UMA vez (ou o ack fecha o job e o claim não o entrega, ou o claim pega e o ack é 409)", async () => {
+    const ctx = await setup();
+    await setMode(ctx, "QUEUE");
+    for (let i = 0; i < 8; i++) {
+      const id = await order(ctx);
+      const [a, c] = await Promise.all([printed(ctx, id), claim(ctx)]);
+      const entregue = json(c).job?.ticket?.orderId === id;
+      expect(a.statusCode === 200 && entregue, `rodada ${i}: impresso no legado E entregue pela fila`).toBe(false);
+      expect(a.statusCode === 409 && !entregue, `rodada ${i}: nem um nem outro`).toBe(false);
+      if (entregue) {
+        expect([a.statusCode, json(a).code]).toEqual([409, "MODE_QUEUE"]);
+        await app.inject({ method: "POST", url: `/api/device/print-jobs/${json(c).job.id}/ack`, headers: bearer(ctx.token), payload: { status: "PRINTED" } });
+      } else {
+        expect(a.statusCode).toBe(200);
+        expect((await kitchenJobs(id))[0].status).toBe("PRINTED");
+      }
+      // encerra o que sobrou da rodada para a próxima começar limpa
+      await prisma.printJob.updateMany({ where: { storeId: ctx.storeId, status: { in: ["CLAIMED", "PENDING"] } }, data: { status: "PRINTED", leaseUntil: null } });
+    }
+  });
+
+  it("repetir o comando que RECONCILIA sem trocar o modo também fica no rastro (print.mode_reconcile); sem nada a reconciliar, nenhum rastro novo", async () => {
+    const ctx = await setup();
+    await setMode(ctx, "QUEUE");
+    const novo = await order(ctx);
+    await prisma.printJob.deleteMany({ where: { orderId: novo } }); // pedido que chegou sem job (ex.: legado)
+    const r = await setMode(ctx, "QUEUE");
+    expect(json(r)).toMatchObject({ changed: false, reconciled: { createdJobs: 1 } });
+    const rows = await prisma.auditLog.findMany({ where: { storeId: ctx.storeId, action: "print.mode_reconcile" } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].metadata).toEqual({ mode: "QUEUE", closedPendingJobs: 0, createdJobs: 1, markedOrdersPrinted: 0 });
+    await setMode(ctx, "QUEUE"); // nada a reconciliar
+    expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "print.mode_reconcile" } })).toBe(1);
+  });
+
+  it("LIMITE DE TAXA da troca de modo: 10 por minuto POR LOJA (a 11ª ⇒ 429 RATE_LIMITED com Retry-After); outra loja não é afetada", async () => {
+    const ctx = await setup();
+    const outra = await setup();
+    for (let i = 0; i < 10; i++) expect((await setMode(ctx, i % 2 ? "LEGACY" : "QUEUE")).statusCode, `chamada ${i + 1}`).toBe(200);
+    const r = await setMode(ctx, "QUEUE");
+    expect([r.statusCode, json(r).code, r.headers["retry-after"]]).toEqual([429, "RATE_LIMITED", "60"]);
+    expect((await setMode(outra, "QUEUE")).statusCode).toBe(200);
   });
 
   it("2ª via e tíquete de teste exigem QUEUE: em LEGACY ⇒ 409 PRINT_MODE_LEGACY e NADA é criado", async () => {

@@ -47,6 +47,13 @@ export class PrintJobService {
     if (mode === "LEGACY") return { job: null, mode };
     const taken = await this.db.$transaction(
       async (tx) => {
+        // Serializa com a TROCA DE MODO (item 14 do ADR): o claim segura o lock consultivo da loja em modo COMPARTILHADO (claims não se
+        // bloqueiam entre si) e a troca o pede em modo exclusivo. Assim, ou o claim termina antes (e o recuo vê o job CLAIMED e recusa
+        // com PRINT_IN_PROGRESS), ou a troca termina antes (e o claim relê o modo aqui dentro e não entrega nada em LEGACY).
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock_shared(hashtext(${"printmode:" + storeId}))`;
+        const modeNow = await loadPrintMode(tx, storeId);
+        if (modeNow === "LEGACY") return { row: null as ClaimRow | null, remaining: 0, dead: [] as string[], mode: modeNow };
+
         // Serializa os claims do MESMO token (lock consultivo por transação): sem isto, duas chamadas simultâneas da
         // mesma impressora (ex.: retry depois de timeout) passam juntas pela checagem "já tenho um job?" e cada uma
         // pega um job diferente — um deles fica preso pela lease inteira sem ninguém imprimir. Tokens diferentes
@@ -60,7 +67,7 @@ export class PrintJobService {
             FROM "PrintJob"
            WHERE "storeId" = ${storeId} AND "status" = 'CLAIMED' AND "claimedByTokenId" = ${tokenId} AND "leaseUntil" > ${NOW}
            ORDER BY "createdAt" ASC, "id" ASC LIMIT 1`;
-        if (again[0]) return { row: again[0], remaining: again[0].remaining, dead: [] as string[] };
+        if (again[0]) return { row: again[0] as ClaimRow | null, remaining: again[0].remaining, dead: [] as string[], mode: modeNow };
 
         // 2) Lease vencida e sem tentativas sobrando: falha DEFINITIVA (alerta ao painel), em vez de voltar à fila para sempre.
         const dead = await tx.$queryRaw<{ id: string }[]>`
@@ -87,14 +94,14 @@ export class PrintJobService {
                     FOR UPDATE SKIP LOCKED LIMIT 1)
              AND "storeId" = ${storeId}
           RETURNING "id", "kind", "orderId", "attempts", "reprintNumber", ${lease}::int AS "remaining"`;
-        return { row: claimed[0] ?? null, remaining: lease, dead: dead.map((d) => d.id) };
+        return { row: (claimed[0] ?? null) as ClaimRow | null, remaining: lease, dead: dead.map((d) => d.id), mode: modeNow };
       },
       { maxWait: 10_000, timeout: 20_000 },
     );
 
     for (const id of taken.dead) this.publish(storeId, { type: "print.job_failed", jobId: id });
-    if (!taken.row) return { job: null, mode };
-    return { job: await this.toClaimed(storeId, taken.row, taken.remaining), mode };
+    if (!taken.row) return { job: null, mode: taken.mode };
+    return { job: await this.toClaimed(storeId, taken.row, taken.remaining), mode: taken.mode };
   }
 
   private async toClaimed(storeId: string, row: ClaimRow, remaining: number): Promise<ClaimedJob> {

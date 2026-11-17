@@ -40,7 +40,24 @@ const printJobRoutes: FastifyPluginAsync = async (app) => {
     await printModeService.recordDenied(request.user, (request.body as { mode?: unknown } | null)?.mode);
     reply.code(403).send({ error: "ação restrita ao dono da loja" });
   };
+  // Limite de taxa POR LOJA (a troca de modo é rara e mexe na impressão da cozinha inteira): 10 por minuto, janela deslizante em memória.
+  const modeHits = new Map<string, number[]>();
+  const modeRateLimited = (storeId: string) => {
+    const now = Date.now();
+    const recent = (modeHits.get(storeId) ?? []).filter((t) => now - t < 60_000);
+    if (recent.length >= 10) {
+      modeHits.set(storeId, recent);
+      return true;
+    }
+    recent.push(now);
+    modeHits.set(storeId, recent);
+    return false;
+  };
   app.put("/api/store/print-mode", { preHandler: [app.requirePanelAuth, ownerOrRecordDenied] }, async (request, reply) => {
+    if (modeRateLimited(request.user.storeId)) {
+      reply.header("Retry-After", "60");
+      return reply.code(429).send({ error: "Muitas tentativas. Aguarde um minuto e tente de novo.", code: "RATE_LIMITED" });
+    }
     const parsed = setPrintModeSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "modo inválido", code: "VALIDATION_ERROR" });
     return printModeService.set({ storeId: request.user.storeId, userId: request.user.userId }, parsed.data.mode);

@@ -1,5 +1,6 @@
 import { Prisma, type prisma as prismaClient, type PrintMode } from "@meucardapio/db";
 import type { AuditLogger } from "../../shared/audit";
+import { CodedError } from "../../shared/errors";
 
 type Db = typeof prismaClient;
 
@@ -63,6 +64,14 @@ export class PrintModeService {
       async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"printmode:" + actor.storeId}))`;
         const current = await loadPrintMode(tx, actor.storeId);
+        // Janela entre impressoras (ADR-0004 §8 item 14): recuar para o legado com uma impressão EM ANDAMENTO (job CLAIMED com lease
+        // vigente) faria o legado imprimir o mesmo pedido de novo. Recusa com mensagem clara; a lease é curta (120 s), o recuo de
+        // emergência espera no máximo ~2 min. O claim segura o lock compartilhado, então esta checagem enxerga qualquer claim já feito.
+        if (current === "QUEUE" && target === "LEGACY") {
+          const [busy] = await tx.$queryRaw<{ n: bigint }[]>`
+            SELECT count(*) AS n FROM "PrintJob" WHERE "storeId" = ${actor.storeId} AND "status" = 'CLAIMED' AND "leaseUntil" > ${NOW}`;
+          if (Number(busy.n) > 0) throw new CodedError(409, "PRINT_IN_PROGRESS", "Há impressão em andamento. Tente em instantes.");
+        }
         const reconciled = target === "QUEUE" ? await this.toQueue(tx, actor.storeId) : await this.toLegacy(tx, actor.storeId);
         if (current !== target) {
           await tx.store.update({ where: { id: actor.storeId }, data: { printMode: target } });
@@ -76,6 +85,20 @@ export class PrintModeService {
               targetType: "Store",
               targetId: actor.storeId,
               metadata: { from: current, to: target, ...reconciled },
+            },
+          });
+        }
+        // Repetir o comando pode reconciliar sem trocar o modo (ex.: pedidos novos do legado): isso também fica no rastro.
+        const touched = reconciled.closedPendingJobs + reconciled.createdJobs + reconciled.markedOrdersPrinted;
+        if (current === target && touched > 0) {
+          await tx.auditLog.create({
+            data: {
+              storeId: actor.storeId,
+              userId: actor.userId,
+              action: "print.mode_reconcile",
+              targetType: "Store",
+              targetId: actor.storeId,
+              metadata: { mode: target, ...reconciled },
             },
           });
         }
