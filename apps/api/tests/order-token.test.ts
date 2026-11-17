@@ -281,6 +281,9 @@ describe("CORS do cardápio (preflight) e redação de log", () => {
     // parâmetro SEM nome que parece uma credencial (≥ 16 caracteres com letra e número) some; palavras comuns e curtos ficam
     expect(redactLogUrl("/a?mco_AbC123xyz456QWE789&page=2")).toBe("/a?[redigido]&page=2");
     expect(redactLogUrl("/a?ativo&apenas-palavras-sem-numero&v2")).toBe("/a?ativo&apenas-palavras-sem-numero&v2");
+    // o MÍNIMO do solto é 16: curtos com letra e número ficam legíveis (um token de verdade tem bem mais que isso)
+    expect(redactLogUrl("/a?curto1&abc12345&abcdef123456789")).toBe("/a?curto1&abc12345&abcdef123456789");
+    expect(redactLogUrl("/a?abcdef1234567890")).toBe("/a?[redigido]"); // exatamente 16 com letra e número
     // parâmetros comuns continuam legíveis para diagnóstico
     expect(redactLogUrl("/a?page=2&limit=50&motivo=ok&periodo=7d")).toBe("/a?page=2&limit=50&motivo=ok&periodo=7d");
     // vários separadores seguidos e query vazia não quebram
