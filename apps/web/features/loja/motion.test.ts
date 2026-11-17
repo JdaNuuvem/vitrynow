@@ -96,7 +96,7 @@ describe("orçamento de desempenho dos @keyframes (critério 1)", () => {
 // Orçamento (spec 12 §8, critério 1): nada anima width, height, top, left, sombra ou filtro. Transitions só de `transform`,
 // `opacity` e cor (fundo/texto dos chips, M-03). A exceção do M-12 (grid-template-rows) é da Fatia 3, com justificativa.
 describe("orçamento de desempenho das transitions (critério 1)", () => {
-  const ALLOWED = ["transform", "opacity", "background-color", "color", "visibility"];
+  const ALLOWED = ["transform", "opacity", "background-color", "color", "visibility", "none"];
   const transitionProperties = (css: string) => {
     const found: string[] = [];
     for (const declaration of css.matchAll(/transition\s*:\s*([^;]+);/g)) {
@@ -148,6 +148,23 @@ describe("M-03/M-13: o chip afunda e troca de cor sem uma transition apagar a ou
   it("nenhum outro seletor do chip redefine a transition (senão a última venceria e apagaria a outra)", () => {
     const rules = [...(lojaCss + motionCss).matchAll(/([^{}]*\.loja__chip-body[^{}]*)\{([^}]*)\}/g)].filter((m) => /transition/.test(m[2]));
     expect(rules).toHaveLength(1);
+  });
+});
+
+describe("camadas fixas: a folha fica acima de tudo (visto no clipe da folha)", () => {
+  const zIndexOf = (selector: string) => {
+    // String.raw: as barras invertidas valem para o REGEX (num string comum "\\." viraria só ".")
+    const escaped = selector.replace(/[.]/g, String.raw`\.`);
+    const rule = new RegExp(String.raw`(?:^|\n)` + escaped + String.raw`\s*\{([^}]*)\}`).exec(lojaCss)?.[1] ?? "";
+    return Number(/z-index:\s*(\d+)/.exec(rule)?.[1]);
+  };
+
+  it("a folha (carrinho/checkout) tem z-index maior que a pílula, a barra inferior, os chips e a barra superior", () => {
+    const sheet = zIndexOf(".loja__sheet");
+    for (const other of [".loja__cart-bar", ".loja__nav", ".loja__chipsbox", ".loja__bar"]) {
+      expect(zIndexOf(other), other).toBeGreaterThan(0);
+      expect(sheet, `.loja__sheet deve ficar acima de ${other}`).toBeGreaterThan(zIndexOf(other));
+    }
   });
 });
 
