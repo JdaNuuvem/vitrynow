@@ -1,3 +1,4 @@
+import bcrypt from "bcryptjs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import * as emailLib from "../src/lib/email";
@@ -139,5 +140,67 @@ describe("redefinição de senha exige o e-mail da conta do token (SEC-29, ST-67
     for (let i = 0; i < 3; i += 1) await reset({ token: a.token, email: "errado@exemplo.com", newPassword: "senha-nova-da-vitima" });
     expect((await prisma.passwordResetToken.findFirstOrThrow({ where: { tokenHash: hashToken(b.token) } })).emailFailures).toBe(0);
     expect((await reset({ token: b.token, email: b.credentials.email, newPassword: "senha-nova-do-dono" })).statusCode).toBe(200);
+  }, 120000);
+
+  // ST-68 (Sun Tzu, mesma classe do ST-32): a decisão tem de sair NO BANCO, numa instrução. O pedido CERTO é atrasado só no bcrypt, depois de ler
+  // o token como "vivo" e o e-mail como certo; enquanto isso 30 pedidos errados gravam as falhas e o token morre na 5ª. Se a decisão fosse
+  // tomada com a leitura velha (antes do UPDATE), o certo passaria mesmo com 5 falhas já gravadas.
+  it("ST-68: rajada de 30 e-mails errados + o CERTO por último (lendo o token antes de as falhas serem gravadas) ⇒ o certo é RECUSADO", async () => {
+    const a = await accountWithToken("rajada@exemplo.com");
+    const original = bcrypt.hash.bind(bcrypt);
+    const delayed = vi.spyOn(bcrypt, "hash").mockImplementation((async (...args: unknown[]) => {
+      await new Promise((resolve) => setTimeout(resolve, 600)); // o certo lê o token vivo e ESPERA aqui
+      return (original as (...a: unknown[]) => unknown)(...args);
+    }) as never);
+
+    const wrong = Array.from({ length: 30 }, (_, i) => reset({ token: a.token, email: `chute${i}@exemplo.com`, newPassword: "senha-nova-da-vitima" }));
+    await new Promise((resolve) => setTimeout(resolve, 30)); // os errados já leram o token; o certo chega logo depois e também lê "vivo"
+    const right = reset({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
+    const [rightRes] = await Promise.all([right, ...wrong]);
+    delayed.mockRestore();
+
+    expect(rightRes.statusCode).toBe(400); // vulnerável (antes do conserto): 200
+    const row = await prisma.passwordResetToken.findFirstOrThrow({ where: { tokenHash: hashToken(a.token) } });
+    expect(row.usedAt).toBeNull();
+    expect(row.emailFailures).toBe(RESET_MAX_EMAIL_FAILURES); // o contador parou na 5ª: o resto nem o toca
+    const login = await app.inject({ method: "POST", url: "/auth/login", remoteAddress: ip(), payload: { email: a.credentials.email, password: a.credentials.password } });
+    expect(login.statusCode).toBe(200); // a senha NÃO mudou
+  }, 120000);
+
+  it("ST-68: dois pedidos CERTOS ao mesmo tempo ⇒ exatamente UM redefine (o token não é usado 2×) e a senha muda uma vez só", async () => {
+    const a = await accountWithToken("duplo@exemplo.com");
+    const before = await prisma.user.findUniqueOrThrow({ where: { email: a.credentials.email }, select: { tokenVersion: true } });
+    const results = await Promise.all([
+      reset({ token: a.token, email: a.credentials.email, newPassword: "primeira-senha-nova" }),
+      reset({ token: a.token, email: a.credentials.email, newPassword: "segunda-senha-nova-" }),
+    ]);
+    expect(results.map((r) => r.statusCode).sort()).toEqual([200, 400]);
+    const after = await prisma.user.findUniqueOrThrow({ where: { email: a.credentials.email }, select: { tokenVersion: true } });
+    expect(after.tokenVersion).toBe(before.tokenVersion + 1);
+  }, 120000);
+
+  it("ST-68: contador já em 5 com o token ainda no prazo (estado inconsistente) ⇒ nem o e-mail CERTO passa (o WHERE do banco também confere o contador)", async () => {
+    const a = await accountWithToken("esgotado@exemplo.com");
+    await prisma.passwordResetToken.updateMany({ where: { tokenHash: hashToken(a.token) }, data: { emailFailures: RESET_MAX_EMAIL_FAILURES } });
+    expect(await unusedActive(a.token)).toBe(1);
+    const res = await reset({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
+    expect(res.statusCode).toBe(400);
+    expect((await prisma.passwordResetToken.findFirstOrThrow({ where: { tokenHash: hashToken(a.token) } })).usedAt).toBeNull();
+  }, 60000);
+
+  it("troca da senha e consumo do token são UMA transação: se a troca falhar, o token continua válido (nada de token queimado sem senha nova)", async () => {
+    const a = await accountWithToken("atomico@exemplo.com");
+    // falha REAL do banco dentro da transação: uma restrição temporária que o `tokenVersion + 1` da troca de senha viola
+    await prisma.user.update({ where: { email: a.credentials.email }, data: { tokenVersion: 4 } });
+    await prisma.$executeRawUnsafe(`ALTER TABLE "User" ADD CONSTRAINT "zz_ng_atomico" CHECK ("tokenVersion" < 5)`);
+    try {
+      const res = await reset({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
+      expect(res.statusCode).toBeGreaterThanOrEqual(400);
+      expect(await unusedActive(a.token)).toBe(1); // o consumo do token foi desfeito junto
+    } finally {
+      await prisma.$executeRawUnsafe(`ALTER TABLE "User" DROP CONSTRAINT IF EXISTS "zz_ng_atomico"`);
+    }
+    const retry = await reset({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
+    expect(retry.statusCode).toBe(200);
   }, 120000);
 });

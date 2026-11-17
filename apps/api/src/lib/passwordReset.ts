@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { prisma } from "@meucardapio/db";
+import { Prisma, prisma } from "@meucardapio/db";
 import { nanoid } from "nanoid";
 import { hashToken } from "./tokenHash";
 
@@ -57,3 +57,6 @@ export function constantTimeEqual(a: string, b: string): boolean {
   const digest = (value: string) => createHash("sha256").update(value.trim().toLowerCase()).digest();
   return timingSafeEqual(digest(a), digest(b));
 }
+
+// Relógio do BANCO em UTC (mesma convenção do claim e da troca de modo: colunas TIMESTAMP sem fuso, gravadas em UTC).
+export const NOW = Prisma.raw("(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')");

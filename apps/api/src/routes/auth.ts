@@ -10,7 +10,7 @@ import { SESSION_COOKIE, revokeSession, sessionCookieOptions, signSession } from
 import { disconnectSession, disconnectUser } from "../realtime/hub";
 import { hashToken } from "../lib/tokenHash";
 import { LoginThrottle } from "../lib/loginThrottle";
-import { RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, constantTimeEqual, issueResetToken, padToMinimum } from "../lib/passwordReset";
+import { NOW, RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, constantTimeEqual, issueResetToken, padToMinimum } from "../lib/passwordReset";
 
 // Hash de uma senha que ninguém conhece, no mesmo custo dos hashes reais: login com e-mail inexistente
 // gasta o mesmo tempo do login com senha errada (ST-05, sem enumeração de contas por tempo).
@@ -205,30 +205,38 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       // conta de um atacante, mandado à vítima, redefinia a conta DELE com a senha que a vítima reutiliza.
       // Três recusas (token inexistente/usado/vencido, e-mail que não bate, token de outra conta) têm o MESMO status, o MESMO corpo e o
       // MESMO trabalho no banco (3 consultas, na mesma ordem) e o MESMO piso de tempo; o token NUNCA é gasto quando o e-mail não bate.
-      const now = new Date();
       const resetToken = await prisma.passwordResetToken.findUnique({ where: { tokenHash: hashToken(parsed.data.token) } });
-      const live = !!resetToken && !resetToken.usedAt && resetToken.expiresAt >= now;
       const owner = await prisma.user.findUnique({ where: { id: resetToken?.userId ?? "-" }, select: { email: true } });
       const sameEmail = constantTimeEqual(parsed.data.email, owner?.email ?? "");
-      // Conta a falha do e-mail e, na 5ª, invalida o token (resposta igual). Para token que não existe, roda a mesma instrução sobre 0 linhas.
-      await prisma.$executeRaw`
-        UPDATE "PasswordResetToken"
-           SET "emailFailures" = "emailFailures" + 1,
-               "expiresAt" = CASE WHEN "emailFailures" + 1 >= ${RESET_MAX_EMAIL_FAILURES} THEN ${now} ELSE "expiresAt" END
-         WHERE "id" = ${resetToken?.id ?? "-"} AND "usedAt" IS NULL AND "expiresAt" >= ${now} AND ${live && !sameEmail}`;
-      if (!live || !sameEmail || !resetToken) {
+      // Só calcula o hash da senha se a leitura de cima ACHA que vale (token, conta e e-mail); quem decide de verdade é o UPDATE abaixo.
+      // Recusas nunca pagam o bcrypt (o piso de tempo as iguala às demais).
+      const passwordHash = resetToken && sameEmail ? await bcrypt.hash(parsed.data.newPassword, 10) : null;
+
+      // ST-68: a DECISÃO sai NO BANCO, numa instrução só, com o relógio do banco. Lê-la antes (live/sameEmail em memória) deixava uma rajada
+      // paralela ver o token "vivo" antes de qualquer falha ser gravada: um palpite certo passava mesmo depois de 5 falhas, e duas
+      // requisições certas simultâneas usavam o token 2×. O UPDATE trava a linha; quem chega depois reavalia o WHERE já com o resultado dos
+      // anteriores. (a) e-mail certo: marca `usedAt` (consome o token); (b) e-mail errado: soma a falha e, na 5ª, invalida o token.
+      // Para token que não existe, a mesma instrução roda sobre 0 linhas (mesmo trabalho em todos os ramos).
+      const outcome = await prisma.$transaction(async (tx) => {
+        const claimed = await tx.$queryRaw<{ id: string }[]>`
+          UPDATE "PasswordResetToken"
+             SET "usedAt" = CASE WHEN ${sameEmail}::boolean THEN ${NOW} ELSE "usedAt" END,
+                 "emailFailures" = CASE WHEN ${sameEmail}::boolean THEN "emailFailures" ELSE "emailFailures" + 1 END,
+                 "expiresAt" = CASE WHEN NOT ${sameEmail}::boolean AND "emailFailures" + 1 >= ${RESET_MAX_EMAIL_FAILURES} THEN ${NOW} ELSE "expiresAt" END
+           WHERE "id" = ${resetToken?.id ?? "-"} AND "usedAt" IS NULL AND "expiresAt" >= ${NOW} AND "emailFailures" < ${RESET_MAX_EMAIL_FAILURES}
+          RETURNING "id"`;
+        if (claimed.length !== 1 || !sameEmail || !resetToken || !passwordHash) return null;
+        // Na MESMA transação do consumo do token: se a troca da senha falhar, o token volta a valer (nada de token queimado sem senha nova).
+        // tokenVersion+1: redefinir a senha derruba todas as sessões abertas (token roubado inclusive).
+        await tx.user.update({ where: { id: resetToken.userId }, data: { passwordHash, tokenVersion: { increment: 1 } } });
+        return resetToken.userId;
+      });
+      if (!outcome || !resetToken) {
         await padToMinimum(startedAt, RESET_FAIL_MIN_DURATION_MS);
         return reply.code(400).send({ error: "token inválido ou expirado" });
       }
 
-      const passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
-      await prisma.$transaction([
-        // tokenVersion+1: redefinir a senha derruba todas as sessões abertas (token roubado inclusive).
-        prisma.user.update({ where: { id: resetToken.userId }, data: { passwordHash, tokenVersion: { increment: 1 } } }),
-        prisma.passwordResetToken.update({ where: { id: resetToken.id }, data: { usedAt: new Date() } }),
-      ]);
-
-      disconnectUser(resetToken.userId);
+      disconnectUser(outcome);
       return { ok: true };
     },
   );
