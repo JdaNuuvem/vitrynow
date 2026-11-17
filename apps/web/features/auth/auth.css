@@ -144,3 +144,16 @@
 .auth__alert .auth__button {
   min-height: 44px;
 }
+
+/* WEB-42: recusa única do envio + "Pedir um novo link" (alvo de toque de 44 px) */
+.auth__refused {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+}
+.auth__link--target {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}

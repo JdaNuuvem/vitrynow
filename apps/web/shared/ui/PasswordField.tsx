@@ -35,14 +35,9 @@ export function PasswordField({
 
   return (
     <div className="pw-field">
-      <div className="pw-field__head">
-        <label htmlFor={inputId} className="pw-field__label">
-          {label}
-        </label>
-        <button type="button" className="pw-field__toggle" aria-pressed={visible} aria-controls={inputId} onClick={() => setVisible((previous) => !previous)}>
-          {visible ? "Ocultar senha" : "Mostrar senha"}
-        </button>
-      </div>
+      <label htmlFor={inputId} className="pw-field__label">
+        {label}
+      </label>
       <input
         id={inputId}
         className={inputClassName ?? "pw-field__input"}
@@ -55,6 +50,10 @@ export function PasswordField({
         onChange={(event) => onChange(event.target.value)}
         onBlur={onBlur}
       />
+      {/* No DOM vem DEPOIS do campo (a ordem do Tab é campo, "Mostrar senha", enviar); no visual o CSS grid o põe à direita do rótulo */}
+      <button type="button" className="pw-field__toggle" aria-pressed={visible} aria-controls={inputId} disabled={disabled} onClick={() => setVisible((previous) => !previous)}>
+        {visible ? "Ocultar senha" : "Mostrar senha"}
+      </button>
       <p id={helpId} className="pw-field__help">
         {help}
       </p>

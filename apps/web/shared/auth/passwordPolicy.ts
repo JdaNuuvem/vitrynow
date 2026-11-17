@@ -20,3 +20,25 @@ export const isPasswordLongEnough = (password: string) => password.length >= PAS
 // do campo; "Senha atual incorreta" e outros erros continuam como vieram. Nunca mostra código nem texto técnico da validação.
 const RULE_ERROR = /(newPassword|password).*(at least|least \d+|\bmin\b|short|character)|pelo menos \d+ caracteres|ao menos \d+ caracteres|senha.*(curta|caracteres)/i;
 export const isPasswordRuleError = (message: string | null | undefined): boolean => Boolean(message && RULE_ERROR.test(message));
+
+// ---- Confirmação do e-mail na redefinição (SEC-29 parte 2, ST-67; spec 16 §6, textos aprovados pelo Ogilvy) ----
+export const CONFIRM_EMAIL_LABEL = "Confirme o e-mail desta conta";
+export const CONFIRM_EMAIL_HELP = "Digite o e-mail completo da conta, como você o usa para entrar.";
+// UMA frase para "e-mail não bate" e "link inválido no envio": nunca diz qual dos dois falhou (senão o e-mail certo sairia por tentativa e erro).
+export const RESET_REFUSED_MESSAGE = "Não foi possível redefinir a senha. Confira o e-mail e o link e tente de novo.";
+export const RESET_REFUSED_NEW_LINK = "Pedir um novo link";
+export const RESET_RATE_LIMITED_MESSAGE = "Muitas tentativas. Aguarde alguns minutos e tente de novo.";
+
+// Só confere a FORMA para liberar o botão; quem decide se o e-mail é o da conta é o servidor.
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const isEmailShapeValid = (email: string) => EMAIL_SHAPE.test(email.trim());
+
+export type ResetFailure = "rule" | "rate" | "server" | "refused";
+/** Como a tela trata a recusa do servidor no envio (a 1ª regra que casar vale). */
+export function classifyResetFailure(status: number | null, error: string | null): ResetFailure | null {
+  if (!error) return null;
+  if (isPasswordRuleError(error)) return "rule"; // tamanho da senha: a frase do campo
+  if (status === 429) return "rate";
+  if (status !== null && status >= 500) return "server"; // rede ou erro do servidor: o texto da API/rede, sem acusar e-mail nem link
+  return "refused"; // qualquer outra recusa (e-mail que não bate, link vencido/usado): a MESMA frase, sempre
+}
