@@ -1089,6 +1089,8 @@
   color: var(--loja-accent);
 }
 .loja__qr-box {
+  width: 100%;
+  max-width: 24rem; /* a linha inteira do "Mostrar QR Code" é o alvo de toque, como o botão de copiar */
   margin: 0.75rem 0;
 }
 .loja__qr-box summary {

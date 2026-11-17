@@ -127,6 +127,7 @@ export function OrderResultScreen({
   if (resume === "expired") {
     return (
       <main className="loja__result">
+        {storeName && <p className="loja__result-store">{storeName}</p>}
         <h1 ref={headingRef} tabIndex={-1} className="loja__result-title">
           {`Pedido #${code}`}
         </h1>

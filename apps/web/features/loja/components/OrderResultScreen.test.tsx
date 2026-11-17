@@ -287,6 +287,13 @@ describe("OrderResultScreen: tela recuperada depois de recarregar (WEB-33b, UI-V
     expect(onBack).toHaveBeenCalled();
   });
 
+  it("PIX vencido também mostra o nome da loja acima do título (quem voltou de outra aba)", () => {
+    setup({ code: "0123", resume: "expired", trackingUnavailable: true, pixData: null, summary: null, storeName: "Pizzaria Boa" });
+    const store = screen.getByText("Pizzaria Boa");
+    const heading = screen.getByRole("heading", { name: "Pedido #0123" });
+    expect(store.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("PIX vencido sem WhatsApp: só o texto", () => {
     setup({ code: "0123", resume: "expired", trackingUnavailable: true, pixData: null, summary: null, whatsapp: null });
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
