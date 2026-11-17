@@ -206,8 +206,9 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 
 ## Modo PrintJob (PC-03, ADR-0004)
 
-Com `"UsePrintJobs": true` no `settings.json` o cliente consome a fila de **jobs** (claim com lease + ack) em vez de `/api/device/orders/pending`. **Desligado por padrão** até a API-12 existir e as
-lojas-piloto migrarem. O formato JSON é uma **suposição** nossa, documentada em `docs\contrato-printjob-cliente.md` (o ADR fixa o comportamento, não os campos): o Turing precisa confirmá-la.
+O cliente consome a fila de **jobs** (claim com lease + ack) quando a loja está no modo `QUEUE`, e `/api/device/orders/pending` no modo `LEGACY`. **Quem decide o modo é o servidor, por loja** (PC-18, ADR-0004 §8 itens 12-13): o cliente
+segue o servidor a cada ciclo (o `claim` devolve `mode`; o endpoint legado responde `409 MODE_QUEUE` quando a loja virou para a fila) e **nunca mistura os dois** na virada. `"UsePrintJobs"` no `settings.json` é só um interruptor de
+desenvolvimento (padrão `false` = começa no legado). Contrato conferido contra a API-12 real em `docs\contrato-printjob-cliente.md` e `docs\conferencia-cruzada-api12.md`; plano de virada em `docs\plano-virada-printjobs.md`.
 
 - O servidor decide o que imprimir; o cliente obedece. Um job por vez, no máximo 20 por ciclo.
 - Dedupe local **por job** (`job:<id>`): original e 2ª via do mesmo pedido são jobs diferentes. Job já impresso que o servidor oferece de novo (ack perdido, lease vencida) **não reimprime**: só reenvia `PRINTED`.

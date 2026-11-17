@@ -26,5 +26,7 @@ namespace MeuCardapio.PrintClient.Models
     public class ClaimResponse
     {
         [JsonProperty("job")] public PrintJobDto Job { get; set; }
+        // Modo de impressao da loja (ADR-0004 §8 item 12): "LEGACY" | "QUEUE". Ausente = API sem modo (nao muda nada).
+        [JsonProperty("mode")] public string Mode { get; set; }
     }
 }

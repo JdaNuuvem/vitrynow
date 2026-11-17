@@ -12,7 +12,8 @@ O hash do EXE de cada release sai em `tools\build-installer.ps1` e entra no mani
 - Tíquete próprio (58 e 80 mm), com sanitização do texto do cliente, bloco de pagamento e impressora virtual para teste sem papel.
 - Atualização automática segura (HTTPS, manifesto assinado com duas chaves, validade, hash conferido antes de executar). Desligada até a chave de release existir.
 - A atualização nunca instala sozinha: pede confirmação do lojista; chave de release protegida por senha (formato v2; chave em texto puro é recusada na assinatura).
-- Modo PrintJob (claim/ack do ADR-0004) pronto no cliente, desligado por padrão (`UsePrintJobs`); conferido contra a API-12 local (pedido, falha, 2ª via, teste, cancelamento e duas impressoras na mesma fila).
+- Modo PrintJob (claim/ack do ADR-0004) pronto no cliente, desligado por padrão (`UsePrintJobs`); conferido contra a API-12 local (pedido, falha, 2ª via, teste, cancelamento e duas impressoras na mesma fila).
+- O modo de impressão (legado ou fila) vem do servidor, por loja; o app segue o servidor a cada ciclo e nunca mistura os dois na virada (nada em impressão é reclamado pelo outro modo; pedido já impresso no legado não reimprime pelo job).
 - Sons de alerta gerados pelo app.
 - Build reprodutível sem dependência do `reconstruction/`; instalador Inno Setup sem identidade do terceiro (`tools\scan-identity.ps1`).
 
