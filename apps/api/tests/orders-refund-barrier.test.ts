@@ -88,6 +88,10 @@ describe("C5 — estorno × pedido, com barreira de linha", () => {
     return Promise.all(acoes);
   }
 
+  // Mensagem de diagnóstico: status + corpo das respostas, para a próxima ocorrência de um 500 dizer a causa
+  // (P2028 timeout de transação, P2034 deadlock/conflito de escrita, etc.) em vez de só "expected 500 to be 200".
+  const resumo = (...rs: { statusCode: number; body: string }[]) => rs.map((r) => `${r.statusCode} ${r.body.slice(0, 300)}`).join(" | ");
+
   const cancelarPainel = (l: Loja, id: string) =>
     app.inject({ method: "POST", url: `/api/orders/${id}/cancel`, headers: { cookie: l.cookie }, payload: { reason: { code: "ITEM_EM_FALTA" } } });
   const transicao = (l: Loja, id: string, to: string) =>
@@ -112,13 +116,13 @@ describe("C5 — estorno × pedido, com barreira de linha", () => {
       const [cancelar, concluir] = await comBarreira(id, () => [cancelarPainel(l, id), transicao(l, id, "CONCLUIDO")]);
       const o = await invariante(id, `rodada ${i} cancelar=${cancelar.statusCode} concluir=${concluir.statusCode}`);
       if (cancelar.statusCode === 200) {
-        expect(concluir.statusCode).toBe(409);
+        expect(concluir.statusCode, resumo(cancelar, concluir)).toBe(409);
         expect(`${o.status}/${o.payment?.status}`).toBe("CANCELADO/REEMBOLSADO");
         expect(refundPayment).toHaveBeenCalledTimes(1);
         vencedores.add("cancelar");
       } else {
-        expect(concluir.statusCode).toBe(200);
-        expect(cancelar.statusCode).toBe(409); // pedido já final: o estorno nem começa
+        expect(concluir.statusCode, resumo(cancelar, concluir)).toBe(200);
+        expect(cancelar.statusCode, resumo(cancelar, concluir)).toBe(409); // pedido já final: o estorno nem começa
         expect(`${o.status}/${o.payment?.status}`).toBe("CONCLUIDO/APROVADO");
         expect(refundPayment).not.toHaveBeenCalled(); // dinheiro intocado
         vencedores.add("concluir");
@@ -137,8 +141,8 @@ describe("C5 — estorno × pedido, com barreira de linha", () => {
       const o = await invariante(id, `rodada ${i} cancelar=${cancelar.statusCode} aceitar=${aceitar.statusCode}`);
       // O dono pode cancelar (com estorno) qualquer pedido ativo: "aceitar e depois cancelar" também é válido.
       // O que nunca pode: aceitar DEPOIS de o estorno começar, ou terminar aceito com o dinheiro devolvido.
-      expect(cancelar.statusCode, `rodada ${i}`).toBe(200);
-      expect([200, 409]).toContain(aceitar.statusCode);
+      expect(cancelar.statusCode, `rodada ${i}: ${resumo(cancelar, aceitar)}`).toBe(200);
+      expect([200, 409], `rodada ${i}: ${resumo(cancelar, aceitar)}`).toContain(aceitar.statusCode);
       expect(`${o.status}/${o.payment?.status}`).toBe("CANCELADO/REEMBOLSADO");
       expect(refundPayment).toHaveBeenCalledTimes(1);
       const aceitos = await prisma.orderStatusHistory.count({ where: { orderId: id, status: "CONFIRMADO" } });
@@ -153,9 +157,42 @@ describe("C5 — estorno × pedido, com barreira de linha", () => {
       const id = await pedidoPago(l, "PENDENTE");
       const [cliente, aceitar] = await comBarreira(id, () => [cancelarCliente(l, id), transicao(l, id, "CONFIRMADO")]);
       const o = await invariante(id, `rodada ${i} cliente=${cliente.statusCode} aceitar=${aceitar.statusCode}`);
-      expect([cliente.statusCode, aceitar.statusCode].sort()).toEqual([200, 409]);
+      expect([cliente.statusCode, aceitar.statusCode].sort(), `rodada ${i}: ${resumo(cliente, aceitar)}`).toEqual([200, 409]);
       expect(`${o.status}/${o.payment?.status}`).toBe(cliente.statusCode === 200 ? "CANCELADO/REEMBOLSADO" : "CONFIRMADO/APROVADO");
     }
+  });
+
+  it("ORDEM DE LOCKS: concluir o estorno (Tx 2) contra quem já segura o pedido e depois toca o pagamento NÃO dá deadlock", async () => {
+    // Quem segura o Pedido e depois quer o Pagamento (ordem da Tx 1 da saga) cruza com a Tx 2 do estorno. Se a Tx 2 travasse
+    // o Pagamento ANTES do Pedido, as duas esperariam uma pela outra: o Postgres derruba uma (40P01) ⇒ 500 num fluxo de dinheiro.
+    const l = await loja();
+    const id = await pedidoPago(l, "PRONTO");
+    refundPayment.mockRejectedValueOnce(new Error("timeout"));
+    expect((await cancelarPainel(l, id)).statusCode).toBe(202); // estorno pendente, pedido ainda ativo
+    refundPayment.mockResolvedValue(undefined);
+
+    let soltar!: () => void;
+    const solta = new Promise<void>((r) => (soltar = r));
+    let travou!: () => void;
+    const travada = new Promise<void>((r) => (travou = r));
+    const outraTx = prisma.$transaction(
+      async (t) => {
+        await t.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${id} FOR UPDATE`; // 1º o pedido…
+        travou();
+        await solta;
+        await t.$executeRaw`UPDATE "Payment" SET "refundAttempts" = "refundAttempts" + 1 WHERE "orderId" = ${id}`; // …depois o pagamento
+      },
+      { timeout: 20_000, maxWait: 10_000 },
+    );
+    await travada;
+    const retry = app.inject({ method: "POST", url: `/api/orders/${id}/refund/retry`, headers: { cookie: l.cookie } });
+    await sleep(800); // a Tx 2 chega ao ponto de travar (ordem nova: fica esperando o pedido, sem segurar o pagamento)
+    soltar();
+    await expect(outraTx).resolves.not.toThrow(); // com a ordem antiga: deadlock detected
+    const res = await retry;
+    expect(res.statusCode, resumo(res)).toBe(200);
+    const o = await invariante(id, "depois do cruzamento");
+    expect(`${o.status}/${o.payment?.status}`).toBe("CANCELADO/REEMBOLSADO");
   });
 
   it("o estorno congela o pedido NA LINHA: depois da Tx 1 nem um avanço que leu antes consegue concluir", async () => {
