@@ -224,15 +224,79 @@ describe("FUNC-01/02 — cupom e total zero", () => {
     return (login.headers["set-cookie"] as string).split(";")[0];
   }
 
+  it("TETO DO STAFF: só até 50% ou R$ 50,00 e SEMPRE com limite de usos; acima disso (ou sem limite) ⇒ 403 FORBIDDEN_ROLE; o dono não tem teto", async () => {
+    const ctx = await setup();
+    const staff = await staffCookie(ctx);
+    const asStaff = (url: string, payload?: Record<string, unknown>) => app.inject({ method: "POST", url, headers: { cookie: staff }, payload });
+    const forbidden = async (payload: Record<string, unknown>) => {
+      const r = await asStaff("/api/coupons", payload);
+      expect([r.statusCode, json(r).code], JSON.stringify(payload)).toEqual([403, "FORBIDDEN_ROLE"]);
+    };
+    await forbidden({ code: "ENORME", discountType: "FIXED", discountValue: 999_900, maxUses: 5 }); // R$ 9.999
+    await forbidden({ code: "NOVENTA", discountType: "PERCENT", discountValue: 99 }); // 99% sem limite zera o pedido
+    await forbidden({ code: "CINQ1", discountType: "PERCENT", discountValue: 51, maxUses: 5 });
+    await forbidden({ code: "CINQUENTA1", discountType: "FIXED", discountValue: 5001, maxUses: 5 });
+    await forbidden({ code: "SEMLIM", discountType: "PERCENT", discountValue: 10 }); // dentro do teto, mas sem limite de usos
+    await forbidden({ code: "SEMLIMF", discountType: "FIXED", discountValue: 100 });
+    await forbidden({ code: "MUITOSUSOS", discountType: "PERCENT", discountValue: 10, maxUses: 501 }); // limite de usos também tem teto (500)
+    const negado = await asStaff("/api/coupons", { code: "TEXTO", discountType: "PERCENT", discountValue: 60, maxUses: 5 });
+    expect(json(negado).error).toBe("Acima do seu limite. Peça ao dono.");
+    expect(await prisma.coupon.count({ where: { storeId: ctx.storeId } })).toBe(0);
+    // no teto, com limite: pode
+    expect((await asStaff("/api/coupons", { code: "METADE", discountType: "PERCENT", discountValue: 50, maxUses: 3 })).statusCode).toBe(201);
+    expect((await asStaff("/api/coupons", { code: "CINQUENTA", discountType: "FIXED", discountValue: 5000, maxUses: 3 })).statusCode).toBe(201);
+    expect((await asStaff("/api/coupons", { code: "QUINHENTOS", discountType: "PERCENT", discountValue: 5, maxUses: 500 })).statusCode).toBe(201);
+    // o dono cria acima do teto e sem limite (99%); o STAFF não consegue editá-lo (nem para baixar o valor sem declarar limite)
+    const dono = await coupon(ctx, { code: "DONO99", discountType: "PERCENT", discountValue: 99 });
+    expect(dono.statusCode, dono.body).toBe(201);
+    const donoId = json(dono).coupon.id as string;
+    for (const payload of [{ discountValue: 10 }, { maxUses: 2 }, { discountValue: 10, maxUses: 2 }, { expiresAt: "2099-01-01" }]) {
+      const r = await asStaff(`/api/coupons/${donoId}`, payload);
+      expect([r.statusCode, json(r).code], JSON.stringify(payload)).toEqual([403, "FORBIDDEN_ROLE"]);
+    }
+    // PARAR um cupom perigoso reduz risco: o STAFF pode DESATIVAR (só isso) o cupom do dono acima do teto; reativar e misturar, não
+    const desativa = await asStaff(`/api/coupons/${donoId}`, { active: false });
+    expect(desativa.statusCode, desativa.body).toBe(200);
+    expect((await prisma.coupon.findUniqueOrThrow({ where: { id: donoId } })).active).toBe(false);
+    const reativa = await asStaff(`/api/coupons/${donoId}`, { active: true });
+    expect([reativa.statusCode, json(reativa).code]).toEqual([403, "FORBIDDEN_ROLE"]);
+    const mistura = await asStaff(`/api/coupons/${donoId}`, { active: false, discountValue: 10 });
+    expect([mistura.statusCode, json(mistura).code]).toEqual([403, "FORBIDDEN_ROLE"]);
+    expect((await prisma.coupon.findUniqueOrThrow({ where: { id: donoId } })).discountValue).toBe(99);
+    // a exceção é estreita: a chave `active` SOZINHA; `active:false` com validade (ou qualquer outro campo) ⇒ 403
+    const comValidade = await asStaff(`/api/coupons/${donoId}`, { active: false, expiresAt: "2099-01-01" });
+    expect([comValidade.statusCode, json(comValidade).code]).toEqual([403, "FORBIDDEN_ROLE"]);
+    expect((await prisma.coupon.findUniqueOrThrow({ where: { id: donoId } })).expiresAt).toBeNull();
+    // desativar cupom já inativo é idempotente
+    expect((await asStaff(`/api/coupons/${donoId}`, { active: false })).statusCode).toBe(200);
+    // cupom de OUTRA loja não existe para este STAFF (404), nem para desativar
+    const outra = await setup();
+    const alheio = json(await coupon(outra, { code: "ALHEIO", discountType: "PERCENT", discountValue: 10 })).coupon.id as string;
+    expect((await asStaff(`/api/coupons/${alheio}`, { active: false })).statusCode).toBe(404);
+    expect((await prisma.coupon.findUniqueOrThrow({ where: { id: alheio } })).active).toBe(true);
+    // reativar DENTRO do teto é permitido ao STAFF (reduzir risco não é o caso, mas o cupom é dele)
+    const dentro = json(await asStaff("/api/coupons", { code: "DENTRO", discountType: "PERCENT", discountValue: 10, maxUses: 4 })).coupon.id as string;
+    expect((await asStaff(`/api/coupons/${dentro}`, { active: false })).statusCode).toBe(200);
+    expect((await asStaff(`/api/coupons/${dentro}`, { active: true })).statusCode).toBe(200);
+    // o STAFF não consegue ESTOURAR o teto editando um cupom dele
+    const meu = json(await asStaff("/api/coupons", { code: "MEU", discountType: "PERCENT", discountValue: 10, maxUses: 4 })).coupon.id as string;
+    expect((await asStaff(`/api/coupons/${meu}`, { discountValue: 51 })).statusCode).toBe(403);
+    expect((await asStaff(`/api/coupons/${meu}`, { discountType: "FIXED", discountValue: 9000 })).statusCode).toBe(403);
+    expect((await asStaff(`/api/coupons/${meu}`, { discountValue: 40 })).statusCode).toBe(200);
+    // o dono mexe em tudo
+    expect((await app.inject({ method: "POST", url: `/api/coupons/${donoId}`, headers: { cookie: ctx.owner }, payload: { discountValue: 10 } })).statusCode).toBe(200);
+    expect((await coupon(ctx, { code: "DONOFIXO", discountType: "FIXED", discountValue: 999_900 })).statusCode).toBe(201);
+  });
+
   it("CA-CP-16: STAFF cria/edita cupom abaixo de 100% e fixo, mas NÃO cria 100%, NÃO mexe em 100% (nem reativa/define limite) e NÃO exclui nada ⇒ 403 FORBIDDEN_ROLE; OWNER pode e fica na auditoria", async () => {
     const ctx = await setup();
     const staff = await staffCookie(ctx);
     const asStaff = (url: string, payload?: Record<string, unknown>) => app.inject({ method: "POST", url, headers: { cookie: staff }, payload });
 
-    const normal = await asStaff("/api/coupons", { code: "NORMAL", discountType: "PERCENT", discountValue: 20 });
+    const normal = await asStaff("/api/coupons", { code: "NORMAL", discountType: "PERCENT", discountValue: 20, maxUses: 10 });
     expect(normal.statusCode, normal.body).toBe(201);
     const normalId = json(normal).coupon.id as string;
-    expect((await asStaff("/api/coupons", { code: "FIXOX", discountType: "FIXED", discountValue: 500 })).statusCode).toBe(201);
+    expect((await asStaff("/api/coupons", { code: "FIXOX", discountType: "FIXED", discountValue: 500, maxUses: 10 })).statusCode).toBe(201);
     expect((await asStaff(`/api/coupons/${normalId}`, { discountValue: 30 })).statusCode).toBe(200);
 
     const free = await asStaff("/api/coupons", { code: "GRATIS", discountType: "PERCENT", discountValue: 100, maxUses: 5 });
@@ -272,7 +336,9 @@ describe("FUNC-01/02 — cupom e total zero", () => {
     await coupon(ctx, { code: "TUDO", discountType: "PERCENT", discountValue: 100, maxUses: 10 });
     const r = await order(ctx, { couponCode: "TUDO", paymentMethod: "PIX", changeForCents: 5000 });
     expect(r.statusCode, r.body).toBe(201);
-    expect(Object.keys(json(r)).sort()).toEqual(["code", "orderId"]); // sem `payment`/QR
+    // sem cobrança na resposta: nenhuma chave de pagamento/QR/PIX (outras chaves, como o token de acompanhamento da NG-16, podem existir)
+    expect(Object.keys(json(r)).filter((k) => /payment|qr|pix/i.test(k))).toEqual([]);
+    expect(json(r)).toMatchObject({ orderId: expect.any(String), code: expect.any(String) });
     const o = await prisma.order.findUniqueOrThrow({ where: { id: json(r).orderId }, include: { payment: true } });
     expect(o).toMatchObject({ subtotalCents: 4000, discountCents: 4000, totalCents: 0, paymentMethod: null, changeForCents: null, awaitingPayment: false, payment: null });
     expect(vi.mocked(mp.createPixPayment)).not.toHaveBeenCalled();
