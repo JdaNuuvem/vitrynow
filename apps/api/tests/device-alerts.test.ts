@@ -226,6 +226,18 @@ describe("PC-24 — alertas de dispositivo", () => {
     expect(await prisma.deviceAlert.count()).toBe(0);
   });
 
+  it("IPv6: dois endereços do MESMO /64 dividem o contador por IP (girar o final do endereço não escapa dos 120/min); outro /64 e IPv4 têm contadores próprios", async () => {
+    const enviar = (remoteAddress: string, i: number) =>
+      app.inject({ method: "POST", url: "/api/device/alerts", remoteAddress, headers: { authorization: `Bearer aleatorio-${remoteAddress}-${i}` }, payload: { code: "MODE_UNCONFIRMED" } });
+    for (let i = 0; i < 60; i++) expect((await enviar("2001:db8:1:2::1", i)).statusCode).toBe(401);
+    for (let i = 0; i < 60; i++) expect((await enviar("2001:db8:1:2:aaaa:bbbb:cccc:dddd", i)).statusCode).toBe(401); // outro endereço, mesmo /64: soma 120
+    const barrada = await enviar("2001:db8:1:2::ffff", 0); // um terceiro endereço do mesmo /64
+    expect([barrada.statusCode, json(barrada).code]).toEqual([429, "RATE_LIMITED"]);
+    expect((await enviar("2001:db8:1:3::1", 0)).statusCode).toBe(401); // outro /64 não é afetado
+    expect((await enviar("203.0.113.9", 0)).statusCode).toBe(401); // nem um IPv4
+    expect(await prisma.deviceAlert.count()).toBe(0);
+  });
+
   it("NEGATIVA DO STAFF em GET /api/device-alerts: balde por usuário (10/min); a 11ª ⇒ 429 sem gravar auditoria; a rota nunca abre; o dono segue lendo", async () => {
     const ctx = await setup();
     const staff = await staffCookie(ctx);

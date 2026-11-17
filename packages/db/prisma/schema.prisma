@@ -404,8 +404,6 @@ model Payment {
   @@index([providerPaymentId])
 }
 
-// Log de ações sensíveis (quem fez o quê) — não é feature de produto, é rastro pra
-// investigar disputa/incidente depois (ex.: "quem revogou essa chave", "quem fechou o caixa").
 // PC-24: alertas dos dispositivos de impressão (cliente) e do detector do servidor. TELEMETRIA NÃO CONFIÁVEL: serve de aviso ao dono e à
 // operação, nunca decide nada (não muda modo, não libera cobrança). Sem PII por construção: só código fechado, id opaco do pedido e versão.
 enum DeviceAlertCode {
@@ -437,6 +435,8 @@ model DeviceAlert {
   @@index([expiresAt])
 }
 
+// Log de ações sensíveis (quem fez o quê) — não é feature de produto, é rastro pra
+// investigar disputa/incidente depois (ex.: "quem revogou essa chave", "quem fechou o caixa").
 model AuditLog {
   id         String   @id @default(cuid())
   storeId    String
