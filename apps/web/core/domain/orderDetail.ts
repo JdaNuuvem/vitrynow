@@ -39,6 +39,9 @@ export type OrderDetail = Omit<Order, "items" | "payment"> & {
   address: string | null;
   hasAddress: boolean;
   contactMasked: boolean;
+  // Só no detalhe, nunca na lista (API-54b): o servidor não conseguiu registrar o acesso ao contato e, por segurança
+  // (falha fechada), devolveu o telefone e o endereço mascarados. Não é questão de papel: tentar de novo pode resolver.
+  contactUnavailable?: "AUDIT_UNAVAILABLE";
   notes: string | null;
   subtotalCents: number;
   discountCents: number;

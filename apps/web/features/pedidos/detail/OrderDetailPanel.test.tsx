@@ -153,6 +153,26 @@ describe("OrderDetailPanel: tipos de pedido e máscara do servidor (UI-D-04, CA-
     expect(screen.queryByRole("button", { name: "Copiar endereço" })).not.toBeInTheDocument();
   });
 
+  it("falha fechada do servidor (contactUnavailable): avisa, oferece repetir e MANTÉM o resto do pedido (API-54b)", async () => {
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce(ok({ order: detail({ customerPhone: "*******5678", contactMasked: true, address: null, hasAddress: true, contactUnavailable: "AUDIT_UNAVAILABLE" }) }))
+      .mockResolvedValueOnce(ok({ order: detail() }));
+    setup(get);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Contato indisponível agora, tente de novo.");
+    // o resto do pedido segue na tela
+    expect(within(section("Itens")).getByText("2× Calabresa")).toBeInTheDocument();
+    expect(within(section("Pagamento")).getByText("Cobrar R$ 95,30 em dinheiro")).toBeInTheDocument();
+    // não confunde com "peça ao dono": não é questão de papel
+    expect(screen.queryByText(/Peça ao dono/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Ligar|WhatsApp/ })).not.toBeInTheDocument();
+    await userEvent.click(within(alert).getByRole("button", { name: "Tentar de novo" }));
+    expect(await screen.findByRole("link", { name: "Ligar para Ana Souza" })).toBeInTheDocument();
+    expect(screen.queryByText(/Contato indisponível/)).not.toBeInTheDocument();
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
   it("pedido cancelado mostra quem, quando, o motivo interno e a frase que o cliente viu, em linhas separadas (CA-DET-11)", async () => {
     const cancelled = detail({
       status: "CANCELADO",

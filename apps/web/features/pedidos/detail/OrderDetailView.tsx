@@ -26,6 +26,8 @@ export type DetailHandlers = {
 
 type Props = {
   order: OrderDetail;
+  // Busca o pedido de novo (o aviso "contato indisponível" tem "Tentar de novo")
+  onRetryContact: () => void;
   deliverers: Deliverer[];
   nowMs: number;
   busy: boolean;
@@ -34,7 +36,7 @@ type Props = {
 
 // Conteúdo do detalhe (spec 11 §3), na ordem fixa: cliente, entrega, observação, itens, valores, pagamento, entregador,
 // impressão, cancelamento. O servidor decide o que cada papel recebe; aqui só se mostra o que chegou.
-export function OrderDetailView({ order, deliverers, nowMs, busy, canRetryRefund, ...handlers }: Props) {
+export function OrderDetailView({ order, deliverers, nowMs, busy, canRetryRefund, onRetryContact, ...handlers }: Props) {
   const [copied, setCopied] = useState(false);
   const minutes = orderAgeMinutes(order, nowMs);
   const age = ageText(minutes);
@@ -43,6 +45,7 @@ export function OrderDetailView({ order, deliverers, nowMs, busy, canRetryRefund
   const selectable = deliverers.filter((deliverer) => deliverer.active || deliverer.id === order.delivererId);
   const isDelivery = order.type === "DELIVERY";
   const contact = canContact(order);
+  const contactUnavailable = order.contactUnavailable === "AUDIT_UNAVAILABLE";
 
   async function copyAddress() {
     if (!order.address) return;
@@ -85,7 +88,17 @@ export function OrderDetailView({ order, deliverers, nowMs, busy, canRetryRefund
             </a>
           </div>
         )}
-        {order.hasPhone && order.contactMasked && <p className="pedido-detalhe__help">Contato protegido. Peça ao dono para ver o número.</p>}
+        {contactUnavailable && (
+          // Falha fechada do servidor (API-54b): não foi possível registrar o acesso, então o contato não veio. O resto do
+          // pedido segue na tela; repetir busca de novo.
+          <div role="alert" className="pedido-detalhe__alert">
+            <span>Contato indisponível agora, tente de novo.</span>
+            <button type="button" className="pedido-detalhe__action" onClick={onRetryContact}>
+              Tentar de novo
+            </button>
+          </div>
+        )}
+        {!contactUnavailable && order.hasPhone && order.contactMasked && <p className="pedido-detalhe__help">Contato protegido. Peça ao dono para ver o número.</p>}
       </section>
 
       {isDelivery && (
@@ -108,7 +121,7 @@ export function OrderDetailView({ order, deliverers, nowMs, busy, canRetryRefund
               </p>
             </>
           ) : order.hasAddress ? (
-            <p className="pedido-detalhe__help">Endereço protegido. Peça ao dono para ver.</p>
+            <p className="pedido-detalhe__help">{contactUnavailable ? "Endereço indisponível agora." : "Endereço protegido. Peça ao dono para ver."}</p>
           ) : (
             <p className="pedido-detalhe__help">Endereço não informado.</p>
           )}

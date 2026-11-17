@@ -171,6 +171,21 @@
   line-height: 18px;
 }
 
+/* aviso de contato indisponível (falha fechada do servidor): o resto do pedido segue visível */
+.pedido-detalhe .pedido-detalhe__alert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-weight: 600;
+}
+
 .pedido-detalhe .pedido-detalhe__row {
   display: flex;
   flex-wrap: wrap;

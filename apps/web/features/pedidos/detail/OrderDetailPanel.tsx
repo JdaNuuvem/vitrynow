@@ -80,7 +80,7 @@ export function OrderDetailPanel({ orderId, listOrder, refreshKey, deliverers, n
       )}
 
       {detail && (
-        <OrderDetailView order={detail} deliverers={deliverers} nowMs={nowMs} busy={busy} canRetryRefund={canRetryRefund} {...handlers} />
+        <OrderDetailView order={detail} deliverers={deliverers} nowMs={nowMs} busy={busy} canRetryRefund={canRetryRefund} onRetryContact={retry} {...handlers} />
       )}
     </>
   );
