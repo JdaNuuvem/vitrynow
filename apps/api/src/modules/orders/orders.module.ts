@@ -39,6 +39,11 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
     return orderService.list(actorOf(request), { cursor: query.cursor, limit: Number(query.limit) || undefined });
   });
 
+  app.get("/api/orders/:id", auth, async (request) => {
+    const { id } = request.params as { id: string };
+    return { order: await orderService.detail(actorOf(request), id) };
+  });
+
   app.post("/api/orders/:id/transition", auth, async (request, reply) => {
     const { id } = request.params as { id: string };
     const to = orderStatusSchema.safeParse((request.body as { to?: unknown })?.to);

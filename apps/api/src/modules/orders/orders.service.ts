@@ -17,6 +17,7 @@ import {
   type Actor as ActorKind,
   type Role,
 } from "../../lib/orderStateMachine";
+import { contactAccessFor, toPanelOrder, type ContactAccess } from "./orders.view";
 
 type Db = typeof prismaClient;
 type Tx = Prisma.TransactionClient;
@@ -34,6 +35,7 @@ type CancelOrigin = {
 };
 
 type OrderWithPayment = Order & { payment: Payment | null };
+type PanelOrderSource = import("./orders.view").PanelOrderSource;
 type HistoryRow = {
   status: OrderStatus;
   kind: string;
@@ -85,6 +87,32 @@ export class OrderService {
     return this.decorate(rest, statusHistory, actor.role, roles);
   }
 
+  // Detalhe do pedido (PRD-15): contato completo conforme papel e idade; a abertura com dado completo é auditada
+  // (`order.view_contact`, sem o dado na linha), uma vez por usuário+pedido a cada 10 min.
+  async detail(actor: PanelActor, orderId: string) {
+    const order = await this.db.order.findFirst({
+      where: { id: orderId, storeId: actor.storeId },
+      include: { items: true, deliverer: true, payment: true, statusHistory: { orderBy: { seq: "desc" }, take: 3 } },
+    });
+    if (!order) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
+    const { statusHistory, ...rest } = order;
+    const roles = await this.rolesOf(statusHistory.map((h) => h.userId));
+    const closedAt = statusHistory[0]?.createdAt ?? null;
+    const access = contactAccessFor(actor.role, order, closedAt, this.now());
+    if (access === "FULL" && (order.customerPhone || order.address)) await this.auditViewContact(actor, order.id);
+    return this.decorate(rest, statusHistory, actor.role, roles, { detail: true, access });
+  }
+
+  private async auditViewContact(actor: PanelActor, orderId: string) {
+    const since = new Date(this.now().getTime() - 10 * 60 * 1000);
+    const recent = await this.db.auditLog.findFirst({
+      where: { storeId: actor.storeId, userId: actor.userId, action: "order.view_contact", targetId: orderId, createdAt: { gte: since } },
+      select: { id: true },
+    });
+    if (recent) return;
+    this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "order.view_contact", targetType: "Order", targetId: orderId });
+  }
+
   private async rolesOf(userIds: (string | null)[]) {
     const ids = [...new Set(userIds.filter((u): u is string => !!u))];
     if (ids.length === 0) return new Map<string, string>();
@@ -92,29 +120,34 @@ export class OrderService {
     return new Map(users.map((u) => [u.id, u.role as string]));
   }
 
-  private decorate<T extends OrderWithPayment>(order: T, history: HistoryRow[], role: Role, roles: Map<string, string>) {
+  // Monta a resposta do painel por ALLOWLIST (orders.view.ts): nunca espalha a linha do Prisma.
+  private decorate(
+    order: PanelOrderSource,
+    history: HistoryRow[],
+    role: Role,
+    roles: Map<string, string>,
+    opts: { detail: boolean; access: ContactAccess } = { detail: false, access: "MASKED" },
+  ) {
     const last = history[0];
     const undo = this.undoInfo(order, history, role);
     const cancelRow = order.status === "CANCELADO" && last?.kind === "CANCEL" ? last : null;
-    return {
-      ...order,
-      payment: order.payment && {
-        ...order.payment,
-        refundPending: order.payment.status === "ESTORNO_PENDENTE",
-        reconcileRequired: !!order.payment.reconcileNote,
+    return toPanelOrder(
+      order,
+      {
+        allowedTransitions: allowedTransitions(order, role),
+        blocked: [...blockedTransitions(order, role), ...this.undoBlocked(order, history, role)],
+        canUndo: undo.canUndo,
+        undoUntil: undo.until?.toISOString() ?? null,
+        cancel: cancelRow && {
+          reasonCode: cancelRow.reasonCode,
+          reasonText: cancelRow.reasonText,
+          customerMessage: cancelRow.customerMessage,
+          at: cancelRow.createdAt.toISOString(),
+          by: cancelRow.source === "CUSTOMER" ? "CUSTOMER" : cancelRow.source === "PANEL" ? (roles.get(cancelRow.userId ?? "") ?? "OWNER") : "SYSTEM",
+        },
       },
-      allowedTransitions: allowedTransitions(order, role),
-      blocked: [...blockedTransitions(order, role), ...this.undoBlocked(order, history, role)],
-      canUndo: undo.canUndo,
-      undoUntil: undo.until?.toISOString() ?? null,
-      cancel: cancelRow && {
-        reasonCode: cancelRow.reasonCode,
-        reasonText: cancelRow.reasonText,
-        customerMessage: cancelRow.customerMessage,
-        at: cancelRow.createdAt.toISOString(),
-        by: cancelRow.source === "CUSTOMER" ? "CUSTOMER" : cancelRow.source === "PANEL" ? (roles.get(cancelRow.userId ?? "") ?? "OWNER") : "SYSTEM",
-      },
-    };
+      opts,
+    );
   }
 
   // Desfazer só vale para a última ação "para frente" (kind ADVANCE) e nunca depois de um desfazer.
