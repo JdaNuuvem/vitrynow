@@ -63,5 +63,11 @@ Histórico e contexto medido: BOARD §3 (5 saídas em 17/11; causa **não provad
 - **Auditoria:** cada troca grava `print.mode_change` na mesma transação (se não grava, o modo não muda); STAFF recebe 403 e a tentativa fica registrada.
 - **Voltar o app para uma versão sem esta migração:** o app antigo ignora a coluna. Desfazer o banco só **depois** de voltar o app: `ALTER TABLE "Store" DROP COLUMN "printMode"; DROP TYPE "PrintMode";`. Isso **perde o modo escolhido por loja** (volta tudo para o comportamento LEGACY). Não executado por mim.
 
-## 11. Ainda NÃO documentado (sem prova)
+## 11. Logs da API: o que mudou com a NG-16 (para alertas e busca, NG-12/INF-08)
+**Relato do Atlas sobre `feat/NG-16-token-do-pedido` @6b5a391; eu não executei nem li o código.**
+- A query da URL com `token`, `code` ou `state` aparece **redigida** (`[redigido]`) nos logs "incoming request" e "request completed". Nunca procure um token real no log: ele não está lá.
+- A linha padrão do Fastify **"Route … not found" deixa de existir**. Quem buscava ou alertava por essa frase deve passar a olhar o **status 404 na linha "request completed"**. Alerta ou painel que ainda dependam da frase antiga ficam **mudos**, sem erro: revise-os antes de confiar neles.
+- O corpo do 404 de rota inexistente é idêntico em todas as rotas (não revela quais caminhos existem).
+
+## 12. Ainda NÃO documentado (sem prova)
 Suspensão/reativação de loja (depende de API-09), restauração em servidor de produção, observabilidade/alertas (INF-08), `deploy.sh` com backup obrigatório antes de migrar (rascunho em `hopper/inf11/deploy.sh.rascunho`, nunca executado).
