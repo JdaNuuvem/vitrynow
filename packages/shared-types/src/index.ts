@@ -210,11 +210,32 @@ export const productAdditionalInputSchema = z.object({
   priceCents: z.number().int().nonnegative().max(100_000_000),
 });
 
+// ST-17 / NG-07: URL de imagem só em https, sem usuário/senha e sem esquema estranho (javascript:, data:, file:, http:).
+// O CSP do web (img-src) já recusa http:// no navegador; recusar aqui dá ao lojista a mensagem na hora em vez de
+// uma foto que some sozinha. Até o upload próprio (B12), o lojista cola uma URL https.
+export const httpsUrl = z
+  .string()
+  .trim()
+  .max(500)
+  .refine(
+    (value) => {
+      // Prefixo literal "https://": "https:host/x" o parser aceita, mas o navegador o trata como relativo.
+      if (!/^https:\/\//i.test(value)) return false;
+      try {
+        const url = new URL(value);
+        return url.protocol === "https:" && url.hostname !== "" && url.username === "" && url.password === "";
+      } catch {
+        return false;
+      }
+    },
+    { message: "use um endereço que comece com https://" },
+  );
+
 export const createProductSchema = z.object({
   categoryId: z.string().min(1).optional(),
   name: z.string().min(1).max(150),
   description: z.string().max(1000).optional(),
-  imageUrl: z.string().url().max(500).optional().or(z.literal("")),
+  imageUrl: httpsUrl.optional().or(z.literal("")),
   priceCents: z.number().int().nonnegative().max(100_000_000),
   active: z.boolean().optional(),
   featured: z.boolean().optional(),
@@ -304,8 +325,8 @@ export type UpdateCouponInput = z.infer<typeof updateCouponSchema>;
 
 export const updateStoreSettingsSchema = z.object({
   name: z.string().min(1).max(150).optional(),
-  logoUrl: z.string().url().max(500).optional().or(z.literal("")),
-  coverImageUrl: z.string().url().max(500).optional().or(z.literal("")),
+  logoUrl: httpsUrl.optional().or(z.literal("")),
+  coverImageUrl: httpsUrl.optional().or(z.literal("")),
   primaryColor: z
     .string()
     .regex(/^#[0-9a-fA-F]{6}$/, "use um hex de cor, ex. #16a34a")
@@ -373,7 +394,7 @@ export type CheckoutPlanInput = z.infer<typeof checkoutPlanSchema>;
 export const createNoticeSchema = z.object({
   title: z.string().trim().min(1).max(150),
   body: z.string().trim().min(1).max(2000),
-  imageUrl: z.string().url().max(500).optional(),
+  imageUrl: httpsUrl.optional(),
   expiresAt: z.string().datetime().optional(),
 });
 export type CreateNoticeInput = z.infer<typeof createNoticeSchema>;
