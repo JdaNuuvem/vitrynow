@@ -77,6 +77,10 @@ export const resetPasswordSchema = z.object({
 });
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
 
+// SEC-29 (ST-63): a página de redefinição pergunta DE QUAL CONTA é o token antes de a pessoa digitar a senha nova. Não consome o token.
+export const inspectResetTokenSchema = z.object({ token: z.string().min(1).max(512) });
+export type InspectResetTokenInput = z.infer<typeof inspectResetTokenSchema>;
+
 export const registerStoreSchema = z.object({
   storeName: z.string().min(1).max(150),
   slug: z

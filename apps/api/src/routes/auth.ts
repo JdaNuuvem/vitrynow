@@ -2,7 +2,8 @@ import type { FastifyPluginAsync } from "fastify";
 import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
 import { prisma } from "@meucardapio/db";
-import { loginSchema, registerStoreSchema, forgotPasswordSchema, resetPasswordSchema } from "@meucardapio/shared-types";
+import { loginSchema, registerStoreSchema, forgotPasswordSchema,
+  inspectResetTokenSchema, resetPasswordSchema } from "@meucardapio/shared-types";
 import { maskEmail, sendLoginAlertEmail, sendPasswordResetEmail } from "../lib/email";
 import { newTrialEndsAt } from "../lib/subscription";
 import { SESSION_COOKIE, revokeSession, sessionCookieOptions, signSession } from "../lib/session";
@@ -161,6 +162,24 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       await padToMinimum(startedAt);
 
       return { ok: true };
+    },
+  );
+
+  // SEC-29 (ST-63): quem abre o link vê DE QUAL CONTA é o token (e-mail mascarado) ANTES de digitar a senha nova. Sem isto, um atacante
+  // pede a redefinição da conta DELE e manda à vítima o link; a vítima digita a senha que reutiliza e o atacante a lê ao entrar.
+  // NÃO consome o token. Resposta idêntica para inválido, expirado, usado, inexistente e corpo malformado (nada de motivo).
+  app.post(
+    "/auth/reset-password/inspect",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      const parsed = inspectResetTokenSchema.safeParse(request.body);
+      if (!parsed.success) return { valid: false };
+      const resetToken = await prisma.passwordResetToken.findUnique({ where: { tokenHash: hashToken(parsed.data.token) } });
+      if (!resetToken || resetToken.usedAt || resetToken.expiresAt < new Date()) return { valid: false };
+      const user = await prisma.user.findUnique({ where: { id: resetToken.userId }, select: { email: true } });
+      if (!user) return { valid: false };
+      return { valid: true, email: maskEmail(user.email) };
     },
   );
 
