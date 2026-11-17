@@ -83,6 +83,51 @@ describe("usePedidos: estado de carregamento", () => {
   });
 });
 
+describe("usePedidos: teto de abertos (API-70, WEB-37)", () => {
+  it("guarda quantos abertos a API deixou de fora", async () => {
+    const { result } = setup({ list: vi.fn().mockResolvedValue(ok({ orders: [order()], openCapped: true, openHidden: 12 })) });
+    await waitFor(() => expect(result.current.loadState).toBe("ready"));
+    expect(result.current.openHidden).toBe(12);
+  });
+
+  it("API antiga (sem os campos) e teto não estourado: zero, sem faixa", async () => {
+    const old = setup({ list: vi.fn().mockResolvedValue(ok({ orders: [order()] })) });
+    await waitFor(() => expect(old.result.current.loadState).toBe("ready"));
+    expect(old.result.current.openHidden).toBe(0);
+    const calm = setup({ list: vi.fn().mockResolvedValue(ok({ orders: [order()], openCapped: false, openHidden: 0 })) });
+    await waitFor(() => expect(calm.result.current.loadState).toBe("ready"));
+    expect(calm.result.current.openHidden).toBe(0);
+  });
+
+  it("o número acompanha cada recarga: some quando o dono conclui os escondidos", async () => {
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce(ok({ orders: [order()], openCapped: true, openHidden: 3 }))
+      .mockResolvedValue(ok({ orders: [order()], openCapped: false, openHidden: 0 }));
+    const { result } = setup({ list, transition: vi.fn().mockResolvedValue(ok({ order: order({ canUndo: true }) })) });
+    await waitFor(() => expect(result.current.openHidden).toBe(3));
+    await act(async () => result.current.transition(order(), action()));
+    await waitFor(() => expect(result.current.openHidden).toBe(0));
+  });
+
+  it("falha de recarga NÃO apaga a faixa: mantém o último valor, como mantém a lista", async () => {
+    const list = vi.fn().mockResolvedValueOnce(ok({ orders: [order()], openCapped: true, openHidden: 5 })).mockResolvedValue(fail(500, "x"));
+    const { result } = setup({ list, transition: vi.fn().mockResolvedValue(fail(409, "x", "ORDER_STATE_CHANGED")) });
+    await waitFor(() => expect(result.current.openHidden).toBe(5));
+    await act(async () => {
+      await result.current.transition(order(), action());
+    });
+    expect(list.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(result.current.openHidden).toBe(5);
+  });
+
+  it("valor inválido da API (texto, negativo) vale zero", async () => {
+    const { result } = setup({ list: vi.fn().mockResolvedValue(ok({ orders: [order()], openHidden: "muitos" })) });
+    await waitFor(() => expect(result.current.loadState).toBe("ready"));
+    expect(result.current.openHidden).toBe(0);
+  });
+});
+
 describe("usePedidos: avançar pela aresta do servidor", () => {
   it("chama /transition com o estado de destino da ação e recarrega a lista", async () => {
     const { result, orders } = setup({ transition: vi.fn().mockResolvedValue(ok({ order: order({ canUndo: true }) })) });

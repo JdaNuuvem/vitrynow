@@ -10,8 +10,12 @@ export type CancelBody = {
   acknowledgeClosedCash?: boolean;
 };
 
+// Resposta do kanban (GET /api/orders). Só `orders` é obrigatório: a API antiga não manda o resto. `openHidden` (API-70) é quantos
+// abertos o teto deixou de fora; `openCapped` é o mesmo aviso em booleano (a tela usa só `openHidden`, que traz o número).
+export type OrdersListResponse = { orders: Order[]; openCapped?: boolean; openHidden?: number };
+
 export interface OrdersGateway {
-  list(): Promise<HttpResult<{ orders: Order[] }>>;
+  list(): Promise<HttpResult<OrdersListResponse>>;
   // Rotas novas do contrato B3 (API-02). As legadas /status e /refund deixam de ser usadas pela tela.
   transition(orderId: string, to: OrderStatus): Promise<HttpResult<{ order: Order }>>;
   cancel(orderId: string, body: CancelBody, options?: RequestOptions): Promise<HttpResult<CancelResult>>;
