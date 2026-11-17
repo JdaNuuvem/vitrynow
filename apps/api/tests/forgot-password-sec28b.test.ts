@@ -266,3 +266,84 @@ describe("SEC-33: aviso `<rota>_floor_exceeded` quando a resposta passa do piso 
     expect(String(warn.mock.calls[1][0])).toContain("[reset_floor_exceeded]");
   });
 });
+
+describe("SEC-33c: commit sem fsync SÓ na transação do forgot-password, em todos os caminhos, sem vazar para o pool", () => {
+  beforeEach(async () => {
+    await resetDb();
+  });
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await resetDb();
+  });
+
+  // Lê `synchronous_commit` DENTRO da transação do issueResetToken (antes da 2ª instrução) com a MESMA conexão que ela usa.
+  async function insideTransaction(email: string) {
+    const seen: string[] = [];
+    const holder = prisma as unknown as { $transaction: (fn: (tx: unknown) => unknown, options?: unknown) => Promise<unknown> };
+    const original = holder.$transaction;
+    holder.$transaction = ((fn: (tx: any) => unknown, options?: unknown) =>
+      original.call(prisma, (tx: any) => {
+        const proxied = new Proxy(tx, {
+          get(target, prop, receiver) {
+            if (prop !== "passwordResetToken") return Reflect.get(target, prop, receiver);
+            return new Proxy(target.passwordResetToken, {
+              get(model, name, r2) {
+                if (name !== "findMany") return Reflect.get(model, name, r2);
+                return async (...args: unknown[]) => {
+                  const rows = (await target.$queryRaw`SELECT current_setting('synchronous_commit') AS v`) as { v: string }[];
+                  seen.push(rows[0].v);
+                  return model.findMany(...args);
+                };
+              },
+            });
+          },
+        });
+        return fn(proxied);
+      }, options)) as never;
+    try {
+      const issued = await issueResetToken(email);
+      return { issued, seen };
+    } finally {
+      holder.$transaction = original;
+    }
+  }
+
+  it("`synchronous_commit` é off DENTRO da transação nos 4 caminhos (emite, inexistente, no intervalo, cota esgotada) e a sequência continua com 4 idas", async () => {
+    const app = makeApp();
+    await app.ready();
+    const { credentials } = await registerStore(app);
+    const user = await prisma.user.findUniqueOrThrow({ where: { email: credentials.email } });
+
+    const emits = await insideTransaction(credentials.email);
+    expect(emits.issued).not.toBeNull();
+    const missing = await insideTransaction("fantasma@exemplo.com");
+    expect(missing.issued).toBeNull();
+    const cooldown = await insideTransaction(credentials.email);
+    expect(cooldown.issued).toBeNull();
+    await prisma.passwordResetToken.updateMany({ where: { userId: user.id }, data: { createdAt: new Date(Date.now() - 10 * 60_000) } });
+    await prisma.passwordResetToken.createMany({
+      data: [1, 2].map((n) => ({ userId: user.id, tokenHash: `cota33c-${n}-${Date.now()}`, expiresAt: new Date(Date.now() - 1000), createdAt: new Date(Date.now() - 5 * 60_000) })),
+    });
+    const capped = await insideTransaction(credentials.email);
+    expect(capped.issued).toBeNull();
+    for (const path of [emits, missing, cooldown, capped]) expect(path.seen).toEqual(["off"]);
+
+    // a sequência de idas não ganhou operação (o set_config vai na MESMA instrução do lock)
+    const trace: string[] = [];
+    await withTrace(trace, () => issueResetToken("outra-conta-fantasma@exemplo.com"));
+    expect(trace).toEqual(["tx.$queryRaw", "tx.passwordResetToken.findMany", "tx.passwordResetToken.updateMany", "tx.$executeRaw"]);
+    await app.close();
+  }, 60000);
+
+  it("NÃO vaza: depois do commit, as conexões do pool seguem com o padrão do banco (on), e a leitura fora da transação do reset vê `on`", async () => {
+    const app = makeApp();
+    await app.ready();
+    const { credentials } = await registerStore(app);
+    await issueResetToken(credentials.email);
+    await issueResetToken("fantasma2@exemplo.com");
+    const values = await Promise.all(Array.from({ length: 16 }, () => prisma.$queryRaw<{ v: string }[]>`SELECT current_setting('synchronous_commit') AS v`));
+    expect(values.map((r) => r[0].v)).toEqual(Array(16).fill("on"));
+    await app.close();
+  }, 60000);
+});
+
