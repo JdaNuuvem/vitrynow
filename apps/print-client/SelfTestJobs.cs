@@ -1125,7 +1125,7 @@ namespace MeuCardapio.PrintClient
             {
                 using (var api = new FakeApi())
                 {
-                    api.PrintMode = "QUEUE"; api.ConfigEnabled = false;      // config 404 e /pending vazio: o cliente nao tem como saber
+                    api.PrintMode = "QUEUE"; api.ConfigEnabled = false; api.PendingCarriesMode = false;   // config 404 e /pending vazio SEM mode: o cliente nao tem como saber
                     var o = Order("N5", "5205"); api.AddJob("n5", o);
                     var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
                     using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: false))
