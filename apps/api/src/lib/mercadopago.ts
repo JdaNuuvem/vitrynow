@@ -1,43 +1,26 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { MercadoPagoConfig, Payment as MpPayment, PaymentRefund } from "mercadopago";
 
-// Integração PIX via Mercado Pago. Token vem de MP_ACCESS_TOKEN (conta da plataforma,
-// não da loja — simplificação da Fase 3: todo recebimento passa por uma conta só).
-function client() {
-  const accessToken = process.env.MP_ACCESS_TOKEN;
-  if (!accessToken) throw new Error("MP_ACCESS_TOKEN não configurado");
-  return new MercadoPagoConfig({ accessToken });
-}
+// Integração PIX via Mercado Pago. `mercadoPagoGateway(token)` é a ÚNICA porta para o SDK: o token da PLATAFORMA
+// (MP_ACCESS_TOKEN) só serve à cobrança da assinatura SaaS (`createPixPayment` e demais abaixo); o PIX dos pedidos usa o
+// token DA LOJA, obtido por `modules/storePayments/gateway.ts` (ADR-0001: nada do dinheiro das lojas passa pela plataforma).
 
-export async function createPixPayment(input: {
+export type PixChargeInput = {
   orderId: string;
   amountCents: number;
   description: string;
   payerEmail: string;
   // Repetir a chamada com a mesma chave não cria segunda cobrança (queda entre o aceite e a gravação).
   idempotencyKey?: string;
-}) {
-  const payment = new MpPayment(client());
-  const result = await payment.create({
-    body: {
-      transaction_amount: input.amountCents / 100,
-      description: input.description,
-      payment_method_id: "pix",
-      payer: { email: input.payerEmail },
-      external_reference: input.orderId,
-    },
-    ...(input.idempotencyKey ? { requestOptions: { idempotencyKey: input.idempotencyKey } } : {}),
-  });
+};
 
-  const txData = result.point_of_interaction?.transaction_data;
-  return {
-    providerPaymentId: String(result.id),
-    status: result.status, // "pending" | "approved" | "rejected" | ...
-    pixQrCode: txData?.qr_code ?? null,
-    pixQrCodeBase64: txData?.qr_code_base64 ?? null,
-    expiresAt: result.date_of_expiration ? new Date(result.date_of_expiration) : null,
-  };
-}
+export type PixCharge = {
+  providerPaymentId: string;
+  status: string | null | undefined; // "pending" | "approved" | "rejected" | ...
+  pixQrCode: string | null;
+  pixQrCodeBase64: string | null;
+  expiresAt: Date | null;
+};
 
 // Visão do pagamento no provedor — única fonte da verdade (a notificação só traz o id).
 // Conferir valor, moeda e referência é obrigatório antes de aprovar qualquer coisa (ADR-0001 §3.6).
@@ -49,32 +32,76 @@ export type ProviderPayment = {
   currency?: string | null;
 };
 
-export async function getPayment(providerPaymentId: string): Promise<ProviderPayment> {
-  const payment = new MpPayment(client());
-  const result = await payment.get({ id: providerPaymentId });
+export interface PixGateway {
+  createPixPayment(input: PixChargeInput): Promise<PixCharge>;
+  getPayment(providerPaymentId: string): Promise<ProviderPayment>;
+  /** Cancela um pagamento PIX ainda pendente (cliente cancelou o pedido antes de pagar). */
+  cancelPayment(providerPaymentId: string): Promise<void>;
+  /**
+   * Estorna um pagamento já aprovado (reembolso total); o MP devolve o PIX ao pagador quando aceita. `idempotencyKey`
+   * determinística (ex. "refund-<payment.id>"): repetir depois de uma queda devolve o mesmo resultado em vez de falhar.
+   */
+  refundPayment(providerPaymentId: string, idempotencyKey?: string): Promise<void>;
+}
+
+export function mercadoPagoGateway(accessToken: string): PixGateway {
+  if (!accessToken) throw new Error("token do Mercado Pago ausente");
+  const client = () => new MercadoPagoConfig({ accessToken });
   return {
-    providerPaymentId: String(result.id),
-    status: result.status,
-    externalReference: result.external_reference ?? null,
-    amountCents: typeof result.transaction_amount === "number" ? Math.round(result.transaction_amount * 100) : null,
-    currency: result.currency_id ?? null,
+    async createPixPayment(input) {
+      const payment = new MpPayment(client());
+      const result = await payment.create({
+        body: {
+          transaction_amount: input.amountCents / 100,
+          description: input.description,
+          payment_method_id: "pix",
+          payer: { email: input.payerEmail },
+          external_reference: input.orderId,
+        },
+        ...(input.idempotencyKey ? { requestOptions: { idempotencyKey: input.idempotencyKey } } : {}),
+      });
+      const txData = result.point_of_interaction?.transaction_data;
+      return {
+        providerPaymentId: String(result.id),
+        status: result.status,
+        pixQrCode: txData?.qr_code ?? null,
+        pixQrCodeBase64: txData?.qr_code_base64 ?? null,
+        expiresAt: result.date_of_expiration ? new Date(result.date_of_expiration) : null,
+      };
+    },
+    async getPayment(providerPaymentId) {
+      const payment = new MpPayment(client());
+      const result = await payment.get({ id: providerPaymentId });
+      return {
+        providerPaymentId: String(result.id),
+        status: result.status,
+        externalReference: result.external_reference ?? null,
+        amountCents: typeof result.transaction_amount === "number" ? Math.round(result.transaction_amount * 100) : null,
+        currency: result.currency_id ?? null,
+      };
+    },
+    async cancelPayment(providerPaymentId) {
+      const payment = new MpPayment(client());
+      await payment.cancel({ id: providerPaymentId });
+    },
+    async refundPayment(providerPaymentId, idempotencyKey) {
+      const refund = new PaymentRefund(client());
+      await refund.total({ payment_id: providerPaymentId, ...(idempotencyKey ? { requestOptions: { idempotencyKey } } : {}) });
+    },
   };
 }
 
-// Cancela um pagamento PIX ainda pendente (cliente cancelou o pedido antes de pagar).
-export async function cancelPayment(providerPaymentId: string) {
-  const payment = new MpPayment(client());
-  await payment.cancel({ id: providerPaymentId });
+// Conta da PLATAFORMA (assinatura SaaS). Não usar para o PIX dos pedidos das lojas.
+function platformGateway(): PixGateway {
+  const accessToken = process.env.MP_ACCESS_TOKEN;
+  if (!accessToken) throw new Error("MP_ACCESS_TOKEN não configurado");
+  return mercadoPagoGateway(accessToken);
 }
 
-// Estorna um pagamento já aprovado (reembolso total). Mercado Pago devolve o PIX pro
-// pagador automaticamente quando o estorno é aceito.
-// idempotencyKey deterministica (ex. "refund-<payment.id>"): repetir a chamada depois de uma queda
-// devolve o mesmo resultado em vez de falhar com "ja estornado".
-export async function refundPayment(providerPaymentId: string, idempotencyKey?: string) {
-  const refund = new PaymentRefund(client());
-  await refund.total({ payment_id: providerPaymentId, ...(idempotencyKey ? { requestOptions: { idempotencyKey } } : {}) });
-}
+export const createPixPayment = async (input: PixChargeInput) => platformGateway().createPixPayment(input);
+export const getPayment = async (providerPaymentId: string) => platformGateway().getPayment(providerPaymentId);
+export const cancelPayment = async (providerPaymentId: string) => platformGateway().cancelPayment(providerPaymentId);
+export const refundPayment = async (providerPaymentId: string, idempotencyKey?: string) => platformGateway().refundPayment(providerPaymentId, idempotencyKey);
 
 // Confere o header x-signature do webhook (ts=...,v1=<hmac>) contra MP_WEBHOOK_SECRET.
 // Sem isso, qualquer POST externo com um data.id válido conseguiria "confirmar" pagamento

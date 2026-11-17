@@ -18,6 +18,7 @@ CREATE TABLE "PaymentAccount" (
     "connectedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "disconnectedAt" TIMESTAMP(3),
     "lastRefreshAt" TIMESTAMP(3),
+    "lastRefreshAttemptAt" TIMESTAMP(3),
     "refreshFailures" INTEGER NOT NULL DEFAULT 0,
     "lastError" TEXT,
 
