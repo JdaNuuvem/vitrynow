@@ -33,6 +33,10 @@ export type SubscriptionView = {
   /** Fase do ADR-0003 (TRIAL/ACTIVE/READ_ONLY/SUSPENDED); `state` acima é o formato legado do banner. */
   phase: Phase;
   readOnlyEndsAt: string | null;
+  /** Próxima mudança de fase se nada acontecer (WEB-07: faixas e contagem regressiva). */
+  nextPhaseAt: string | null;
+  /** Atalho de `access.canFinishInProgress` (WEB-07: botões ativos na Consulta). */
+  canFinishInProgress: boolean;
   limits: PlanLimits;
   access: Access;
 };
@@ -66,6 +70,8 @@ export function resolveSubscription(
     features: entitlements.features,
     phase: entitlements.phase,
     readOnlyEndsAt: entitlements.readOnlyEndsAt,
+    nextPhaseAt: entitlements.nextPhaseAt,
+    canFinishInProgress: entitlements.access.canFinishInProgress,
     limits: entitlements.limits,
     access: entitlements.access,
   };
@@ -151,7 +157,7 @@ export async function getSubscriptionView(storeId: string, now: Date = new Date(
 /** Fonte única de verdade do que a loja pode usar agora (ADR-0003 §2.1). */
 export async function getEntitlements(storeId: string, now: Date = new Date()): Promise<Entitlements> {
   const view = await getSubscriptionView(storeId, now);
-  return { phase: view.phase, readOnlyEndsAt: view.readOnlyEndsAt, features: view.features, limits: view.limits, access: view.access };
+  return { phase: view.phase, readOnlyEndsAt: view.readOnlyEndsAt, nextPhaseAt: view.nextPhaseAt, features: view.features, limits: view.limits, access: view.access };
 }
 
 // Uma consulta por requisição: o portão de assinatura (plugins/subscriptionGate.ts), requireFeature e

@@ -12,13 +12,20 @@
  *                (decisão do Claudio, reversível); Suspensão ⇒ 402.
  * - `allowed`  — liberada na Consulta (leitura, ações pessoais); Suspensão ⇒ 402.
  * - `billing`  — liberada na Consulta E na Suspensão (pagar, ver a conta, sair).
+ * - `export`   — exportação de dados do próprio lojista (CSV; decisão do Atlas, ADR-0003 §5): liberada na Consulta e
+ *                também na Suspensão, mas na Suspensão SÓ para OWNER. O limite de uso (rate limit), a auditoria e
+ *                "não guardar o arquivo" são da rota; nenhuma outra rota do painel abre por causa disso.
  * Leitura (GET) sem entrada aqui vale `allowed`; escrita sem entrada vale `blocked` e reprova o teste de contrato.
  */
-export type PanelPolicy = "blocked" | "finish" | "allowed" | "billing";
+export type PanelPolicy = "blocked" | "finish" | "allowed" | "billing" | "export";
 
 export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   // — Pedidos já recebidos (RN-A-01: aceitar, recusar, avançar, concluir, cancelar, estornar) —
-  "POST /api/orders/:id/status": "finish",
+  "POST /api/orders/:id/transition": "finish", // API-02: avançar
+  "POST /api/orders/:id/cancel": "finish", // API-02: cancelar/recusar com motivo (e estorno em saga)
+  "POST /api/orders/:id/refund/retry": "finish", // API-02: tentar o estorno de novo
+  "POST /api/orders/:id/undo": "finish", // API-02: desfazer dentro da janela
+  "POST /api/orders/:id/status": "finish", // legado (alias deprecated até WEB-05)
   "POST /api/orders/:id/refund": "finish",
   "POST /api/orders/:id/deliverer": "finish",
 

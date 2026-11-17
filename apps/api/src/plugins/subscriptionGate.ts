@@ -59,7 +59,11 @@ function panelGate(policy: PanelPolicy, mutating: boolean) {
   if (!gate) {
     gate = async (request, reply) => {
       const { phase, access } = await getRequestEntitlements(request, request.user.storeId);
-      if (phase === "SUSPENDED") return policy === "billing" ? undefined : blockSuspended(reply);
+      if (phase === "SUSPENDED") {
+        if (policy === "billing") return undefined;
+        if (policy === "export" && request.user.role === "OWNER") return undefined;
+        return blockSuspended(reply);
+      }
       if (phase === "READ_ONLY" && mutating) {
         if (policy === "blocked") return blockReadOnly(reply);
         if (policy === "finish" && !access.canFinishInProgress) return blockReadOnly(reply);
@@ -90,9 +94,10 @@ const publicOrderGate = async (request: FastifyRequest, reply: FastifyReply) => 
   return undefined;
 };
 
-// Cardápio: Suspensão ⇒ 503 neutro sem dados da loja; Consulta ⇒ `acceptingOrders:false` na resposta (a vitrine
-// mostra a faixa "não está recebendo pedidos agora").
-const menuPhase = new WeakMap<FastifyRequest, "READ_ONLY">();
+// Cardápio: Suspensão ⇒ 503 neutro sem dados da loja; Consulta ⇒ `acceptingOrders:false`. A resposta
+// ganha `store.accepting` (a loja recebe pedido AGORA = interruptor da loja E assinatura em dia): a vitrine
+// usa só isso e nunca fica sabendo de plano nem de cobrança (RN-A-02).
+const menuAccess = new WeakMap<FastifyRequest, boolean>();
 const publicMenuGate = async (request: FastifyRequest, reply: FastifyReply) => {
   const { slug } = request.params as { slug?: string };
   if (!slug) return undefined;
@@ -102,13 +107,17 @@ const publicMenuGate = async (request: FastifyRequest, reply: FastifyReply) => {
   if (access.storefront === "unavailable") {
     return reply.code(503).send({ error: "Loja indisponível no momento.", code: "STORE_UNAVAILABLE" });
   }
-  if (access.storefront === "notice") menuPhase.set(request, "READ_ONLY");
+  menuAccess.set(request, access.publicOrders);
   return undefined;
 };
 const publicMenuSerializer = async (request: FastifyRequest, _reply: FastifyReply, payload: unknown) => {
-  if (menuPhase.get(request) === "READ_ONLY" && payload && typeof payload === "object") {
-    const body = payload as { store?: Record<string, unknown> };
-    if (body.store) return { ...body, store: { ...body.store, acceptingOrders: false } };
+  const publicOrders = menuAccess.get(request);
+  if (publicOrders !== undefined && payload && typeof payload === "object") {
+    const body = payload as { store?: { acceptingOrders?: boolean } & Record<string, unknown> };
+    if (body.store) {
+      const accepting = publicOrders && body.store.acceptingOrders !== false;
+      return { ...body, store: { ...body.store, acceptingOrders: accepting, accepting } };
+    }
   }
   return payload;
 };
