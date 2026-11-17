@@ -4,7 +4,7 @@
 import { createHmac } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { makeApp, registerStore, resetDb } from "../helpers";
+import { makeApp, registerStore, resetDb, orderTokenHeader } from "../helpers";
 import { subscribe } from "../../src/realtime/hub";
 import { mapMpStatus } from "../../src/lib/mercadopago";
 import { activateSubscription } from "../../src/lib/subscription";
@@ -258,7 +258,7 @@ describe("QA probes — API", () => {
     const { orderId, providerPaymentId } = await pixOrder(ctx);
     getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "approved"));
     await webhook(providerPaymentId);
-    const res = await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${orderId}/cancel` });
+    const res = await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${orderId}/cancel`, headers: orderTokenHeader(orderId) });
     const after = await prisma.order.findUnique({ where: { id: orderId } });
     // Correto: ou recusa (409) mantendo o pedido, ou cancela E estorna. Cancelar sem estornar = dinheiro retido.
     const ok = res.statusCode === 409 || (after?.status === "CANCELADO" && refundPayment.mock.calls.length === 1);
@@ -270,7 +270,7 @@ describe("QA probes — API", () => {
     const { orderId, providerPaymentId } = await pixOrder(ctx);
     const socket = { readyState: 1, OPEN: 1, send: vi.fn(), on: vi.fn() };
     subscribe(ctx.storeId, socket as never);
-    await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${orderId}/cancel` });
+    await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${orderId}/cancel`, headers: orderTokenHeader(orderId) });
     getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "approved"));
     await webhook(providerPaymentId);
     const announced = socket.send.mock.calls.filter(([m]) => String(m).includes("order.created")).length;
@@ -390,7 +390,7 @@ describe("QA probes — API", () => {
     const auth = { authorization: `Bearer ${token}` };
     const a = JSON.parse((await order(ctx.slug, { type: "BALCAO", customerName: "Ana", items: [{ productId: ctx.productId, quantity: 2, additionalIds: [ctx.additionalId] }] })).body);
     const b = JSON.parse((await order(ctx.slug, { type: "BALCAO", items: [{ productId: ctx.productId, quantity: 1 }] })).body);
-    await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${b.orderId}/cancel` });
+    await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${b.orderId}/cancel`, headers: orderTokenHeader(b.orderId) });
 
     const pending = JSON.parse((await app.inject({ method: "GET", url: "/api/device/orders/pending", headers: auth })).body).orders;
     expect(pending.map((o: { id: string }) => o.id)).toEqual([a.orderId]);

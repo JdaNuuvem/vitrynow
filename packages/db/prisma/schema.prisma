@@ -218,6 +218,8 @@ model ProductAdditional {
 
 model Order {
   id            String      @id @default(cuid())
+  // NG-16: SHA-256 do token de acesso do cliente (cardápio público). O token em si só existe na resposta da criação.
+  publicTokenHash String? @unique
   storeId       String
   store         Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
   code          String // sequencial legível por loja, ex. "0007"

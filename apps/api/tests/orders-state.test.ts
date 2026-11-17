@@ -2,7 +2,7 @@
 // Mercado Pago é SEMPRE mockado.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { login, makeApp, registerStore, resetDb } from "./helpers";
+import { login, makeApp, registerStore, resetDb, orderTokenHeader } from "./helpers";
 import { subscribe } from "../src/realtime/hub";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
@@ -76,7 +76,7 @@ describe("API-02 — estados do pedido", () => {
   const cancel = (cookie: string, id: string, reason?: Record<string, unknown>) =>
     app.inject({ method: "POST", url: `/api/orders/${id}/cancel`, headers: { cookie }, payload: reason ? { reason } : {} });
   const undo = (cookie: string, id: string) => app.inject({ method: "POST", url: `/api/orders/${id}/undo`, headers: { cookie } });
-  const customerCancel = (slug: string, id: string) => app.inject({ method: "POST", url: `/stores/${slug}/orders/${id}/cancel` });
+  const customerCancel = (slug: string, id: string) => app.inject({ method: "POST", url: `/stores/${slug}/orders/${id}/cancel`, headers: orderTokenHeader(id) });
 
   // ───────────── Avançar ─────────────
   it("BALCAO percorre PENDENTE→…→CONCLUIDO e grava autor/origem no histórico; DELIVERY passa por SAIU_PARA_ENTREGA", async () => {
@@ -503,7 +503,7 @@ describe("API-02 — estados do pedido", () => {
       const res = await cancel(ctx.cookie, id, { code, text: "nota interna do dono", customerMessage: hostil });
       expect(res.statusCode, code).toBe(200);
       expect(json(res).order.cancel.customerMessage).toBe(esperado);
-      const publico = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status` }));
+      const publico = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status`, headers: orderTokenHeader(id) }));
       expect(publico.cancelReason.customerMessage).toBe(esperado);
       // Nada do texto hostil nem da nota interna chega ao cliente; a nota continua só no painel.
       expect(JSON.stringify(publico)).not.toMatch(/golpe|0800|nota interna/);
@@ -518,7 +518,7 @@ describe("API-02 — estados do pedido", () => {
     const id = await paidOrder(ctx);
     refundPayment.mockRejectedValueOnce(new Error("timeout"));
     expect((await customerCancel(ctx.slug, id)).statusCode).toBe(200);
-    const status = () => app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status` }).then(json);
+    const status = () => app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status`, headers: orderTokenHeader(id) }).then(json);
     // Estorno em andamento: o pedido AINDA não está cancelado (ADR-0007 §5.2), então não há motivo a mostrar.
     expect(await status()).toMatchObject({ orderStatus: "PENDENTE", cancelReason: null });
     refundPayment.mockResolvedValue(undefined);
@@ -533,10 +533,10 @@ describe("API-02 — estados do pedido", () => {
   it("payment-status do checkout indica terminal e o motivo quando o pedido foi cancelado", async () => {
     const ctx = await setup();
     const id = await newOrder(ctx);
-    const before = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status` }));
+    const before = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status`, headers: orderTokenHeader(id) }));
     expect(before).toMatchObject({ orderStatus: "PENDENTE", terminal: false, cancelReason: null });
     await cancel(ctx.cookie, id, { code: "ITEM_EM_FALTA" });
-    const after = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status` }));
+    const after = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status`, headers: orderTokenHeader(id) }));
     expect(after).toMatchObject({ orderStatus: "CANCELADO", terminal: true, cancelReason: { customerMessage: "Item indisponível no momento.", moneyLine: null } });
   });
 

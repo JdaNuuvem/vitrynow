@@ -7,7 +7,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { subscribe } from "../src/realtime/hub";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { makeApp, registerStore, resetDb, orderTokenHeader } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -101,7 +101,7 @@ describe("C5 — estorno × pedido, com barreira de linha", () => {
     app.inject({ method: "POST", url: `/api/orders/${id}/cancel`, headers: { cookie: l.cookie }, payload: { reason: { code: "ITEM_EM_FALTA" } } });
   const transicao = (l: Loja, id: string, to: string) =>
     app.inject({ method: "POST", url: `/api/orders/${id}/transition`, headers: { cookie: l.cookie }, payload: { to } });
-  const cancelarCliente = (l: Loja, id: string) => app.inject({ method: "POST", url: `/stores/${l.store.slug}/orders/${id}/cancel` });
+  const cancelarCliente = (l: Loja, id: string) => app.inject({ method: "POST", url: `/stores/${l.store.slug}/orders/${id}/cancel`, headers: orderTokenHeader(id) });
 
   // Estados proibidos: dinheiro devolvido com pedido entregue/ativo, ou pedido cancelado com dinheiro retido.
   async function invariante(orderId: string, contexto: string) {

@@ -2,8 +2,33 @@ import { prisma } from "@meucardapio/db";
 import { buildApp } from "../src/app";
 import { assertSafeToReset } from "./dbGuard";
 
+// NG-16: o token do pedido só existe na resposta da criação. Os testes que depois consultam/cancelam como cliente
+// precisam dele: este gancho (SÓ no app de teste, nunca em produção) guarda o token de cada pedido criado.
+const orderTokens = new Map<string, string>();
+
+export function orderTokenHeader(orderId: string): Record<string, string> {
+  const token = orderTokens.get(orderId);
+  return token ? { "x-order-token": token } : {};
+}
+
+export function orderTokenOf(orderId: string): string | undefined {
+  return orderTokens.get(orderId);
+}
+
 export function makeApp() {
-  return buildApp();
+  const app = buildApp();
+  app.addHook("onSend", async (request, reply, payload) => {
+    if (request.method === "POST" && reply.statusCode === 201 && /^\/stores\/[^/]+\/orders$/.test(request.url.split("?")[0]) && typeof payload === "string") {
+      try {
+        const body = JSON.parse(payload) as { orderId?: string; token?: string };
+        if (body.orderId && body.token) orderTokens.set(body.orderId, body.token);
+      } catch {
+        // resposta que não é JSON: nada a guardar
+      }
+    }
+    return payload;
+  });
+  return app;
 }
 
 // Limpa todas as tabelas entre testes (ordem respeita FKs). Só roda contra meucardapio_test
