@@ -83,7 +83,7 @@ while IFS= read -r l; do case "$l" in FALHA*) bad "${l#FALHA }";; AVISO*) echo "
 
 # ---------- helpers de aplicação ----------
 apply() { # db nome... -> aplica o conjunto de migrações via prisma migrate deploy
-  local db="$1"; shift; local s="$TMP/set_$RANDOM$RANDOM"; mkdir -p "$s/migrations"
+  local db="$1"; shift; local s="$TMP/set_$RANDOM$RANDOM"; mkdir -p "$s/migrations"; LAST_SET="$s"
   G show "$BASE:packages/db/prisma/schema.prisma" > "$s/schema.prisma"
   cp "$TMP/union/migration_lock.toml" "$s/migrations/"
   for n in "$@"; do cp -r "$TMP/union/$n" "$s/migrations/$n"; done
@@ -112,6 +112,15 @@ note_hash() { # db rótulo -> guarda o dump (sem comentários) e os dois hashes 
 # ---------- S1 / S3: banco novo ----------
 echo "== S1 banco NOVO: base + todas as novas"
 D="$(newdb s1)"; if apply "$D" "${ALL[@]}"; then ok "aplicou ${#ALL[@]} migrações em ordem alfabética"; note_hash "$D" "S1-novo"; else bad "S1 falhou"; tail -8 "$TMP/last.log"; fi
+# Drift: o banco migrado tem de coincidir com o schema.prisma do branch (o CI usa a mesma checagem). Índice por
+# expressão (ex.: lower(email)) não é representável no Prisma: se ele aparecer como drift, o CI vai reprovar.
+if [ ${#REFS[@]} -eq 1 ]; then
+  G show "${REFS[0]}:packages/db/prisma/schema.prisma" > "$TMP/schema_ref.prisma" 2>/dev/null
+  ( cd "$ROOT" && pnpm --filter @meucardapio/db exec prisma migrate diff --from-url "postgresql://meucardapio:meucardapio@127.0.0.1:$PORT/$D?schema=public" --to-schema-datamodel "$(cygpath -m "$TMP/schema_ref.prisma")" --exit-code ) > "$TMP/drift.log" 2>&1; rc=$?
+  if [ "$rc" = 0 ]; then ok "drift: banco migrado == schema.prisma de ${REFS[0]}"
+  elif [ "$rc" = 2 ]; then bad "DRIFT: o banco migrado difere do schema.prisma de ${REFS[0]} (o ci.ps1 reprovaria):"; sed "s/^/     /" "$TMP/drift.log" | head -14
+  else bad "drift: prisma migrate diff falhou (exit $rc)"; tail -5 "$TMP/drift.log"; fi
+else echo "  [n/a]   drift: só é checado com UMA ref (use uma branch por vez)"; fi
 
 echo "== S3 banco com DADOS na base + todas as novas (conferindo backfills)"
 D="$(newdb s3)"; apply "$D" "${BASE_NAMES[@]}" || { bad "S3: base não aplicou"; tail -5 "$TMP/last.log"; }
@@ -151,17 +160,17 @@ for N in "${NEW[@]}"; do
 done
 
 # ---------- S6: dados "no meio do caminho" (ganchos por migração) ----------
-# Para uma migração N que tenha scripts/migrations-check/pre-N.sql: aplica tudo que ordena ANTES de N,
+# Para uma migração N que tenha scripts/migrations-check/pre-N.sql (opcional) e/ou post-N.sql: aplica tudo que ordena ANTES de N,
 # semeia os dados de pre-N.sql (válidos naquele schema intermediário), aplica o resto e roda post-N.sql,
 # que imprime linhas "nome|t/f|detalhe" como o verify.sql. Prova backfills que o schema da base não comporta.
 for N in "${NEW[@]}"; do
-  [ -f "$HERE/pre-$N.sql" ] || continue
+  [ -f "$HERE/pre-$N.sql" ] || [ -f "$HERE/post-$N.sql" ] || continue   # pre é opcional (semeia dados intermediários); post confere
   [ -n "${ONLY:-}" ] && [ "$N" != "$ONLY" ] && continue
   echo "== S6 dados intermediários antes de: $N"
   BEFORE=(); for m in "${ALL[@]}"; do [[ "$m" < "$N" ]] && BEFORE+=("$m"); done
   D="$(newdb s6)"
   if ! apply "$D" "${BEFORE[@]}"; then bad "S6: as ${#BEFORE[@]} migrações anteriores a $N não aplicaram"; tail -6 "$TMP/last.log"; continue; fi
-  "${PSQL[@]}" -d "$D" < "$HERE/pre-$N.sql" > /dev/null || { bad "S6: pre-$N.sql falhou"; continue; }
+  if [ -f "$HERE/pre-$N.sql" ]; then "${PSQL[@]}" -d "$D" < "$HERE/pre-$N.sql" > /dev/null || { bad "S6: pre-$N.sql falhou"; continue; }; fi
   if apply "$D" "${ALL[@]}"; then
     ok "S6 aplicou $N e as seguintes sobre dados intermediários"
     if [ -f "$HERE/post-$N.sql" ]; then
@@ -173,6 +182,33 @@ for N in "${NEW[@]}"; do
     fi
     note_hash "$D" "S6-$N"
   else bad "S6: $N falhou sobre dados intermediários"; tail -10 "$TMP/last.log"; fi
+done
+
+# ---------- S7: dados em CONFLITO (ganchos conflict-<N>.sql, conflict-<N>.expect, conflict-post-<N>.sql, conflict-fix-<N>.sql) ----------
+# A migração N tem de FALHAR com a mensagem esperada, não alterar nada (conflict-post confere), e o caminho do operador
+# (corrigir os dados, `prisma migrate resolve --rolled-back N`, reaplicar) tem de funcionar. É o que o runbook vai dizer.
+for N in "${NEW[@]}"; do
+  [ -f "$HERE/conflict-$N.sql" ] || continue
+  [ -n "${ONLY:-}" ] && [ "$N" != "$ONLY" ] && continue
+  echo "== S7 conflito de dados em: $N"
+  BEFORE=(); for m in "${ALL[@]}"; do [[ "$m" < "$N" ]] && BEFORE+=("$m"); done
+  D="$(newdb s7)"
+  if ! apply "$D" "${BEFORE[@]}"; then bad "S7: as migrações anteriores a $N não aplicaram"; tail -6 "$TMP/last.log"; continue; fi
+  "${PSQL[@]}" -d "$D" < "$HERE/conflict-$N.sql" > /dev/null || { bad "S7: conflict-$N.sql falhou"; continue; }
+  if apply "$D" "${ALL[@]}"; then bad "S7: $N APLICOU sobre dados em conflito (deveria falhar e não alterar nada)"; continue; fi
+  ok "S7 $N falhou sobre dados em conflito, como esperado"
+  if [ -f "$HERE/conflict-$N.expect" ] && grep -qF "$(cat "$HERE/conflict-$N.expect")" "$TMP/last.log"; then ok "S7 mensagem de erro lista os conflitos ($(cat "$HERE/conflict-$N.expect"))"
+  else bad "S7: a mensagem de erro não contém o esperado ($(cat "$HERE/conflict-$N.expect" 2>/dev/null))"; grep -iE "ERROR|exception|E-mails" "$TMP/last.log" | head -4 | cut -c1-200; fi
+  if [ -f "$HERE/conflict-post-$N.sql" ]; then
+    out="$("${PSQL[@]}" -d "$D" -A -t -F '|' < "$HERE/conflict-post-$N.sql" 2>&1)" || { bad "S7: conflict-post-$N.sql falhou: $out"; continue; }
+    while IFS='|' read -r name okv det; do [ -z "$name" ] && continue; case "$okv" in t) ok "S7 $N · $name";; f) bad "S7 $N · $name: $det";; esac; done <<< "$out"
+  fi
+  if [ -f "$HERE/conflict-fix-$N.sql" ]; then
+    "${PSQL[@]}" -d "$D" < "$HERE/conflict-fix-$N.sql" > /dev/null || { bad "S7: conflict-fix-$N.sql falhou"; continue; }
+    ( cd "$ROOT" && DATABASE_URL="postgresql://meucardapio:meucardapio@127.0.0.1:$PORT/$D?schema=public" pnpm --filter @meucardapio/db exec prisma migrate resolve --rolled-back "$N" --schema "$(cygpath -m "$LAST_SET")/schema.prisma" ) > "$TMP/resolve.log" 2>&1 || { bad "S7: migrate resolve --rolled-back falhou"; tail -4 "$TMP/resolve.log"; continue; }
+    if apply "$D" "${ALL[@]}"; then ok "S7 recuperação do operador: dados corrigidos + resolve --rolled-back + deploy aplicou $N"; note_hash "$D" "S7-recuperado"
+    else bad "S7: depois da correção + resolve, o deploy ainda falhou"; tail -8 "$TMP/last.log"; fi
+  fi
 done
 
 # ---------- S5: schema final igual em todos os cenários ----------
