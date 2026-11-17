@@ -16,16 +16,20 @@ export type ResumeRecord = {
   paymentMethod: ResumePaymentMethod;
   pix: { pixQrCode: string; pixQrCodeBase64: string | null } | null; // só com PIX
   pixExpiresAt: number | null; // ms desde 1970; só com PIX
+  // true = o prazo veio do servidor (pode ser mostrado: "Vale até HH:MM"); false = é só o prazo de reserva local, que
+  // serve para ESCONDER o QR e nunca vira hora na tela (hora inventada). Só com PIX.
+  pixExpiryKnown: boolean | null;
 };
 
 export type ResumeReading = { kind: "valid"; record: ResumeRecord } | { kind: "expired"; code: string };
 
 export const RESUME_MAX_AGE_MS = 24 * 60 * 60 * 1000;
-// Se a API não informar o prazo do PIX, vale este tempo a partir do pedido (o payload nunca fica guardado para sempre).
-export const RESUME_DEFAULT_PIX_MS = 30 * 60 * 1000;
+// Se a API não informar o prazo do PIX (versão antiga ou erro), o QR só some pelo teto de 24 h (Atlas): a tela nunca
+// inventa um prazo menor nem mostra hora. O servidor passa a fixar 30 min e a sempre devolver `expiresAt`.
+export const RESUME_DEFAULT_PIX_MS = RESUME_MAX_AGE_MS;
 
 const SCHEMA_VERSION = 1;
-const ALLOWED_KEYS = ["v", "code", "placedAt", "totalCents", "paymentMethod", "pix", "pixExpiresAt"];
+const ALLOWED_KEYS = ["v", "code", "placedAt", "totalCents", "paymentMethod", "pix", "pixExpiresAt", "pixExpiryKnown"];
 const ALLOWED_PIX_KEYS = ["pixQrCode", "pixQrCodeBase64"];
 const CODE_PATTERN = /^[0-9A-Za-z-]{1,16}$/;
 const PIX_COPY_PATTERN = /^[\x20-\x7E]{1,1024}$/; // texto ASCII imprimível do "copia e cola"
@@ -50,7 +54,7 @@ const isTimestamp = (value: unknown): value is number => typeof value === "numbe
 /** Valida o objeto INTEIRO. Qualquer desvio (campo a mais, tipo errado, método inventado, payload sem PIX) devolve null. */
 export function parseResume(raw: unknown): ResumeRecord | null {
   if (!isPlainObject(raw) || !hasOnly(raw, ALLOWED_KEYS) || raw.v !== SCHEMA_VERSION) return null;
-  const { code, placedAt, totalCents, paymentMethod, pix, pixExpiresAt } = raw;
+  const { code, placedAt, totalCents, paymentMethod, pix, pixExpiresAt, pixExpiryKnown } = raw;
   if (typeof code !== "string" || !CODE_PATTERN.test(code)) return null;
   if (!isTimestamp(placedAt)) return null;
   if (typeof totalCents !== "number" || !Number.isInteger(totalCents) || totalCents < 0 || totalCents > MAX_REASONABLE_CENTS) return null;
@@ -60,7 +64,8 @@ export function parseResume(raw: unknown): ResumeRecord | null {
     // o payload só existe com PIX: qualquer vestígio dele numa chave "OUTRO" é adulteração
     if (pix !== undefined && pix !== null) return null;
     if (pixExpiresAt !== undefined && pixExpiresAt !== null) return null;
-    return { code, placedAt, totalCents, paymentMethod, pix: null, pixExpiresAt: null };
+    if (pixExpiryKnown !== undefined && pixExpiryKnown !== null) return null;
+    return { code, placedAt, totalCents, paymentMethod, pix: null, pixExpiresAt: null, pixExpiryKnown: null };
   }
 
   if (!isPlainObject(pix) || !hasOnly(pix, ALLOWED_PIX_KEYS)) return null;
@@ -69,7 +74,10 @@ export function parseResume(raw: unknown): ResumeRecord | null {
   if (typeof copy !== "string" || !PIX_COPY_PATTERN.test(copy)) return null;
   if (image !== null && image !== undefined && (typeof image !== "string" || image.length > MAX_BASE64_LENGTH || !BASE64_PATTERN.test(image))) return null;
   if (!isTimestamp(pixExpiresAt)) return null;
-  return { code, placedAt, totalCents, paymentMethod, pix: { pixQrCode: copy, pixQrCodeBase64: typeof image === "string" ? image : null }, pixExpiresAt };
+  // o prazo vem depois do pedido e no máximo 24 h depois (Nightingale): fora disso é adulteração
+  if (pixExpiresAt <= placedAt || pixExpiresAt > placedAt + RESUME_MAX_AGE_MS) return null;
+  if (typeof pixExpiryKnown !== "boolean") return null;
+  return { code, placedAt, totalCents, paymentMethod, pix: { pixQrCode: copy, pixQrCodeBase64: typeof image === "string" ? image : null }, pixExpiresAt, pixExpiryKnown };
 }
 
 export function clearResume(slug: string, storage: Storage | null = sessionStore()) {
@@ -95,6 +103,7 @@ export function saveResume(
     paymentMethod: "PIX",
     pix: { pixQrCode: order.pix.pixQrCode, pixQrCodeBase64: order.pix.pixQrCodeBase64 ?? null },
     pixExpiresAt: order.pixExpiresAt ?? order.placedAt + RESUME_DEFAULT_PIX_MS,
+    pixExpiryKnown: order.pixExpiresAt != null,
   };
   // o que vai para o storage passa pelo MESMO esquema de leitura: o que não valida não é gravado
   if (!parseResume(record)) return false;

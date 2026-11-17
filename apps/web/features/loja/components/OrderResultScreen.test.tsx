@@ -264,6 +264,13 @@ describe("OrderResultScreen: tela recuperada depois de recarregar (WEB-33b, UI-V
     expect(screen.getByRole("link", { name: "Falar com a loja no WhatsApp" })).toHaveAttribute("href", "https://wa.me/5521999999999?text=Pedido%20%230123");
   });
 
+  it("sem prazo do servidor: mostra o QR e NÃO mostra 'Vale até' (nenhuma hora inventada)", () => {
+    setup({ code: "0123", resume: "valid", trackingUnavailable: true, pixData: pix, pixExpiresAt: null, summary: null });
+    expect(screen.getByAltText("QR Code PIX")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copiar código PIX" })).toBeInTheDocument();
+    expect(screen.queryByText(/Vale até/)).not.toBeInTheDocument();
+  });
+
   it("PIX válido sem WhatsApp: só o texto, sem botão", () => {
     setup({ code: "0123", resume: "valid", trackingUnavailable: true, pixData: pix, pixExpiresAt: expires, summary: null, whatsapp: null });
     expect(screen.queryByRole("link")).not.toBeInTheDocument();

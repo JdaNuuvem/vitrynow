@@ -92,7 +92,8 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
         summary: null,
         trackingUnavailable: true,
         resume: "valid",
-        pixExpiresAt: record.pixExpiresAt,
+        // só o prazo que o SERVIDOR deu vira "Vale até"; o de reserva local apenas esconde o QR quando vence
+        pixExpiresAt: record.pixExpiryKnown ? record.pixExpiresAt : null,
       },
     );
   }, [slug]);

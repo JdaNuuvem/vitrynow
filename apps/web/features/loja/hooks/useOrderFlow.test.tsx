@@ -299,7 +299,7 @@ describe("useOrderFlow: voltar ao QR depois de recarregar (WEB-33b)", () => {
   const saved = (over: Record<string, unknown> = {}) =>
     sessionStorage.setItem(
       KEY,
-      JSON.stringify({ v: 1, code: "0123", placedAt: NOW, totalCents: 4500, paymentMethod: "PIX", pix: { pixQrCode: "000201PIXCODE", pixQrCodeBase64: "QUJD" }, pixExpiresAt: NOW + 20 * 60_000, ...over }),
+      JSON.stringify({ v: 1, code: "0123", placedAt: NOW, totalCents: 4500, paymentMethod: "PIX", pix: { pixQrCode: "000201PIXCODE", pixQrCodeBase64: "QUJD" }, pixExpiresAt: NOW + 20 * 60_000, pixExpiryKnown: true, ...over }),
     );
   beforeEach(() => {
     sessionStorage.clear();
@@ -330,6 +330,12 @@ describe("useOrderFlow: voltar ao QR depois de recarregar (WEB-33b)", () => {
     expect(JSON.parse(sessionStorage.getItem(KEY) as string).pixExpiresAt).toBe(Date.parse(expiresAt));
   });
 
+  it("sem expiresAt da API, a chave guarda o prazo de reserva marcado como não informado", async () => {
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await placePixOrder(t);
+    expect(JSON.parse(sessionStorage.getItem(KEY) as string).pixExpiryKnown).toBe(false);
+  });
+
   it("pedido em dinheiro não guarda nada", async () => {
     const t = setup([ok({ awaitingPayment: false, paymentStatus: "APROVADO" })], ok({ orderId: "o2", code: "0043", token: TOKEN }));
     await placePixOrder(t);
@@ -352,6 +358,21 @@ describe("useOrderFlow: voltar ao QR depois de recarregar (WEB-33b)", () => {
     expect(JSON.stringify(t.result.current.placed)).not.toMatch(/não encontr|não existe/i);
   });
 
+  it("prazo vindo do servidor aparece na tela recuperada; prazo só de reserva NÃO (hora inventada)", async () => {
+    saved();
+    const known = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await act(async () => {});
+    expect(known.result.current.placed?.pixExpiresAt).toBe(NOW + 20 * 60_000);
+    known.unmount();
+
+    saved({ pixExpiryKnown: false });
+    const reserve = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await act(async () => {});
+    expect(reserve.result.current.placed?.resume).toBe("valid"); // o QR continua à mostra
+    expect(reserve.result.current.placed?.pixExpiresAt).toBeNull(); // mas sem hora
+    expect(reserve.result.current.pendingPix?.expiresAt).toBe(NOW + 20 * 60_000); // o prazo de reserva só decide esconder o QR
+  });
+
   it("na tela recuperada recarregar de novo é seguro: sem aviso do navegador", async () => {
     saved();
     const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
@@ -362,7 +383,7 @@ describe("useOrderFlow: voltar ao QR depois de recarregar (WEB-33b)", () => {
   });
 
   it("UI-V-21: recarregar com PIX vencido mostra 'venceu' (sem QR) e apaga a chave", async () => {
-    saved({ pixExpiresAt: NOW - 1000 });
+    saved({ placedAt: NOW - 3_600_000, pixExpiresAt: NOW - 1000 });
     const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
     await act(async () => {});
     expect(t.result.current.placed).toMatchObject({ code: "0123", resume: "expired", pixData: null });

@@ -4,7 +4,7 @@ import { clearResume, hasValidPixFor, parseResume, readResume, RESUME_DEFAULT_PI
 const NOW = Date.parse("2026-11-17T12:00:00Z");
 const pix = { pixQrCode: "00020126580014br.gov.bcb.pix0136abcd", pixQrCodeBase64: "QUJDREVG" };
 const order = { code: "0123", totalCents: 4500, placedAt: NOW, pix, pixExpiresAt: NOW + 30 * 60_000 };
-const valid = () => ({ v: 1, code: "0123", placedAt: NOW, totalCents: 4500, paymentMethod: "PIX", pix: { ...pix }, pixExpiresAt: NOW + 30 * 60_000 });
+const valid = () => ({ v: 1, code: "0123", placedAt: NOW, totalCents: 4500, paymentMethod: "PIX", pix: { ...pix }, pixExpiresAt: NOW + 30 * 60_000, pixExpiryKnown: true });
 
 beforeEach(() => sessionStorage.clear());
 
@@ -12,7 +12,7 @@ describe("pixResume: o que é guardado (UI-V-23)", () => {
   it("só código, hora, total, paymentMethod, payload do PIX e prazo; nunca token, orderId nem dado do cliente", () => {
     expect(saveResume("loja", order)).toBe(true);
     const raw = sessionStorage.getItem(resumeKey("loja")) as string;
-    expect(Object.keys(JSON.parse(raw)).sort()).toEqual(["code", "paymentMethod", "pix", "pixExpiresAt", "placedAt", "totalCents", "v"]);
+    expect(Object.keys(JSON.parse(raw)).sort()).toEqual(["code", "paymentMethod", "pix", "pixExpiresAt", "pixExpiryKnown", "placedAt", "totalCents", "v"]);
     expect(Object.keys(JSON.parse(raw).pix).sort()).toEqual(["pixQrCode", "pixQrCodeBase64"]);
     expect(raw).not.toMatch(/token|orderId|mco_|customer|phone|name|address/i);
   });
@@ -31,9 +31,16 @@ describe("pixResume: o que é guardado (UI-V-23)", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("sem prazo da API, vale o prazo padrão a partir do pedido", () => {
+  it("sem prazo da API o QR só some pelo teto de 24 h (nunca um prazo menor inventado) e fica MARCADO como não informado pelo servidor", () => {
     saveResume("loja", { ...order, pixExpiresAt: null });
-    expect(JSON.parse(sessionStorage.getItem(resumeKey("loja")) as string).pixExpiresAt).toBe(NOW + RESUME_DEFAULT_PIX_MS);
+    const saved = JSON.parse(sessionStorage.getItem(resumeKey("loja")) as string);
+    expect(saved.pixExpiresAt).toBe(NOW + RESUME_DEFAULT_PIX_MS);
+    expect(saved.pixExpiryKnown).toBe(false);
+  });
+
+  it("com prazo da API, fica marcado como informado pelo servidor", () => {
+    saveResume("loja", order);
+    expect(JSON.parse(sessionStorage.getItem(resumeKey("loja")) as string).pixExpiryKnown).toBe(true);
   });
 
   it("o que não passa no esquema de leitura nem é gravado (código com HTML)", () => {
@@ -71,6 +78,11 @@ describe("pixResume: leitura com validação do objeto inteiro (UI-V-28)", () =>
     ["payload com método OUTRO", { ...valid(), paymentMethod: "OUTRO" }],
     ["PIX sem payload", { ...valid(), pix: null }],
     ["PIX sem prazo", { ...valid(), pixExpiresAt: null }],
+    ["prazo antes do pedido", { ...valid(), pixExpiresAt: NOW - 1000 }],
+    ["prazo igual à hora do pedido", { ...valid(), pixExpiresAt: NOW }],
+    ["prazo mais de 24 h depois do pedido", { ...valid(), pixExpiresAt: NOW + RESUME_MAX_AGE_MS + 1 }],
+    ["PIX sem a marca do prazo", (() => { const { pixExpiryKnown: _k, ...rest } = valid(); return rest; })()],
+    ["marca do prazo em texto", { ...valid(), pixExpiryKnown: "true" }],
     ["prazo em texto", { ...valid(), pixExpiresAt: "2026-11-17T12:30:00Z" }],
     ["código com HTML", { ...valid(), code: "<img src=x onerror=alert(1)>" }],
     ["código longo demais", { ...valid(), code: "1".repeat(17) }],
@@ -104,6 +116,7 @@ describe("pixResume: leitura com validação do objeto inteiro (UI-V-28)", () =>
     expect(parseResume({ v: 1, code: "0123", placedAt: NOW, totalCents: 4500, paymentMethod: "OUTRO" })).not.toBeNull();
     expect(parseResume({ v: 1, code: "0123", placedAt: NOW, totalCents: 4500, paymentMethod: "OUTRO", pix })).toBeNull(); // só o payload
     expect(parseResume({ v: 1, code: "0123", placedAt: NOW, totalCents: 4500, paymentMethod: "OUTRO", pixExpiresAt: NOW + 1 })).toBeNull(); // só o prazo
+    expect(parseResume({ v: 1, code: "0123", placedAt: NOW, totalCents: 4500, paymentMethod: "OUTRO", pixExpiryKnown: true })).toBeNull(); // só a marca
     expect(parseResume({ ...valid(), pix: { ...pix, pixQrCodeBase64: 'AAAA" onerror="x' } })).toBeNull();
     expect(parseResume({ ...valid(), pix: { ...pix, pixQrCodeBase64: "javascript:alert(1)" } })).toBeNull();
   });
@@ -122,13 +135,19 @@ describe("pixResume: validade", () => {
     expect(readResume("loja", NOW + 31 * 60_000)).toBeNull(); // 2ª leitura: nada
   });
 
+  it("sem prazo da API (reserva de 24 h) a chave continua valendo até perto do teto, sem hora inventada de 30 min", () => {
+    saveResume("loja", { ...order, pixExpiresAt: null });
+    expect(readResume("loja", NOW + 31 * 60_000)?.kind).toBe("valid");
+    expect(readResume("loja", NOW + 23 * 3_600_000)?.kind).toBe("valid");
+  });
+
   it("no segundo exato do prazo já vale como vencido", () => {
     saveResume("loja", order);
     expect(readResume("loja", order.pixExpiresAt)?.kind).toBe("expired");
   });
 
   it("mais de 24 h: some sem tela (null) e apaga", () => {
-    saveResume("loja", { ...order, pixExpiresAt: NOW + 3 * RESUME_MAX_AGE_MS });
+    saveResume("loja", { ...order, pixExpiresAt: NOW + RESUME_MAX_AGE_MS });
     expect(readResume("loja", NOW + RESUME_MAX_AGE_MS + 1)).toBeNull();
     expect(sessionStorage.getItem(resumeKey("loja"))).toBeNull();
   });
