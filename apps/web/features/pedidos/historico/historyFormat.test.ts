@@ -51,6 +51,8 @@ describe("telefone na lista: sempre mascarado", () => {
   it("só aceita telefone COM máscara; o completo nunca é exibido", () => {
     expect(safePhone("(11) ••••-5678")).toBe("(11) ••••-5678");
     expect(safePhone("(11) ****-5678")).toBe("(11) ****-5678");
+    expect(safePhone("*******5678")).toBe("*******5678"); // formato REAL da API (maskPhone em orders.view.ts)
+    expect(safePhone("****")).toBe("****");
     expect(safePhone("11987655678")).toBeNull();
     expect(safePhone("(11) 98765-5678")).toBeNull();
     expect(safePhone("")).toBeNull();
