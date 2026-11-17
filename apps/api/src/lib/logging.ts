@@ -181,7 +181,9 @@ const HEADER_LINE = /\b(proxy-authorization|authorization|set-cookie|cookie)(\s*
 //  1b) senha SEM aspas e com espaço (`password=ab cd ef`): vai até o fim da linha ou do parâmetro (`&`, `,`, `;`, `}`); redige a mais de propósito (SEC-33d)
 const PASSWORD_UNQUOTED = /\b((?:password|passwd|pwd|senha)\s*[:=]\s*)([^\s"'\r\n&,};][^\r\n&,};"']*)/gi;
 //  2) `nome=valor` / `"nome":"valor"` com valor entre aspas (aceita espaço e aspas ESCAPADAS dentro) ou sem aspas; inclui `token=`, `secret=` e `"cookie":"…"` soltos em texto
-const NAMED_VALUE = /\b((?:access_token|refresh_token|client_secret|id_token|api[-_]?key|password|passwd|pwd|senha|token|secret|cookie|set-cookie|authorization|x-order-token|x-mfa-challenge|x-admin-token)["']?\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|(?:(?:bearer|basic|digest)\s+)?[^\s"'&,}]+)/gi;
+const NAMED_VALUE = /\b((?:access_token|refresh_token|client_secret|id_token|api[-_]?key|password|passwd|pwd|senha|token|secret|cookie|set-cookie|authorization|x-order-token|x-mfa-challenge|x-admin-token)\\?["']?\s*[:=]\s*)(\\"(?:(?!\\").)*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|(?:(?:bearer|basic|digest)\s+)?[^\s"'&,}]+)/gi;
+//  2a) JSON serializado DUAS vezes (`{\"access_token\":\"X\"}`, o que um erro de biblioteca produz ao pôr o corpo em texto): a barra antes da aspa do nome e a do valor
+//      (`\"…\"`) entram no padrão acima (SEC-33d, resto (a) do Sun Tzu). Escape de 3 ou mais níveis fica como resíduo aceito.
 //  2b) credencial na URL (`postgres://usuario:SENHA@host`): é o que um erro de conexão do banco coloca em texto (SEC-33d)
 const URL_CREDENTIALS = /\b([a-z][a-z0-9+.-]{1,20}:\/\/[^\/\s:@]*:)[^@\s\/]+(@)/gi;
 //  3) esquema solto (`Bearer abc`), JWT puro (três partes em base64url, a 1ª começa com `eyJ`), `?code=`/`&state=` do OAuth
@@ -198,7 +200,7 @@ export function scrubText(text: string): string {
     .replace(URL_CREDENTIALS, (_match, head: string, at: string) => `${head}[redigido]${at}`)
     .replace(PASSWORD_UNQUOTED, (_match, prefix: string) => `${prefix}[redigido]`)
     .replace(NAMED_VALUE, (_match, prefix: string, value: string) => {
-      const quote = value.startsWith('"') ? '"' : value.startsWith("'") ? "'" : "";
+      const quote = value.startsWith('\\"') ? '\\"' : value.startsWith('"') ? '"' : value.startsWith("'") ? "'" : "";
       return `${prefix}${quote}[redigido]${quote}`;
     })
     .replace(SCHEME, (_match, scheme: string) => `${scheme} [redigido]`)

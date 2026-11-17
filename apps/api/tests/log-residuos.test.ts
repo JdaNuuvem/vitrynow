@@ -72,6 +72,38 @@ describe("SEC-33d: formatos de segredo em texto que ainda passavam", () => {
   });
 });
 
+// JSON serializado DUAS vezes: o que um erro de biblioteca produz ao pôr o corpo da requisição em texto (resto (a) do Sun Tzu).
+describe("SEC-33d: JSON duplamente escapado em texto", () => {
+  const esc = (json: string) => json.split(String.fromCharCode(34)).join(String.fromCharCode(92, 34)); // " -> \"
+  const casosEscapados: [string, string, string][] = [
+    ["access_token", esc('{"access_token":"SEG-H1"}'), "SEG-H1"],
+    ["password", esc('{"password":"SEG-H2","nome":"Maria"}'), "SEG-H2"],
+    ["refresh_token com espaços", esc('{ "refresh_token" : "SEG-H3" }'), "SEG-H3"],
+    ["cookie", esc('{"cookie":"sid=SEG-H4; a=b"}'), "SEG-H4"],
+    ["client_secret no meio de um corpo maior", "falha ao chamar o provedor: " + esc('{"grant":"client_credentials","client_secret":"SEG-H5","scope":"pagamentos"}'), "SEG-H5"],
+  ];
+  it.each(casosEscapados)("%s", (_nome, entrada, segredo) => {
+    const saida = scrubText(entrada);
+    expect(saida).not.toContain(segredo);
+    expect(saida).toContain("[redigido]");
+  });
+
+  it("o resto do corpo fica legível e o escape do restante não é quebrado", () => {
+    const saida = scrubText(esc('{"password":"SEG-H2","nome":"Maria"}'));
+    expect(saida).toBe(esc('{"password":"[redigido]","nome":"Maria"}'));
+  });
+
+  it("não cria falso positivo no JSON escapado comum (campos sem nome de segredo) e não custa caro", () => {
+    const comum = esc('{"pedido":"0042","cliente":"Autor Silva","obs":"sem cebola"}');
+    expect(scrubText(comum)).toBe(comum);
+    const adversarial = 'password' + String.fromCharCode(92) + '"' + (String.fromCharCode(92, 34).repeat(900));
+    const t0 = performance.now();
+    scrubText(adversarial);
+    scrubText(("token" + String.fromCharCode(92, 34, 58, 92, 34)).repeat(300));
+    expect(performance.now() - t0).toBeLessThan(50);
+  });
+});
+
 describe("SEC-33d: teto TOTAL de nós na travessia", () => {
   function arvore(profundidade: number, largura: number): Record<string, unknown> {
     const out: Record<string, unknown> = {};
