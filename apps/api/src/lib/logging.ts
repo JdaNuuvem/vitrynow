@@ -51,13 +51,33 @@ export function redactLogUrl(url: string | undefined): string | undefined {
   return `${url.slice(0, queryAt)}?${redacted}${hashAt === -1 ? "" : url.slice(hashAt)}`;
 }
 
+// SEC-31 (ST-70): a redação acima cobre a QUERY, não o CAMINHO. O que vai no caminho (o `orderId` de /stores/:slug/orders/:orderId/payment-status,
+// que é a credencial do cliente; o token de acompanhamento e o `qrToken` da mesa, pelo desenho da API-19/API-22) saía em texto em TODA
+// requisição. Por isso o log leva o MODELO da rota (`/stores/:slug/orders/:orderId/payment-status`), nunca o valor do parâmetro dinâmico.
+// Seguro por padrão: o que passa a ser logado é uma constante do código, então rota nova com segredo no caminho já nasce coberta.
+// Sem rota casada (404), o caminho é de quem chamou e pode ter um segredo digitado: fica só o 1º segmento.
+function unmatchedPath(path: string): string {
+  const [, first = "", ...rest] = path.split("/");
+  const head = BARE_CREDENTIAL.test(first) ? "[redigido]" : first;
+  return rest.length > 0 ? `/${head}/[redigido]` : `/${head}`;
+}
+
+export function routeLogUrl(request: { url?: string; routeOptions?: { url?: string } }): string | undefined {
+  const url = request.url;
+  if (!url) return url;
+  const queryAt = url.indexOf("?");
+  const path = queryAt === -1 ? url : url.slice(0, queryAt);
+  const query = queryAt === -1 ? "" : (redactLogUrl(url) ?? "").slice(queryAt);
+  return `${request.routeOptions?.url ?? unmatchedPath(path)}${query}`;
+}
+
 export function loggerOptions() {
   return {
     redact: { paths: REDACT_PATHS, censor: "[redigido]" },
     serializers: {
-      // mesmo formato do serializador padrão do Fastify (método, URL, host, IP), com a query sem segredos
-      req(request: { method?: string; url?: string; hostname?: string; ip?: string; socket?: { remotePort?: number } }) {
-        return { method: request.method, url: redactLogUrl(request.url), hostname: request.hostname, remoteAddress: request.ip, remotePort: request.socket?.remotePort };
+      // mesmo formato do serializador padrão do Fastify (método, URL, host, IP), com o MODELO da rota e a query sem segredos
+      req(request: { method?: string; url?: string; routeOptions?: { url?: string }; hostname?: string; ip?: string; socket?: { remotePort?: number } }) {
+        return { method: request.method, url: routeLogUrl(request), hostname: request.hostname, remoteAddress: request.ip, remotePort: request.socket?.remotePort };
       },
     },
   };
