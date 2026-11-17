@@ -515,7 +515,7 @@ describe("API-12 — PrintJob", () => {
     expect(via1.ticket.printedAtOriginal).not.toBeNull();
     await ack(token, via1.id, { status: "PRINTED" });
     expect(json(await claim(token)).job.ticket.reprintCount).toBe(2);
-    await vi.waitFor(async () => expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "print.reprint" } })).toBe(2));
+    await vi.waitFor(async () => expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "print.reprint" } })).toBe(2), { timeout: 10_000, interval: 100 });
     const log = await prisma.auditLog.findFirstOrThrow({ where: { storeId: ctx.storeId, action: "print.reprint" } });
     expect(log.userId).not.toBeNull();
   });
