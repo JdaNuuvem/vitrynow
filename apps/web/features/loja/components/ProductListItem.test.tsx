@@ -65,4 +65,16 @@ describe("ProductListItem", () => {
     expect(container.querySelector("img")).not.toBeInTheDocument();
     expect(screen.queryByText("+")).not.toBeInTheDocument();
   });
+
+  it("Espaço também abre o detalhe (o role=button promete Enter e Espaço)", async () => {
+    const { onOpen } = setup();
+    screen.getByRole("button", { name: /Cheeseburguer/ }).focus();
+    await userEvent.keyboard(" ");
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it("carrega o id do produto para o foco poder voltar a ele (WEB-22)", () => {
+    const { container } = setup();
+    expect(container.querySelector('[data-product-id="p1"]')).toBeInTheDocument();
+  });
 });

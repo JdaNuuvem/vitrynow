@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Menu } from "@/core/domain/storefront";
@@ -74,5 +75,43 @@ describe("LojaRoot com o menu vindo do servidor (ADR-0013)", () => {
     render(<LojaRoot slug="boa-massa" />);
     expect(screen.getByText("Carregando...")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// WEB-22 (F2 do Deming): a troca de tela desmonta a lista. Ao fechar o detalhe, a rolagem e o foco voltam ao produto.
+describe("detalhe do produto: devolve rolagem e foco ao fechar", () => {
+  function setupDetail() {
+    // Devolve um valor de propósito: se o efeito repassasse o retorno do scrollTo, o React o chamaria como
+    // função de limpeza e a página quebraria ao fechar o detalhe (visto no navegador).
+    const scrollTo = vi.fn(() => "não é função");
+    vi.stubGlobal("scrollTo", scrollTo);
+    Object.defineProperty(window, "scrollY", { value: 480, configurable: true });
+    render(<LojaRoot slug="boa-massa" initialMenu={menu} />);
+    return scrollTo;
+  }
+
+  it("Voltar devolve o foco ao produto que abriu e a rolagem de onde estava", async () => {
+    const scrollTo = setupDetail();
+    await userEvent.click(screen.getByRole("button", { name: /Calabresa Especial/ }));
+    expect(screen.getByRole("heading", { level: 1, name: "Calabresa Especial" })).toHaveFocus();
+    expect(scrollTo).toHaveBeenLastCalledWith(0, 0);
+
+    await userEvent.click(screen.getByRole("button", { name: "Voltar ao cardápio" }));
+    expect(screen.getByRole("button", { name: /Calabresa Especial/ })).toHaveFocus();
+    expect(scrollTo).toHaveBeenLastCalledWith(0, 480);
+  });
+
+  it("Esc também devolve o foco ao produto", async () => {
+    setupDetail();
+    await userEvent.click(screen.getByRole("button", { name: /Calabresa Especial/ }));
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("button", { name: /Calabresa Especial/ })).toHaveFocus();
+  });
+
+  it("Adicionar devolve o foco ao produto", async () => {
+    setupDetail();
+    await userEvent.click(screen.getByRole("button", { name: /Calabresa Especial/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^Adicionar/ }));
+    expect(screen.getByRole("button", { name: /Calabresa Especial/ })).toHaveFocus();
   });
 });
