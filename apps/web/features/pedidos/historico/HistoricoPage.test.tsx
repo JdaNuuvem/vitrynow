@@ -80,7 +80,7 @@ const row = (id: string, over: Partial<HistoryRow> = {}): HistoryRow => ({
   code: id.padStart(4, "0"),
   createdAt: "2026-11-10T22:05:00Z",
   customerName: "Ana Souza",
-  customerPhone: "(11) ••••-5678",
+  customerPhone: "*******5678",
   hasPhone: true,
   type: "DELIVERY",
   totalCents: 6900,
@@ -150,7 +150,7 @@ describe("HistoricoPage: a lista", () => {
     list.rows = [row("1", { customerName: null }), row("2", { customerName: null, customerPhone: "11987655678" })];
     list.total = 2;
     render(<HistoricoPage />);
-    expect(screen.getByRole("button", { name: "Abrir pedido 0001" })).toHaveTextContent("(11) ••••-5678");
+    expect(screen.getByRole("button", { name: "Abrir pedido 0001" })).toHaveTextContent("*******5678");
     expect(document.body.textContent).not.toContain("11987655678");
   });
 

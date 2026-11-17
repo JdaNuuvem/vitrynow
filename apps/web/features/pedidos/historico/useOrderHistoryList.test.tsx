@@ -17,7 +17,7 @@ const row = (id: string, over: Partial<HistoryRow> = {}): HistoryRow => ({
   code: id.padStart(4, "0"),
   createdAt: "2026-11-10T12:00:00Z",
   customerName: "Ana",
-  customerPhone: "(11) ••••-5678",
+  customerPhone: "*******5678",
   hasPhone: true,
   type: "BALCAO",
   totalCents: 1000,

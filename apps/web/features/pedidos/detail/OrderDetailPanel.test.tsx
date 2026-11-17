@@ -7,6 +7,9 @@ import type { HttpResult } from "@/core/http/HttpClient";
 import { PanelServicesProvider, type PanelServices } from "@/core/services/PanelServices";
 import { OrderDetailPanel } from "./OrderDetailPanel";
 
+// Id no formato real da API (cuid): o detalhe recusa qualquer outro formato sem fazer requisição.
+const OID = "c" + "0".repeat(23) + "1";
+
 const router = { push: vi.fn() };
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
@@ -14,7 +17,7 @@ const NOW = Date.parse("2026-11-17T20:00:00.000Z");
 
 const detail = (over: Partial<OrderDetail> = {}): OrderDetail =>
   ({
-    id: "o1",
+    id: OID,
     code: "0123",
     type: "DELIVERY",
     status: "EM_PREPARO",
@@ -61,7 +64,7 @@ function setup(get: ReturnType<typeof vi.fn>, over: Partial<React.ComponentProps
   const handlers = { onClose: vi.fn(), onAdvance: vi.fn(), onOpenCancel: vi.fn(), onUndo: vi.fn(), onRetryRefund: vi.fn(), onAssignDeliverer: vi.fn() };
   render(
     <PanelServicesProvider services={{ orders: { get } } as unknown as PanelServices}>
-      <OrderDetailPanel orderId="o1" listOrder={undefined} refreshKey="a" deliverers={deliverers} nowMs={NOW} busy={false} canRetryRefund desktop {...handlers} {...over} />
+      <OrderDetailPanel orderId={OID} listOrder={undefined} refreshKey="a" deliverers={deliverers} nowMs={NOW} busy={false} canRetryRefund desktop {...handlers} {...over} />
     </PanelServicesProvider>,
   );
   return { get, ...handlers };
@@ -244,7 +247,7 @@ describe("OrderDetailPanel: ações do servidor (UI-D-14)", () => {
   it("escolher o entregador chama a atribuição", async () => {
     const { onAssignDeliverer } = setup(vi.fn().mockResolvedValue(ok({ order: detail() })));
     await userEvent.selectOptions(await screen.findByRole("combobox"), "d1");
-    expect(onAssignDeliverer).toHaveBeenCalledWith(expect.objectContaining({ id: "o1" }), "d1");
+    expect(onAssignDeliverer).toHaveBeenCalledWith(expect.objectContaining({ id: OID }), "d1");
   });
 });
 
@@ -254,6 +257,23 @@ describe("OrderDetailPanel: estados de tela (spec 11 §6)", () => {
     expect(screen.getByRole("heading", { level: 2, name: "Pedido #0123" })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Carregando pedido…");
     expect(screen.queryByRole("button", { name: "Marcar pronto" })).not.toBeInTheDocument();
+  });
+
+  // Parecer de segurança R1 (Nightingale): o id de ?pedido= vem da URL e pode ter sido montado por outra pessoa.
+  it.each([["../auth/me"], ["x?code=1"], ["..%2F..%2Fauth%2Fme"], ["o1"], ["C" + "0".repeat(24)], ["c" + "0".repeat(24) + "/transition"]])(
+    "id fora do formato da API (%j): 'Pedido não encontrado.' SEM nenhuma requisição",
+    async (badId) => {
+      const { get } = setup(vi.fn().mockResolvedValue(ok({ order: detail() })), { orderId: badId });
+      expect(await screen.findByRole("alert")).toHaveTextContent("Pedido não encontrado.");
+      expect(get).not.toHaveBeenCalled();
+      expect(router.push).not.toHaveBeenCalled();
+    },
+  );
+
+  it("id no formato da API faz a requisição normalmente", async () => {
+    const { get } = setup(vi.fn().mockResolvedValue(ok({ order: detail() })));
+    await screen.findByRole("heading", { level: 2, name: "Pedido #0123" });
+    expect(get).toHaveBeenCalledWith(OID);
   });
 
   it("pedido inexistente ou de outra loja (404): a mesma frase 'Pedido não encontrado.'", async () => {
@@ -276,7 +296,7 @@ describe("OrderDetailPanel: estados de tela (spec 11 §6)", () => {
       const handlers = { onClose: vi.fn(), onAdvance: vi.fn(), onOpenCancel: vi.fn(), onUndo: vi.fn(), onRetryRefund: vi.fn(), onAssignDeliverer: vi.fn() };
       const ui = (key: string) => (
         <PanelServicesProvider services={{ orders: { get } } as unknown as PanelServices}>
-          <OrderDetailPanel orderId="o1" listOrder={undefined} refreshKey={key} deliverers={deliverers} nowMs={NOW} busy={false} canRetryRefund desktop {...handlers} />
+          <OrderDetailPanel orderId={OID} listOrder={undefined} refreshKey={key} deliverers={deliverers} nowMs={NOW} busy={false} canRetryRefund desktop {...handlers} />
         </PanelServicesProvider>
       );
       return render(ui("a")) && { rerender: (key: string) => render(ui(key)) };
@@ -293,7 +313,7 @@ describe("OrderDetailPanel: estados de tela (spec 11 §6)", () => {
     const services = { orders: { get } } as unknown as PanelServices;
     const view = (key: string) => (
       <PanelServicesProvider services={services}>
-        <OrderDetailPanel orderId="o1" listOrder={undefined} refreshKey={key} deliverers={deliverers} nowMs={NOW} busy={false} canRetryRefund desktop {...handlers} />
+        <OrderDetailPanel orderId={OID} listOrder={undefined} refreshKey={key} deliverers={deliverers} nowMs={NOW} busy={false} canRetryRefund desktop {...handlers} />
       </PanelServicesProvider>
     );
     const { rerender } = render(view("a"));

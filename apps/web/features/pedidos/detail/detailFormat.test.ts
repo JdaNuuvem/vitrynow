@@ -26,6 +26,9 @@ describe("telefone, WhatsApp e mapa (UI-D-05)", () => {
     expect(canContact({ customerPhone: "11912345678", contactMasked: false })).toBe(true);
     expect(canContact({ customerPhone: "*******5678", contactMasked: true })).toBe(false);
     expect(canContact({ customerPhone: null, contactMasked: false })).toBe(false);
+    // se o servidor errar a flag, telefone com máscara nunca vira link (parecer R2)
+    expect(canContact({ customerPhone: "*******5678", contactMasked: false })).toBe(false);
+    expect(canContact({ customerPhone: "••••••5678", contactMasked: false })).toBe(false);
   });
 
   it("o mapa codifica o endereço e abre só uma busca", () => {

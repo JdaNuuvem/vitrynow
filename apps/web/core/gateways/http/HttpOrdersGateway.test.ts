@@ -12,6 +12,38 @@ describe("HttpOrdersGateway.list (API-70)", () => {
   });
 });
 
+describe("HttpOrdersGateway: o id entra codificado em TODO caminho (parecer de segurança R1)", () => {
+  const tricky = "a/../b?x=1#y";
+  const encoded = encodeURIComponent(tricky);
+
+  it("get, transition, cancel, undo, retryRefund e assignDeliverer nunca deixam / ? # ou .. escaparem do segmento do id", async () => {
+    const get = vi.fn().mockResolvedValue({ ok: true, data: {} });
+    const post = vi.fn().mockResolvedValue({ ok: true, data: {} });
+    const gateway = new HttpOrdersGateway({ get, post } as unknown as HttpClient);
+    await gateway.get(tricky);
+    await gateway.transition(tricky, "CONFIRMADO");
+    await gateway.cancel(tricky, { reasonCode: "OTHER" } as never);
+    await gateway.undo(tricky);
+    await gateway.retryRefund(tricky);
+    await gateway.assignDeliverer(tricky, null);
+    const urls = [...get.mock.calls, ...post.mock.calls].map((call) => call[0] as string);
+    expect(urls).toHaveLength(6);
+    for (const url of urls) {
+      expect(url.startsWith(`/api/orders/${encoded}`), url).toBe(true);
+      expect(url.slice("/api/orders/".length + encoded.length)).not.toMatch(/[?#.]/);
+    }
+  });
+
+  it("entregadores também", async () => {
+    const post = vi.fn().mockResolvedValue({ ok: true, data: {} });
+    const { HttpDeliverersGateway } = await import("./HttpOrdersGateway");
+    const gateway = new HttpDeliverersGateway({ get: vi.fn(), post } as unknown as HttpClient);
+    await gateway.setActive(tricky, true);
+    await gateway.remove(tricky);
+    expect(post.mock.calls.map((call) => call[0])).toEqual([`/api/deliverers/${encoded}`, `/api/deliverers/${encoded}/delete`]);
+  });
+});
+
 describe("HttpOrdersGateway.history (API-70)", () => {
   const gateway = () => {
     const get = vi.fn().mockResolvedValue({ ok: true, data: { rows: [] } });

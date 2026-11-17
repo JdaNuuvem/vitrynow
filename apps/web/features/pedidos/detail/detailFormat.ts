@@ -13,7 +13,8 @@ function withCountryCode(digits: string): string {
 
 // Só existe link de contato com o telefone COMPLETO. Mascarado (`contactMasked`) ou ausente: sem link.
 export function canContact(order: Pick<OrderDetail, "customerPhone" | "contactMasked">): boolean {
-  return Boolean(order.customerPhone) && !order.contactMasked;
+  // Defesa em profundidade: se o servidor errar a flag, um telefone com máscara ("*", "•") nunca vira link para o número errado.
+  return Boolean(order.customerPhone) && !order.contactMasked && !/[*•]/.test(order.customerPhone ?? "");
 }
 
 export function telHref(phone: string): string {

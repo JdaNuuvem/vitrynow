@@ -21,27 +21,27 @@ export class HttpOrdersGateway implements OrdersGateway {
   }
 
   get(orderId: string) {
-    return this.http.get<{ order: OrderDetail }>(`/api/orders/${orderId}`);
+    return this.http.get<{ order: OrderDetail }>(`/api/orders/${encodeURIComponent(orderId)}`);
   }
 
   transition(orderId: string, to: OrderStatus) {
-    return this.http.post<{ order: Order }>(`/api/orders/${orderId}/transition`, { to });
+    return this.http.post<{ order: Order }>(`/api/orders/${encodeURIComponent(orderId)}/transition`, { to });
   }
 
   cancel(orderId: string, body: CancelBody, options?: RequestOptions) {
-    return this.http.post<CancelResult>(`/api/orders/${orderId}/cancel`, body, options);
+    return this.http.post<CancelResult>(`/api/orders/${encodeURIComponent(orderId)}/cancel`, body, options);
   }
 
   undo(orderId: string) {
-    return this.http.post<{ order: Order }>(`/api/orders/${orderId}/undo`);
+    return this.http.post<{ order: Order }>(`/api/orders/${encodeURIComponent(orderId)}/undo`);
   }
 
   retryRefund(orderId: string, options?: RequestOptions) {
-    return this.http.post<CancelResult>(`/api/orders/${orderId}/refund/retry`, undefined, options);
+    return this.http.post<CancelResult>(`/api/orders/${encodeURIComponent(orderId)}/refund/retry`, undefined, options);
   }
 
   assignDeliverer(orderId: string, delivererId: string | null) {
-    return this.http.post(`/api/orders/${orderId}/deliverer`, { delivererId });
+    return this.http.post(`/api/orders/${encodeURIComponent(orderId)}/deliverer`, { delivererId });
   }
 
 }
@@ -58,10 +58,10 @@ export class HttpDeliverersGateway implements DeliverersGateway {
   }
 
   setActive(id: string, active: boolean) {
-    return this.http.post(`/api/deliverers/${id}`, { active });
+    return this.http.post(`/api/deliverers/${encodeURIComponent(id)}`, { active });
   }
 
   remove(id: string) {
-    return this.http.post(`/api/deliverers/${id}/delete`);
+    return this.http.post(`/api/deliverers/${encodeURIComponent(id)}/delete`);
   }
 }

@@ -64,5 +64,5 @@ export function customerText(row: Pick<HistoryRow, "customerName" | "customerPho
 export function safePhone(phone: string | null | undefined): string | null {
   const text = phone?.trim();
   if (!text) return null;
-  return /[•*xX]/.test(text) ? text : null;
+  return /^[*•]+\d{0,4}$/.test(text) ? text : null; // formato exato do maskPhone da API: "*" repetido + 4 últimos dígitos
 }

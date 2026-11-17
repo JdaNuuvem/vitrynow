@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import type { OrderDetail } from "@/core/domain/orderDetail";
+import { isOrderId } from "@/core/domain/orderId";
 import { usePanelServices } from "@/core/services/PanelServices";
 
 export type DetailState =
@@ -30,6 +31,12 @@ export function useOrderDetail(orderId: string | null, refreshKey: string) {
 
   useEffect(() => {
     if (!orderId) return;
+    // Id vindo da URL (?pedido=) fora do formato da API: "não encontrado" SEM requisição (nunca vira caminho de pedido).
+    if (!isOrderId(orderId)) {
+      setRefreshing(false);
+      setState({ status: "notfound" });
+      return;
+    }
     let active = true;
     orders.get(orderId).then((result) => {
       if (!active) return;
