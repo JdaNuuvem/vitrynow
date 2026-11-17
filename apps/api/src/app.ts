@@ -24,6 +24,7 @@ import reportRoutes from "./routes/reports";
 import userRoutes from "./modules/users/users.module";
 import auditRoutes from "./modules/audit/audit.module";
 import feedbackRoutes from "./routes/feedback";
+import privacyRoutes from "./modules/privacy/privacy.module";
 import subscriptionRoutes from "./routes/subscription";
 import noticeRoutes from "./routes/notices";
 import mfaRoutes from "./routes/mfa";
@@ -120,6 +121,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(userRoutes);
   app.register(auditRoutes);
   app.register(feedbackRoutes);
+  app.register(privacyRoutes);
   app.register(subscriptionRoutes);
   app.register(noticeRoutes);
   app.register(mfaRoutes);

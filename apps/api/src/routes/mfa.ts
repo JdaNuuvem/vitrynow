@@ -8,6 +8,7 @@ const PURPOSE_LABELS: Record<MfaPurpose, string> = {
   refund: "estorno de pagamento",
   change_password: "troca de senha",
   delete_user: "remoção de usuário",
+  anonymize_customer: "remoção de dados pessoais de um cliente",
 };
 
 const mfaRoutes: FastifyPluginAsync = async (app) => {

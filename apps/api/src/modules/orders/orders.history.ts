@@ -117,6 +117,8 @@ export type HistoryRow = {
   customerName: string | null;
   customerPhone: string | null;
   hasPhone: boolean;
+  /** LGPD: o dado pessoal deste pedido foi removido a pedido do titular. */
+  anonymized: boolean;
   type: string;
   totalCents: number;
   status: string;
@@ -199,7 +201,7 @@ export async function searchOrderHistory(
     where: { id: { in: pageIds }, storeId },
     select: {
       id: true, code: true, createdAt: true, customerName: true, customerPhone: true, type: true, totalCents: true, status: true,
-      awaitingPayment: true, paymentMethod: true, printedAt: true, payment: { select: { status: true } },
+      awaitingPayment: true, paymentMethod: true, printedAt: true, anonymizedAt: true, payment: { select: { status: true } },
     },
   });
   const byId = new Map(found.map((o) => [o.id, o]));
@@ -218,6 +220,7 @@ export async function searchOrderHistory(
       customerName: o.customerName,
       customerPhone: maskPhone(o.customerPhone), // lista: SEMPRE mascarado, qualquer papel; sem endereço
       hasPhone: !!o.customerPhone,
+      anonymized: o.anonymizedAt !== null,
       type: o.type,
       totalCents: o.totalCents,
       status: o.status,
