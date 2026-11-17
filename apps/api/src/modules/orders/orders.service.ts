@@ -4,7 +4,7 @@ import { CodedError } from "../../shared/errors";
 import type { AuditLogger } from "../../shared/audit";
 import { cancelPayment, getPayment, refundPayment } from "../../lib/mercadopago";
 import { ORDER_TX_OPTIONS } from "../../lib/order-code";
-import { cancelPendingTickets, enqueueCancelNoticeIfPrinted } from "../printJobs/printJobs.queue";
+import { cancelPendingTickets, enqueueCancelNoticeIfPrinted, lockPrintMode } from "../printJobs/printJobs.queue";
 import { customerMessageFor, messageActorFor, moneyLineFor } from "../../lib/cancelMessages";
 import {
   FINAL_STATUSES,
@@ -22,9 +22,16 @@ import {
 } from "../../lib/orderStateMachine";
 import { toPanelOrder, type ContactAccess } from "./orders.view";
 import { authorizeContactView } from "./contactAccess";
+import { assertPhoneSearchRate, HISTORY_STAFF_FULL_PHONE_DIGITS, OPEN_ORDER_STATUSES, parseSearch, recordPhoneRefusal, searchOrderHistory, type HistoryQuery } from "./orders.history";
+import { closedTodayIds, KANBAN_OLD_OPEN_CAP, KANBAN_TODAY_OPEN_HARD_CAP } from "./orders.kanban";
+import { safeTimeZone, startOfStoreDay } from "../../lib/storeTime";
 
 type Db = typeof prismaClient;
 type Tx = Prisma.TransactionClient;
+
+// Kanban (RN-KB-01): pedidos em andamento; teto de segurança para não devolver a loja inteira se algo ficar preso.
+const OPEN_STATUSES: OrderStatus[] = [...OPEN_ORDER_STATUSES];
+export const INTERNAL_NOTE_MAX = 500;
 
 export type PanelActor = { storeId: string; userId: string; role: Role };
 // Sem campo editável ao cliente (GRW-15): o texto que o cliente vê é derivado de (código, ator) em lib/cancelMessages.
@@ -41,6 +48,20 @@ type CancelOrigin = {
   // não chama o provedor de novo, só refaz a Tx 2 (estorno chamado UMA só vez).
   providerRefundedAt?: string;
 };
+
+// Teto de tentativas AUTOMÁTICAS de estorno (o job de conciliação da API-06 para aqui; o "Tentar estorno" manual do dono segue valendo).
+// Ao atingir o teto o alerta é emitido UMA vez (auditoria + log), para a loja e a operação resolverem com o Mercado Pago.
+export const MAX_REFUND_AUTO_ATTEMPTS = 5;
+export const refundAutoRetryable = (payment: { refundAttempts: number }) => payment.refundAttempts < MAX_REFUND_AUTO_ATTEMPTS;
+
+// Código do erro do provedor para o log (diagnóstico do CL-13 e da conciliação): SÓ status HTTP e código de causa, em lista
+// restrita de caracteres. Nunca a mensagem, a descrição nem o corpo (podem trazer dado do pagador ou do pedido).
+export function providerErrorCode(error: unknown): string {
+  const safe = (v: unknown) => (typeof v === "string" || typeof v === "number") && /^[A-Za-z0-9_.-]{1,30}$/.test(String(v)) ? String(v) : "?";
+  const e = (error ?? {}) as { status?: unknown; statusCode?: unknown; cause?: unknown };
+  const cause = Array.isArray(e.cause) ? (e.cause[0] as { code?: unknown } | undefined) : (e.cause as { code?: unknown } | undefined);
+  return `status=${safe(e.status ?? e.statusCode)} code=${safe(cause?.code)}`;
+}
 
 type OrderWithPayment = Order & { payment: Payment | null };
 type PanelOrderSource = import("./orders.view").PanelOrderSource;
@@ -76,18 +97,94 @@ export class OrderService {
   }
 
   // ───────────── Leitura (kanban) ─────────────
+  // RN-KB-01..05: pedidos em aberto, de qualquer data, mais os concluídos/cancelados DO DIA (fuso da loja). Todo aberto de HOJE
+  // entra sempre; os abertos de dias anteriores têm teto (KANBAN_OLD_OPEN_CAP, os mais antigos primeiro) e o que passar dele
+  // vem em `openHidden` com `openCapped` (o painel avisa e leva ao Histórico › Em aberto). Só os encerrados do dia são
+  // paginados, por cursor (instante do encerramento, mais recente primeiro). PIX ainda não pago fica de fora (RN-KB-07).
   async list(actor: PanelActor, query: { cursor?: string; limit?: number }) {
     const limit = Math.min(Math.max(query.limit || 100, 1), 200);
-    const orders = await this.db.order.findMany({
-      where: { storeId: actor.storeId, awaitingPayment: false },
-      orderBy: { createdAt: "desc" },
-      include: { items: true, deliverer: true, payment: true, statusHistory: { orderBy: { seq: "desc" }, take: 3 } },
-      take: limit,
-      ...(query.cursor ? { skip: 1, cursor: { id: query.cursor } } : {}),
-    });
+    const store = await this.db.store.findUnique({ where: { id: actor.storeId }, select: { timezone: true } });
+    const timezone = safeTimeZone(store?.timezone);
+    const now = this.now();
+    const todayStart = startOfStoreDay(now, timezone, 0);
+    const include = { items: true, deliverer: true, payment: true, statusHistory: { orderBy: { seq: "desc" as const }, take: 3 } };
+    const openWhere = { storeId: actor.storeId, awaitingPayment: false, status: { in: OPEN_STATUSES } };
+
+    const [older, today] = await Promise.all([
+      query.cursor ? [] : this.db.order.findMany({ where: { ...openWhere, createdAt: { lt: todayStart } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], include, take: KANBAN_OLD_OPEN_CAP }),
+      query.cursor ? [] : this.db.order.findMany({ where: { ...openWhere, createdAt: { gte: todayStart } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], include, take: KANBAN_TODAY_OPEN_HARD_CAP }),
+    ]);
+    // Só conta no banco quando bateu no teto (o caso comum não paga a consulta extra).
+    let openHidden = 0;
+    if (older.length >= KANBAN_OLD_OPEN_CAP) openHidden += Math.max(0, (await this.db.order.count({ where: { ...openWhere, createdAt: { lt: todayStart } } })) - older.length);
+    if (today.length >= KANBAN_TODAY_OPEN_HARD_CAP) openHidden += Math.max(0, (await this.db.order.count({ where: { ...openWhere, createdAt: { gte: todayStart } } })) - today.length);
+    const open = [...older, ...today];
+
+    const page = await closedTodayIds(this.db, actor.storeId, todayStart, limit, query.cursor);
+    const found = page.ids.length ? await this.db.order.findMany({ where: { id: { in: page.ids }, storeId: actor.storeId }, include }) : [];
+    const byId = new Map(found.map((o) => [o.id, o]));
+    const closed = page.ids.map((id) => byId.get(id)).filter((o): o is NonNullable<typeof o> => !!o);
+
+    const orders = [...open, ...closed];
     const roles = await this.rolesOf(orders.flatMap((o) => o.statusHistory.map((h) => h.userId)));
-    const decorated = orders.map(({ statusHistory, ...order }) => this.decorate(order, statusHistory, actor.role, roles));
-    return { orders: decorated, nextCursor: orders.length === limit ? orders[orders.length - 1].id : null };
+    const decorate = ({ statusHistory, ...order }: (typeof orders)[number]) => this.decorate(order, statusHistory, actor.role, roles);
+    const decoratedOpen = open.map(decorate);
+    // Dentro de cada coluna, quem espera há mais tempo no estado fica no topo (RN-KB-04); a tela agrupa por status.
+    decoratedOpen.sort((a, b) => a.statusChangedAt.getTime() - b.statusChangedAt.getTime());
+    return {
+      orders: [...decoratedOpen, ...closed.map(decorate)],
+      nextCursor: page.nextCursor,
+      serverNow: now,
+      timezone,
+      // Início do "hoje" da loja: pedido aberto criado ANTES disto leva o selo "de ontem" (RN-KB-03).
+      todayStartsAt: todayStart,
+      openCount: open.length,
+      staleOpenCount: open.filter((o) => o.createdAt < todayStart).length,
+      openCapped: openHidden > 0,
+      openHidden,
+    };
+  }
+
+  // Histórico (RN-HP): busca e filtros por período; só linhas de lista (telefone mascarado, sem endereço).
+  async history(actor: PanelActor, query: HistoryQuery) {
+    const store = await this.db.store.findUnique({ where: { id: actor.storeId }, select: { timezone: true } });
+    // Busca por telefone do STAFF é um "este número é cliente?": 10 por hora e rastro ESTRITO (gravado antes de responder; se
+    // não gravar, não responde: falha fechada como o contato completo). Nunca os dígitos, só o tamanho do termo.
+    const search = parseSearch(query.q, actor.role);
+    let skipPhone = false;
+    if (search?.phone && actor.role !== "OWNER") {
+      try {
+        assertPhoneSearchRate(actor.userId, this.now().getTime());
+      } catch (error) {
+        // A recusa deixa rastro (só contagem, nunca os dígitos), mas só a 1ª da hora e nas marcas 10/100/1000: o dono vê o padrão sem ruído.
+        const refusals = recordPhoneRefusal(actor.userId, this.now().getTime());
+        if (refusals !== null) this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "order.history_phone_search_blocked", targetType: "Store", targetId: actor.storeId, metadata: { termLength: search.phone.length, refusals } });
+        // Termo só de dígitos que cabe num CÓDIGO de pedido (< 10 dígitos): não leva 429, cai para código e nome (sem o telefone, sem oráculo).
+        if (search.code !== null && search.phone.length < HISTORY_STAFF_FULL_PHONE_DIGITS) skipPhone = true;
+        else throw error;
+      }
+      if (!skipPhone) {
+        try {
+          await this.audit.logStrict({ storeId: actor.storeId, userId: actor.userId, action: "order.history_phone_search", targetType: "Store", targetId: actor.storeId, metadata: { termLength: search.phone.length } });
+        } catch (error) {
+          // A causa vai em `cause` e a rota a registra pelo serializador seguro do log (nunca console.error com o erro bruto).
+          throw Object.assign(err(503, "AUDIT_UNAVAILABLE", "Busca por telefone indisponível agora. Busque pelo código ou pelo nome, ou tente de novo em instantes."), { cause: error });
+        }
+      }
+    }
+    return searchOrderHistory(this.db, actor.storeId, store?.timezone ?? "America/Sao_Paulo", this.now(), query, actor.role, { skipPhone });
+  }
+
+  // Observação interna do pedido (API-54): texto livre da equipe, nunca ao cliente nem ao tíquete. A auditoria registra
+  // QUE mudou e o tamanho, nunca o texto (pode ter dado pessoal). SQL direto de propósito: anotar não é atividade do pedido e
+  // não pode mexer em `updatedAt` (que o kanban e os relatórios leem; QA-28 H1).
+  async setInternalNote(actor: PanelActor, orderId: string, note: string | null) {
+    const text = note === null ? null : note.trim() || null;
+    if (text && text.length > INTERNAL_NOTE_MAX) throw err(400, "NOTE_TOO_LONG", `A observação pode ter até ${INTERNAL_NOTE_MAX} caracteres.`);
+    const updated = await this.db.$executeRaw`UPDATE "Order" SET "internalNote" = ${text} WHERE "id" = ${orderId} AND "storeId" = ${actor.storeId}`;
+    if (updated !== 1) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
+    this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "order.internal_note", targetType: "Order", targetId: orderId, metadata: { length: text?.length ?? 0 } });
+    return { internalNote: text };
   }
 
   async get(actor: PanelActor, orderId: string) {
@@ -138,6 +235,8 @@ export class OrderService {
     return toPanelOrder(
       order,
       {
+        statusChangedAt: last?.createdAt ?? order.createdAt,
+        serverNow: this.now(),
         allowedTransitions: allowedTransitions(order, role),
         blocked: [...blockedTransitions(order, role), ...this.undoBlocked(order, history, role)],
         canUndo: undo.canUndo,
@@ -289,7 +388,10 @@ export class OrderService {
     if (holdsMoney(order.payment)) return this.refundSaga(order, origin);
 
     const sink = { noticeQueued: false };
-    const completed = await this.runTx((tx) => this.applyCancel(tx, order, origin, { expected: order.status, noMoney: true, sink }));
+    const completed = await this.runTx(async (tx) => {
+      await lockPrintMode(tx, order.storeId); // ANTES de qualquer linha de pedido (ordem única de travas: loja → pedido → pagamento)
+      return this.applyCancel(tx, order, origin, { expected: order.status, noMoney: true, sink });
+    });
     if (!completed) {
       // Perdeu a corrida: ou o pagamento foi aprovado agora (vira saga) ou o status mudou (outro chegou antes).
       const fresh = await this.load(order.storeId, order.id);
@@ -424,10 +526,7 @@ export class OrderService {
 
     if (!origin.providerRefundedAt) {
       if (!(await this.providerRefund(payment.id, payment.providerPaymentId))) {
-        await this.db.payment.updateMany({
-          where: { id: payment.id, status: "ESTORNO_PENDENTE" },
-          data: { refundAttempts: { increment: 1 }, refundLastError: "Não foi possível estornar no Mercado Pago. Tentaremos novamente." },
-        });
+        await this.noteRefundFailure(payment.id, order, origin, "Não foi possível estornar no Mercado Pago. Tentaremos novamente.");
         this.publish(order.storeId, { type: "payment.refund_pending", orderId: order.id });
         return "PENDING";
       }
@@ -448,8 +547,10 @@ export class OrderService {
     let concluded: { orderCancelled: boolean; reconcile: boolean } | null;
     try {
       concluded = await this.runTx(async (tx) => {
-      // Ordem de locks ÚNICA no sistema: Pedido → Pagamento (a Tx 1 da saga também começa pelo pedido). Travar o
-      // pagamento primeiro aqui criava a ordem inversa e permitia deadlock quando duas tentativas se sobrepõem.
+      // Ordem de locks ÚNICA no sistema: loja (modo de impressão) → Pedido → Pagamento (a Tx 1 da saga também começa pelo pedido).
+      // Travar o pagamento primeiro aqui criava a ordem inversa e permitia deadlock quando duas tentativas se sobrepõem; e o lock da
+      // loja vem ANTES do pedido porque a troca de modo o segura exclusivo e atualiza pedidos/jobs (ciclo ⇒ 40P01).
+      await lockPrintMode(tx, order.storeId);
       await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${order.id} FOR UPDATE`;
       const flipped = await tx.payment.updateMany({
         where: { id: payment.id, status: "ESTORNO_PENDENTE" },
@@ -475,10 +576,7 @@ export class OrderService {
       // por inteiro: o pagamento continua ESTORNO_PENDENTE e o pedido intacto. NUNCA 500 mudo: fica pendente e visível, e o
       // "Tentar estorno" (ou o job de conciliação) refaz SÓ a Tx 2.
       console.error("[estorno] provedor devolveu, mas a conclusão do cancelamento falhou:", error);
-      await this.db.payment.updateMany({
-        where: { id: payment.id, status: "ESTORNO_PENDENTE" },
-        data: { refundAttempts: { increment: 1 }, refundLastError: "O estorno foi feito, mas falta concluir o cancelamento. Tentaremos novamente." },
-      });
+      await this.noteRefundFailure(payment.id, order, origin, "O estorno foi feito, mas falta concluir o cancelamento. Tentaremos novamente.");
       this.publish(order.storeId, { type: "payment.refund_pending", orderId: order.id });
       return "PENDING";
     }
@@ -496,14 +594,36 @@ export class OrderService {
 
   // Pede o estorno ao provedor com chave idempotente. Se der erro, consulta o pagamento: "refunded" no
   // provedor significa que o dinheiro JÁ voltou (queda entre o aceite e a nossa gravação) ⇒ sucesso.
+  // Conta a tentativa que falhou e grava o texto curto (fixo, sem dado sensível). O UPDATE devolve o valor EXATO do contador,
+  // então só UMA tentativa vê "cruzou o teto" (duas simultâneas recebem valores diferentes): o alerta sai uma vez.
+  private async noteRefundFailure(paymentId: string, order: { id: string; storeId: string }, origin: CancelOrigin, message: string) {
+    const rows = await this.db.$queryRaw<{ refundAttempts: number }[]>`
+      UPDATE "Payment" SET "refundAttempts" = "refundAttempts" + 1, "refundLastError" = ${message}
+       WHERE "id" = ${paymentId} AND "status" = 'ESTORNO_PENDENTE'
+   RETURNING "refundAttempts"`;
+    if (rows[0]?.refundAttempts === MAX_REFUND_AUTO_ATTEMPTS) {
+      console.error(`[estorno] pagamento ${paymentId} atingiu ${MAX_REFUND_AUTO_ATTEMPTS} tentativas sem concluir: precisa de atenção`);
+      this.audit.log({
+        storeId: order.storeId,
+        userId: origin.userId,
+        action: "order.refund_stuck",
+        targetType: "Order",
+        targetId: order.id,
+        metadata: { attempts: MAX_REFUND_AUTO_ATTEMPTS },
+      });
+    }
+  }
+
   private async providerRefund(paymentId: string, providerPaymentId: string): Promise<boolean> {
     try {
       await refundPayment(providerPaymentId, `refund-${paymentId}`);
       return true;
-    } catch {
+    } catch (refundError) {
+      console.error(`[estorno] provedor recusou o estorno do pagamento ${paymentId}: ${providerErrorCode(refundError)}`);
       try {
         return (await getPayment(providerPaymentId)).status === "refunded";
-      } catch {
+      } catch (lookupError) {
+        console.error(`[estorno] não consegui consultar o pagamento ${paymentId} no provedor: ${providerErrorCode(lookupError)}`);
         return false;
       }
     }

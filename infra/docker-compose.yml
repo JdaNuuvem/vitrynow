@@ -1,43 +1,113 @@
+# Stack de produção do MeuCardapio. Só o Caddy publica portas (80/443); Postgres, API e web ficam
+# na rede interna do compose — não há como contornar TLS/proxy acessando 3000/3001 direto.
+# Acesso administrativo ao banco: `docker compose exec postgres psql -U meucardapio`.
+#
+# Subir (dev/staging): docker compose --env-file .env up -d --build  (veja infra/.env.example). Runbook e validação do .env: INF-11.
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-api-build: &api-build
+  context: ..
+  dockerfile: apps/api/Dockerfile
+
 services:
   postgres:
+    networks: [data]            # só na rede de dados (interna, sem saída à internet): caddy e web não alcançam o banco
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    # Fuso do servidor FIXO em UTC (garantia): as colunas TIMESTAMP(3) do Prisma não têm fuso e o PrintJob (API-12)
+    # usa CURRENT_TIMESTAMP AT TIME ZONE 'UTC'. Mudar isto sem migrar os dados desloca todas as datas gravadas.
+    command: ["postgres", "-c", "timezone=UTC", "-c", "log_timezone=UTC"]
     environment:
       POSTGRES_USER: meucardapio
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
       POSTGRES_DB: meucardapio
-    ports:
-      - "127.0.0.1:5432:5432"
+      TZ: UTC
+      PGTZ: UTC
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U meucardapio"]
+      test: ["CMD-SHELL", "pg_isready -U meucardapio -d meucardapio"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  api:
-    build:
-      context: ..
-      dockerfile: apps/api/Dockerfile
-    restart: unless-stopped
+  # Aplica as migrações pendentes (prisma migrate deploy) e termina. A API só sobe depois que
+  # isto sai com sucesso; se a migração falhar, a API antiga continua rodando e o deploy para.
+  migrate:
+    networks: [data]
+    build: *api-build
+    image: meucardapio-api:${APP_VERSION:-local}
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://meucardapio:${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}@postgres:5432/meucardapio?schema=public
+    working_dir: /repo/packages/db
+    command: ["./node_modules/.bin/prisma", "migrate", "deploy"]
+    restart: "no"
+
+  api:
+    networks: [default, data]   # default = rede de borda (Caddy, web, internet para MP/e-mail); data = banco
+    build: *api-build
+    image: meucardapio-api:${APP_VERSION:-local}
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://meucardapio:${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}@postgres:5432/meucardapio?schema=public
       JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no .env}
       PORT: 3001
-      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
+      WEB_ORIGIN: ${WEB_ORIGIN:?defina WEB_ORIGIN no .env, com https e sem barra final}
+      MFA_HMAC_KEY: ${MFA_HMAC_KEY:?defina MFA_HMAC_KEY no .env, 32 ou mais caracteres e diferente do JWT_SECRET}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      # Só o Caddy (IP fixo, ver networks) pode ditar o IP do cliente via X-Forwarded-For (B04/ST-02).
+      TRUST_PROXY_CIDR: ${CADDY_IP:-172.29.250.10}/32   # derivado do IP fixo do Caddy: não há como divergir
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
+      SESSION_ABSOLUTE_DAYS: ${SESSION_ABSOLUTE_DAYS:-14}
+      # Segredo de serviço (SEC-24), o MESMO do web. Rotação sem queda: ponha o novo em API_INTERNAL_SECRET e o antigo em
+      # API_INTERNAL_SECRET_PREVIOUS (a API aceita os dois), suba api e web, e depois esvazie o PREVIOUS.
+      API_INTERNAL_SECRET: ${API_INTERNAL_SECRET:?defina API_INTERNAL_SECRET no .env (32+ caracteres; openssl rand -hex 32)}
+      API_INTERNAL_SECRET_PREVIOUS: ${API_INTERNAL_SECRET_PREVIOUS:-}
+      JOBS_ENABLED: ${JOBS_ENABLED:-true}   # jobs no processo da API (ADR-0011); false só para depurar
+      # PIX por loja (API-07, ADR-0001): desligado por padrão. As regras CONDICIONAIS (com MP_OAUTH_MODE=real exige chave de cifra
+      # própria, MP_CLIENT_ID/SECRET e PUBLIC_API_URL https) o compose não expressa: ficam em infra/check-env.sh (rode antes de subir) e
+      # a própria API recusa subir fora delas. `fake` só em desenvolvimento.
+      MP_OAUTH_MODE: ${MP_OAUTH_MODE:-off}
+      PAYMENT_ENC_KEY: ${PAYMENT_ENC_KEY:-}
+      PAYMENT_ENC_KEY_ID: ${PAYMENT_ENC_KEY_ID:-v1}
+      PAYMENT_ENC_KEY_PREV: ${PAYMENT_ENC_KEY_PREV:-}
+      PAYMENT_ENC_KEY_PREV_ID: ${PAYMENT_ENC_KEY_PREV_ID:-}
+      MP_CLIENT_ID: ${MP_CLIENT_ID:-}
+      MP_CLIENT_SECRET: ${MP_CLIENT_SECRET:-}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-}
       MP_ACCESS_TOKEN: ${MP_ACCESS_TOKEN:-}
       MP_WEBHOOK_SECRET: ${MP_WEBHOOK_SECRET:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAIL_FROM: ${EMAIL_FROM:-MeuCardapio <onboarding@resend.dev>}
-    ports:
-      - "3001:3001"
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      TRIAL_DAYS: ${TRIAL_DAYS:-7}
+      MFA_ENFORCED: ${MFA_ENFORCED:-false}
+    expose:
+      - "3001"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3001/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -47,56 +117,126 @@ services:
       context: ..
       dockerfile: apps/web/Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?defina NEXT_PUBLIC_API_URL no .env (fixado no build da imagem web)}
+    image: meucardapio-web:${APP_VERSION:-local}
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       api:
         condition: service_healthy
     environment:
       NODE_ENV: production
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
-    ports:
-      - "3000:3000"
+      # Chamadas servidor-a-servidor do cardápio (SSR/ISR) vão direto à API pela rede interna: sem isto o padrão do código é
+      # http://localhost:3001, que dentro deste container NÃO é a API (o cardápio cairia no plano B do navegador sem avisar).
+      API_INTERNAL_URL: http://api:3001
+      # Segredo de serviço (SEC-24): só em tempo de EXECUÇÃO e só no servidor. Nunca NEXT_PUBLIC_*, nunca ARG de build,
+      # nunca no código. A API só confia no IP repassado pelo web quando este segredo confere.
+      API_INTERNAL_SECRET: ${API_INTERNAL_SECRET:?defina API_INTERNAL_SECRET no .env (32+ caracteres; openssl rand -hex 32)}
+    expose:
+      - "3000"
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 15s
       timeout: 5s
       retries: 5
 
   caddy:
-    image: caddy:2-alpine
+    build:
+      context: ./caddy
+    image: meucardapio-caddy:${APP_VERSION:-local}
     restart: unless-stopped
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    # Privilégio mínimo: sem capabilities, só a de abrir as portas 80/443; sistema de arquivos somente leitura (só /data,
+    # /config e /tmp são graváveis). Provado pelo smoke: o Caddy sobe e atende assim.
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    read_only: true
+    tmpfs:
+      - /tmp
     depends_on:
       - api
       - web
+    networks:
+      default:
+        ipv4_address: ${CADDY_IP:-172.29.250.10}   # fixo: é o único IP em que a API confia (TRUST_PROXY_CIDR)
+    environment:
+      DOMAIN: ${DOMAIN:?defina DOMAIN no .env}
+      ACME_EMAIL: ${ACME_EMAIL:?defina ACME_EMAIL no .env}
+      # O Go passa a devolver memória ANTES de bater no teto do container (mem_limit); sem isso ele retém o heap liberado e o
+      # container pode ser morto por falta de memória. É um TETO, não uma reserva. Mantenha ~20% abaixo do mem_limit.
+      GOMEMLIMIT: 600MiB
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
+      - caddy_config:/config
+    # Teto de memória (ST-49/ST-50). Medido: 6 a 7 KB por IP distinto na janela. Decisão do Atlas (17/11): 768 MB, porque com 512 MB
+    # o Caddy chegou a ~450 MB sob rotatividade alta de IPs (o cenário do ataque) e a folga era pequena. É um TETO (custo só de RAM
+    # se for usado). O smoke exige que o teto sustente >= 60 mil IPs a 80%. Acima disso (ataque distribuído) o Caddy é morto e volta
+    # em segundos (restart); risco ACEITO: tratar na borda/CDN. RISCO ABERTO: há um crescimento lento que não expliquei (ST-50-levas.md).
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2019/config/"]   # API de administração do Caddy, só dentro do container
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
-  # Backup diário do Postgres — guarda os 14 dumps mais recentes em infra/backups/ (fora do
-  # container, acessível pelo host; mantenha isso também copiado pra fora do VPS).
+  # Backup lógico do Postgres, verificado a cada execução (scripts/backup/backup.sh): dump vazio ou
+  # sem as tabelas é recusado e o healthcheck acusa. Guarda ./backups (host). ATENÇÃO: isto ainda
+  # está NO MESMO servidor — a cópia externa (off-site) precisa de um destino definido pelo Claudio.
+  # Prova de restauração: scripts/backup/restore-verify.sh.
   postgres-backup:
+    networks: [data]
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully   # sem tabelas o backup (corretamente) recusa
     environment:
+      PGHOST: postgres
+      PGUSER: meucardapio
       PGPASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      PGDATABASE: meucardapio
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
     volumes:
       - ./backups:/backups
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >
-        while true; do
-          pg_dump -h postgres -U meucardapio -d meucardapio -F c -f "/backups/meucardapio_$(date +%Y%m%d_%H%M%S).dump";
-          find /backups -name '*.dump' -mtime +14 -delete;
-          sleep 86400;
-        done
+      - ../scripts/backup:/scripts:ro
+    entrypoint: ["/bin/sh", "/scripts/backup-loop.sh"]
+    healthcheck:
+      test: ["CMD", "/bin/sh", "/scripts/healthcheck.sh"]
+      interval: 5m
+      timeout: 10s
+      start_period: 5m
+      retries: 1
+
+networks:
+  # data: só Postgres, migrate, backup e API. internal: true = sem saída à internet nem acesso do Caddy/web ao banco.
+  data:
+    internal: true
+    ipam:
+      config:
+        # Faixa FIXA também aqui: sem ela o Docker sorteia um /16 do pool (ex.: 172.29.0.0/16) que pode ENGLOBAR a faixa
+        # fixa da rede de borda e a criação falha com "Pool overlaps" (visto no smoke de 17/11, com 172.28 já ocupada).
+        - subnet: ${DATA_SUBNET:-172.29.251.0/24}
+  # default = rede de borda (Caddy, web, API); sub-rede e IP do Caddy fixos (a API só confia no X-Forwarded-For dele).
+  default:
+    ipam:
+      config:
+        - subnet: ${INTERNAL_SUBNET:-172.29.250.0/24}   # troque (e CADDY_IP) se colidir com outra rede Docker do servidor
 
 volumes:
   postgres_data:
   caddy_data:
+  caddy_config:

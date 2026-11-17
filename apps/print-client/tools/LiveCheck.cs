@@ -16,7 +16,8 @@ namespace MeuCardapio.PrintClient
     public static class LiveCheck
     {
         // fault: "" (impressora boa) | "offline" | "nopaper" | "driver"
-        public static string Run(string baseUrl, string token, string outDir, string ledgerPath, int seconds, string fault)
+        // startLegacy: o cliente PADRAO (UsePrintJobs desligado) comeca no legado; a virada para a fila vem do servidor (PC-18/PC-22).
+        public static string Run(string baseUrl, string token, string outDir, string ledgerPath, int seconds, string fault, bool startLegacy = false)
         {
             var sb = new StringBuilder();
             var messages = new List<string>();
@@ -28,7 +29,7 @@ namespace MeuCardapio.PrintClient
             else if (fault == "nopaper") printer.Fault = VirtualFault.OutOfPaper;
 
             var ledger = new PrintLedger(ledgerPath, () => DateTime.UtcNow);
-            var settings = new AppSettings { ApiBaseUrl = baseUrl, DeviceToken = token, UsePrintJobs = true };
+            var settings = new AppSettings { ApiBaseUrl = baseUrl, DeviceToken = token, UsePrintJobs = !startLegacy };
             var device = new DeviceClient(ledger, settings) { PollIntervalMs = 1500, WsRetryMs = 1000, RevokedProbeMs = 600000 };
             var coordinator = new PrintCoordinator(device, printer, () => 58, TimeZoneInfo.Local);
             coordinator.Message += m => { lock (messages) messages.Add(m); };
@@ -40,6 +41,7 @@ namespace MeuCardapio.PrintClient
             Thread.Sleep(seconds * 1000);
             try { device.Dispose(); } catch { }
 
+            sb.AppendLine("MODO_FINAL=" + device.CurrentMode);
             sb.AppendLine("ALERTAS=" + alerts);
             lock (messages) foreach (var m in messages.Distinct()) sb.AppendLine("MSG " + m);
             lock (problems) foreach (var p in problems) sb.AppendLine("PROBLEMAS " + p);

@@ -1,12 +1,14 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "@meucardapio/db";
-import { printAckSchema } from "@meucardapio/shared-types";
+import { printAckSchema, setPrintModeSchema } from "@meucardapio/shared-types";
 import { prismaAuditLogger } from "../../shared/audit";
 import { useDomainErrors } from "../../shared/errors";
 import { publishToStore } from "../../realtime/hub";
 import { PrintJobService } from "./printJobs.service";
+import { PrintModeService, loadPrintMode } from "./printMode.service";
 
 export const printJobService = new PrintJobService(prisma, prismaAuditLogger, publishToStore);
+export const printModeService = new PrintModeService(prisma, prismaAuditLogger);
 
 // Rotas da fila de impressão. Dispositivo (token da impressora): claim e ack. Painel (sessão): reimprimir, teste e lista.
 const printJobRoutes: FastifyPluginAsync = async (app) => {
@@ -14,6 +16,9 @@ const printJobRoutes: FastifyPluginAsync = async (app) => {
 
   // ───────────── Dispositivo ─────────────
   const device = { preHandler: app.requireDeviceAuth };
+
+  // Configuração que o cliente lê a cada ciclo: o MODO da loja (a virada é atômica entre todas as impressoras).
+  app.get("/api/device/config", device, async (request) => ({ mode: await loadPrintMode(prisma, request.deviceStoreId!) }));
 
   app.post("/api/device/print-jobs/claim", device, async (request) => {
     return printJobService.claim(request.deviceStoreId!, request.deviceTokenId!);
@@ -27,6 +32,38 @@ const printJobRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // ───────────── Painel ─────────────
+  // Modo de impressão da loja: só o OWNER altera (auditado). A troca RECONCILIA no mesmo ato (ADR-0004 §8.13).
+  app.get("/api/store/print-mode", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request) => printModeService.get(request.user.storeId));
+  // Limite de taxa em memória (janela deslizante de 1 min), um balde por chave. A troca de modo é rara e mexe na impressão da cozinha
+  // inteira; cada tentativa NEGADA grava auditoria, então ela também conta (balde por USUÁRIO: o STAFF nunca gasta a cota do dono).
+  const hits = new Map<string, number[]>();
+  const limited = (key: string, max: number) => {
+    const now = Date.now();
+    const recent = (hits.get(key) ?? []).filter((t) => now - t < 60_000);
+    const over = recent.length >= max;
+    if (!over) recent.push(now);
+    hits.set(key, recent);
+    return over;
+  };
+  const tooMany = (reply: FastifyReply) => {
+    reply.header("Retry-After", "60");
+    return reply.code(429).send({ error: "Muitas tentativas. Aguarde um minuto e tente de novo.", code: "RATE_LIMITED" });
+  };
+  // Quem não é OWNER recebe 403 e a TENTATIVA fica registrada (print.mode_change_denied); passando de 10 por minuto por usuário,
+  // 429 sem gravar mais nada. A rota NUNCA se abre ao STAFF: a resposta é 403 ou 429, nunca o efeito.
+  const ownerOrRecordDenied = async (request: FastifyRequest, reply: FastifyReply) => {
+    if (request.user.role === "OWNER") return;
+    if (limited(`denied:${request.user.userId}`, 10)) return tooMany(reply);
+    await printModeService.recordDenied(request.user, (request.body as { mode?: unknown } | null)?.mode);
+    reply.code(403).send({ error: "ação restrita ao dono da loja" });
+  };
+  app.put("/api/store/print-mode", { preHandler: [app.requirePanelAuth, ownerOrRecordDenied] }, async (request, reply) => {
+    if (limited(`mode:${request.user.storeId}`, 10)) return tooMany(reply); // balde da LOJA (10 trocas por minuto)
+    const parsed = setPrintModeSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "modo inválido", code: "VALIDATION_ERROR" });
+    return printModeService.set({ storeId: request.user.storeId, userId: request.user.userId }, parsed.data.mode);
+  });
+
   const panel = { preHandler: app.requirePanelAuth };
   const actorOf = (request: { user: { storeId: string; userId: string; role: "OWNER" | "STAFF" } }) => ({ storeId: request.user.storeId, userId: request.user.userId, role: request.user.role });
 

@@ -76,7 +76,7 @@ export async function registerStore(
     slug: overrides.slug ?? `loja-teste-${storeSeq}`,
     code: overrides.code ?? `C${storeSeq}`,
     email: overrides.email ?? `dono${storeSeq}@teste.com`,
-    password: overrides.password ?? "senha123",
+    password: overrides.password ?? "senha12345",
   };
   const response = await app.inject({ method: "POST", url: "/auth/register", payload: body });
   // Diagnóstico do flake de cadastro (QA-14): se vier 5xx ou 429, registra o corpo para achar a causa.

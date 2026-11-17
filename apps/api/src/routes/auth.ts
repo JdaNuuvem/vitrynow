@@ -2,13 +2,15 @@ import type { FastifyPluginAsync } from "fastify";
 import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
 import { prisma } from "@meucardapio/db";
-import { loginSchema, registerStoreSchema, forgotPasswordSchema, resetPasswordSchema } from "@meucardapio/shared-types";
-import { sendLoginAlertEmail, sendPasswordResetEmail } from "../lib/email";
+import { loginSchema, registerStoreSchema, forgotPasswordSchema,
+  inspectResetTokenSchema, resetPasswordSchema } from "@meucardapio/shared-types";
+import { maskEmail, sendLoginAlertEmail, sendPasswordResetEmail } from "../lib/email";
 import { newTrialEndsAt } from "../lib/subscription";
 import { SESSION_COOKIE, revokeSession, sessionCookieOptions, signSession } from "../lib/session";
 import { disconnectSession, disconnectUser } from "../realtime/hub";
 import { hashToken } from "../lib/tokenHash";
 import { LoginThrottle } from "../lib/loginThrottle";
+import { NOW, RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, constantTimeEqual, issueResetToken, padToMinimum, runBeforeClaimHook } from "../lib/passwordReset";
 
 // Hash de uma senha que ninguém conhece, no mesmo custo dos hashes reais: login com e-mail inexistente
 // gasta o mesmo tempo do login com senha errada (ST-05, sem enumeração de contas por tempo).
@@ -141,20 +143,43 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     "/auth/forgot-password",
     { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
     async (request, reply) => {
+      const startedAt = performance.now();
       const parsed = forgotPasswordSchema.safeParse(request.body);
       if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
 
-      const user = await prisma.user.findUnique({ where: { email: parsed.data.email } });
-      if (user) {
-        const token = nanoid(32);
-        await prisma.passwordResetToken.create({
-          data: { userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + 60 * 60 * 1000) },
+      // SEC-28: a emissão do token (por conta: 3/hora, 60 s entre pedidos, um só token ativo) fica em `issueResetToken`; o envio NÃO é
+      // esperado (ST-57: esperar o provedor de e-mail revelaria por tempo se a conta existe) e o piso de duração iguala os três caminhos
+      // (existente, inexistente, limitado). A resposta é sempre a mesma.
+      const issued = await issueResetToken(parsed.data.email);
+      if (issued) {
+        // O token vai no FRAGMENTO (#), que o navegador nunca envia ao servidor: não aparece em log de acesso, de erro do proxy,
+        // nem no Referer. A página lê, apaga da barra de endereço e manda no corpo do POST.
+        const resetUrl = `${process.env.WEB_ORIGIN ?? "http://localhost:3000"}/reset-senha#token=${issued.token}`;
+        void sendPasswordResetEmail({ to: issued.to, resetUrl }).catch((error: unknown) => {
+          console.error(`[email] falha ao enviar recuperação de senha para ${maskEmail(issued.to)}: ${error instanceof Error ? error.name : "erro"}`);
         });
-        const resetUrl = `${process.env.WEB_ORIGIN ?? "http://localhost:3000"}/reset-senha?token=${token}`;
-        await sendPasswordResetEmail({ to: user.email, resetUrl });
       }
+      await padToMinimum(startedAt);
 
       return { ok: true };
+    },
+  );
+
+  // SEC-29 (ST-63): quem abre o link vê DE QUAL CONTA é o token (e-mail mascarado) ANTES de digitar a senha nova. Sem isto, um atacante
+  // pede a redefinição da conta DELE e manda à vítima o link; a vítima digita a senha que reutiliza e o atacante a lê ao entrar.
+  // NÃO consome o token. Resposta idêntica para inválido, expirado, usado, inexistente e corpo malformado (nada de motivo).
+  app.post(
+    "/auth/reset-password/inspect",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      const parsed = inspectResetTokenSchema.safeParse(request.body);
+      if (!parsed.success) return { valid: false };
+      const resetToken = await prisma.passwordResetToken.findUnique({ where: { tokenHash: hashToken(parsed.data.token) } });
+      if (!resetToken || resetToken.usedAt || resetToken.expiresAt < new Date()) return { valid: false };
+      const user = await prisma.user.findUnique({ where: { id: resetToken.userId }, select: { email: true } });
+      if (!user) return { valid: false };
+      return { valid: true, email: maskEmail(user.email) };
     },
   );
 
@@ -162,22 +187,60 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     "/auth/reset-password",
     { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
+      const startedAt = performance.now();
       const parsed = resetPasswordSchema.safeParse(request.body);
-      if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+      if (!parsed.success) {
+        // Pedido SEM e-mail (ou com e-mail malformado) vindo de um bundle antigo em cache do navegador: a MESMA recusa genérica e o mesmo piso de
+        // tempo das demais (o servidor nunca trata o e-mail como opcional). Qualquer outro problema do corpo (senha curta, token ausente) segue
+        // com o erro de validação, que não depende do token e por isso não é oráculo.
+        const onlyEmail = parsed.error.issues.length > 0 && parsed.error.issues.every((issue) => issue.path[0] === "email");
+        if (onlyEmail) {
+          await padToMinimum(startedAt, RESET_FAIL_MIN_DURATION_MS);
+          return reply.code(400).send({ error: "token inválido ou expirado" });
+        }
+        return reply.code(400).send({ error: parsed.error.flatten() });
+      }
 
+      // SEC-29 (ST-67): além do token, quem redefine DIGITA o e-mail da conta, comparado AQUI com o da conta do token. Sem isto, o link da
+      // conta de um atacante, mandado à vítima, redefinia a conta DELE com a senha que a vítima reutiliza.
+      // Três recusas (token inexistente/usado/vencido, e-mail que não bate, token de outra conta) têm o MESMO status, o MESMO corpo e o
+      // MESMO trabalho no banco (3 consultas, na mesma ordem) e o MESMO piso de tempo; o token NUNCA é gasto quando o e-mail não bate.
       const resetToken = await prisma.passwordResetToken.findUnique({ where: { tokenHash: hashToken(parsed.data.token) } });
-      if (!resetToken || resetToken.usedAt || resetToken.expiresAt < new Date()) {
+      const owner = await prisma.user.findUnique({ where: { id: resetToken?.userId ?? "-" }, select: { email: true } });
+      const sameEmail = constantTimeEqual(parsed.data.email, owner?.email ?? "");
+      // Gancho só de TESTE (ST-69: honrado só com NODE_ENV=test, sem receber dado): deixa um teste atrasar o pedido entre a leitura de cima
+      // e o UPDATE, para provar que a decisão não depende da leitura velha.
+      await runBeforeClaimHook();
+
+      // ST-68: a DECISÃO sai NO BANCO, numa instrução só, com o relógio do banco. Lê-la antes (live/sameEmail em memória) deixava uma rajada
+      // paralela ver o token "vivo" antes de qualquer falha ser gravada: um palpite certo passava mesmo depois de 5 falhas, e duas
+      // requisições certas simultâneas usavam o token 2×. O UPDATE trava a linha; quem chega depois reavalia o WHERE já com o resultado dos
+      // anteriores. (a) e-mail certo: marca `usedAt` (consome o token); (b) e-mail errado: soma a falha e, na 5ª, invalida o token.
+      // Para token que não existe, a mesma instrução roda sobre 0 linhas (mesmo trabalho em todos os ramos).
+      const outcome = await prisma.$transaction(async (tx) => {
+        const claimed = await tx.$queryRaw<{ id: string }[]>`
+          UPDATE "PasswordResetToken"
+             SET "usedAt" = CASE WHEN ${sameEmail}::boolean THEN ${NOW} ELSE "usedAt" END,
+                 "emailFailures" = CASE WHEN ${sameEmail}::boolean THEN "emailFailures" ELSE "emailFailures" + 1 END,
+                 "expiresAt" = CASE WHEN NOT ${sameEmail}::boolean AND "emailFailures" + 1 >= ${RESET_MAX_EMAIL_FAILURES} THEN ${NOW} ELSE "expiresAt" END
+           WHERE "id" = ${resetToken?.id ?? "-"} AND "usedAt" IS NULL AND "expiresAt" >= ${NOW} AND "emailFailures" < ${RESET_MAX_EMAIL_FAILURES}
+          RETURNING "id"`;
+        if (claimed.length !== 1 || !sameEmail || !resetToken) return null;
+        // O bcrypt só roda DEPOIS de o banco ter dado o token a este pedido: nenhuma recusa o paga, então o tempo de uma recusa não revela
+        // que o e-mail estava certo (token morto + e-mail certo seria mais lento que as outras). Dentro da transação: a troca de senha e o
+        // consumo do token continuam atômicos, e quem esperava a linha só segue depois do COMMIT.
+        const passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
+        // Na MESMA transação do consumo do token: se a troca da senha falhar, o token volta a valer (nada de token queimado sem senha nova).
+        // tokenVersion+1: redefinir a senha derruba todas as sessões abertas (token roubado inclusive).
+        await tx.user.update({ where: { id: resetToken.userId }, data: { passwordHash, tokenVersion: { increment: 1 } } });
+        return resetToken.userId;
+      });
+      if (!outcome || !resetToken) {
+        await padToMinimum(startedAt, RESET_FAIL_MIN_DURATION_MS);
         return reply.code(400).send({ error: "token inválido ou expirado" });
       }
 
-      const passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
-      await prisma.$transaction([
-        // tokenVersion+1: redefinir a senha derruba todas as sessões abertas (token roubado inclusive).
-        prisma.user.update({ where: { id: resetToken.userId }, data: { passwordHash, tokenVersion: { increment: 1 } } }),
-        prisma.passwordResetToken.update({ where: { id: resetToken.id }, data: { usedAt: new Date() } }),
-      ]);
-
-      disconnectUser(resetToken.userId);
+      disconnectUser(outcome);
       return { ok: true };
     },
   );

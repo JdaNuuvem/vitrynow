@@ -327,7 +327,7 @@ describe("FUNC-01/02 — cupom e total zero", () => {
       for (const row of rows) {
         expect(Object.keys(row.metadata as object).sort()).toEqual(row.action === "coupon.delete" ? ["code", "discountType", "discountValue"] : ["active", "code", "discountType", "discountValue", "maxUses"]);
       }
-    });
+    }, { timeout: 10_000, interval: 100 }); // a auditoria do cupom é gravada sem await: sob carga passava de 1 s (padrão)
   });
 
   // ───────────── FUNC-02: total zero ─────────────

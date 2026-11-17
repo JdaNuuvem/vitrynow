@@ -62,6 +62,7 @@ Quem decide como imprimir é o **servidor, por loja** (`Store.printMode`, padrã
 | `mode` ausente (API antiga) ou valor desconhecido | — | ignora: nada muda |
 
 - **Ponto de partida:** `UsePrintJobs` do `settings.json` é só um interruptor de desenvolvimento (padrão `false` = começa no legado). Depois do primeiro ciclo quem manda é o servidor: o legado descobre a fila pelo `409 MODE_QUEUE`; a fila descobre o legado pelo `mode:"LEGACY"` do `claim`.
+- **Configuração do dispositivo (PC-22, achado da conferência cruzada com a API-12b real):** em `QUEUE` a lista legada `/api/device/orders/pending` vem **vazia com 200** (não `409`); só `printable` e `/printed` dão `409 MODE_QUEUE`. Um cliente que começa no legado (o padrão) nunca descobriria a fila olhando a lista vazia. Por isso, no modo legado, o cliente lê **`GET /api/device/config` → `{"mode":"LEGACY"|"QUEUE"}` a cada ciclo** (a fila já recebe o `mode` no `claim`). `404` (API antiga, deploy, proxy ou rollback) **suprime a pergunta por 10 min** e depois volta a perguntar (não desliga para sempre: senão uma loja virada para a fila ficaria sem tíquete e sem sinal); **falhas SEGUIDAS** (rede, 5xx, lixo, corpo vazio; 5 ciclos) mostram "Não consigo confirmar o modo de impressão da loja" **uma vez, sem trocar o modo**, e limpam ao voltar a responder ("confirmado novamente"); `mode` desconhecido é ignorado; `401/403` seguem a regra de chave recusada. O `409 MODE_QUEUE` dos endpoints do pedido continua valendo como cinto. A API-12b também devolve o modo no **corpo** do `/api/device/orders/pending` (`{orders, mode}`; formato `{orders}` antigo continua aceito): o cliente troca para a fila **no próprio ciclo**, sem requisição extra. **Fonte do modo = o `mode` do CORPO** (claim, `/pending`, `/config`); o cabeçalho `X-Print-Mode` é só dica e o cliente **não o lê** (numa troca no mesmo instante os dois podem divergir por milissegundos).
 - **Nunca mistura os dois modos** (a virada acontece com impressão em andamento):
   - não pede job enquanto há pedido legado **em impressão** (a impressão em andamento não pode ser reclamada como job);
   - **aviso pendente nunca bloqueia o outro modo** (um aviso recusado para sempre congelaria a loja): a proteção é o registro de "impresso" dos dois lados, abaixo;
@@ -71,3 +72,13 @@ Quem decide como imprimir é o **servidor, por loja** (`Store.printMode`, padrã
 - **Aviso do job recusado de vez** (4xx exceto 408/429; 404 e 409 já encerravam): encerra, avisa na tela e não repete. Job já impresso que o servidor **reoferece** (o mesmo dono recebe o mesmo job enquanto a lease vale) reenvia o aviso **uma vez por ciclo** e para o laço (antes pedia o job de novo até 20 vezes por ciclo).
 - **Se um job chegar em `LEGACY`** (servidor fora do contrato), o cliente **não imprime** (o legado cuidaria do mesmo pedido).
 - Teste executável: `SelfTestJobs.ModeFollowsServer` (M1–M12) sobre o `FakeApi` com `PrintMode`; o plano de virada fica em `docs\plano-virada-printjobs.md`.
+
+## `nothingToCharge` (API-66, ticketSchemaVersion 3)
+O servidor diz se **não há nada a cobrar** (`totalCents == 0` E nenhuma cobrança possível: sem Payment, ou Payment morto REJEITADO/EXPIRADO/CANCELADO). Campo opcional; em pedido real nunca sai ausente; aviso de cancelamento e tíquete de teste saem `false`.
+| Campo | Total | O cliente imprime |
+|---|---|---|
+| `false` | qualquer | **regra normal (cobra)**, mesmo com a aritmética local dando zero (há pagamento vivo) |
+| `true` | PRESENTE e 0 | "SEM COBRANÇA: NADA A COBRAR" |
+| `true` | ≠ 0 ou AUSENTE | **regra normal (cobra)** + AVISO no log (servidor incoerente) |
+| PRESENTE e **não booleano** (`1`, `0`, `"true"`, `"false"`, `"lixo"`, lista, objeto) | qualquer | **regra normal (cobra)** + AVISO no log ("o campo nothingToCharge chegou com valor que nao e booleano"); dado corrompido, não é campo ausente: a aritmética NÃO decide; o valor não é coagido nem derruba a leitura do tíquete |
+| ausente/`null` (API antiga) | — | aritmética do PC-19: total PRESENTE e 0, desconto = itens, sem taxa/gorjeta, subtotal batendo |

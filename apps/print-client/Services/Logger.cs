@@ -13,12 +13,16 @@ namespace MeuCardapio.PrintClient.Services
         static readonly string LogPath = Path.Combine(LogDir, "print-client.log");
         const long MaxSizeBytes = 5 * 1024 * 1024; // 5 MB — depois disso, rotaciona pra .old (1 geração só)
 
+        // So os testes usam: recebe cada linha ("INFO ..."/"ERROR ...") para provar o que o app GRAVA no log (o alerta de operacao depende do texto).
+        internal static Action<string> Sink;
+
         public static void Info(string message) => Write("INFO", message);
         public static void Error(string message) => Write("ERROR", message);
         public static void Error(string message, Exception ex) => Write("ERROR", message + " — " + ex);
 
         static void Write(string level, string message)
         {
+            try { var sink = Sink; if (sink != null) sink(level + " " + message); } catch { }
             try
             {
                 lock (_lock)

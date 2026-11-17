@@ -28,7 +28,7 @@ import noticeRoutes from "./routes/notices";
 import mfaRoutes from "./routes/mfa";
 import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
 import { clientKey } from "./lib/clientKey";
-import { loggerOptions } from "./lib/logging";
+import { loggerOptions, redactLogUrl } from "./lib/logging";
 import { ORDER_TOKEN_HEADER } from "./lib/orderToken";
 import jobsPlugin from "./jobs/plugin";
 
@@ -41,6 +41,12 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   // importado direto de @meucardapio/db, não um plugin fastify com ciclo de vida próprio.
   app.addHook("onClose", async () => {
     await prisma.$disconnect();
+  });
+
+  // 404 de rota inexistente: o tratador padrão do Fastify grava "Route METHOD:/url?query not found" no log com a query INTEIRA
+  // (token, code e state do OAuth incluídos). Mesmo corpo de resposta, sem esse log e com os valores sensíveis trocados.
+  app.setNotFoundHandler((request, reply) => {
+    reply.code(404).send({ message: `Route ${request.method}:${redactLogUrl(request.url)} not found`, error: "Not Found", statusCode: 404 });
   });
 
   app.register(cors, {

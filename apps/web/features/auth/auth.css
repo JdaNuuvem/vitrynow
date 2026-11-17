@@ -98,3 +98,62 @@
   text-align: center;
   text-decoration: underline;
 }
+
+
+/* SEC-29: bloco de conferência da conta (neutro) e alerta de falha da conferência */
+.auth__note {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f1f5f9;
+  color: #1e293b;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: left;
+}
+.auth__note strong {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.auth__alert {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #b45309;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #92400e;
+  text-align: left;
+}
+.auth__alert-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.auth__alert-icon {
+  flex: none;
+  margin-top: 1px;
+}
+.auth__alert .auth__text {
+  color: inherit; /* o texto do alerta usa o âmbar escuro do bloco (6,8:1), não o cinza do texto comum (4,9:1) */
+}
+.auth__alert .auth__button {
+  min-height: 44px;
+}
+
+/* WEB-42: recusa única do envio + "Pedir um novo link" (alvo de toque de 44 px) */
+.auth__refused {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+}
+.auth__link--target {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}

@@ -10,6 +10,7 @@
     "dev:web": "pnpm --filter @meucardapio/web dev",
     "db:generate": "pnpm --filter @meucardapio/db generate",
     "db:migrate": "pnpm --filter @meucardapio/db migrate",
+    "db:migrate:deploy": "pnpm --filter @meucardapio/db migrate:deploy",
     "db:seed": "pnpm --filter @meucardapio/db seed",
     "build": "pnpm -r build",
     "test": "pnpm -r test"

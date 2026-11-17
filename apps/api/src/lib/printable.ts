@@ -13,6 +13,15 @@ export function ticketPaymentStatus(payment: { status: PaymentStatus } | null | 
   return "A_COBRAR";
 }
 
+// "Nada a cobrar" (API-66): total ZERO e nenhuma cobrança possível. Pagamento aprovado, pendente, em análise, estornado ou contestado
+// significa que dinheiro está em jogo; só pagamento morto (rejeitado, expirado, cancelado) ou ausência de pagamento libera.
+// Total zero com cupom nasce sem Payment (FUNC-02); um total > 0 NUNCA é "nada a cobrar", seja qual for o desconto.
+const DEAD_PAYMENT: ReadonlySet<PaymentStatus> = new Set<PaymentStatus>(["REJEITADO", "EXPIRADO", "CANCELADO"]);
+export function nothingToCharge(order: { totalCents: number }, payment: { status: PaymentStatus } | null | undefined): boolean {
+  if (order.totalCents !== 0) return false;
+  return !payment || DEAD_PAYMENT.has(payment.status);
+}
+
 export type PrintableOptions = {
   // Preenchidos pela fila de impressão (API-12): 2ª via e aviso de cancelamento.
   reprintCount?: number;
@@ -48,6 +57,7 @@ export async function buildPrintableOrder(orderId: string, options: PrintableOpt
       tipCents: 0,
       paymentMethod: null,
       paymentStatus: "A_COBRAR",
+      nothingToCharge: false, // o aviso tem total 0 só porque não leva valores: NUNCA vira "sem cobrança"
       cancelNotice: true,
       reprintCount: 0,
       printedAtOriginal: options.printedAtOriginal ? options.printedAtOriginal.toISOString() : null,
@@ -76,6 +86,7 @@ export async function buildPrintableOrder(orderId: string, options: PrintableOpt
     changeForCents: order.changeForCents ?? null,
     paymentMethod: order.paymentMethod,
     paymentStatus: ticketPaymentStatus(order.payment),
+    nothingToCharge: nothingToCharge(order, order.payment),
     tableLabel: null,
     reprintCount: options.reprintCount ?? 0,
     printedAtOriginal: options.printedAtOriginal ? options.printedAtOriginal.toISOString() : null,
@@ -110,6 +121,7 @@ export function buildTestTicket(jobId: string, now: Date): PrintableOrder {
     deliveryFeeCents: 0,
     tipCents: 0,
     paymentMethod: null,
+    nothingToCharge: false,
     createdAt: now.toISOString(),
     items: [],
   });

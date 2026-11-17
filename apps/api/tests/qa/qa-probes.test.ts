@@ -334,10 +334,10 @@ describe("QA probes — API", () => {
     const owner = await setupStore();
     // Equipe é recurso do PRO (D2/API-08): o teste vale só o fluxo de sessão, então ativamos o PRO nesta loja.
     await activateSubscription({ subscriptionId: (await prisma.subscription.findFirstOrThrow()).id, planCode: "PRO" });
-    const invite = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: owner.cookie }, payload: { email: "staff@teste.com", password: "senha123" } });
+    const invite = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: owner.cookie }, payload: { email: "staff@teste.com", password: "senha12345" } });
     expect(invite.statusCode).toBe(201);
     const staffId = JSON.parse(invite.body).user.id;
-    const loginRes = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "staff@teste.com", password: "senha123" } });
+    const loginRes = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "staff@teste.com", password: "senha12345" } });
     const staffCookie = (loginRes.headers["set-cookie"] as string).split(";")[0];
     expect((await app.inject({ method: "GET", url: "/auth/me", headers: { cookie: staffCookie } })).statusCode).toBe(200);
     const del = await app.inject({ method: "POST", url: `/api/users/${staffId}/delete`, headers: { cookie: owner.cookie } });
@@ -347,8 +347,8 @@ describe("QA probes — API", () => {
   });
 
   it("D06b sessão antiga é invalidada após troca de senha", async () => {
-    const { cookie } = await registerStore(app, { email: "troca@teste.com", password: "senha123" });
-    const change = await app.inject({ method: "POST", url: "/auth/change-password", headers: { cookie: cookie! }, payload: { currentPassword: "senha123", newPassword: "novaSenha456" } });
+    const { cookie } = await registerStore(app, { email: "troca@teste.com", password: "senha12345" });
+    const change = await app.inject({ method: "POST", url: "/auth/change-password", headers: { cookie: cookie! }, payload: { currentPassword: "senha12345", newPassword: "novaSenha456" } });
     expect(change.statusCode).toBe(200);
     const stolen = await app.inject({ method: "GET", url: "/auth/me", headers: { cookie: cookie! } });
     expect(stolen.statusCode).toBe(401);

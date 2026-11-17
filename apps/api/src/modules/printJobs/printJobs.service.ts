@@ -1,8 +1,10 @@
-import { Prisma, type prisma as prismaClient, type PrintJob, type PrintKind, type PrintJobStatus } from "@meucardapio/db";
+import { Prisma, type prisma as prismaClient, type PrintJob, type PrintKind, type PrintJobStatus, type PrintMode } from "@meucardapio/db";
 import type { PrintableOrder, WsServerMessage } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
 import type { AuditLogger } from "../../shared/audit";
 import { authorizeContactView } from "../orders/contactAccess";
+import { loadPrintMode } from "./printMode.service";
+import { lockPrintMode } from "./printJobs.queue";
 import { buildPrintableOrder, buildTestTicket } from "../../lib/printable";
 import {
   BACKOFF_SECONDS,
@@ -40,9 +42,19 @@ export class PrintJobService {
   ) {}
 
   // ───────────── Dispositivo: claim ─────────────
-  async claim(storeId: string, tokenId: string): Promise<{ job: ClaimedJob | null }> {
+  async claim(storeId: string, tokenId: string): Promise<{ job: ClaimedJob | null; mode: PrintMode }> {
+    // O modo é do SERVIDOR (ADR-0004 §8.12). Em LEGACY o claim não entrega nada: quem imprime é o caminho legado, nunca os dois.
+    const mode = await loadPrintMode(this.db, storeId);
+    if (mode === "LEGACY") return { job: null, mode };
     const taken = await this.db.$transaction(
       async (tx) => {
+        // Serializa com a TROCA DE MODO (item 14 do ADR): o claim segura o lock consultivo da loja em modo COMPARTILHADO (claims não se
+        // bloqueiam entre si) e a troca o pede em modo exclusivo. Assim, ou o claim termina antes (e o recuo vê o job CLAIMED e recusa
+        // com PRINT_IN_PROGRESS), ou a troca termina antes (e o claim relê o modo aqui dentro e não entrega nada em LEGACY).
+        await lockPrintMode(tx, storeId);
+        const modeNow = await loadPrintMode(tx, storeId);
+        if (modeNow === "LEGACY") return { row: null as ClaimRow | null, remaining: 0, dead: [] as string[], mode: modeNow };
+
         // Serializa os claims do MESMO token (lock consultivo por transação): sem isto, duas chamadas simultâneas da
         // mesma impressora (ex.: retry depois de timeout) passam juntas pela checagem "já tenho um job?" e cada uma
         // pega um job diferente — um deles fica preso pela lease inteira sem ninguém imprimir. Tokens diferentes
@@ -56,7 +68,7 @@ export class PrintJobService {
             FROM "PrintJob"
            WHERE "storeId" = ${storeId} AND "status" = 'CLAIMED' AND "claimedByTokenId" = ${tokenId} AND "leaseUntil" > ${NOW}
            ORDER BY "createdAt" ASC, "id" ASC LIMIT 1`;
-        if (again[0]) return { row: again[0], remaining: again[0].remaining, dead: [] as string[] };
+        if (again[0]) return { row: again[0] as ClaimRow | null, remaining: again[0].remaining, dead: [] as string[], mode: modeNow };
 
         // 2) Lease vencida e sem tentativas sobrando: falha DEFINITIVA (alerta ao painel), em vez de voltar à fila para sempre.
         const dead = await tx.$queryRaw<{ id: string }[]>`
@@ -83,14 +95,14 @@ export class PrintJobService {
                     FOR UPDATE SKIP LOCKED LIMIT 1)
              AND "storeId" = ${storeId}
           RETURNING "id", "kind", "orderId", "attempts", "reprintNumber", ${lease}::int AS "remaining"`;
-        return { row: claimed[0] ?? null, remaining: lease, dead: dead.map((d) => d.id) };
+        return { row: (claimed[0] ?? null) as ClaimRow | null, remaining: lease, dead: dead.map((d) => d.id), mode: modeNow };
       },
       { maxWait: 10_000, timeout: 20_000 },
     );
 
     for (const id of taken.dead) this.publish(storeId, { type: "print.job_failed", jobId: id });
-    if (!taken.row) return { job: null };
-    return { job: await this.toClaimed(storeId, taken.row, taken.remaining) };
+    if (!taken.row) return { job: null, mode: taken.mode };
+    return { job: await this.toClaimed(storeId, taken.row, taken.remaining), mode: taken.mode };
   }
 
   private async toClaimed(storeId: string, row: ClaimRow, remaining: number): Promise<ClaimedJob> {
@@ -123,20 +135,25 @@ export class PrintJobService {
   // ───────────── Dispositivo: ack ─────────────
   async ack(storeId: string, tokenId: string, jobId: string, input: AckInput): Promise<{ ok: true }> {
     if (input.status === "PRINTED") {
-      const done = await this.db.$queryRaw<{ id: string; kind: PrintKind; orderId: string | null }[]>`
-        UPDATE "PrintJob"
-           SET "status" = 'PRINTED', "printedAt" = ${NOW}, "leaseUntil" = NULL, "ackStatus" = 'PRINTED',
-               "lastErrorCode" = NULL, "lastError" = NULL, "updatedAt" = ${NOW}
-         WHERE "id" = ${jobId} AND "storeId" = ${storeId} AND "claimedByTokenId" = ${tokenId}
-           AND "status" = 'CLAIMED' AND "leaseUntil" > ${NOW}
-        RETURNING "id", "kind", "orderId"`;
-      if (done[0]) {
+      // O job e o `printedAt` do pedido mudam NA MESMA transação (R2 do Deming: antes eram 2 comandos e uma falha entre eles
+      // deixava o job PRINTED com o pedido "não impresso" — o legado o reimprimiria no recuo).
+      const done = await this.db.$transaction(async (tx) => {
+        const rows = await tx.$queryRaw<{ id: string; kind: PrintKind; orderId: string | null }[]>`
+          UPDATE "PrintJob"
+             SET "status" = 'PRINTED', "printedAt" = ${NOW}, "leaseUntil" = NULL, "ackStatus" = 'PRINTED',
+                 "lastErrorCode" = NULL, "lastError" = NULL, "updatedAt" = ${NOW}
+           WHERE "id" = ${jobId} AND "storeId" = ${storeId} AND "claimedByTokenId" = ${tokenId}
+             AND "status" = 'CLAIMED' AND "leaseUntil" > ${NOW}
+          RETURNING "id", "kind", "orderId"`;
+        const row = rows[0];
+        if (!row) return null;
         // Compatibilidade com o endpoint legado (`printedAt` do pedido): só o tíquete original conta.
-        if (done[0].kind === "ORDER_KITCHEN" && done[0].orderId) {
-          await this.db.order.updateMany({ where: { id: done[0].orderId, storeId, printedAt: null }, data: { printedAt: this.now() } });
+        if (row.kind === "ORDER_KITCHEN" && row.orderId) {
+          await tx.order.updateMany({ where: { id: row.orderId, storeId, printedAt: null }, data: { printedAt: this.now() } });
         }
-        return { ok: true };
-      }
+        return row;
+      });
+      if (done) return { ok: true };
       return this.ackRejected(storeId, tokenId, jobId, "PRINTED");
     }
 
@@ -167,7 +184,11 @@ export class PrintJobService {
 
     const sameOwner = job.claimedByTokenId === tokenId;
     if (sameOwner && job.ackStatus === requested && (job.status === "PRINTED" || job.status === "PENDING" || job.status === "FAILED")) {
-      return { ok: true }; // repetido pelo dono: 200 idempotente, sem efeito
+      // repetido pelo dono: 200 idempotente. Se o `printedAt` do pedido ficou para trás, conserta (nunca desfaz nada).
+      if (requested === "PRINTED" && job.kind === "ORDER_KITCHEN" && job.orderId) {
+        await this.db.order.updateMany({ where: { id: job.orderId, storeId, printedAt: null }, data: { printedAt: job.printedAt ?? this.now() } });
+      }
+      return { ok: true };
     }
     if (sameOwner && job.status === "CLAIMED") {
       // Lease vencida: devolve o job à fila agora (ou FAILED se não há tentativas) em vez de esperar o próximo claim.
@@ -182,6 +203,7 @@ export class PrintJobService {
 
   // ───────────── Painel ─────────────
   async reprint(actor: { storeId: string; userId: string; role: "OWNER" | "STAFF" }, orderId: string) {
+    await this.requireQueueMode(actor.storeId);
     // A 2ª via sai com telefone e endereço COMPLETOS: é uma DIVULGAÇÃO de contato e segue a regra única do detalhe
     // (authorizeContactView): papel e idade (STAFF só pedido aberto ou encerrado há < 24 h), rastro `order.view_contact`
     // gravado de forma ESTRITA antes de o tíquete existir e falha fechada se o rastro não puder ser gravado.
@@ -229,12 +251,20 @@ export class PrintJobService {
   }
 
   async createTest(actor: { storeId: string; userId: string }) {
+    await this.requireQueueMode(actor.storeId);
     const created = await this.db.printJob.create({
       data: { storeId: actor.storeId, kind: "TEST", maxAttempts: DEFAULT_MAX_ATTEMPTS, requestedByUserId: actor.userId },
     });
     this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "print.test", targetType: "PrintJob", targetId: created.id });
     this.publish(actor.storeId, { type: "print.available" });
     return this.view(created);
+  }
+
+  // Reimpressão e teste de impressora geram jobs: com a loja em LEGACY ninguém os consome. Falha clara em vez de job parado.
+  private async requireQueueMode(storeId: string) {
+    if ((await loadPrintMode(this.db, storeId)) !== "QUEUE") {
+      throw err(409, "PRINT_MODE_LEGACY", "A impressão por fila ainda não está ativa nesta loja. Peça ao dono para ativá-la.");
+    }
   }
 
   async list(storeId: string, query: { orderId?: string; limit?: number }) {

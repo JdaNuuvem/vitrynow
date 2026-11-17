@@ -8,6 +8,11 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { prisma } from "@meucardapio/db";
 import { makeApp, registerStore, resetDb } from "../helpers";
 
+// Estes testes esperam o lock da loja, disputam corridas e preparam banco: sob carga da máquina o tempo total varia de 1 s a 45 s (medido pelo
+// Hopper). O limite de 15 s do vitest.config.ts os reprovava por TEMPO, sem violar nenhum invariante. O limite é só deste arquivo e as
+// asserções não mudaram (com mais folga, a asserção final é sempre reportada).
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+
 vi.mock("../../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/mercadopago")>();
   return { ...original, createPixPayment: vi.fn(), getPayment: vi.fn(), cancelPayment: vi.fn(), refundPayment: vi.fn() };
@@ -35,6 +40,8 @@ describe("QA aviso de cancelamento da fila de impressão (C1)", () => {
   async function pedidoImpresso() {
     const { cookie, response } = await registerStore(app);
     const store = json(response).store as { id: string; slug: string };
+    // API-12b: o aviso de cancelamento só existe com a loja em modo QUEUE (em LEGACY ninguém consome a fila).
+    await prisma.store.update({ where: { id: store.id }, data: { printMode: "QUEUE" } });
     const cat = json(await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie: cookie! }, payload: { name: "C" } })).category.id;
     const productId = json(await app.inject({ method: "POST", url: "/api/catalog/products", headers: { cookie: cookie! }, payload: { categoryId: cat, name: "P", priceCents: 1000 } })).product.id as string;
     const token = json(await app.inject({ method: "POST", url: "/api/device-tokens", headers: { cookie: cookie! }, payload: { label: "PC" } })).token.token as string;
