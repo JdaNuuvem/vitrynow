@@ -177,6 +177,29 @@ export type CreateProductInput = z.infer<typeof createProductSchema>;
 export const updateProductSchema = createProductSchema.partial();
 export type UpdateProductInput = z.infer<typeof updateProductSchema>;
 
+// ---- Grupos de opções (B8) ----
+// Regras de negócio (mínimo/máximo coerentes, BASE = 1..1, limites) ficam na API (optionGroups.domain); aqui só o formato.
+
+export const optionInputSchema = z.object({
+  id: z.string().min(1).optional(), // presente ao editar uma opção existente
+  name: z.string().trim().min(1).max(150),
+  priceCents: z.number().int().min(0).max(100_000_000),
+  active: z.boolean().optional(),
+});
+
+export const optionGroupInputSchema = z.object({
+  name: z.string().trim().min(1).max(150),
+  helpText: z.string().trim().max(300).nullish().transform((v) => (v ? v : null)),
+  minSelect: z.number().int().min(0).max(100).default(0),
+  maxSelect: z.number().int().min(1).max(100).nullable().default(1), // null = sem limite
+  maxPerOption: z.number().int().min(1).max(99).default(1),
+  priceMode: z.enum(["SUM", "BASE"]).default("SUM"),
+  options: z.array(optionInputSchema).max(60),
+});
+export type OptionGroupInput = z.infer<typeof optionGroupInputSchema>;
+
+export const productOptionGroupsSchema = z.object({ groupIds: z.array(z.string().min(1)).max(50) });
+
 // ---- Caixa (painel) ----
 
 export const openCashSessionSchema = z.object({

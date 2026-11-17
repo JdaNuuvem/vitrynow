@@ -27,6 +27,7 @@ import noticeRoutes from "./routes/notices";
 import mfaRoutes from "./routes/mfa";
 import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
 import jobsPlugin from "./jobs/plugin";
+import optionGroupRoutes from "./modules/optionGroups/optionGroups.module";
 
 export function buildApp() {
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
@@ -73,6 +74,7 @@ export function buildApp() {
   app.register(deviceTokenRoutes);
   app.register(realtimeRoutes);
   app.register(catalogRoutes);
+  app.register(optionGroupRoutes);
   app.register(cashierRoutes);
   app.register(couponRoutes);
   app.register(paymentRoutes);
