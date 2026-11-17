@@ -113,6 +113,23 @@ namespace MeuCardapio.PrintClient
             };
         }
 
+        // Como a API manda o AVISO DE CANCELAMENTO (printable.ts, montado do zero): total 0, sem itens, sem contato.
+        internal static PrintableOrder CancelFromApi()
+        {
+            return new PrintableOrder
+            {
+                OrderId = "ord-5300", Code = "5300", Type = "DELIVERY", StoreName = "Lanchonete Boa Vista", CreatedAt = "2026-11-17T14:05:00.000Z",
+                TotalCents = 0, SubtotalCents = 0, DiscountCents = 0, DeliveryFeeCents = 0, TipCents = 0, PaymentMethod = null, PaymentStatus = "A_COBRAR",
+                CancelNotice = true, PrintedAtOriginal = "2026-11-17T14:06:00Z", Items = new List<PrintableOrderItem>(),
+            };
+        }
+
+        // Como o cliente monta o TESTE (o servidor manda total 0 e sem itens; o cliente ignora tudo menos o nome da loja).
+        internal static PrintableOrder TestFromClient()
+        {
+            return new PrintableOrder { IsTest = true, Code = "TESTE", StoreName = "Lanchonete Boa Vista", TotalCents = 0, Items = new List<PrintableOrderItem>() };
+        }
+
         internal static PrintableOrder ZeroTotalReprint()
         {
             var o = ZeroTotal();
@@ -553,6 +570,48 @@ namespace MeuCardapio.PrintClient
             Check("total 0 SEM desconto e com itens de valor (dado faltando): NAO diz 'nada a cobrar'", !pay(missing).Contains("SEM COBRANÇA"));
             var missing2 = ZeroTotal(); missing2.DiscountCents = 0;
             Check("total 0 com desconto 0 e itens de valor: NAO diz 'nada a cobrar'", !pay(missing2).Contains("SEM COBRANÇA"));
+            // ---- Condicao da Nightingale (PC-19): ARITMETICA, e AUSENTE nao e ZERO ----
+            Func<string, PrintableOrder> fromJson = j => Newtonsoft.Json.JsonConvert.DeserializeObject<PrintableOrder>(j);
+            const string itemsJson = "\"items\":[{\"productName\":\"X-Burger\",\"quantity\":2,\"unitPriceCents\":2500}]";
+            var absent = fromJson("{\"orderId\":\"a\",\"code\":\"1\",\"type\":\"BALCAO\",\"subtotalCents\":5000,\"discountCents\":5000," + itemsJson + "}");
+            Check("total AUSENTE no JSON (mesmo com desconto igual aos itens): nao e total zero e NAO diz 'nada a cobrar'", !absent.HasTotalCents && !pay(absent).Contains("SEM COBRANÇA"));
+            var present0 = fromJson("{\"orderId\":\"a\",\"code\":\"1\",\"type\":\"BALCAO\",\"totalCents\":0,\"subtotalCents\":5000,\"discountCents\":5000," + itemsJson + "}");
+            Check("totalCents: 0 ESCRITO pelo servidor com desconto = itens: diz 'SEM COBRANÇA' (b)", present0.HasTotalCents && pay(present0) == Z);
+            var partial = fromJson("{\"orderId\":\"a\",\"code\":\"1\",\"type\":\"BALCAO\",\"subtotalCents\":5000,\"discountCents\":100," + itemsJson + "}");
+            Check("itens R$ 50, desconto R$ 1 e total ausente (chegaria como 0): NAO diz 'SEM COBRANÇA' (a)", !pay(partial).Contains("SEM COBRANÇA"));
+            var partial0 = ZeroTotal(); partial0.DiscountCents = 100;
+            Check("itens R$ 50, desconto R$ 1 e total 0: NAO diz 'SEM COBRANÇA' (a)", !pay(partial0).Contains("SEM COBRANÇA"));
+            var over = ZeroTotal(); over.DiscountCents = 6000;
+            Check("itens R$ 50, desconto R$ 60 (inconsistente, total 0): fluxo normal (c)", !pay(over).Contains("SEM COBRANÇA"));
+            var feeOnly = ZeroTotal(); feeOnly.Type = "DELIVERY"; feeOnly.DeliveryFeeCents = 600;
+            Check("total 0 mas taxa de entrega R$ 6,00 (cupom so cobre os itens): fluxo normal (d)", !pay(feeOnly).Contains("SEM COBRANÇA"));
+            var tipOnly = ZeroTotal(); tipOnly.TipCents = 200;
+            Check("total 0 mas gorjeta R$ 2,00: fluxo normal", !pay(tipOnly).Contains("SEM COBRANÇA"));
+            var subDiverge = ZeroTotal(); subDiverge.SubtotalCents = 4000;
+            Check("subtotal informado (R$ 40) NAO bate com a soma dos itens (R$ 50): fluxo normal", !pay(subDiverge).Contains("SEM COBRANÇA"));
+            var noDiscount = ZeroTotal(); noDiscount.DiscountCents = null;
+            Check("desconto AUSENTE com itens de valor e total 0: fluxo normal (sem prova nao e de graca)", !pay(noDiscount).Contains("SEM COBRANÇA"));
+            var withAdds = ZeroTotal(); withAdds.Items[0].Additionals = new List<PrintableOrderAdditional> { new PrintableOrderAdditional { Name = "Bacon", PriceCents = 300 } };
+            Check("adicionais entram no valor dos itens: desconto de R$ 50 nao cobre itens de R$ 56 (fluxo normal)", !pay(withAdds).Contains("SEM COBRANÇA"));
+            withAdds.SubtotalCents = 5600; withAdds.DiscountCents = 5600;
+            Check("adicionais entram no valor dos itens: desconto de R$ 56 cobre exatamente (diz 'SEM COBRANÇA')", pay(withAdds) == Z);
+
+            // ---- aviso de cancelamento e TESTE nao passam pela linha de pagamento (vem da API com total 0 e SEM itens) ----
+            foreach (var mm in new[] { 58, 80 })
+            {
+                var oldClock = TicketBuilder.Clock; TicketBuilder.Clock = () => new DateTime(2026, 11, 17, 15, 0, 0, DateTimeKind.Utc);
+                try
+                {
+                    var cancelTxt = Txt(CancelFromApi(), mm);
+                    Check("aviso de cancelamento da API (total 0, sem itens) em " + mm + " mm: layout proprio, SEM linha de pagamento", cancelTxt.Contains("CANCELADO") && !cancelTxt.Contains("SEM COBRANÇA") && !cancelTxt.Contains("COBRAR") && !cancelTxt.Contains("PIX"));
+                    var testTxt = Txt(TestFromClient(), mm);
+                    Check("tiquete de TESTE (total 0, sem itens) em " + mm + " mm: layout proprio, SEM linha de pagamento", testTxt.Contains("TESTE DE IMPRESSÃO") && !testTxt.Contains("SEM COBRANÇA") && !testTxt.Contains("COBRAR") && !testTxt.Contains("PIX"));
+                }
+                finally { TicketBuilder.Clock = oldClock; }
+            }
+            Check("so o tiquete de pedido sem itens e total 0 pede o aviso de log (aviso de cancelamento e teste NAO)", TicketBuilder.IsEmptyZeroTicket(new PrintableOrder { OrderId = "v", Code = "9", Type = "BALCAO", TotalCents = 0, Items = new List<PrintableOrderItem>() })
+                && !TicketBuilder.IsEmptyZeroTicket(CancelFromApi()) && !TicketBuilder.IsEmptyZeroTicket(TestFromClient()) && !TicketBuilder.IsEmptyZeroTicket(ZeroTotal()));
+
             var empty = new PrintableOrder { OrderId = "e", Code = "1", Type = "BALCAO", TotalCents = 0, Items = new List<PrintableOrderItem>() };
             Check("pedido sem itens e total 0: 'SEM COBRANÇA' (nada a cobrar de fato)", pay(empty) == Z);
         }
@@ -587,11 +646,15 @@ namespace MeuCardapio.PrintClient
             bool update = Environment.GetEnvironmentVariable("PC_UPDATE_GOLDEN") == "1";
             if (string.IsNullOrEmpty(dir)) { Console.WriteLine("SKIP golden files (PC_GOLDEN_DIR nao definido; use run-selftest.ps1)"); return; }
             Directory.CreateDirectory(dir);
+            var oldClock = TicketBuilder.Clock;
+            TicketBuilder.Clock = () => new DateTime(2026, 11, 17, 15, 0, 0, DateTimeKind.Utc);   // hora fixa do tiquete de teste
+            try {
             var fixtures = new Dictionary<string, PrintableOrder>
             {
                 { "basico", Basic() }, { "contrato-atual", CurrentContract() }, { "longo-emoji-hostil", LongAndHostile() },
                 { "muitos-itens", ManyItems() }, { "segunda-via", Reprint() }, { "quantidades", Quantities() }, { "cancelamento", CancelFixture() },
                 { "total-zero", ZeroTotal() }, { "total-zero-segunda-via", ZeroTotalReprint() },
+                { "cancelamento-da-api", CancelFromApi() }, { "teste-da-api", TestFromClient() },
             };
             foreach (var kv in fixtures)
             {
@@ -606,6 +669,7 @@ namespace MeuCardapio.PrintClient
                     Check("golden confere: " + name + (expected == actual ? "" : " | " + FirstDiff(expected, actual)), expected == actual);
                 }
             }
+            } finally { TicketBuilder.Clock = oldClock; }
         }
 
         static string FirstDiff(string expected, string actual)

@@ -29,7 +29,11 @@ namespace MeuCardapio.PrintClient.Models
         [JsonProperty("customerPhone")] public string CustomerPhone { get; set; }
         [JsonProperty("address")] public string Address { get; set; }
         [JsonProperty("notes")] public string Notes { get; set; }
-        [JsonProperty("totalCents")] public int TotalCents { get; set; }
+        // Total: AUSENTE nao e ZERO (parecer Nightingale, PC-19). Campo ausente na resposta deixa HasTotalCents falso; so um "totalCents": 0
+        // ESCRITO pelo servidor (ou atribuido em codigo) vale como zero. A decisao "nada a cobrar" exige a presenca.
+        int? _totalCents;
+        [JsonProperty("totalCents")] public int TotalCents { get { return _totalCents ?? 0; } set { _totalCents = value; } }
+        [JsonIgnore] public bool HasTotalCents { get { return _totalCents.HasValue; } }
         // Já entregues pela API (printable.ts): taxa, gorjeta e forma de pagamento (DINHEIRO, PIX, CREDITO, DEBITO, VR, VA ou null).
         [JsonProperty("deliveryFeeCents")] public int DeliveryFeeCents { get; set; }
         [JsonProperty("tipCents")] public int TipCents { get; set; }

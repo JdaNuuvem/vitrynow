@@ -32,6 +32,8 @@ namespace MeuCardapio.PrintClient.Services
             if (order == null) return;
             try
             {
+                // Tiquete sem itens e total zero e malformado: sai "SEM COBRANCA", mas fica registrado (o dono pode conferir no painel).
+                if (TicketBuilder.IsEmptyZeroTicket(order)) Logger.Info("AVISO: pedido #" + order.Code + " sem itens e com total zero; impresso como SEM COBRANCA. Conferir no painel.");
                 var doc = TicketBuilder.Build(order, _paperMm(), _timeZone);
                 // Uma impressão por vez: o spooler/PrintDocument e a consulta WMI não são para uso concorrente, e
                 // dois tíquetes não podem se misturar. Chamado fora da thread da interface (ver MainForm).
