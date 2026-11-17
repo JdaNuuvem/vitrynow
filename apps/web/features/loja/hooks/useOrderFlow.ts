@@ -21,8 +21,11 @@ export type PlacedOrderState = {
   trackingUnavailable: boolean;
 };
 
-export const TRACKING_UNAVAILABLE_MESSAGE = "Não conseguimos acompanhar este pedido por aqui. Fale com a loja pelo WhatsApp ou por telefone.";
-export const CANCEL_UNAVAILABLE_MESSAGE = "Não conseguimos cancelar por aqui. Fale com a loja pelo WhatsApp ou por telefone.";
+// Sem prometer telefone: a loja pública só tem WhatsApp (e nem toda loja o cadastrou). O botão do WhatsApp vem da tela, se houver.
+export const TRACKING_UNAVAILABLE_MESSAGE = "Não é possível acompanhar este pedido por aqui. Fale com a loja.";
+// Só em pedido PIX (em dinheiro ou cartão na entrega a frase enganaria).
+export const PIX_PAID_REASSURANCE = "Se você já pagou, a loja recebe o pedido.";
+export const CANCEL_UNAVAILABLE_MESSAGE = "Não é possível cancelar por aqui. Fale com a loja.";
 
 export const PAYMENT_POLL_MS = 3000;
 
@@ -80,6 +83,19 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
       clearTimeout(timer);
     };
   }, [storefront, slug, orderId, watching]);
+
+  // PIX na tela e ainda não resolvido: recarregar ou fechar a aba perde o QR e o "copia e cola" (o token só vive em
+  // memória). Pede a confirmação padrão do navegador (sem texto próprio) até o pagamento confirmar, falhar ou cancelar.
+  const pixOnScreen = Boolean(placed?.pixData) && !placed?.paymentConfirmed && !placed?.paymentFailedMessage && !placed?.cancelled;
+  useEffect(() => {
+    if (!pixOnScreen) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [pixOnScreen]);
 
   // Devolve true se o pedido foi criado (quem chamou limpa o carrinho e fecha o checkout).
   async function submit(form: CheckoutForm, cart: CartLine[], totalCents: number, summary: OrderSummary | null = null): Promise<boolean> {

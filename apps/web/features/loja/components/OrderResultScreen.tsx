@@ -2,8 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import type { PixPayment } from "@/core/domain/storefront";
 import { formatCents } from "@/shared/format/money";
 import type { OrderSummary } from "../checkoutForm";
-import { TRACKING_UNAVAILABLE_MESSAGE } from "../hooks/useOrderFlow";
+import { PIX_PAID_REASSURANCE, TRACKING_UNAVAILABLE_MESSAGE } from "../hooks/useOrderFlow";
 import { Sheet } from "./Sheet";
+
+// Conversa com a loja no WhatsApp, só com o código do pedido na mensagem (sem token nem dado do cliente). Sem número
+// cadastrado devolve null e a tela mostra só o texto.
+export function storeChatLink(whatsapp: string | null | undefined, code: string): string | null {
+  const digits = (whatsapp ?? "").replace(/\D/g, "");
+  return digits ? `https://wa.me/${digits}?text=${encodeURIComponent(`Pedido #${code}`)}` : null;
+}
 
 // Telas pós-pedido (spec 09 §10.2): resumo do que foi pedido, "Voltar ao cardápio" como ação
 // principal e o cancelamento numa folha que escreve o efeito (nunca confirm() nativo).
@@ -37,6 +44,21 @@ export function OrderResultScreen({
   const headingRef = useRef<HTMLHeadingElement>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [copyNote, setCopyNote] = useState<string | null>(null);
+  const pixCodeRef = useRef<HTMLTextAreaElement>(null);
+  const chatLink = storeChatLink(whatsapp, code);
+
+  async function copyPixCode() {
+    try {
+      await navigator.clipboard.writeText(pixData?.pixQrCode ?? "");
+      setCopyNote("Código PIX copiado.");
+    } catch {
+      // sem permissão ou sem suporte: deixa o código selecionado para o cliente copiar
+      pixCodeRef.current?.focus();
+      pixCodeRef.current?.select();
+      setCopyNote("Não deu para copiar sozinho. Copie o código selecionado abaixo.");
+    }
+  }
 
   // Ao entrar na tela, o foco vai ao título: o leitor de tela anuncia o resultado.
   useEffect(() => {
@@ -106,9 +128,10 @@ export function OrderResultScreen({
       {trackingUnavailable && !paymentConfirmed && (
         <div role="status" className="loja__result-notice">
           <p className="loja__result-text">{TRACKING_UNAVAILABLE_MESSAGE}</p>
-          {whatsapp && (
-            <a href={`https://wa.me/${whatsapp}`} target="_blank" rel="noreferrer" className="loja__empty-menu-link">
-              Falar com a loja
+          {pixData && <p className="loja__result-text">{PIX_PAID_REASSURANCE}</p>}
+          {chatLink && (
+            <a href={chatLink} target="_blank" rel="noreferrer" className="loja__empty-menu-link">
+              Falar com a loja no WhatsApp
             </a>
           )}
         </div>
@@ -117,6 +140,17 @@ export function OrderResultScreen({
       {awaitingPix && pixData && (
         <>
           <p className="loja__result-text">Escaneie o QR Code ou copie o código para pagar via PIX:</p>
+          <p className="loja__result-warning">Não feche nem atualize esta página até pagar.</p>
+          {pixData.pixQrCode && (
+            <>
+              <button type="button" onClick={copyPixCode} className="loja__cta">
+                Copiar código PIX
+              </button>
+              <p aria-live="polite" className="loja__result-hint">
+                {copyNote}
+              </p>
+            </>
+          )}
           {pixData.pixQrCodeBase64 && (
             // eslint-disable-next-line @next/next/no-img-element -- QR em data: URL, não há otimização possível
             <img src={`data:image/png;base64,${pixData.pixQrCodeBase64}`} alt="QR Code PIX" className="loja__qr" />
@@ -126,7 +160,7 @@ export function OrderResultScreen({
               <label htmlFor="loja-pix-code" className="loja__label">
                 Código PIX (copia e cola)
               </label>
-              <textarea id="loja-pix-code" readOnly value={pixData.pixQrCode} className="loja__pix-code" rows={3} />
+              <textarea id="loja-pix-code" ref={pixCodeRef} readOnly value={pixData.pixQrCode} className="loja__pix-code" rows={3} />
             </>
           )}
         </>
@@ -164,9 +198,9 @@ export function OrderResultScreen({
           {cancelError && (
             <div role="alert" className="loja__error-summary">
               <p>{cancelError}</p>
-              {whatsapp && (
-                <a href={`https://wa.me/${whatsapp}`} target="_blank" rel="noreferrer" className="loja__empty-menu-link">
-                  Falar com a loja
+              {chatLink && (
+                <a href={chatLink} target="_blank" rel="noreferrer" className="loja__empty-menu-link">
+                  Falar com a loja no WhatsApp
                 </a>
               )}
             </div>

@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OrderSummary } from "../checkoutForm";
 import { OrderResultScreen } from "./OrderResultScreen";
 
@@ -95,7 +95,7 @@ describe("OrderResultScreen: cancelar sem confirm() nativo", () => {
     setup({ cancelError: "A loja já aceitou o pedido. Fale com ela.", whatsapp: "5521999999999" });
     await userEvent.click(screen.getByRole("button", { name: "Cancelar pedido" }));
     expect(screen.getByRole("alert")).toHaveTextContent("A loja já aceitou o pedido. Fale com ela.");
-    expect(screen.getByRole("link", { name: "Falar com a loja" })).toHaveAttribute("href", "https://wa.me/5521999999999");
+    expect(screen.getByRole("link", { name: "Falar com a loja no WhatsApp" })).toHaveAttribute("href", "https://wa.me/5521999999999?text=Pedido%20%230001");
   });
 
   it("pedido cancelado mostra o título e só 'Voltar ao cardápio'", () => {
@@ -132,8 +132,8 @@ describe("OrderResultScreen: PIX", () => {
 describe("OrderResultScreen: sem acesso ao pedido neste aparelho (NG-16)", () => {
   it("pede para falar com a loja, com o contato, sem erro técnico e sem 'pedido não existe'", () => {
     setup({ trackingUnavailable: true, whatsapp: "5521999999999" });
-    expect(screen.getByText(/Fale com a loja pelo WhatsApp ou por telefone/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Falar com a loja" })).toHaveAttribute("href", "https://wa.me/5521999999999");
+    expect(screen.getByText("Não é possível acompanhar este pedido por aqui. Fale com a loja.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Falar com a loja no WhatsApp" })).toHaveAttribute("href", "https://wa.me/5521999999999?text=Pedido%20%230001");
     expect(document.body.textContent).not.toMatch(/não encontr|não existe|erro/i);
   });
 
@@ -149,6 +149,96 @@ describe("OrderResultScreen: sem acesso ao pedido neste aparelho (NG-16)", () =>
     setup({ pixData: { pixQrCode: "000201...", pixQrCodeBase64: null } });
     expect(screen.getByText(/Aguardando confirmação/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancelar pedido" })).toBeInTheDocument();
-    expect(screen.queryByText(/Fale com a loja pelo WhatsApp/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Fale com a loja/)).not.toBeInTheDocument();
+  });
+});
+
+
+describe("OrderResultScreen: contato da loja sem prometer telefone (WEB-33, Da Vinci)", () => {
+  it("loja SEM whatsapp: só o texto, sem botão e sem a palavra telefone", () => {
+    setup({ trackingUnavailable: true, whatsapp: null });
+    expect(screen.getByText("Não é possível acompanhar este pedido por aqui. Fale com a loja.")).toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/telefone|ligue/i);
+  });
+
+  it("loja COM whatsapp: abre só wa.me/<dígitos> com 'Pedido #código' codificado, sem token nem dado do cliente", () => {
+    setup({ trackingUnavailable: true, whatsapp: "+55 (21) 99999-9999", code: "0123" });
+    const href = screen.getByRole("link", { name: "Falar com a loja no WhatsApp" }).getAttribute("href");
+    expect(href).toBe("https://wa.me/5521999999999?text=Pedido%20%230123");
+    expect(href).not.toMatch(/token|mco_|Maria/);
+  });
+
+  it("whatsapp só com lixo (sem dígitos) é tratado como ausente", () => {
+    setup({ trackingUnavailable: true, whatsapp: "---" });
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("o link do cancelar recusado também usa o texto e o link novos", async () => {
+    setup({ cancelError: "Não é possível cancelar por aqui. Fale com a loja.", whatsapp: "5521999999999" });
+    await userEvent.click(screen.getByRole("button", { name: "Cancelar pedido" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Não é possível cancelar por aqui. Fale com a loja.");
+    expect(screen.getByRole("link", { name: "Falar com a loja no WhatsApp" })).toBeInTheDocument();
+  });
+});
+
+describe("OrderResultScreen: espera do PIX (aviso e copiar)", () => {
+  const pix = { pixQrCode: "000201PIXCODE", pixQrCodeBase64: "QUJD" };
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("mostra 'Não feche nem atualize esta página até pagar.' ACIMA do QR e o botão 'Copiar código PIX'", () => {
+    setup({ pixData: pix });
+    const warning = screen.getByText("Não feche nem atualize esta página até pagar.");
+    const qr = screen.getByAltText("QR Code PIX");
+    expect(warning.compareDocumentPosition(qr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Copiar código PIX" })).toBeInTheDocument();
+  });
+
+  it("copiar escreve o código na área de transferência e avisa", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    setup({ pixData: pix });
+    await userEvent.click(screen.getByRole("button", { name: "Copiar código PIX" }));
+    expect(writeText).toHaveBeenCalledWith("000201PIXCODE");
+    expect(screen.getByText("Código PIX copiado.")).toBeInTheDocument();
+  });
+
+  it("sem permissão para copiar: seleciona o código e explica, sem erro técnico", async () => {
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText: vi.fn().mockRejectedValue(new Error("negado")) } });
+    setup({ pixData: pix });
+    await userEvent.click(screen.getByRole("button", { name: "Copiar código PIX" }));
+    expect(screen.getByText(/Não deu para copiar sozinho/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Código PIX (copia e cola)")).toHaveFocus();
+  });
+
+  it("sem acompanhamento (sem token) o aviso e o botão de copiar continuam: o cliente ainda precisa pagar", () => {
+    setup({ pixData: pix, trackingUnavailable: true });
+    expect(screen.getByText("Não feche nem atualize esta página até pagar.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copiar código PIX" })).toBeInTheDocument();
+  });
+
+  it("pedido sem PIX não mostra aviso nem copiar", () => {
+    setup();
+    expect(screen.queryByText(/Não feche nem atualize/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copiar código PIX" })).not.toBeInTheDocument();
+  });
+});
+
+
+describe("OrderResultScreen: a frase 'a loja recebe o pedido' só em pedido PIX (Da Vinci/Leonardo)", () => {
+  it("PIX sem acompanhamento: diz 'Se você já pagou, a loja recebe o pedido.'", () => {
+    setup({ trackingUnavailable: true, pixData: { pixQrCode: "000201...", pixQrCodeBase64: null } });
+    expect(screen.getByText("Se você já pagou, a loja recebe o pedido.")).toBeInTheDocument();
+  });
+
+  it("dinheiro ou cartão na entrega sem acompanhamento: a frase NÃO aparece (enganaria)", () => {
+    setup({ trackingUnavailable: true, pixData: null });
+    expect(screen.getByText("Não é possível acompanhar este pedido por aqui. Fale com a loja.")).toBeInTheDocument();
+    expect(screen.queryByText(/já pagou/)).not.toBeInTheDocument();
+  });
+
+  it("com acompanhamento normal, nenhuma das duas frases aparece", () => {
+    setup({ pixData: { pixQrCode: "000201...", pixQrCodeBase64: null } });
+    expect(screen.queryByText(/já pagou/)).not.toBeInTheDocument();
   });
 });

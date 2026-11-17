@@ -226,3 +226,67 @@ describe("useOrderFlow: token do pedido (NG-16)", () => {
     expect(t.result.current.placed?.cancelError).toBe("A loja já aceitou o pedido.");
   });
 });
+
+
+describe("useOrderFlow: confirmação ao recarregar durante o PIX (WEB-33)", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const unload = () => {
+    const event = new Event("beforeunload", { cancelable: true }) as BeforeUnloadEvent;
+    window.dispatchEvent(event);
+    return event;
+  };
+
+  it("com o PIX na tela, recarregar pede a confirmação padrão do navegador", async () => {
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await placePixOrder(t);
+    expect(unload().defaultPrevented).toBe(true);
+  });
+
+  it("também avisa quando o PIX está na tela mas sem acompanhamento (sem token): o QR se perde igual", async () => {
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })], ok({ orderId: "o9", code: "0099", payment: { pixQrCode: "000201...", pixQrCodeBase64: null } }));
+    await placePixOrder(t);
+    expect(unload().defaultPrevented).toBe(true);
+  });
+
+  it("sem pedido ou pedido presencial: nada a avisar", async () => {
+    const t = setup([ok({ awaitingPayment: false, paymentStatus: "APROVADO" })], ok({ orderId: "o2", code: "0043" }));
+    expect(unload().defaultPrevented).toBe(false);
+    await placePixOrder(t);
+    expect(unload().defaultPrevented).toBe(false);
+  });
+
+  it("sai quando o pagamento confirma", async () => {
+    const t = setup([ok({ awaitingPayment: false, orderStatus: "PENDENTE", paymentStatus: "APROVADO" })]);
+    await placePixOrder(t);
+    expect(unload().defaultPrevented).toBe(true);
+    await tick();
+    expect(t.result.current.placed?.paymentConfirmed).toBe(true);
+    expect(unload().defaultPrevented).toBe(false);
+  });
+
+  it("sai quando o PIX falha (expirado)", async () => {
+    const t = setup([ok({ awaitingPayment: false, orderStatus: "PENDENTE", paymentStatus: "EXPIRADO", terminal: true })]);
+    await placePixOrder(t);
+    await tick();
+    expect(t.result.current.placed?.paymentFailedMessage).toBeTruthy();
+    expect(unload().defaultPrevented).toBe(false);
+  });
+
+  it("sai quando o pedido é cancelado", async () => {
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await placePixOrder(t);
+    await act(async () => {
+      await t.result.current.cancel();
+    });
+    expect(unload().defaultPrevented).toBe(false);
+  });
+
+  it("ao desmontar o ouvinte é removido", async () => {
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await placePixOrder(t);
+    t.unmount();
+    expect(unload().defaultPrevented).toBe(false);
+  });
+});

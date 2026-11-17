@@ -1065,6 +1065,13 @@
   line-height: 1.25rem;
   color: var(--loja-muted);
 }
+.loja__result-warning {
+  margin-top: 0.75rem;
+  font-size: 0.9375rem;
+  line-height: 1.375rem;
+  font-weight: 700;
+  color: var(--loja-ink);
+}
 .loja__result-error {
   margin-top: 0.5rem;
   margin-bottom: 1rem;
