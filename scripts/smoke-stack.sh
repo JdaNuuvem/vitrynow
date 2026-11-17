@@ -67,7 +67,9 @@ w="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")"; [ "$w" 
 s="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/stores/nao-existe")"; [ "$s" = 404 ] && check ok "GET /stores/<inexistente> = 404 vindo da API" || check fail "GET /stores/<x> = $s"
 
 echo "== 3 nenhuma porta publicada fora do Caddy"
-pub="$(docker ps --filter "label=com.docker.compose.project=$PROJ" --format '{{.Names}}|{{.Ports}}' | grep -E '0\.0\.0\.0|::|127\.0\.0\.1' | grep -v caddy || true)"
+# Só os containers que o compose DESTA pilha lista (`ps -q`). NÃO filtrar por rótulo de projeto: a imagem meucardapio-web:smoke carrega o rótulo
+# do compose e todo `docker run` dela (de qualquer agente) o herda, passando no filtro (falso vermelho visto em 17/11, achado da Tesla).
+pub=""; for cid in $("${DC[@]}" ps -q); do p="$(docker inspect -f '{{.Name}}|{{range $k,$v := .NetworkSettings.Ports}}{{if $v}}{{$k}}->{{range $v}}{{.HostIp}}:{{.HostPort}} {{end}}{{end}}{{end}}' "$cid" | sed 's#^/##')"; case "$p" in *caddy*) ;; *"->"*) pub="$pub $p";; esac; done
 [ -z "$pub" ] && check ok "só o caddy publica porta (127.0.0.1:$PORT)" || check fail "portas publicadas: $pub"
 
 echo "== 4 não-root"
