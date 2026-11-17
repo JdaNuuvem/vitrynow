@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CartLine, PixPayment } from "@/core/domain/storefront";
 import { useStorefrontServices } from "@/core/services/StorefrontServices";
 import { STORE_CLOSED_MESSAGE, toPlaceOrderInput, type CheckoutForm, type OrderSummary } from "../checkoutForm";
@@ -16,7 +16,13 @@ export type PlacedOrderState = {
   cancelError: string | null;
   // O que o cliente pediu, para mostrar no resultado. Opcional: quem chama pode não ter montado.
   summary: OrderSummary | null;
+  // NG-16: false = este aparelho não tem acesso ao pedido (a API não devolveu o token, ou recusou o que tinha).
+  // Não dá para consultar o pagamento nem cancelar por aqui: a tela manda o cliente falar com a loja.
+  trackingUnavailable: boolean;
 };
+
+export const TRACKING_UNAVAILABLE_MESSAGE = "Não conseguimos acompanhar este pedido por aqui. Fale com a loja pelo WhatsApp ou por telefone.";
+export const CANCEL_UNAVAILABLE_MESSAGE = "Não conseguimos cancelar por aqui. Fale com a loja pelo WhatsApp ou por telefone.";
 
 export const PAYMENT_POLL_MS = 3000;
 
@@ -28,19 +34,25 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [placed, setPlaced] = useState<PlacedOrderState | null>(null);
+  // NG-16: o token fica SÓ em memória, num ref: não entra no estado que a tela recebe, não vai à URL, ao localStorage
+  // (o histórico guarda só código e total) nem a log. Some ao recarregar a página.
+  const tokenRef = useRef<string | null>(null);
 
   // Acompanha o PIX até um estado final (pago, expirado, rejeitado ou cancelado). Uma consulta
   // por vez (setTimeout encadeado, não setInterval: consulta lenta não empilha chamadas) e para
   // sozinho ao desmontar, ao cancelar ou quando o pedido deixa de existir.
   const orderId = placed?.orderId;
-  const watching = Boolean(placed?.pixData) && !placed?.paymentConfirmed && !placed?.paymentFailedMessage && !placed?.cancelled;
+  const watching =
+    Boolean(placed?.pixData) && !placed?.trackingUnavailable && !placed?.paymentConfirmed && !placed?.paymentFailedMessage && !placed?.cancelled;
   useEffect(() => {
     if (!orderId || !watching) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
 
     async function tick() {
-      const result = await storefront.getPaymentStatus(slug, orderId as string);
+      const token = tokenRef.current;
+      if (!token) return;
+      const result = await storefront.getPaymentStatus(slug, orderId as string, token);
       if (stopped) return;
       if (result.ok) {
         const outcome = interpretPaymentStatus(result.data);
@@ -53,7 +65,9 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
           return;
         }
       } else if (result.status === 404) {
-        setPlaced((prev) => (prev ? { ...prev, paymentFailedMessage: "Não encontramos este pedido. Fale com a loja." } : prev));
+        // Com o NG-16 o 404 é o mesmo para pedido inexistente e para token recusado: não afirma que o pedido não
+        // existe nem que o pagamento falhou (o cliente pode ter pago). Para de consultar e manda falar com a loja.
+        setPlaced((prev) => (prev ? { ...prev, trackingUnavailable: true } : prev));
         return;
       }
       // Pendente ou falha de rede passageira: tenta de novo.
@@ -87,6 +101,7 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
     }
 
     onPlaced({ code: result.data.code, totalCents, placedAt: new Date().toISOString() });
+    tokenRef.current = result.data.token ?? null;
     setPlaced({
       orderId: result.data.orderId,
       code: result.data.code,
@@ -96,6 +111,7 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
       cancelled: false,
       cancelError: null,
       summary,
+      trackingUnavailable: !result.data.token,
     });
     return true;
   }
@@ -103,10 +119,21 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
   // A confirmação é da tela (folha que escreve o efeito); aqui só executa. Nunca confirm() nativo.
   async function cancel() {
     if (!placed) return;
-    const result = await storefront.cancelOrder(slug, placed.orderId);
-    const failure = result.ok ? null : result.error;
+    const token = tokenRef.current;
+    if (!token) {
+      setPlaced((prev) => (prev ? { ...prev, cancelError: CANCEL_UNAVAILABLE_MESSAGE } : prev));
+      return;
+    }
+    const result = await storefront.cancelOrder(slug, placed.orderId, token);
+    // 404 = a API não reconhece o acesso a este pedido: não é "pedido não existe" para o cliente.
+    const failure = result.ok ? null : result.status === 404 ? CANCEL_UNAVAILABLE_MESSAGE : result.error;
     setPlaced((prev) => (prev ? { ...prev, cancelError: failure, cancelled: failure === null } : prev));
   }
 
-  return { placed, submitting, error, errorCode, submit, cancel, back: () => setPlaced(null) };
+  function back() {
+    tokenRef.current = null;
+    setPlaced(null);
+  }
+
+  return { placed, submitting, error, errorCode, submit, cancel, back };
 }

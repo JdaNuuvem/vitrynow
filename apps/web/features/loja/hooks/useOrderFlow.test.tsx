@@ -6,7 +6,7 @@ import type { StorefrontGateway } from "@/core/gateways/StorefrontGateway";
 import type { HttpResult } from "@/core/http/HttpClient";
 import { StorefrontServicesProvider } from "@/core/services/StorefrontServices";
 import type { CheckoutForm } from "../checkoutForm";
-import { PAYMENT_POLL_MS, useOrderFlow } from "./useOrderFlow";
+import { CANCEL_UNAVAILABLE_MESSAGE, PAYMENT_POLL_MS, useOrderFlow } from "./useOrderFlow";
 
 const form: CheckoutForm = {
   deliveryType: "BALCAO",
@@ -19,6 +19,7 @@ const form: CheckoutForm = {
   tipCents: 0,
 };
 const cart = [{ productId: "p1", quantity: 1, additionalIds: [] }];
+const TOKEN = "mco_token-de-teste-do-pedido";
 
 function ok<T>(data: T): HttpResult<T> {
   return { ok: true, data };
@@ -34,7 +35,7 @@ function setup(statuses: Array<HttpResult<PaymentStatusResponse>>, placeResult?:
     cancelOrder: vi.fn().mockResolvedValue(ok({})),
     getPaymentStatus,
     placeOrder: vi.fn().mockResolvedValue(
-      placeResult ?? ok({ orderId: "o1", code: "0042", payment: { pixQrCode: "000201...", pixQrCodeBase64: null } }),
+      placeResult ?? ok({ orderId: "o1", code: "0042", token: TOKEN, payment: { pixQrCode: "000201...", pixQrCodeBase64: null } }),
     ),
   } as unknown as StorefrontGateway;
   const onPlaced = vi.fn();
@@ -110,11 +111,13 @@ describe("useOrderFlow: acompanhamento do PIX (B15)", () => {
     expect(t.getPaymentStatus).toHaveBeenCalledTimes(3);
   });
 
-  it("pedido inexistente (404) encerra o acompanhamento com aviso", async () => {
+  it("404 (NG-16: igual para pedido inexistente e token recusado): para de consultar, sem dizer que o pedido não existe nem que o pagamento falhou", async () => {
     const t = setup([{ ok: false, status: 404, error: "pedido não encontrado" }]);
     await placePixOrder(t);
     await tick();
-    expect(t.result.current.placed?.paymentFailedMessage).toContain("Não encontramos");
+    expect(t.result.current.placed?.trackingUnavailable).toBe(true);
+    expect(t.result.current.placed?.paymentFailedMessage).toBeNull();
+    expect(JSON.stringify(t.result.current.placed)).not.toMatch(/não encontr|não existe/i);
     await tick(PAYMENT_POLL_MS * 3);
     expect(t.getPaymentStatus).toHaveBeenCalledTimes(1);
   });
@@ -150,5 +153,76 @@ describe("useOrderFlow: acompanhamento do PIX (B15)", () => {
     await act(async () => resolveFirst(ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })));
     await tick();
     expect(t.getPaymentStatus).toHaveBeenCalledTimes(2);
+  });
+});
+
+
+describe("useOrderFlow: token do pedido (NG-16)", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    localStorage.clear();
+    sessionStorage.clear();
+  });
+
+  it("consulta o pagamento com o token que a API devolveu na criação", async () => {
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await placePixOrder(t);
+    await tick();
+    expect(t.getPaymentStatus).toHaveBeenCalledWith("loja", "o1", TOKEN);
+  });
+
+  it("cancela com o token", async () => {
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await placePixOrder(t);
+    await act(async () => {
+      await t.result.current.cancel();
+    });
+    expect(t.storefront.cancelOrder).toHaveBeenCalledWith("loja", "o1", TOKEN);
+    expect(t.result.current.placed?.cancelled).toBe(true);
+  });
+
+  it("o token fica só em memória: não aparece no estado da tela, no histórico, nem em localStorage/sessionStorage", async () => {
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    await placePixOrder(t);
+    expect(JSON.stringify(t.result.current.placed)).not.toContain(TOKEN);
+    expect(JSON.stringify(t.onPlaced.mock.calls)).not.toContain(TOKEN);
+    expect(JSON.stringify({ ...localStorage })).not.toContain(TOKEN);
+    expect(JSON.stringify({ ...sessionStorage })).not.toContain(TOKEN);
+  });
+
+  it("sem token na resposta (API antiga ou outro aparelho): não consulta, não cancela e avisa para falar com a loja", async () => {
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })], ok({ orderId: "o9", code: "0099", payment: { pixQrCode: "000201...", pixQrCodeBase64: null } }));
+    await placePixOrder(t);
+    expect(t.result.current.placed?.trackingUnavailable).toBe(true);
+    await tick(PAYMENT_POLL_MS * 3);
+    expect(t.getPaymentStatus).not.toHaveBeenCalled();
+    await act(async () => {
+      await t.result.current.cancel();
+    });
+    expect(t.storefront.cancelOrder).not.toHaveBeenCalled();
+    expect(t.result.current.placed?.cancelled).toBe(false);
+    expect(t.result.current.placed?.cancelError).toBe(CANCEL_UNAVAILABLE_MESSAGE);
+  });
+
+  it("cancelar com 404 não vira 'pedido não encontrado': pede para falar com a loja", async () => {
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    (t.storefront.cancelOrder as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, status: 404, error: "pedido não encontrado" });
+    await placePixOrder(t);
+    await act(async () => {
+      await t.result.current.cancel();
+    });
+    expect(t.result.current.placed?.cancelError).toBe(CANCEL_UNAVAILABLE_MESSAGE);
+    expect(t.result.current.placed?.cancelled).toBe(false);
+  });
+
+  it("cancelar recusado por outro motivo (loja já aceitou) mantém a mensagem do servidor", async () => {
+    const t = setup([ok({ awaitingPayment: true, paymentStatus: "PENDENTE" })]);
+    (t.storefront.cancelOrder as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, status: 409, error: "A loja já aceitou o pedido." });
+    await placePixOrder(t);
+    await act(async () => {
+      await t.result.current.cancel();
+    });
+    expect(t.result.current.placed?.cancelError).toBe("A loja já aceitou o pedido.");
   });
 });

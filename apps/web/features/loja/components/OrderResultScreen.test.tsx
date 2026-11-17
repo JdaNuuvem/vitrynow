@@ -127,3 +127,28 @@ describe("OrderResultScreen: PIX", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("O tempo do PIX acabou");
   });
 });
+
+
+describe("OrderResultScreen: sem acesso ao pedido neste aparelho (NG-16)", () => {
+  it("pede para falar com a loja, com o contato, sem erro técnico e sem 'pedido não existe'", () => {
+    setup({ trackingUnavailable: true, whatsapp: "5521999999999" });
+    expect(screen.getByText(/Fale com a loja pelo WhatsApp ou por telefone/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Falar com a loja" })).toHaveAttribute("href", "https://wa.me/5521999999999");
+    expect(document.body.textContent).not.toMatch(/não encontr|não existe|erro/i);
+  });
+
+  it("não oferece cancelar (a API recusaria) e não promete 'aguardando confirmação'", () => {
+    setup({ trackingUnavailable: true, pixData: { pixQrCode: "000201...", pixQrCodeBase64: null } });
+    expect(screen.queryByRole("button", { name: "Cancelar pedido" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Aguardando confirmação/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Código PIX (copia e cola)")).toBeInTheDocument(); // o cliente ainda consegue pagar
+    expect(screen.getByRole("button", { name: "Voltar ao cardápio" })).toBeInTheDocument();
+  });
+
+  it("com acesso (padrão) nada muda: aguarda o pagamento e oferece cancelar", () => {
+    setup({ pixData: { pixQrCode: "000201...", pixQrCodeBase64: null } });
+    expect(screen.getByText(/Aguardando confirmação/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancelar pedido" })).toBeInTheDocument();
+    expect(screen.queryByText(/Fale com a loja pelo WhatsApp/)).not.toBeInTheDocument();
+  });
+});

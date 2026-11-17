@@ -59,4 +59,7 @@ export type PlaceOrderInput = {
   cart: CartLine[];
 };
 
-export type PlacedOrderResponse = { orderId: string; code: string; payment?: PixPayment };
+// NG-16: `token` é o acesso do cliente ao PRÓPRIO pedido; a API o devolve UMA vez, na criação. Vai no cabeçalho
+// `x-order-token` (nunca na URL) para consultar o pagamento e cancelar. Ausente = pedido sem acesso por este aparelho.
+export const ORDER_TOKEN_HEADER = "x-order-token";
+export type PlacedOrderResponse = { orderId: string; code: string; token?: string; payment?: PixPayment };

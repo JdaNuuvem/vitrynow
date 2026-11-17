@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PixPayment } from "@/core/domain/storefront";
 import { formatCents } from "@/shared/format/money";
 import type { OrderSummary } from "../checkoutForm";
+import { TRACKING_UNAVAILABLE_MESSAGE } from "../hooks/useOrderFlow";
 import { Sheet } from "./Sheet";
 
 // Telas pós-pedido (spec 09 §10.2): resumo do que foi pedido, "Voltar ao cardápio" como ação
@@ -14,6 +15,7 @@ export function OrderResultScreen({
   paymentConfirmed,
   paymentFailedMessage,
   cancelError,
+  trackingUnavailable = false,
   summary = null,
   whatsapp = null,
   onCancel,
@@ -25,6 +27,8 @@ export function OrderResultScreen({
   paymentConfirmed: boolean;
   paymentFailedMessage: string | null;
   cancelError: string | null;
+  // NG-16: sem acesso ao pedido neste aparelho: sem acompanhar o PIX nem cancelar; o cliente fala com a loja.
+  trackingUnavailable?: boolean;
   summary?: OrderSummary | null;
   whatsapp?: string | null;
   onCancel: () => void | Promise<void>;
@@ -78,6 +82,7 @@ export function OrderResultScreen({
   }
 
   const awaitingPix = Boolean(pixData) && !paymentConfirmed;
+  const watchingPix = awaitingPix && !trackingUnavailable;
   const title = paymentConfirmed ? "Pagamento confirmado" : awaitingPix ? `Pedido #${code}` : "Pedido enviado";
 
   return (
@@ -91,12 +96,23 @@ export function OrderResultScreen({
       <div role="status">
         {paymentConfirmed ? (
           <p className="loja__result-text loja__result-text--ok">Pagamento confirmado! Seu pedido já está sendo preparado.</p>
-        ) : awaitingPix ? (
+        ) : watchingPix ? (
           <p className="loja__result-hint">Aguardando confirmação do pagamento…</p>
-        ) : (
+        ) : awaitingPix ? null : (
           <p className="loja__result-text">A loja ainda precisa aceitar o pedido.</p>
         )}
       </div>
+
+      {trackingUnavailable && !paymentConfirmed && (
+        <div role="status" className="loja__result-notice">
+          <p className="loja__result-text">{TRACKING_UNAVAILABLE_MESSAGE}</p>
+          {whatsapp && (
+            <a href={`https://wa.me/${whatsapp}`} target="_blank" rel="noreferrer" className="loja__empty-menu-link">
+              Falar com a loja
+            </a>
+          )}
+        </div>
+      )}
 
       {awaitingPix && pixData && (
         <>
@@ -136,7 +152,7 @@ export function OrderResultScreen({
       <button type="button" onClick={onBack} className="loja__cta">
         Voltar ao cardápio
       </button>
-      {!paymentConfirmed && (
+      {!paymentConfirmed && !trackingUnavailable && (
         <button type="button" onClick={() => setCancelOpen(true)} className="loja__result-secondary">
           Cancelar pedido
         </button>

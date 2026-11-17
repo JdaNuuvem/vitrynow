@@ -90,6 +90,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
           paymentConfirmed={order.placed.paymentConfirmed}
           paymentFailedMessage={order.placed.paymentFailedMessage}
           cancelError={order.placed.cancelError}
+          trackingUnavailable={order.placed.trackingUnavailable}
           summary={order.placed.summary}
           whatsapp={store.whatsapp}
           onCancel={order.cancel}
