@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Postgres de teste descartável, por agente (INF-01). Sobe um container na SUA porta, cria os bancos
   meucardapio e meucardapio_test e aplica as migrations do worktree em que você está.
