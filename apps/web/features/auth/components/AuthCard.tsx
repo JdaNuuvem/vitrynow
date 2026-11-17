@@ -8,7 +8,7 @@ export function AuthCard({ title, children, backToLogin = false }: { title?: str
       {children}
       {backToLogin && (
         <Link href="/login" className="auth__link">
-          Voltar pro login
+          Voltar ao login
         </Link>
       )}
     </div>

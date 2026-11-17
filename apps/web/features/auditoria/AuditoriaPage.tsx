@@ -12,7 +12,7 @@ export function AuditoriaPage() {
   return (
     <main className="auditoria">
       <h1>Log de auditoria</h1>
-      <p className="auditoria__intro">Ações sensíveis da conta — útil pra investigar quem fez o quê.</p>
+      <p className="auditoria__intro">Ações sensíveis da conta — útil para investigar quem fez o quê.</p>
 
       <div className="auditoria__list">
         {logs?.map((log) => <LogRow key={log.id} log={log} />)}
