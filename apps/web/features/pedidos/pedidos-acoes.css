@@ -14,6 +14,29 @@
   font-size: 14px;
   line-height: 20px;
 }
+/* WEB-37: faixa fixa do teto de abertos (aviso, não erro). `.pedidos .pedidos__capped p`: o reset `.panel-root p` zera o padding de 1 classe. */
+.pedidos__capped {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid #b45309;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #92400e; /* 6,8:1 sobre o fundo */
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+.pedidos__capped-icon {
+  flex: none;
+  margin-top: 1px;
+}
+.pedidos .pedidos__capped p {
+  margin: 0;
+  padding: 0;
+}
 .pedidos__notice {
   display: flex;
   align-items: center;

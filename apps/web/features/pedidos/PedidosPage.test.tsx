@@ -6,11 +6,12 @@ import { PedidosPage } from "./PedidosPage";
 
 type HookState = {
   orders: Order[];
+  openHidden: number;
   loadState: "loading" | "ready" | "error";
   notice: string | null;
   undoOffer: { orderId: string; text: string } | null;
 };
-const state: HookState = { orders: [], loadState: "ready", notice: null, undoOffer: null };
+const state: HookState = { orders: [], openHidden: 0, loadState: "ready", notice: null, undoOffer: null };
 const fns = {
   transition: vi.fn(),
   undo: vi.fn(),
@@ -46,6 +47,7 @@ const column = (name: string) => screen.getByRole("region", { name }) as HTMLEle
 
 beforeEach(() => {
   state.orders = [];
+  state.openHidden = 0;
   state.loadState = "ready";
   state.notice = null;
   state.undoOffer = null;
@@ -309,3 +311,55 @@ describe("PedidosPage: abrir o detalhe do pedido (WEB-26, UI-D-01)", () => {
   });
 });
 
+describe("PedidosPage: faixa dos abertos escondidos pelo teto (API-70, WEB-37)", () => {
+  const banner = () => screen.queryByText(/em aberto não aparece/);
+
+  it("com abertos de fora mostra a faixa com o número e o caminho, como aviso (role=status, não alerta)", () => {
+    state.openHidden = 7;
+    render(<PedidosPage />);
+    const note = screen.getByText("7 pedidos antigos em aberto não aparecem aqui. Veja em Histórico › Em aberto.");
+    expect(note.closest("[role=status]")).not.toBeNull();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("um só: singular", () => {
+    state.openHidden = 1;
+    render(<PedidosPage />);
+    expect(screen.getByText("1 pedido antigo em aberto não aparece aqui. Veja em Histórico › Em aberto.")).toBeInTheDocument();
+  });
+
+  it("sem nenhum escondido, nada de faixa", () => {
+    state.openHidden = 0;
+    render(<PedidosPage />);
+    expect(banner()).not.toBeInTheDocument();
+  });
+
+  it("não aparece enquanto carrega nem na falha da 1ª carga (nunca um aviso sobre dados que ainda não vieram)", () => {
+    state.openHidden = 4;
+    state.loadState = "loading";
+    const { unmount } = render(<PedidosPage />);
+    expect(banner()).not.toBeInTheDocument();
+    unmount();
+    state.loadState = "error";
+    render(<PedidosPage />);
+    expect(banner()).not.toBeInTheDocument();
+  });
+
+  it("tem ícone de atenção decorativo (aria-hidden) antes do texto", () => {
+    state.openHidden = 2;
+    render(<PedidosPage />);
+    const region = screen.getByText(/pedidos antigos em aberto/).closest("[role=status]") as HTMLElement;
+    const icon = region.querySelector("svg") as SVGElement;
+    expect(icon).toHaveAttribute("aria-hidden", "true");
+    expect(icon).not.toHaveAttribute("hidden"); // decorativo para o leitor de tela, mas VISÍVEL na tela
+    expect(icon).toBeVisible();
+    expect(region.firstElementChild).toBe(icon);
+  });
+
+  it("os pedidos que a API devolveu continuam todos no quadro (a faixa não esconde nada)", () => {
+    state.openHidden = 3;
+    state.orders = [order("1", "PENDENTE", "0001")];
+    render(<PedidosPage />);
+    expect(within(column("Pendente")).getByText("#0001")).toBeInTheDocument();
+  });
+});

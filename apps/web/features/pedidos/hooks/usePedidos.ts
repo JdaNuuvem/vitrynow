@@ -8,6 +8,7 @@ import type { HttpResult } from "@/core/http/HttpClient";
 import { usePanelServices } from "@/core/services/PanelServices";
 import { useSecurityConfirm } from "@/features/seguranca/SecurityConfirmProvider";
 import { buildCancelBody, type CancelDraft } from "../cancelReasons";
+import { hiddenOpenCount } from "../hiddenOpen";
 import { explainOrderError } from "../orderErrors";
 import type { CardAction } from "../orderActions";
 
@@ -28,6 +29,8 @@ export function usePedidos() {
   const { runProtected } = useSecurityConfirm();
   const { orders: ordersGateway, deliverers: deliverersGateway, realtime } = usePanelServices();
   const [orders, setOrders] = useState<Order[]>([]);
+  // Abertos que o teto da API deixou de fora (API-70): a faixa do quadro diz quantos. Falha de recarga mantém o último valor.
+  const [openHidden, setOpenHidden] = useState(0);
   const [deliverers, setDeliverers] = useState<Deliverer[]>([]);
   // Erro de uma ação, mostrado na página (role=alert) em vez de alert() nativo.
   const [notice, setNotice] = useState<string | null>(null);
@@ -46,6 +49,7 @@ export function usePedidos() {
       return;
     }
     setOrders(result.data.orders);
+    setOpenHidden(hiddenOpenCount(result.data));
     setLoadState("ready");
   }, [ordersGateway, router]);
 
@@ -131,6 +135,7 @@ export function usePedidos() {
 
   return {
     orders,
+    openHidden,
     loadState,
     retryLoad: () => {
       setLoadState("loading");
