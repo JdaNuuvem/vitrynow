@@ -129,7 +129,9 @@ namespace MeuCardapio.PrintClient.UI
             App.Device.KeyRevoked += () => BeginInvoke(new Action(ShowKeyRevoked));
             App.Device.KeyRestored += () => BeginInvoke(new Action(() => { _revokedText = null; RefreshProblemLabel(); }));
             App.Coordinator.Message += msg => BeginInvoke(new Action(() => { Toast(msg); Logger.Info(msg); }));
-            App.Device.TicketReady += order => BeginInvoke(new Action(() => PrintAndAck(order)));
+            // Fora da thread da interface (PC-15): consultar o Windows sobre a impressora e imprimir podem demorar
+            // e não podem travar a janela. As mensagens voltam para a tela pelo BeginInvoke do Coordinator.Message.
+            App.Device.TicketReady += order => Task.Run(() => PrintAndAck(order));
         }
 
         // Indicador persistente de pedidos sem imprimir. O balão do ícone só aparece quando a lista
@@ -163,7 +165,10 @@ namespace MeuCardapio.PrintClient.UI
         void OnOrderPending()
         {
             if (!AppSettings.Current.ReceiveAlerts) return;
-            using (var n = new NotifyForm()) n.Show();
+            // O balão fica vivo até o timer dele fechar (antes era descartado na mesma linha em que aparecia: R12).
+            var n = new NotifyForm();
+            n.FormClosed += (s2, e2) => n.Dispose();
+            n.Show();
             App.Audio.Play(AppSettings.Current.DropdownIndex, AppSettings.Current.CustomSound, AppSettings.Current.SoundVolume);
         }
 
@@ -199,7 +204,7 @@ namespace MeuCardapio.PrintClient.UI
             AppSettings.Current.DropdownIndex = _sounds.SelectedIndex + 1;
             if (_sounds.SelectedIndex == 2)
             {
-                using (var ofd = new OpenFileDialog { Title = "Som personalizado", Filter = "Áudio|*.wav;*.mp3;*.wma" })
+                using (var ofd = new OpenFileDialog { Title = "Som personalizado", Filter = "Áudio WAV|*.wav" })
                 {
                     if (ofd.ShowDialog(this) == DialogResult.OK)
                         AppSettings.Current.CustomSound = ofd.FileName;

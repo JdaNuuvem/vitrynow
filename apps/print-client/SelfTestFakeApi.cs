@@ -47,8 +47,10 @@ namespace MeuCardapio.PrintClient
         public FakeApi()
         {
             var rnd = new Random(); int p = 0; bool ok = false;
-            for (int i = 0; i < 30 && !ok; i++)
+            // A maquina divide portas com outras suites rodando ao mesmo tempo: tenta bastante antes de desistir.
+            for (int i = 0; i < 300 && !ok; i++)
             {
+                if (i > 0 && i % 50 == 0) Thread.Sleep(100);
                 p = 20000 + rnd.Next(30000);
                 try { _l.Prefixes.Clear(); _l.Prefixes.Add("http://127.0.0.1:" + p + "/"); _l.Start(); ok = true; } catch { }
             }

@@ -1,30 +1,57 @@
 using System;
 using System.Management;
+using System.Threading.Tasks;
 
 namespace MeuCardapio.PrintClient.Printing
 {
     // Pergunta ao Windows (WMI Win32_Printer) se a impressora escolhida está em condição de imprimir.
     // Sem isso, impressora offline/sem papel só enfileira no spooler e o app marcaria o pedido como
-    // impresso. Quando o WMI não responde, devolve "sem problema conhecido" (não bloqueia a cozinha).
+    // impresso. Quando o WMI não responde (ou demora), devolve "sem problema conhecido": não bloqueia a cozinha.
+    // PC-15 (parecer Nightingale): consulta com timeout (enumeração 3 s e teto total de 5 s) e liberando cada objeto;
+    // quem chama roda fora da thread da interface (PrintCoordinator é chamado em segundo plano).
     public static class PrinterProbe
     {
+        public const int EnumerationTimeoutMs = 3000;
+        public const int TotalTimeoutMs = 5000;
+
         // null = pode imprimir (ou desconhecido); senão, o motivo em português para o lojista.
         public static string Check(string printerName)
         {
             if (string.IsNullOrWhiteSpace(printerName)) return "Nenhuma impressora selecionada.";
+            return WithTimeout(() => CheckCore(printerName), TotalTimeoutMs);
+        }
+
+        // Roda `probe` em outra thread e desiste depois de `timeoutMs` (devolve null = desconhecido, não bloqueia).
+        // A consulta presa continua em segundo plano até o WMI soltar, sem segurar a impressão.
+        public static string WithTimeout(Func<string> probe, int timeoutMs)
+        {
+            try
+            {
+                var task = Task.Run(probe);
+                return task.Wait(timeoutMs) ? task.Result : null;
+            }
+            catch { return null; }
+        }
+
+        static string CheckCore(string printerName)
+        {
             try
             {
                 var query = "SELECT WorkOffline, PrinterStatus, DetectedErrorState FROM Win32_Printer WHERE Name = '"
                     + printerName.Replace("\\", "\\\\").Replace("'", "\\'") + "'";
-                using (var searcher = new ManagementObjectSearcher(query))
+                var options = new EnumerationOptions { Timeout = TimeSpan.FromMilliseconds(EnumerationTimeoutMs), ReturnImmediately = false };
+                using (var searcher = new ManagementObjectSearcher(new ManagementScope(@"\\.\root\cimv2"), new ObjectQuery(query), options))
                 using (var results = searcher.Get())
                 {
                     foreach (ManagementObject p in results)
                     {
-                        bool offline = p["WorkOffline"] is bool && (bool)p["WorkOffline"];
-                        int status = p["PrinterStatus"] == null ? 0 : Convert.ToInt32(p["PrinterStatus"]);
-                        int error = p["DetectedErrorState"] == null ? 0 : Convert.ToInt32(p["DetectedErrorState"]);
-                        return Describe(offline, status, error);
+                        using (p)
+                        {
+                            bool offline = p["WorkOffline"] is bool && (bool)p["WorkOffline"];
+                            int status = p["PrinterStatus"] == null ? 0 : Convert.ToInt32(p["PrinterStatus"]);
+                            int error = p["DetectedErrorState"] == null ? 0 : Convert.ToInt32(p["DetectedErrorState"]);
+                            return Describe(offline, status, error);
+                        }
                     }
                 }
             }

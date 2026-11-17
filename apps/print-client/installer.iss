@@ -1,9 +1,10 @@
-; Instalador do print-client (MeuCardapio — placeholder de marca) via Inno Setup.
-; Compilar: ISCC.exe installer.iss  (requer Inno Setup 6 instalado: https://jrsoftware.org/isinfo.php)
+; Instalador do print-client (MeuCardapio - placeholder de marca) via Inno Setup 6.
+; Compilar: .\tools\build-installer.ps1  (compila o EXE, roda o instalador e confere identidade e hashes)
 ; Gera bin\Installer\MeuCardapio-PrintClient-Setup.exe
 ;
-; Troque AppName/AppPublisher/ícone quando a marca final for decidida — nada aqui aponta
-; para cardapio.ai: é o instalador do NOSSO app, assinado com o NOSSO nome.
+; Nome/marca final: decisao do Claudio (CL-05). Troque AppName/AppPublisher/icone so quando ela sair.
+; Nada aqui vem do cardapio.ai: tools\scan-identity.ps1 confere isso no EXE, no instalador e no codigo.
+; Assinatura de codigo (Authenticode) so com build final e aval do Claudio (gasto): PC-13.
 
 #define AppVersion "1.0.0"
 #define AppExeName "MeuCardapio - Impressao.exe"
@@ -13,6 +14,9 @@ AppId={{E1F8B6A0-7C2D-4B3E-9A1F-0C2D4E6F8A9B}
 AppName=MeuCardapio - Impressão
 AppVersion={#AppVersion}
 AppPublisher=MeuCardapio
+VersionInfoVersion={#AppVersion}.0
+VersionInfoDescription=Instalador do MeuCardapio - Impressão
+VersionInfoProductName=MeuCardapio - Impressão
 DefaultDirName={autopf}\MeuCardapio\PrintClient
 DefaultGroupName=MeuCardapio
 OutputBaseFilename=MeuCardapio-PrintClient-Setup
@@ -22,6 +26,11 @@ SolidCompression=yes
 SetupIconFile=Resources\icon.ico
 UninstallDisplayIcon={app}\{#AppExeName}
 PrivilegesRequired=lowest
+; Mesmo mutex do aplicativo (Services\SingleInstance.cs): o instalador pede para fechar o app aberto antes de
+; atualizar e nao sobrescreve um EXE em uso. Nao reabre sozinho (a cozinha escolhe a hora).
+AppMutex=Global\MeuCardapioPrintClient-7C2D4B3E
+CloseApplications=yes
+RestartApplications=no
 
 [Languages]
 Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
@@ -29,7 +38,8 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 [Files]
 Source: "bin\Release\MeuCardapio - Impressao.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "bin\Release\*.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
-Source: "bin\Release\Audios\*"; DestDir: "{app}\Audios"; Flags: ignoreversion recursesubdirs skipifsourcedoesntexist
+; Dados do lojista (settings.json com a chave protegida, printed.json, logs) ficam em %LOCALAPPDATA%\MeuCardapioPrintClient
+; e NAO sao apagados pela desinstalacao nem pela atualizacao.
 
 [Tasks]
 Name: "autostart"; Description: "Iniciar automaticamente com o Windows"; GroupDescription: "Opções adicionais:"; Flags: checkedonce

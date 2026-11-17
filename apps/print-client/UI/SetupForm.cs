@@ -7,9 +7,8 @@ using MeuCardapio.PrintClient.Services;
 
 namespace MeuCardapio.PrintClient.UI
 {
-    // Primeira tela: em vez de login humano (o original usa email/senha contra o cardapio.ai),
-    // aqui o lojista cola a URL da API e a "chave de impressora" (device token) geradas no
-    // painel web da plataforma.
+    // Primeira tela: o lojista cola a URL da API e a "chave de impressora" (device token)
+    // geradas no painel web da plataforma. Não há login com e-mail e senha.
     public class SetupForm : Form
     {
         readonly TextBox _apiUrl = new TextBox { Width = 320 };

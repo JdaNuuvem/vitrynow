@@ -10,8 +10,9 @@ da **nossa** API (`apps/api`), não do cardapio.ai.
   (`TextTicketWriter.cs`), o desenho GDI+ (`GdiTicketPainter.cs`, `GdiPrintTarget.cs`), a impressora virtual
   (`VirtualPrintTarget.cs`), `PrintCoordinator`, `DeviceClient`, `PrintLedger`, `Updater`. O tíquete **não é mais HTML**: sumiram o
   parser, o HtmlAgilityPack e os comandos embutidos no texto (`LARGURA`, `--QUEBRA--`) que vinham do módulo do terceiro.
-- **Ainda derivado do `reconstruction/` (pendente, PC-14):** `Services/AudioPlayer.cs` (alerta sonoro via Windows Media Player COM).
-  Decisão de marca/origem é do Claudio (CL-05); até lá não distribuir instalador.
+- **Alerta sonoro próprio (PC-14):** `Services/AlertSounds.cs` gera os sons e `AudioPlayer.cs` usa `SoundPlayer`; não sobra código derivado do
+  `reconstruction/`. `tools\scan-identity.ps1` confere isso (e nome/domínio do terceiro) no código, no EXE e no instalador a cada `build-installer.ps1`.
+  Nome/marca final é decisão do Claudio (CL-05); até lá o nome é placeholder.
 - `Services/DeviceClient.cs` + `UI/SetupForm.cs` + `Services/AppSettings.cs`: conexão (WS + polling) e configuração com a **nossa** API.
 
 ## Build
@@ -152,7 +153,7 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 - Servidor de downloads para o auto-update (`UpdateBaseUrl`) e a **chave de release** (custódia) ainda não existem:
   o mecanismo está pronto e testado, mas recusa tudo sem chave embutida.
 - Tela de configuração para `UpdateBaseUrl` (hoje só via edição manual do `settings.json`).
-- Ícone/sons são placeholders — troque antes de distribuir pra clientes de verdade. `AudioPlayer.cs` ainda deriva do `reconstruction/` (PC-14).
+- Ícone/sons são placeholders — troque antes de distribuir pra clientes de verdade. Os sons "Sino" e "Padrão" são gerados pelo app.
 - Teste real com impressora térmica física (só validado até aqui via self-test + payload JSON da API).
 
 ## Resiliência (PC-05, PC-06)
@@ -168,6 +169,16 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 - Testes: `SelfTestDeviceClient.cs` roda o `DeviceClient` real contra uma API falsa em loopback (dedupe, ack que falha e repete,
   indicador sem repetição, 401/403, 401 isolado, redirecionamento).
 
+## Limites e defesas no papel (PC-15)
+
+- **Teto de tamanho:** nome, endereço, observação e demais textos do servidor saem com no máximo **300 caracteres** + "…" (sem partir emoji nem letra com acento);
+  no máximo **80 itens** e **12 adicionais por item** no papel. O que passa disso vira uma linha "... e mais N itens (ver no painel)" / "+ mais N adicionais" **com o valor somado**,
+  então a coluna continua somando o subtotal e o TOTAL fica certo. Texto de megabytes não é varrido inteiro.
+- **Sanitização extra:** saem U+061C, U+2060, U+180E, U+034F, U+FFF9-FFFC, uso privado (U+E000-F8FF e planos 15/16) e substitutos soltos; no máximo 2 marcas combinantes por letra ("zalgo").
+  Teste de propriedade com 3 000 textos aleatórios (seed fixa): saída sem caractere proibido, `Sanitize` idempotente, sem exceção.
+- **Consulta WMI da impressora:** timeout de 3 s na enumeração e teto de 5 s no total (acima disso vale "desconhecido" e a impressão segue), cada objeto liberado.
+  Imprimir e consultar rodam **fora da thread da interface** e uma impressão por vez (tíquetes nunca se misturam).
+
 ## Confiabilidade e segredos (PC-02)
 
 - **Dedupe e ack persistido** (`Services/PrintLedger.cs`, arquivo `%LOCALAPPDATA%\MeuCardapioPrintClient\printed.json`): polling e WS passam pelo mesmo portão, um pedido nunca é impresso duas vezes, e se o aviso à API falhar o ack é repetido sem reimprimir. Falha de impressão volta com recuo (15 s até 5 min) e sem novo alerta sonoro.
@@ -178,3 +189,21 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 - **Gravação de `settings.json` atômica** (`.tmp` + `File.Replace`). Se a migração do token em texto puro não puder regravar, o app avisa e tenta de novo a cada abertura; se migrar, avisa para gerar uma chave nova no painel (a antiga já ficou em texto puro).
 - **Tela de configuração:** a chave é mascarada e nunca preenchida com o valor salvo; campo em branco mantém a chave atual. Menu da bandeja: "Configurar chave...".
 - **Limite da proteção DPAPI:** protege contra **cópia do arquivo** para outro usuário/PC. Não protege contra malware rodando na própria conta do Windows.
+
+## Conteúdo do tíquete (PC-07, B4)
+
+Ordem da spec B4.1: loja, `PEDIDO #código`, tipo em destaque (ENTREGA/RETIRADA/MESA), "2ª VIA (n)" quando `reprintCount > 0`, data e hora
+(a API manda ISO em UTC; sai `dd/MM/aaaa HH:mm` no fuso do computador até a API informar o da loja), cliente, itens, observação,
+valores e bloco de pagamento (B4.2). A linha do item mostra produto x quantidade e cada adicional mostra extra x quantidade com o "(Nx)" escrito (`+ Borda catupiry (2x)  +R$ 16,00`), então a coluna de valores soma exatamente o subtotal.
+
+- **Já com o contrato de hoje:** taxa de entrega, gorjeta, forma de pagamento (DINHEIRO, PIX, CREDITO, DEBITO, VR, VA ou nula), desconto **derivado**
+  (soma das linhas + taxa + gorjeta - total, sem código de cupom). **Fail-safe do PIX:** "PAGO ONLINE (PIX) - NÃO COBRAR" só com prova (`paymentStatus` = PAGO); PIX sem prova (A_COBRAR, ausente, pedido manual com PIX presencial) imprime "PIX - CONFERIR NA HORA"; ESTORNADO imprime "PIX ESTORNADO - CONFERIR NA HORA". Enquanto a API não enviar `paymentStatus`, todo PIX sai "conferir na hora" (seguro, mas conservador).
+- **Contrato fechado no ADR-0004 §6** (Turing entrega na API-14; o cliente já aceita): `paymentStatus` (`PAGO`/`A_COBRAR`/`ESTORNADO`), `tableLabel`, `changeForCents`,
+  `subtotalCents`, `discountCents`, `couponCode`, `reprintCount`, `printedAtOriginal` ("1ª impressão: ..." na 2ª via), `cancelNotice` e `ticketSchemaVersion`.
+  Campos que o cliente não conhece são ignorados (cliente antigo não quebra). Valor antigo `APROVADO` **não** vale como prova: só `PAGO`.
+- **Aviso de cancelamento** (`cancelNotice: true`, CA-B4-09): imprime só "PEDIDO #n CANCELADO / NÃO PREPARAR / NÃO ENTREGAR", tipo ou mesa, cliente e hora; sem itens, valores,
+  endereço, telefone ou pagamento, e **não** reimprime o tíquete original.
+- Bloco de pagamento: PIX => `PAGO ONLINE (PIX) - NÃO COBRAR`; dinheiro => `COBRAR R$ X EM DINHEIRO` (+ troco em linhas separadas); cartão (crédito/débito/VR/VA);
+  balcão sem forma => `COBRAR NO CAIXA`; mesa => `PAGAMENTO NA MESA`; sem forma => `FORMA DE PAGAMENTO NÃO INFORMADA`.
+- **Ainda não:** o *disparo* do aviso de cancelamento e da reimpressão (precisam do `PrintJob`: PC-03/API-12/API-14); o desenho já está pronto;
+  bairro/referência separados do endereço, opções agrupadas (B8).

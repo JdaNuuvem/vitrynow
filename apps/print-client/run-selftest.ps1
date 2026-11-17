@@ -19,11 +19,11 @@ New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 $outD = Join-Path $tmp "MeuCardapioSelfTest.dll"
 $json = Join-Path $libs "Newtonsoft.Json.dll"
 $srcs = @(
-  "SelfTest.cs", "SelfTestPrint.cs", "SelfTestHarness.cs", "SelfTestFakeApi.cs", "SelfTestDevice.cs", "SelfTestUpdater.cs", "SelfTestDeviceClient.cs",
+  "SelfTest.cs", "SelfTestPrint.cs", "SelfTestHarness.cs", "SelfTestAudio.cs", "SelfTestInstall.cs", "SelfTestFakeApi.cs", "SelfTestDevice.cs", "SelfTestUpdater.cs", "SelfTestDeviceClient.cs",
   "Models\PrintableOrder.cs",
   "Printing\TicketDocument.cs", "Printing\TicketText.cs", "Printing\TicketBuilder.cs", "Printing\TextTicketWriter.cs", "Printing\IPrintTarget.cs",
   "Printing\GdiTicketPainter.cs", "Printing\VirtualPrintTarget.cs", "Printing\PrinterProbe.cs",
-  "Services\PrintCoordinator.cs", "Services\DeviceClient.cs", "Services\PrintLedger.cs", "Services\SecretStore.cs",
+  "Services\PrintCoordinator.cs", "Services\SingleInstance.cs", "Services\AlertSounds.cs", "Services\AudioPlayer.cs", "Services\DeviceClient.cs", "Services\PrintLedger.cs", "Services\SecretStore.cs",
   "Services\AppSettings.cs", "Services\ApiUrlPolicy.cs",
   "Services\Updater.cs", "Services\UpdateState.cs", "Services\UpdateTransport.cs", "Services\UpdateVerifier.cs", "Services\Logger.cs"
 ) | ForEach-Object { Join-Path $base $_ }
