@@ -223,7 +223,7 @@ describe("API-03 — webhook e PIX", () => {
     const o = await orderOf(orderId);
     expect(o?.status).toBe("CANCELADO");
     expect(await prisma.orderStatusHistory.findMany({ where: { orderId, kind: "CANCEL" } })).toMatchObject([
-      { reasonCode: "PAGAMENTO_NAO_APROVADO", source: "WEBHOOK", userId: null, customerMessage: "Pagamento não aprovado" },
+      { reasonCode: "PAGAMENTO_NAO_APROVADO", source: "WEBHOOK", userId: null, customerMessage: "O pagamento não foi aprovado e o pedido foi cancelado." },
     ]);
     expect((await prisma.coupon.findFirst({ where: { storeId: ctx.storeId } }))?.usedCount).toBe(0);
     expect(refundPayment).not.toHaveBeenCalled();

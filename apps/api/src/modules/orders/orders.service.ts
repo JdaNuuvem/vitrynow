@@ -4,6 +4,7 @@ import { CodedError } from "../../shared/errors";
 import type { AuditLogger } from "../../shared/audit";
 import { cancelPayment, getPayment, refundPayment } from "../../lib/mercadopago";
 import { ORDER_TX_OPTIONS } from "../../lib/order-code";
+import { customerMessageFor, messageActorFor, moneyLineFor } from "../../lib/cancelMessages";
 import {
   FINAL_STATUSES,
   HUMAN_REASON_CODES,
@@ -24,7 +25,8 @@ type Db = typeof prismaClient;
 type Tx = Prisma.TransactionClient;
 
 export type PanelActor = { storeId: string; userId: string; role: Role };
-export type CancelReason = { code: string; text?: string; customerMessage?: string };
+// Sem campo editável ao cliente (GRW-15): o texto que o cliente vê é derivado de (código, ator) em lib/cancelMessages.
+export type CancelReason = { code: string; text?: string };
 export type RefundOutcome = "NONE" | "DONE" | "PENDING";
 
 // Quem origina o cancelamento (persistido em Payment.refundContext para concluir depois do estorno).
@@ -148,7 +150,9 @@ export class OrderService {
         cancel: cancelRow && {
           reasonCode: cancelRow.reasonCode,
           reasonText: cancelRow.reasonText,
-          customerMessage: cancelRow.customerMessage,
+          // Frase fixa por (motivo, ator): texto livre nunca chega ao cliente. A linha de dinheiro é calculada agora.
+          customerMessage: customerMessageFor(cancelRow.reasonCode, messageActorFor(cancelRow.source as "PANEL" | "CUSTOMER" | "SYSTEM" | "WEBHOOK")),
+          moneyLine: moneyLineFor(order.payment, cancelRow.reasonCode),
           at: cancelRow.createdAt.toISOString(),
           by: cancelRow.source === "CUSTOMER" ? "CUSTOMER" : cancelRow.source === "PANEL" ? (roles.get(cancelRow.userId ?? "") ?? "OWNER") : "SYSTEM",
         },
@@ -240,7 +244,8 @@ export class OrderService {
     if (!(HUMAN_REASON_CODES as readonly string[]).includes(reason.code)) throw err(400, "REASON_INVALID", "Motivo de cancelamento inválido.");
     const text = reason.text?.trim();
     if (reason.code === "OUTRO" && !text) throw err(400, "REASON_REQUIRED", "Descreva o motivo do cancelamento.");
-    return { code: reason.code, text: text || undefined, customerMessage: reason.customerMessage?.trim() || undefined };
+    // `customerMessage` enviado pelo painel é IGNORADO de propósito: o cliente só vê a frase fixa do motivo.
+    return { code: reason.code, text: text || undefined };
   }
 
   async cancelByPanel(actor: PanelActor, orderId: string, reason: CancelReason | undefined) {
@@ -262,7 +267,7 @@ export class OrderService {
       source: "CUSTOMER",
       userId: null,
       actor: "CUSTOMER",
-      reason: { code: "CLIENTE_DESISTIU", customerMessage: "Cancelado pelo cliente" },
+      reason: { code: "CLIENTE_DESISTIU" },
     });
     return { status: "CANCELADO", refund };
   }
@@ -275,7 +280,7 @@ export class OrderService {
       source,
       userId: null,
       actor: "SYSTEM",
-      reason: { code, customerMessage: code === "PAGAMENTO_NAO_APROVADO" ? "Pagamento não aprovado" : undefined },
+      reason: { code },
     });
   }
 
@@ -343,7 +348,7 @@ export class OrderService {
         kind: "CANCEL",
         reasonCode: origin.reason.code,
         reasonText: origin.reason.text,
-        customerMessage: origin.reason.customerMessage,
+        customerMessage: customerMessageFor(origin.reason.code, messageActorFor(origin.source)),
       },
     });
     if (order.couponId) {
@@ -486,7 +491,7 @@ export class OrderService {
       source: "WEBHOOK",
       userId: null,
       actor: "SYSTEM",
-      reason: { code: "PAGAMENTO_APOS_CANCELAMENTO", customerMessage: "O pagamento chegou depois do cancelamento do pedido." },
+      reason: { code: "PAGAMENTO_APOS_CANCELAMENTO" },
     };
     return this.refundSaga({ ...payment.order, payment }, origin);
   }

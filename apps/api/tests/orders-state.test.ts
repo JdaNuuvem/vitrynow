@@ -207,11 +207,12 @@ describe("API-02 — estados do pedido", () => {
     const id = await newOrder(ctx, { couponCode: "DEZ" });
     expect((await prisma.coupon.findFirst({ where: { storeId: ctx.storeId } }))?.usedCount).toBe(1);
 
-    const res = await cancel(ctx.cookie, id, { code: "ITEM_EM_FALTA", customerMessage: "Acabou o pão" });
+    const res = await cancel(ctx.cookie, id, { code: "ITEM_EM_FALTA", customerMessage: "Texto livre que NÃO pode chegar ao cliente" });
     expect(res.statusCode).toBe(200);
     const body = json(res).order;
     expect(body.status).toBe("CANCELADO");
-    expect(body.cancel).toMatchObject({ reasonCode: "ITEM_EM_FALTA", customerMessage: "Acabou o pão", by: "OWNER" });
+    expect(body.cancel).toMatchObject({ reasonCode: "ITEM_EM_FALTA", customerMessage: "Item indisponível no momento.", by: "OWNER" });
+    expect(JSON.stringify(body)).not.toContain("Texto livre");
     expect(body.allowedTransitions).toEqual([]);
     expect(body.canUndo).toBe(false);
     expect((await prisma.coupon.findFirst({ where: { storeId: ctx.storeId } }))?.usedCount).toBe(0);
@@ -490,14 +491,53 @@ describe("API-02 — estados do pedido", () => {
     expect((await prisma.payment.findUnique({ where: { orderId: id } }))?.status).toBe("APROVADO");
   });
 
+  it("API-02b: o texto que o cliente vê vem do motivo+ator; texto livre do painel é ignorado (painel e cardápio coincidem)", async () => {
+    const ctx = await setup();
+    const hostil = "<b>ligue 0800-FALSO</b> https://golpe.exemplo";
+    for (const [code, esperado] of [
+      ["ITEM_EM_FALTA", "Item indisponível no momento."],
+      ["OUTRO", "Pedido cancelado pela loja."],
+      ["DUPLICADO_OU_ERRO", "Pedido cancelado pela loja."],
+    ] as const) {
+      const id = await newOrder(ctx);
+      const res = await cancel(ctx.cookie, id, { code, text: "nota interna do dono", customerMessage: hostil });
+      expect(res.statusCode, code).toBe(200);
+      expect(json(res).order.cancel.customerMessage).toBe(esperado);
+      const publico = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status` }));
+      expect(publico.cancelReason.customerMessage).toBe(esperado);
+      // Nada do texto hostil nem da nota interna chega ao cliente; a nota continua só no painel.
+      expect(JSON.stringify(publico)).not.toMatch(/golpe|0800|nota interna/);
+      const gravado = await prisma.orderStatusHistory.findFirst({ where: { orderId: id, kind: "CANCEL" } });
+      expect(gravado?.customerMessage).toBe(esperado);
+      expect(gravado?.reasonText).toBe("nota interna do dono");
+    }
+  });
+
+  it("API-02b: cliente que cancela lê 'Você cancelou…'; e a linha de dinheiro acompanha o estado real do pagamento", async () => {
+    const ctx = await setup();
+    const id = await paidOrder(ctx);
+    refundPayment.mockRejectedValueOnce(new Error("timeout"));
+    expect((await customerCancel(ctx.slug, id)).statusCode).toBe(200);
+    const status = () => app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status` }).then(json);
+    // Estorno em andamento: o pedido AINDA não está cancelado (ADR-0007 §5.2), então não há motivo a mostrar.
+    expect(await status()).toMatchObject({ orderStatus: "PENDENTE", cancelReason: null });
+    refundPayment.mockResolvedValue(undefined);
+    const retry = await app.inject({ method: "POST", url: `/api/orders/${id}/refund/retry`, headers: { cookie: ctx.cookie } });
+    expect(retry.statusCode).toBe(200);
+    expect((await status()).cancelReason).toEqual({
+      customerMessage: "Você cancelou este pedido.",
+      moneyLine: "O valor de R$ 10,00 foi estornado. O prazo para aparecer depende do seu banco.",
+    });
+  });
+
   it("payment-status do checkout indica terminal e o motivo quando o pedido foi cancelado", async () => {
     const ctx = await setup();
     const id = await newOrder(ctx);
     const before = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status` }));
     expect(before).toMatchObject({ orderStatus: "PENDENTE", terminal: false, cancelReason: null });
-    await cancel(ctx.cookie, id, { code: "ITEM_EM_FALTA", customerMessage: "Item indisponível" });
+    await cancel(ctx.cookie, id, { code: "ITEM_EM_FALTA" });
     const after = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status` }));
-    expect(after).toMatchObject({ orderStatus: "CANCELADO", terminal: true, cancelReason: { customerMessage: "Item indisponível" } });
+    expect(after).toMatchObject({ orderStatus: "CANCELADO", terminal: true, cancelReason: { customerMessage: "Item indisponível no momento.", moneyLine: null } });
   });
 
   // ───────────── Desfazer ─────────────
