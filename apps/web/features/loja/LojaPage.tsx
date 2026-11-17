@@ -27,7 +27,7 @@ import { scrollBehavior } from "@/lib/motion";
 import { storeInitials } from "@/lib/storeInitials";
 import { useMediaQuery } from "@/lib/useMediaQuery";
 import { lojaTitleFont } from "./fonts";
-import { isCompactCategory, quickAddMode } from "./storeInfo";
+import { activeCategoryId as activeCategory, isCompactCategory, quickAddMode } from "./storeInfo";
 import { lojaThemeStyle } from "./theme";
 import "./loja.css";
 import "./motion.css";
@@ -44,7 +44,6 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
 
   const [tab, setTab] = useState<NavTab>("itens");
   const [showCategories, setShowCategories] = useState(false);
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [detailProduct, setDetailProduct] = useState<Product | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
@@ -108,7 +107,6 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
   function scrollToCategory(id: string) {
     setTab("itens");
     setShowCategories(false);
-    setSelectedCategoryId(id);
     setPinnedId(id);
     setTimeout(() => document.getElementById(`categoria-${id}`)?.scrollIntoView({ behavior: scrollBehavior(), block: "start" }), 0);
   }
@@ -129,8 +127,8 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
     // Categoria sem produto não aparece para o cliente (spec 09 §6).
     const visibleCategories = categories.filter((category) => category.products.length > 0);
     const hasProducts = visibleCategories.length > 0;
-    // Destaque do chip: a seção que está na tela (scrollspy); antes da 1ª leitura, a escolhida ou a primeira.
-    const activeCategoryId = pinnedId && atEnd ? pinnedId : spyId ? spyId.replace("categoria-", "") : (selectedCategoryId ?? visibleCategories[0]?.id ?? null);
+    // Destaque do chip (regras em activeCategoryId): leitura da rolagem, o chip tocado no fim e a última categoria no fim.
+    const activeCategoryId = activeCategory({ ids: visibleCategories.map((category) => category.id), spy: spyId ? spyId.replace("categoria-", "") : null, pinned: pinnedId, atEnd });
     const identity = { name: store.name, logoUrl: store.logoUrl, initials: storeInitials(store.name) };
     const closed = !store.acceptingOrders;
 

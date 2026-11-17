@@ -49,6 +49,9 @@ export function useScrollSpy(sectionIds: string[], options: { topOffsetPx?: numb
       rootMargin: `-${topOffsetPx}px 0px -${Math.max(0, viewportHeight - topOffsetPx - 1)}px 0px`,
     });
     for (const element of elements) if (element) observer.observe(element);
+    // Lê já: ao voltar de outra tela (o detalhe devolve a rolagem antes deste efeito) o destaque não pode esperar a
+    // próxima rolagem para ficar certo (parecer da Da Vinci, A2).
+    read();
     return () => observer.disconnect();
   }, [key, topOffsetPx, viewportHeight, enabled]);
 

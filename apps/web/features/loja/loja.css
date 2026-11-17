@@ -88,6 +88,7 @@
 }
 
 .loja__page {
+  position: relative;
   padding-bottom: 9rem;
 }
 
@@ -104,8 +105,17 @@
   padding: 0 16px;
 }
 
-.loja__marker,
+.loja__marker {
+  height: 1px;
+}
+
+/* Fim REAL da página (na borda de baixo, depois do espaço do rodapé): "no fim" só vale quando não há mais o que rolar,
+   senão o chip da última categoria acenderia uns 150 px antes de ela chegar. */
 .loja__end {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
   height: 1px;
 }
 
