@@ -7,7 +7,7 @@ export type NavTab = "itens" | "pesquisa" | "pedidos";
 const TABS: { id: NavTab; label: string; icon: React.ReactNode }[] = [
   { id: "itens", label: "Cardápio", icon: <ListIcon /> },
   { id: "pesquisa", label: "Buscar", icon: <SearchIcon size="lg" /> },
-  { id: "pedidos", label: "Meus pedidos", icon: <OrdersIcon /> },
+  { id: "pedidos", label: "Pedidos", icon: <OrdersIcon /> },
 ];
 
 // Barra inferior fixa de navegação. Só renderiza as abas e avisa qual foi tocada. O item ativo

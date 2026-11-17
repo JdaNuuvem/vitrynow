@@ -124,6 +124,13 @@
   font-size: 14px;
 }
 
+/* Erro de um campo, logo abaixo dele (rótulo do alerta ligado por aria-describedby). */
+.conta__field .conta__field-error {
+  margin-top: 4px;
+  color: #b91c1c;
+  font-size: 13px;
+}
+
 .conta__primary {
   align-self: flex-start;
   padding: 10px 16px;
