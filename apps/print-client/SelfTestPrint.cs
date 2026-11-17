@@ -577,6 +577,12 @@ namespace MeuCardapio.PrintClient
             Check("total AUSENTE no JSON (mesmo com desconto igual aos itens): nao e total zero e NAO diz 'nada a cobrar'", !absent.HasTotalCents && !pay(absent).Contains("SEM COBRANÇA"));
             var present0 = fromJson("{\"orderId\":\"a\",\"code\":\"1\",\"type\":\"BALCAO\",\"totalCents\":0,\"subtotalCents\":5000,\"discountCents\":5000," + itemsJson + "}");
             Check("totalCents: 0 ESCRITO pelo servidor com desconto = itens: diz 'SEM COBRANÇA' (b)", present0.HasTotalCents && pay(present0) == Z);
+            // "totalCents": null explicito (parecer Nightingale, obs. 1): vale como AUSENTE, nao derruba a leitura e cai na regra normal
+            var nullTotal = fromJson("{\"orderId\":\"n\",\"code\":\"1\",\"type\":\"BALCAO\",\"totalCents\":null,\"subtotalCents\":5000,\"discountCents\":5000," + itemsJson + "}");
+            Check("\"totalCents\": null no JSON: le sem erro, vale como AUSENTE e NAO diz 'SEM COBRANÇA'", !nullTotal.HasTotalCents && !pay(nullTotal).Contains("SEM COBRANÇA"));
+            var rtZero = fromJson(Newtonsoft.Json.JsonConvert.SerializeObject(ZeroTotal()));
+            var rtUnset = fromJson(Newtonsoft.Json.JsonConvert.SerializeObject(new PrintableOrder { OrderId = "u", Code = "2", Type = "BALCAO" }));
+            Check("ida e volta pelo JSON: total 0 escrito continua PRESENTE e o nao informado continua AUSENTE", rtZero.HasTotalCents && rtZero.TotalCents == 0 && !rtUnset.HasTotalCents && pay(rtZero) == Z);
             var partial = fromJson("{\"orderId\":\"a\",\"code\":\"1\",\"type\":\"BALCAO\",\"subtotalCents\":5000,\"discountCents\":100," + itemsJson + "}");
             Check("itens R$ 50, desconto R$ 1 e total ausente (chegaria como 0): NAO diz 'SEM COBRANÇA' (a)", !pay(partial).Contains("SEM COBRANÇA"));
             var partial0 = ZeroTotal(); partial0.DiscountCents = 100;
