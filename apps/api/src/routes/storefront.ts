@@ -6,6 +6,7 @@ import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
 import { publishToStore } from "../realtime/hub";
 import { createPixPayment } from "../lib/mercadopago";
 import { orderService } from "../modules/orders/orders.module";
+import { customerMessageFor, messageActorFor, moneyLineFor } from "../lib/cancelMessages";
 import { DomainError } from "../shared/errors";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
 
@@ -286,7 +287,13 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       paymentStatus,
       orderStatus: order.status,
       terminal,
-      cancelReason: cancelRow ? { customerMessage: cancelRow.customerMessage ?? null } : null,
+      // Mesma fonte do painel: frase fixa por (motivo, ator) + linha de dinheiro calculada agora (sem prazo).
+      cancelReason: cancelRow
+        ? {
+            customerMessage: customerMessageFor(cancelRow.reasonCode, messageActorFor(cancelRow.source)),
+            moneyLine: moneyLineFor(order.payment, cancelRow.reasonCode),
+          }
+        : null,
     };
   });
 
