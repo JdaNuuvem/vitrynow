@@ -4,7 +4,7 @@ import { CodedError } from "../../shared/errors";
 import type { AuditLogger } from "../../shared/audit";
 import { cancelPayment, getPayment, refundPayment } from "../../lib/mercadopago";
 import { ORDER_TX_OPTIONS } from "../../lib/order-code";
-import { cancelPendingTickets, enqueueCancelNoticeIfPrinted } from "../printJobs/printJobs.queue";
+import { cancelPendingTickets, enqueueCancelNoticeIfPrinted, lockPrintMode } from "../printJobs/printJobs.queue";
 import { customerMessageFor, messageActorFor, moneyLineFor } from "../../lib/cancelMessages";
 import {
   FINAL_STATUSES,
@@ -289,7 +289,10 @@ export class OrderService {
     if (holdsMoney(order.payment)) return this.refundSaga(order, origin);
 
     const sink = { noticeQueued: false };
-    const completed = await this.runTx((tx) => this.applyCancel(tx, order, origin, { expected: order.status, noMoney: true, sink }));
+    const completed = await this.runTx(async (tx) => {
+      await lockPrintMode(tx, order.storeId); // ANTES de qualquer linha de pedido (ordem única de travas: loja → pedido → pagamento)
+      return this.applyCancel(tx, order, origin, { expected: order.status, noMoney: true, sink });
+    });
     if (!completed) {
       // Perdeu a corrida: ou o pagamento foi aprovado agora (vira saga) ou o status mudou (outro chegou antes).
       const fresh = await this.load(order.storeId, order.id);
@@ -448,8 +451,10 @@ export class OrderService {
     let concluded: { orderCancelled: boolean; reconcile: boolean } | null;
     try {
       concluded = await this.runTx(async (tx) => {
-      // Ordem de locks ÚNICA no sistema: Pedido → Pagamento (a Tx 1 da saga também começa pelo pedido). Travar o
-      // pagamento primeiro aqui criava a ordem inversa e permitia deadlock quando duas tentativas se sobrepõem.
+      // Ordem de locks ÚNICA no sistema: loja (modo de impressão) → Pedido → Pagamento (a Tx 1 da saga também começa pelo pedido).
+      // Travar o pagamento primeiro aqui criava a ordem inversa e permitia deadlock quando duas tentativas se sobrepõem; e o lock da
+      // loja vem ANTES do pedido porque a troca de modo o segura exclusivo e atualiza pedidos/jobs (ciclo ⇒ 40P01).
+      await lockPrintMode(tx, order.storeId);
       await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${order.id} FOR UPDATE`;
       const flipped = await tx.payment.updateMany({
         where: { id: payment.id, status: "ESTORNO_PENDENTE" },

@@ -4,6 +4,7 @@ import { CodedError } from "../../shared/errors";
 import type { AuditLogger } from "../../shared/audit";
 import { authorizeContactView } from "../orders/contactAccess";
 import { loadPrintMode } from "./printMode.service";
+import { lockPrintMode } from "./printJobs.queue";
 import { buildPrintableOrder, buildTestTicket } from "../../lib/printable";
 import {
   BACKOFF_SECONDS,
@@ -50,7 +51,7 @@ export class PrintJobService {
         // Serializa com a TROCA DE MODO (item 14 do ADR): o claim segura o lock consultivo da loja em modo COMPARTILHADO (claims não se
         // bloqueiam entre si) e a troca o pede em modo exclusivo. Assim, ou o claim termina antes (e o recuo vê o job CLAIMED e recusa
         // com PRINT_IN_PROGRESS), ou a troca termina antes (e o claim relê o modo aqui dentro e não entrega nada em LEGACY).
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock_shared(hashtext(${"printmode:" + storeId}))`;
+        await lockPrintMode(tx, storeId);
         const modeNow = await loadPrintMode(tx, storeId);
         if (modeNow === "LEGACY") return { row: null as ClaimRow | null, remaining: 0, dead: [] as string[], mode: modeNow };
 
