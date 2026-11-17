@@ -27,6 +27,9 @@ import subscriptionRoutes from "./routes/subscription";
 import noticeRoutes from "./routes/notices";
 import mfaRoutes from "./routes/mfa";
 import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
+import { currentKey } from "./lib/paymentCrypto";
+import { redactLogUrl } from "./lib/logRedaction";
+import { assertPaymentsBootConfig } from "./modules/storePayments/oauth";
 import jobsPlugin from "./jobs/plugin";
 import pixAvailabilityPlugin from "./plugins/pixAvailability";
 import storePaymentRoutes from "./modules/storePayments/storePayments.module";
@@ -34,7 +37,21 @@ import storePaymentRoutes from "./modules/storePayments/storePayments.module";
 export function buildApp() {
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
   // e o rate limit deixa de contar o IP do proxy. Vazio = ignora X-Forwarded-For (não forjável).
-  const app = Fastify({ logger: process.env.NODE_ENV !== "test", trustProxy: trustProxySetting() });
+  // Pagamentos por loja: modo/credenciais/chave inválidos derrubam o boot (não o 1º PIX). Sem vazar `code`/`state` do OAuth no log.
+  assertPaymentsBootConfig(process.env, currentKey);
+  const app = Fastify({
+    logger:
+      process.env.NODE_ENV !== "test"
+        ? {
+            serializers: {
+              req(request) {
+                return { method: request.method, url: redactLogUrl(request.url), hostname: request.hostname, remoteAddress: request.ip, remotePort: request.socket?.remotePort };
+              },
+            },
+          }
+        : false,
+    trustProxy: trustProxySetting(),
+  });
 
   // app.close() (graceful shutdown) também desconecta o Prisma — ele é um singleton
   // importado direto de @meucardapio/db, não um plugin fastify com ciclo de vida próprio.

@@ -109,15 +109,26 @@ describe("gateway por loja", () => {
     // a loja pede reconexão: PIX novo some, mas o pagamento já criado segue consultável e estornável enquanto o token vale
     await prisma.paymentAccount.update({ where: { id: first.id }, data: { status: "NEEDS_RECONNECT" } });
     await expect(gatewayForStore(storeA)).rejects.toThrow(PixUnavailableError);
-    const viaAccount = await gatewayForAccount(first.id);
+    const viaAccount = await gatewayForAccount(first.id, storeA);
     expect((await viaAccount.getPayment(pix.providerPaymentId)).status).toBe("approved");
     await viaAccount.refundPayment(pix.providerPaymentId);
     expect(FakePixGateway.peek(pix.providerPaymentId)?.status).toBe("refunded");
 
     // a conta com TROCA de vendedor (a antiga fica DISCONNECTED, sem tokens): sem token não há como consultar ⇒ indisponível
     await prisma.paymentAccount.update({ where: { id: first.id }, data: { status: "DISCONNECTED", accessTokenEnc: null, refreshTokenEnc: null } });
-    await expect(gatewayForAccount(first.id)).rejects.toThrow(PixUnavailableError);
-    await expect(gatewayForAccount("nao-existe")).rejects.toThrow(PixUnavailableError);
+    await expect(gatewayForAccount(first.id, storeA)).rejects.toThrow(PixUnavailableError);
+    await expect(gatewayForAccount("nao-existe", storeA)).rejects.toThrow(PixUnavailableError);
+  });
+
+  it("M-2 (cross-tenant): gatewayForAccount com a conta de OUTRA loja é indisponível e não revela que a conta existe", async () => {
+    const accountB = await connected(storeB, "vendedor-2");
+    await expect(gatewayForAccount(accountB.id, storeA)).rejects.toThrow(PixUnavailableError);
+    await expect(gatewayForAccount(accountB.id, "id-qualquer")).rejects.toThrow(PixUnavailableError);
+    // mesma mensagem de uma conta inexistente
+    const missing = await gatewayForAccount("nao-existe", storeA).catch((e: Error) => e.message);
+    const foreign = await gatewayForAccount(accountB.id, storeA).catch((e: Error) => e.message);
+    expect(foreign).toBe(missing);
+    expect((await gatewayForAccount(accountB.id, storeB)).accountId).toBe(accountB.id);
   });
 
   it("token vencido ⇒ indisponível (não tenta com token morto); falha do provedor é propagada para quem chamou decidir", async () => {

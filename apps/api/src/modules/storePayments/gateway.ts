@@ -127,9 +127,11 @@ export async function gatewayForStore(storeId: string): Promise<StoreGateway> {
   return wrap(maker({ accessToken, owner: account.sellerUserId }), account.id, account.storeId);
 }
 
-export async function gatewayForAccount(accountId: string): Promise<StoreGateway> {
+export async function gatewayForAccount(accountId: string, expectedStoreId: string): Promise<StoreGateway> {
   const account = await storePaymentsService.findAccount(accountId);
-  if (!account) throw new PixUnavailableError();
+  // `Payment.paymentAccountId` não tem FK composta por loja: a conferência é feita aqui. Conta de OUTRA loja = indisponível,
+  // sem dizer que ela existe (isolamento entre lojas, ADR-0009).
+  if (!account || account.storeId !== expectedStoreId) throw new PixUnavailableError();
   const accessToken = await storePaymentsService.accessTokenFor(account);
   return wrap(maker({ accessToken, owner: account.sellerUserId }), account.id, account.storeId);
 }
