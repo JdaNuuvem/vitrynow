@@ -232,6 +232,17 @@
   border-radius: 8px;
   background: var(--surface-soft);
 }
+/* API-67: aviso (não erro) de que a impressora não avisa a cozinha. 2 classes: o reset `.panel-root p` zera o padding de 1. */
+.cancel-dialog .cancel-dialog__kitchen {
+  padding: 10px 12px;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
 .cancel-dialog__alert {
   padding: 12px;
   border: 1px solid var(--danger);

@@ -5,8 +5,11 @@ import type { Order } from "@/core/domain/orders";
 import { formatCents } from "@/shared/format/money";
 import { Modal } from "@/shared/ui/Modal";
 import { CANCEL_REASONS, customerPhraseFor, validateCancel, type CancelDraft } from "../cancelReasons";
-import { confirmCancelLabel, isRefundPending } from "../orderActions";
+import { confirmCancelLabel, isRefundPending, kitchenNotWarned } from "../orderActions";
 import type { CancelOutcome } from "../hooks/usePedidos";
+
+// Texto provisório: o Ogilvy valida.
+export const KITCHEN_NOT_WARNED_MESSAGE = "A cozinha não será avisada pela impressora. Avise a cozinha.";
 
 type Props = {
   order: Order;
@@ -64,6 +67,13 @@ export function CancelOrderDialog({ order, refund, onConfirm, onRetryRefund, onC
         }}
       >
         <h2 id={titleId}>{title}</h2>
+
+        {/* API-67 (Leonardo): em LEGACY a impressora não avisa a cozinha; o dono é quem avisa. Nunca em QUEUE. */}
+        {kitchenNotWarned(order) && (
+          <p role="note" className="cancel-dialog__kitchen">
+            {KITCHEN_NOT_WARNED_MESSAGE}
+          </p>
+        )}
 
         {refund && !refundPending && (
           <p className="cancel-dialog__effect">
