@@ -507,7 +507,11 @@ describe("API-12 — PrintJob", () => {
     const job = json(await claim(token)).job;
     expect(job.kind).toBe("TEST");
     expect(printableOrderSchema.safeParse(job.ticket).success).toBe(true);
-    expect(job.ticket).toMatchObject({ code: "TESTE", storeName: "Teste de impressora", customerName: "Cliente de teste", customerPhone: null, address: null });
+    expect(job.ticket).toMatchObject({ code: "TESTE", storeName: "Teste de impressora", customerName: null, customerPhone: null, address: null, notes: null });
+    // Nada que pareça cobrança (ADR-0004 §8.11): sem paymentStatus, sem forma de pagamento, sem itens, totais zerados.
+    expect(job.ticket).not.toHaveProperty("paymentStatus");
+    expect(job.ticket).toMatchObject({ paymentMethod: null, items: [], totalCents: 0, deliveryFeeCents: 0, tipCents: 0 });
+    for (const campo of ["subtotalCents", "discountCents", "couponCode", "changeForCents", "tableLabel"]) expect(job.ticket, campo).not.toHaveProperty(campo);
     expect(JSON.stringify(job.ticket)).not.toContain(ctx.slug);
     expect((await ack(token, job.id, { status: "PRINTED" })).statusCode).toBe(200);
   });

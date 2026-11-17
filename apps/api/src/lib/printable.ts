@@ -91,8 +91,10 @@ export async function buildPrintableOrder(orderId: string, options: PrintableOpt
   });
 }
 
-// Tíquete do job TEST (teste de impressora): conteúdo FIXO e FICTÍCIO — nenhum dado real de loja, cliente ou pedido
-// (ADR-0004 §8.2). Passa pelo mesmo schema e pelo mesmo caminho de renderização do tíquete de verdade.
+// Tíquete do job TEST (teste de impressora): o MÍNIMO e FICTÍCIO — nenhum dado de loja, cliente ou pedido, e NADA que
+// pareça cobrança: sem `paymentStatus`, sem forma de pagamento, sem itens e com os totais obrigatórios do schema em zero
+// (ADR-0004 §8 itens 2 e 11). O cliente imprime o próprio tíquete de teste ("TESTE DE IMPRESSÃO") e ignora campos de pedido;
+// a regra fail-safe do cliente ("sem prova de pagamento, COBRAR NO CAIXA") vale só para pedidos reais.
 export function buildTestTicket(jobId: string, now: Date): PrintableOrder {
   return printableOrderSchema.parse({
     ticketSchemaVersion: TICKET_SCHEMA_VERSION,
@@ -100,24 +102,15 @@ export function buildTestTicket(jobId: string, now: Date): PrintableOrder {
     code: "TESTE",
     type: "BALCAO",
     storeName: "Teste de impressora",
-    customerName: "Cliente de teste",
+    customerName: null,
     customerPhone: null,
     address: null,
-    notes: "Se você leu isto, a impressora está funcionando.",
-    subtotalCents: 1000,
-    discountCents: 0,
-    couponCode: null,
-    totalCents: 1000,
+    notes: null,
+    totalCents: 0,
     deliveryFeeCents: 0,
     tipCents: 0,
-    changeForCents: null,
     paymentMethod: null,
-    paymentStatus: "A_COBRAR",
-    tableLabel: null,
-    reprintCount: 0,
-    printedAtOriginal: null,
-    cancelNotice: false,
     createdAt: now.toISOString(),
-    items: [{ productName: "Item de teste", quantity: 1, unitPriceCents: 1000, notes: null, additionals: [] }],
+    items: [],
   });
 }
