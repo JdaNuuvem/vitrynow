@@ -310,6 +310,7 @@ model OrderStatusHistory {
   seq             Int           @default(autoincrement()) // ordem total das mudanças (createdAt pode empatar no mesmo ms)
 
   @@index([orderId, seq])
+  @@index([status, createdAt]) // kanban: encerrados de hoje sem varrer o histórico inteiro (API-71)
 }
 
 model CashSession {
