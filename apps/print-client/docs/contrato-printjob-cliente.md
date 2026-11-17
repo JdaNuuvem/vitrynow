@@ -14,7 +14,7 @@ Entrega o PRÓXIMO job pendente da loja **com lease** (o servidor decide; o clie
 
 | Situação | Resposta que o cliente aceita |
 |---|---|
-| há job | `200` `{"job": { "id": "<cuid>", "kind": "ORDER_KITCHEN" \| "ORDER_REPRINT" \| "TEST", "attempt": 1, "leaseSeconds": 60, "ticket": { ...payload do §6... } }}` |
+| há job | `200` `{"job": { "id": "<cuid>", "kind": "ORDER_KITCHEN" \| "ORDER_REPRINT" \| "ORDER_CANCEL_NOTICE" \| "TEST", "attempt": 1, "leaseSeconds": 60, "ticket": { ...payload do §6... } }}` |
 | fila vazia | `200` `{"job": null}` **ou** `204` sem corpo |
 | sem permissão | `401`/`403` |
 
@@ -49,5 +49,5 @@ mostrar ao dono a frase traduzida do `code`.
   (ack perdido, lease vencida) **não reimprime**: só reenvia `PRINTED`.
 - **Falha de impressão:** `FAILED` com o motivo + indicador "sem imprimir" + recuo local (15 s … 5 min). O servidor conta `attempts` e, ao estourar, alerta o painel.
 - **Falha local esquecida:** se o servidor deixar de oferecer o job por 30 min, o indicador "sem imprimir" daquele job some (o aviso passa a ser o do painel).
-- **Reimpressão (`ORDER_REPRINT`):** imprime com "2ª VIA (n)" (`reprintCount`) e "1ª impressão: …" (`printedAtOriginal`). **Cancelamento:** `cancelNotice: true` imprime só o aviso.
+- **Reimpressão (`ORDER_REPRINT`):** imprime com "2ª VIA (n)" (`reprintCount`) e "1ª impressão: …" (`printedAtOriginal`). **Cancelamento:** o job `ORDER_CANCEL_NOTICE` (emitido pela API-12 quando o pedido já tinha sido impresso) imprime só o aviso "CANCELADO / NÃO PREPARAR"; o **tipo do job** manda (o cliente liga `cancelNotice` mesmo que o servidor esqueça), e `cancelNotice: true` num job de outro tipo também imprime só o aviso. Não toca o alarme de "novo pedido". *Achado da conferência cruzada com a API-12 real (PC-03c): antes o cliente recusava esse tipo e a cozinha nunca saberia do cancelamento.*
 - **Alerta sonoro** só para `ORDER_KITCHEN` novo.

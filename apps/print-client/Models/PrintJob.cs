@@ -15,6 +15,8 @@ namespace MeuCardapio.PrintClient.Models
         public const string KindKitchen = "ORDER_KITCHEN";
         public const string KindReprint = "ORDER_REPRINT";
         public const string KindTest = "TEST";
+        // Aviso de cancelamento de pedido JA impresso (API-12, conferencia cruzada): o servidor emite como job proprio.
+        public const string KindCancelNotice = "ORDER_CANCEL_NOTICE";
         public const int DefaultLeaseSeconds = 60;
 
         // Chave no PrintLedger: por JOB, não por pedido (original e 2ª via do mesmo pedido são jobs diferentes).

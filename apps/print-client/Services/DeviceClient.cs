@@ -268,7 +268,7 @@ namespace MeuCardapio.PrintClient.Services
             }
 
             string kind = (job.Kind ?? "").Trim().ToUpperInvariant();
-            bool known = kind == PrintJobDto.KindKitchen || kind == PrintJobDto.KindReprint || kind == PrintJobDto.KindTest;
+            bool known = kind == PrintJobDto.KindKitchen || kind == PrintJobDto.KindReprint || kind == PrintJobDto.KindTest || kind == PrintJobDto.KindCancelNotice;
             if (!known)
             {
                 StatusChanged?.Invoke("Job de impressão de tipo não suportado (" + (kind.Length > 40 ? kind.Substring(0, 40) : kind) + "): recusado.");
@@ -284,6 +284,9 @@ namespace MeuCardapio.PrintClient.Services
                 await SendJobAckAsync(job.Id, "FAILED", PrintFailure.Other, "tíquete ausente no job", token);
                 return true;
             }
+
+            // Aviso de cancelamento: o tipo do job manda, não a bandeira do tíquete. Sem ela o papel sairia como um pedido novo completo.
+            if (kind == PrintJobDto.KindCancelNotice) ticket.CancelNotice = true;
 
             // Em recuo depois de falha (ou já em impressão): não imprime agora; o servidor re-oferece depois.
             if (!_ledger.TryBeginPrint(key)) return false;

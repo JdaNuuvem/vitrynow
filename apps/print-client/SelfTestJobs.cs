@@ -64,6 +64,7 @@ namespace MeuCardapio.PrintClient
             EmptyQueue();
             PrinterOffline();
             KindsAndNotices();
+            CancelNoticeKind();
             UnknownKindAndMissingTicket();
             LeaseExpiredBeforeAck();
             ReofferedAfterPrinted();
@@ -191,6 +192,37 @@ namespace MeuCardapio.PrintClient
                         Check("job TEST sem ticket do servidor: sai o tiquete de teste proprio (acentos, regua, sem dados de pedido)", all[2] != null && all[2].Contains("TESTE DE IMPRESSÃO") && all[2].Contains("ação") && !all[2].Contains("PEDIDO") && !all[2].Contains("R$ 0,00"));
                         Check("job: original e 2a via do mesmo pedido sao jobs diferentes (chave por job, nao por pedido)", rig.Ledger.IsPrinted("job:j3") && rig.Ledger.IsPrinted("job:j4"));
                         Check("job: alerta sonoro so para ORDER_KITCHEN (reimpressao, cancelamento e teste NAO alertam)", rig.Alerts == 0);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
+
+        // 4b) ORDER_CANCEL_NOTICE: a API-12 emite o aviso de cancelamento como job proprio (achado da conferencia cruzada
+        // com a API real: o cliente recusava esse tipo e a cozinha nunca saberia que o pedido foi cancelado).
+        static void CancelNoticeKind()
+        {
+            var dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    var withFlag = SelfTestPrint.CancelFixture(); withFlag.OrderId = "X"; withFlag.Code = "3101";
+                    var noFlag = SelfTestPrint.Basic(); noFlag.OrderId = "Y"; noFlag.Code = "3102"; // servidor esqueceu a bandeira: o TIPO do job manda
+                    api.AddJob("n1", withFlag, "ORDER_CANCEL_NOTICE");
+                    api.AddJob("n2", noFlag, "ORDER_CANCEL_NOTICE");
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo"))
+                    {
+                        rig.Start();
+                        bool done = WaitFor(() => api.JobState("n1") == "PRINTED" && api.JobState("n2") == "PRINTED", 30000);
+                        Thread.Sleep(300);
+                        Check("ORDER_CANCEL_NOTICE: aceito, imprime e fecha com PRINTED (nao e recusado como tipo desconhecido)", done && printer.Printed.Count == 2);
+                        var t1 = Read(printer.Printed, 0); var t2 = Read(printer.Printed, 1);
+                        Check("ORDER_CANCEL_NOTICE com cancelNotice: sai o aviso 'CANCELADO', sem itens nem valores", t1 != null && t1.Contains("CANCELADO") && !t1.Contains("Calabresa") && !t1.Contains("R$"));
+                        Check("ORDER_CANCEL_NOTICE SEM a bandeira no tiquete: ainda sai so o aviso (nunca um pedido completo)", t2 != null && t2.Contains("CANCELADO") && !t2.Contains("Calabresa") && !t2.Contains("R$"));
+                        Check("ORDER_CANCEL_NOTICE: nao ha ack FAILED e o ledger fecha o job", !api.AllAckBodies().Contains("FAILED") && rig.Ledger.IsPrinted("job:n1") && rig.Ledger.IsPrinted("job:n2"));
+                        Check("ORDER_CANCEL_NOTICE: sem alerta sonoro de 'novo pedido'", rig.Alerts == 0);
                     }
                 }
             }
