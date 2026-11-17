@@ -4,8 +4,9 @@ import { prisma } from "@meucardapio/db";
 import { techCleanupJob } from "../src/jobs/techCleanup";
 import { JobRunner } from "../src/jobs/runner";
 import { activateSubscription } from "../src/lib/subscription";
-import { decryptSecret, encryptSecret } from "../src/lib/paymentCrypto";
-import { FakeMercadoPagoOAuth, OAuthError, RealMercadoPagoOAuth, oauthProvider, setOAuthProvider } from "../src/modules/storePayments/oauth";
+import { currentKey, decryptSecret, encryptSecret } from "../src/lib/paymentCrypto";
+import { redactLogUrl } from "../src/lib/logging";
+import { FakeMercadoPagoOAuth, OAuthError, RealMercadoPagoOAuth, assertPaymentsBootConfig, oauthProvider, setOAuthProvider } from "../src/modules/storePayments/oauth";
 import { MAX_REFRESH_FAILURES, PixUnavailableError, StorePaymentsService, maskSeller } from "../src/modules/storePayments/storePayments.service";
 import { storePaymentsService } from "../src/modules/storePayments/storePayments.module";
 import { login, makeApp, registerStore, resetDb } from "./helpers";
@@ -159,11 +160,20 @@ describe("PIX por loja — conexão, estado e desconexão (HTTP)", () => {
     expect(accounts[0].disconnectedAt).not.toBeNull();
   });
 
-  it("o MESMO vendedor em duas lojas: a segunda é recusada com mensagem genérica (PAYMENT_ACCOUNT_IN_USE) e a primeira segue intacta", async () => {
+  it("reconectar quando a conta está em NEEDS_RECONNECT: a antiga é desconectada na mesma transação e a nova entra (o índice parcial não bloqueia)", async () => {
+    await connect("fake:vendedor-1");
+    await prisma.paymentAccount.updateMany({ data: { status: "NEEDS_RECONNECT" } });
+    expect((await connect("fake:vendedor-1")).headers.location).toContain("mp=ok"); // mesmo vendedor reconectando
+    const accounts = await prisma.paymentAccount.findMany({ orderBy: { connectedAt: "asc" } });
+    expect(accounts.map((a) => a.status)).toEqual(["DISCONNECTED", "CONNECTED"]);
+    expect(accounts[0].accessTokenEnc).toBeNull();
+  });
+
+  it("o MESMO vendedor em duas lojas: a segunda é recusada com mensagem genérica (MP_ACCOUNT_IN_USE) e a primeira segue intacta", async () => {
     await connect("fake:vendedor-1");
     const other = await registerStore(app, { slug: "outra-pix", code: "PX2" });
     const attempt = await connect("fake:vendedor-1", other.cookie!);
-    expect(attempt.headers.location).toContain("PAYMENT_ACCOUNT_IN_USE");
+    expect(attempt.headers.location).toContain("MP_ACCOUNT_IN_USE");
     expect(await prisma.paymentAccount.count({ where: { status: "CONNECTED" } })).toBe(1);
     expect((await prisma.paymentAccount.findFirstOrThrow({ where: { status: "CONNECTED" } })).storeId).toBe(storeId);
   });
@@ -203,7 +213,34 @@ describe("PIX por loja — conexão, estado e desconexão (HTTP)", () => {
       if (rows.length < 3) await new Promise((resolve) => setTimeout(resolve, 200));
     }
     expect(rows.map((r) => r.action)).toEqual(["payment_account.connect_start", "payment_account.connect", "payment_account.disconnect"]);
-    expect(JSON.stringify(rows)).not.toMatch(/fake-|vendedor-1|state/); // nem token, nem vendedor inteiro
+    expect(JSON.stringify(rows)).not.toMatch(/fake-|vendedor-1|state|"sid"/); // nem token, nem vendedor inteiro, nem a sessão
+  });
+
+  it("P-2: desconectar também é BLOQUEADO com PIX ainda PENDENTE (QR vigente): o cliente poderia pagar depois de o token sumir", async () => {
+    await connect();
+    const account = await prisma.paymentAccount.findFirstOrThrow();
+    const order = await prisma.order.create({ data: { storeId, code: "0002", type: "BALCAO", status: "PENDENTE", customerName: "C", totalCents: 1000, paymentMethod: "PIX" } });
+    await prisma.payment.create({ data: { orderId: order.id, amountCents: 1000, status: "PENDENTE", paymentAccountId: account.id } });
+    const blocked = await post("/api/store/payments/mercadopago/disconnect");
+    expect(blocked.statusCode).toBe(409);
+    expect(json(blocked)).toMatchObject({ code: "DISCONNECT_BLOCKED", count: 1 });
+    await prisma.order.update({ where: { id: order.id }, data: { status: "CANCELADO" } });
+    expect((await post("/api/store/payments/mercadopago/disconnect")).statusCode).toBe(200);
+  });
+
+  it("modo off (PIX desligado): conectar é 409 PAYMENTS_DISABLED e o cardápio não oferece PIX", async () => {
+    setOAuthProvider();
+    const saved = process.env.MP_OAUTH_MODE;
+    process.env.MP_OAUTH_MODE = "off";
+    try {
+      const response = await post("/api/store/payments/mercadopago/connect");
+      expect(response.statusCode).toBe(409);
+      expect(json(response).code).toBe("PAYMENTS_DISABLED");
+      expect((await menuStore()).payment).toEqual({ pixAvailable: false });
+    } finally {
+      if (saved === undefined) delete process.env.MP_OAUTH_MODE;
+      else process.env.MP_OAUTH_MODE = saved;
+    }
   });
 
   it("desconectar é BLOQUEADO enquanto houver PIX pago de pedido em andamento (D1-9); libera quando o pedido encerra", async () => {
@@ -388,9 +425,10 @@ describe("OAuth — seleção por ambiente e cliente real (sem credencial)", () 
   afterEach(() => setOAuthProvider());
 
   it("o FAKE nunca sobe em produção; real exige as credenciais; o padrão fora de produção é o fake", () => {
-    expect(() => oauthProvider({ NODE_ENV: "production" })).toThrow(/não pode rodar em produção/);
+    expect(() => oauthProvider({ NODE_ENV: "production" })).toThrow(/MP_OAUTH_MODE não configurado/);
     expect(() => oauthProvider({ MP_OAUTH_MODE: "real" })).toThrow(/MP_CLIENT_ID/);
     expect(oauthProvider({ NODE_ENV: "development" }).mode).toBe("fake");
+    expect(oauthProvider({}).mode).toBe("fake"); // NODE_ENV ausente = dev local
     expect(oauthProvider({ MP_OAUTH_MODE: "real", MP_CLIENT_ID: "1", MP_CLIENT_SECRET: "s", NODE_ENV: "production" }).mode).toBe("real");
   });
 
@@ -431,5 +469,106 @@ describe("OAuth — seleção por ambiente e cliente real (sem credencial)", () 
     expect(String((error as Error).message)).not.toContain("SEGREDO-DO-PROVEDOR");
     status = 503;
     await expect(real.exchangeCode({ code: "c", redirectUri: "x" })).rejects.toMatchObject({ kind: "unavailable" });
+  });
+});
+
+describe("M-1: configuração de pagamentos no boot", () => {
+  const strong = "k".repeat(48);
+  const real = { MP_OAUTH_MODE: "real", MP_CLIENT_ID: "1", MP_CLIENT_SECRET: "s", PAYMENT_ENC_KEY: strong, PUBLIC_API_URL: "https://api.exemplo.com.br" };
+
+  it("fora de dev/teste o modo é obrigatório e o fake é recusado (production, staging, prod…); off e real passam", () => {
+    for (const NODE_ENV of ["production", "staging", "prod", "homolog"]) {
+      expect(() => assertPaymentsBootConfig({ NODE_ENV }, currentKey), NODE_ENV).toThrow(/MP_OAUTH_MODE não configurado/);
+      expect(() => assertPaymentsBootConfig({ NODE_ENV, MP_OAUTH_MODE: "fake" }, currentKey), NODE_ENV).toThrow(/só roda em dev\/teste/);
+      expect(assertPaymentsBootConfig({ NODE_ENV, MP_OAUTH_MODE: "off" }, currentKey)).toBe("off");
+    }
+    expect(() => assertPaymentsBootConfig({ MP_OAUTH_MODE: "talvez" }, currentKey)).toThrow(/inválido/);
+  });
+
+  it("dev/teste: fake por padrão; real exige as credenciais", () => {
+    for (const NODE_ENV of [undefined, "development", "test"]) {
+      expect(assertPaymentsBootConfig(NODE_ENV ? { NODE_ENV } : {}, currentKey)).toBe("fake");
+    }
+    expect(() => assertPaymentsBootConfig({ MP_OAUTH_MODE: "real" }, currentKey)).toThrow(/MP_CLIENT_ID/);
+  });
+
+  it("real em produção: exige chave de cifra forte, credenciais e PUBLIC_API_URL https; com tudo certo sobe", () => {
+    const saved = process.env.VITEST;
+    delete process.env.VITEST; // fora do vitest, a chave de teste do repositório e a ausência de chave NÃO valem
+    try {
+      const prod = { NODE_ENV: "production", ...real };
+      expect(assertPaymentsBootConfig(prod, currentKey)).toBe("real");
+      expect(() => assertPaymentsBootConfig({ ...prod, PAYMENT_ENC_KEY: undefined } as never, currentKey)).toThrow(/PAYMENT_ENC_KEY não configurado/);
+      expect(() => assertPaymentsBootConfig({ ...prod, PAYMENT_ENC_KEY: "curta" }, currentKey)).toThrow(/fraco/);
+      expect(() => assertPaymentsBootConfig({ ...prod, MP_CLIENT_SECRET: "" }, currentKey)).toThrow(/MP_CLIENT_ID e MP_CLIENT_SECRET/);
+      expect(() => assertPaymentsBootConfig({ ...prod, PUBLIC_API_URL: "http://api.exemplo.com.br" }, currentKey)).toThrow(/https/);
+      expect(() => assertPaymentsBootConfig({ ...prod, PUBLIC_API_URL: undefined } as never, currentKey)).toThrow(/https/);
+      expect(() => assertPaymentsBootConfig({ ...prod, JWT_SECRET: strong }, currentKey)).toThrow(/diferente de JWT_SECRET/);
+    } finally {
+      process.env.VITEST = saved;
+    }
+  });
+
+  it("o app NÃO sobe com configuração inválida (falha no boot, não no primeiro PIX)", () => {
+    const saved = { ...process.env };
+    try {
+      process.env.NODE_ENV = "production";
+      delete process.env.MP_OAUTH_MODE;
+      expect(() => makeApp()).toThrow(/MP_OAUTH_MODE/);
+    } finally {
+      for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+      Object.assign(process.env, saved);
+    }
+  });
+});
+
+describe("P-3/P-4: log sem code/state e recifrar com a chave atual", () => {
+  it("redactLogUrl remove a query do callback do OAuth e mantém o caminho; outras URLs ficam como estão", () => {
+    expect(redactLogUrl("/api/store/payments/mercadopago/callback?code=TG-123&state=abc")).toBe("/api/store/payments/mercadopago/callback?code=[redigido]&state=[redigido]");
+    expect(redactLogUrl("/auth/reset-password?token=x")).toBe("/auth/reset-password?token=[redigido]");
+    expect(redactLogUrl("/stores/loja/menu?x=1")).toBe("/stores/loja/menu?x=1");
+    expect(redactLogUrl("/api/orders")).toBe("/api/orders");
+    expect(redactLogUrl(undefined)).toBeUndefined();
+  });
+
+  it("reencryptAll: passa tudo para a chave atual, é idempotente e o dado continua decifrando; a chave anterior pode sair", async () => {
+    await resetDb();
+    const storeA = (await prisma.store.create({ data: { name: "A", slug: "loja-rc-a", code: "RC1" } })).id;
+    const storeB = (await prisma.store.create({ data: { name: "B", slug: "loja-rc-b", code: "RC2" } })).id;
+    const oldEnv = { PAYMENT_ENC_KEY: "o".repeat(48), PAYMENT_ENC_KEY_ID: "v1" };
+    const mk = (storeId: string, seller: string, token: string) =>
+      prisma.paymentAccount.create({
+        data: {
+          storeId,
+          sellerUserId: seller,
+          accessTokenEnc: encryptSecret(token, { storeId, provider: "mercadopago", field: "accessToken" }, oldEnv),
+          refreshTokenEnc: encryptSecret(`r-${token}`, { storeId, provider: "mercadopago", field: "refreshToken" }, oldEnv),
+          expiresAt: new Date(Date.now() + 90 * DAY),
+        },
+      });
+    const a = await mk(storeA, "v-a", "token-a");
+    const b = await mk(storeB, "v-b", "token-b");
+
+    const rotated = { PAYMENT_ENC_KEY: "n".repeat(48), PAYMENT_ENC_KEY_ID: "v2", PAYMENT_ENC_KEY_PREV: "o".repeat(48), PAYMENT_ENC_KEY_PREV_ID: "v1" };
+    const saved = { ...process.env };
+    Object.assign(process.env, rotated);
+    try {
+      const service = new StorePaymentsService(prisma, () => new FakeMercadoPagoOAuth(), { log() {}, logStrict: async () => {} });
+      expect(await service.reencryptAll("v2")).toEqual({ reencrypted: 2, alreadyCurrent: 0, failed: 0 });
+      expect(await service.reencryptAll("v2")).toEqual({ reencrypted: 0, alreadyCurrent: 2, failed: 0 }); // idempotente
+      const rows = await prisma.paymentAccount.findMany({ orderBy: { sellerUserId: "asc" } });
+      expect(rows.every((r) => r.accessTokenEnc!.split(".")[1] === "v2" && r.refreshTokenEnc!.split(".")[1] === "v2")).toBe(true);
+      expect(rows[0].id).toBe(a.id);
+      expect(rows[1].id).toBe(b.id);
+      // sem a chave anterior, tudo continua decifrando (a anterior já pode ser removida)
+      delete process.env.PAYMENT_ENC_KEY_PREV;
+      delete process.env.PAYMENT_ENC_KEY_PREV_ID;
+      expect(decryptSecret(rows[0].accessTokenEnc!, { storeId: storeA, provider: "mercadopago", field: "accessToken" })).toBe("token-a");
+      expect(decryptSecret(rows[1].refreshTokenEnc!, { storeId: storeB, provider: "mercadopago", field: "refreshToken" })).toBe("r-token-b");
+    } finally {
+      for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+      Object.assign(process.env, saved);
+      await resetDb();
+    }
   });
 });
