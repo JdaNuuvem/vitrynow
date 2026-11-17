@@ -30,7 +30,7 @@ vi.mock("mercadopago", () => ({
   },
 }));
 
-import { cancelPayment, createPixPayment, getPayment, mercadoPagoGateway, refundPayment } from "../src/lib/mercadopago";
+import { PIX_EXPIRATION_MINUTES, cancelPayment, createPixPayment, effectiveExpiry, getPayment, mercadoPagoGateway, refundPayment } from "../src/lib/mercadopago";
 
 describe("lib/mercadopago — token por gateway", () => {
   beforeEach(() => {
@@ -53,6 +53,36 @@ describe("lib/mercadopago — token por gateway", () => {
     expect(new Set(configs)).toEqual(new Set(["TOKEN-DA-LOJA"]));
     expect(created[0]).toMatchObject({ token: "TOKEN-DA-LOJA", input: { body: { transaction_amount: 45.5, external_reference: "pedido-1", payment_method_id: "pix" }, requestOptions: { idempotencyKey: "k1" } } });
     expect(created[1]).toMatchObject({ token: "TOKEN-DA-LOJA", refund: { payment_id: "777", requestOptions: { idempotencyKey: "refund-1" } } });
+  });
+
+  it("prazo do PIX: envia date_of_expiration = agora + 30 min e expiresAt é SEMPRE o menor entre o pedido e o do provedor", async () => {
+    expect(PIX_EXPIRATION_MINUTES).toBe(30);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      // o mock do SDK devolve 12:30Z: com "agora" = 12:00Z o pedido (12:30Z) e o do provedor coincidem; com 12:10Z o provedor é MENOR
+      vi.setSystemTime(new Date("2026-11-17T12:00:00Z"));
+      const same = await mercadoPagoGateway("TOKEN-DA-LOJA").createPixPayment({ orderId: "pedido-1", amountCents: 1000, description: "x", payerEmail: "a@b.c" });
+      expect((created[0] as { input: { body: { date_of_expiration: string } } }).input.body.date_of_expiration).toBe("2026-11-17T12:30:00.000Z");
+      expect(same.expiresAt.toISOString()).toBe("2026-11-17T12:30:00.000Z");
+
+      vi.setSystemTime(new Date("2026-11-17T11:00:00Z")); // pedido = 11:30Z, mais curto que o do provedor (12:30Z): vale o NOSSO
+      const ours = await mercadoPagoGateway("TOKEN-DA-LOJA").createPixPayment({ orderId: "pedido-2", amountCents: 1000, description: "x", payerEmail: "a@b.c" });
+      expect(ours.expiresAt.toISOString()).toBe("2026-11-17T11:30:00.000Z");
+
+      vi.setSystemTime(new Date("2026-11-17T12:20:00Z")); // pedido = 12:50Z, o provedor (12:30Z) é MENOR: vale o dele
+      const theirs = await mercadoPagoGateway("TOKEN-DA-LOJA").createPixPayment({ orderId: "pedido-3", amountCents: 1000, description: "x", payerEmail: "a@b.c" });
+      expect(theirs.expiresAt.toISOString()).toBe("2026-11-17T12:30:00.000Z");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("effectiveExpiry: provedor mais curto vale; mais longo, inválido ou ausente cai nos 30 min pedidos", () => {
+    const requested = new Date("2026-11-17T12:30:00Z");
+    expect(effectiveExpiry(requested, new Date("2026-11-17T12:10:00Z")).toISOString()).toBe("2026-11-17T12:10:00.000Z");
+    expect(effectiveExpiry(requested, new Date("2026-11-18T12:30:00Z"))).toBe(requested);
+    expect(effectiveExpiry(requested, new Date("lixo"))).toBe(requested);
+    expect(effectiveExpiry(requested, null)).toBe(requested);
   });
 
   it("as funções antigas (assinatura SaaS) seguem na conta da PLATAFORMA e mantêm as assinaturas e os retornos", async () => {

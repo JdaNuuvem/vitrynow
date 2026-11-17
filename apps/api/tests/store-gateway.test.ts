@@ -3,6 +3,7 @@ import { prisma } from "@meucardapio/db";
 import { mpTokenRefreshJob } from "../src/jobs/mpTokenRefresh";
 import { JobRunner } from "../src/jobs/runner";
 import { decryptSecret, encryptSecret } from "../src/lib/paymentCrypto";
+import { PIX_EXPIRATION_MINUTES } from "../src/lib/mercadopago";
 import { FakePixGateway, gatewayForAccount, gatewayForStore, setGatewayMaker } from "../src/modules/storePayments/gateway";
 import { FakeMercadoPagoOAuth, setOAuthProvider } from "../src/modules/storePayments/oauth";
 import { AccountChangedError, NeedsReconnectError, PixUnavailableError, REFRESH_RETRY_AFTER_MS, StorePaymentsService } from "../src/modules/storePayments/storePayments.service";
@@ -76,6 +77,16 @@ describe("gateway por loja", () => {
     const other = await gateway.createPixPayment({ ...charge, orderId: "pedido-2" });
     await gateway.cancelPayment(other.providerPaymentId);
     expect((await gateway.getPayment(other.providerPaymentId)).status).toBe("cancelled");
+  });
+
+  it("o Fake também fixa o prazo (30 min, constante única) e expiresAt sempre vem preenchido", async () => {
+    await connected(storeA, "vendedor-1");
+    const gateway = await gatewayForStore(storeA);
+    const pix = await gateway.createPixPayment(charge);
+    const minutes = (pix.expiresAt.getTime() - Date.now()) / 60_000;
+    expect(PIX_EXPIRATION_MINUTES).toBe(30);
+    expect(minutes).toBeGreaterThan(29);
+    expect(minutes).toBeLessThanOrEqual(30);
   });
 
   it("idempotência: repetir a criação com a mesma chave devolve o MESMO pagamento (queda entre o aceite e a gravação)", async () => {
