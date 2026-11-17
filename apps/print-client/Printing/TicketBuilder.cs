@@ -228,9 +228,16 @@ namespace MeuCardapio.PrintClient.Printing
         // o desconto cobre EXATAMENTE o valor dos itens (o cupom so desconta itens), sem taxa de entrega nem gorjeta, e o subtotal
         // informado (se vier) bate com a soma dos itens. Qualquer divergencia (desconto menor ou maior que os itens, subtotal que nao
         // bate, taxa, total ausente) cai no fluxo normal, que COBRA. Desconto ausente conta como zero: sem prova, nao e "de graca".
+        //
+        // Campo do SERVIDOR (API-66, fonte unica; Atlas/Nightingale/Leonardo): se PRESENTE ele MANDA. `false` => regra normal (cobra), mesmo que a
+        // aritmetica local desse zero (ha pagamento vivo). `true` => "nada a cobrar" so com o total PRESENTE e igual a 0 (cinto sempre); `true`
+        // com total diferente de 0 ou ausente => regra normal e AVISO no log (IsNothingToChargeConflict). AUSENTE (API antiga) => a aritmetica abaixo.
         static bool IsNothingToCharge(PrintableOrder o)
         {
+            // Campo PRESENTE e nao booleano = dado corrompido: o lado seguro e COBRAR (a aritmetica local so vale para campo AUSENTE ou null).
+            if (o.NothingToCharge == false || o.NothingToChargeInvalid) return false;
             if (!o.HasTotalCents || o.TotalCents != 0) return false;
+            if (o.NothingToCharge == true) return true;
             long items = ItemsValue(o);
             long discount = o.DiscountCents ?? 0;
             if (o.SubtotalCents.HasValue && o.SubtotalCents.Value != items) return false;
@@ -247,6 +254,19 @@ namespace MeuCardapio.PrintClient.Printing
                 total += ((long)item.UnitPriceCents + extras) * item.Quantity;
             }
             return total;
+        }
+
+        // O campo chegou com valor que nao e booleano: o papel cobra (regra normal) e o chamador registra um AVISO no log.
+        public static bool IsNothingToChargeInvalid(PrintableOrder o)
+        {
+            return o != null && !o.IsTest && o.CancelNotice != true && o.NothingToChargeInvalid;
+        }
+
+        // O servidor disse "nada a cobrar" mas o total nao chegou PRESENTE e igual a 0: incoerente (versao desencontrada ou bug). O papel segue a
+        // regra normal (que cobra) e o chamador registra um AVISO no log.
+        public static bool IsNothingToChargeConflict(PrintableOrder o)
+        {
+            return o != null && !o.IsTest && o.CancelNotice != true && o.NothingToCharge == true && (!o.HasTotalCents || o.TotalCents != 0);
         }
 
         // Tiquete SEM itens e total zero: imprime "SEM COBRANCA" (nada a entregar), mas e malformado e o chamador registra um aviso no log.

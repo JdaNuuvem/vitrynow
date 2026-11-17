@@ -1229,6 +1229,29 @@ namespace MeuCardapio.PrintClient
             }
             finally { Clean(dir); }
 
+            // N9 (mutante Q10 do Deming): 404 REPETIDO da config (API antiga, ou deploy longo) NAO e falha: nunca gera o aviso de "modo nao confirmado".
+            dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.PrintMode = "LEGACY"; api.ConfigEnabled = false;   // config 404 SEMPRE
+                    var o = Order("N9", "5209"); LegacyOrder(api, o);
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: false))
+                    {
+                        rig.Device.ConfigSuppression = TimeSpan.FromMilliseconds(30);   // volta a perguntar a cada ~30 ms: muitos 404 seguidos
+                        rig.Device.ConfigFailuresBeforeWarning = 3;
+                        rig.Start();
+                        bool many = WaitFor(() => api.ConfigCalls >= 12, 20000);
+                        bool printed = WaitFor(() => Paper(printer, "5209") == 1, 20000);
+                        Thread.Sleep(300);
+                        Check("config 404 REPETIDO (" + api.ConfigCalls + " respostas 404 seguidas): NAO conta como falha e NAO avisa 'não consigo confirmar o modo'", many && printed && !rig.Device.ModeUnconfirmed && !rig.HasMessage("Não consigo confirmar"));
+                    }
+                }
+            }
+            finally { Clean(dir); }
+
             // M8: o servidor oscila o modo varias vezes com 6 pedidos (cada um aparece como pedido legado e como job): cada pedido sai 1 vez.
             dir = Tmp();
             try
