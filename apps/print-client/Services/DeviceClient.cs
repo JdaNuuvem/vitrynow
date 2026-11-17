@@ -272,7 +272,8 @@ namespace MeuCardapio.PrintClient.Services
             if (!known)
             {
                 StatusChanged?.Invoke("Job de impressão de tipo não suportado (" + (kind.Length > 40 ? kind.Substring(0, 40) : kind) + "): recusado.");
-                await SendJobAckAsync(job.Id, "FAILED", "tipo não suportado: " + kind, token);
+                // O tipo recebido NÃO volta ao servidor (frase fixa nossa, código OTHER).
+                await SendJobAckAsync(job.Id, "FAILED", PrintFailure.Other, "tipo de job não suportado", token);
                 return true;
             }
 
@@ -280,7 +281,7 @@ namespace MeuCardapio.PrintClient.Services
             if (ticket == null && kind == PrintJobDto.KindTest) ticket = new PrintableOrder { IsTest = true, Code = "TESTE" };
             if (ticket == null)
             {
-                await SendJobAckAsync(job.Id, "FAILED", "tíquete ausente no job", token);
+                await SendJobAckAsync(job.Id, "FAILED", PrintFailure.Other, "tíquete ausente no job", token);
                 return true;
             }
 
@@ -328,12 +329,15 @@ namespace MeuCardapio.PrintClient.Services
 
         // Ack do job. PRINTED é repetido pelo ledger (TryAckAsync); FAILED é de melhor esforço.
         // Devolve true se o servidor tratou o assunto (200, 409 ou 404): não há o que repetir.
-        async Task<bool> SendJobAckAsync(string jobId, string status, string error, CancellationToken token)
+        // FAILED leva só o CÓDIGO da lista fechada (PrintFailure) e uma frase FIXA nossa; nunca texto de exceção, driver, impressora
+        // ou do servidor (ADR-0004 §8 item 8). O detalhe fica no log local.
+        async Task<bool> SendJobAckAsync(string jobId, string status, string failureCode, string fixedText, CancellationToken token)
         {
             try
             {
+                var failCode = PrintFailure.Normalize(failureCode);
                 var payload = status == "FAILED"
-                    ? JsonConvert.SerializeObject(new { status = status, error = TrimError(error) })
+                    ? JsonConvert.SerializeObject(new { status = status, code = failCode, error = string.IsNullOrWhiteSpace(fixedText) ? PrintFailure.Phrase(failCode) : TrimError(fixedText) })
                     : JsonConvert.SerializeObject(new { status = status });
                 using (var content = new StringContent(payload, Encoding.UTF8, "application/json"))
                 using (var request = NewRequest(HttpMethod.Post, "/api/device/print-jobs/" + Uri.EscapeDataString(jobId) + "/ack", content))
@@ -383,7 +387,7 @@ namespace MeuCardapio.PrintClient.Services
 
         // A impressão falhou: o pedido só volta depois do recuo e sem novo alerta sonoro; entra no
         // indicador "sem imprimir" da tela.
-        public void ReportPrintFailed(string orderId, string code = null, string error = null)
+        public void ReportPrintFailed(string orderId, string code = null, string failureCode = null)
         {
             _ledger.MarkPrintFailed(orderId, code);
             PublishProblems();
@@ -391,7 +395,7 @@ namespace MeuCardapio.PrintClient.Services
             if (IsJobKey(orderId))
             {
                 var jobId = orderId.Substring(JobKeyPrefix.Length);
-                Task.Run(() => SendJobAckAsync(jobId, "FAILED", error, CancellationToken.None));
+                Task.Run(() => SendJobAckAsync(jobId, "FAILED", failureCode, null, CancellationToken.None));
             }
         }
 
@@ -400,7 +404,7 @@ namespace MeuCardapio.PrintClient.Services
             if (IsJobKey(orderId))
             {
                 // PRINTED do job: 200/409/404 encerram (409 = lease vencida, já avisado); o resto repete no próximo ciclo.
-                if (await SendJobAckAsync(orderId.Substring(JobKeyPrefix.Length), "PRINTED", null, token)) _ledger.MarkAcked(orderId);
+                if (await SendJobAckAsync(orderId.Substring(JobKeyPrefix.Length), "PRINTED", null, null, token)) _ledger.MarkAcked(orderId);
                 return;
             }
             try

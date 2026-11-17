@@ -40,8 +40,9 @@ namespace MeuCardapio.PrintClient
                 Device.StatusChanged += m => { lock (Messages) Messages.Add(m); };
                 Device.PrintProblemsChanged += l => { lock (Problems) Problems.Add(string.Join(",", l)); };
                 Device.OrderPending += () => Interlocked.Increment(ref _alerts);
-                Device.TicketReady += o => System.Threading.Tasks.Task.Run(() => Coordinator.Handle(o));
+                Device.TicketReady += OnTicket;
             }
+            public void OnTicket(PrintableOrder o) { System.Threading.Tasks.Task.Run(() => Coordinator.Handle(o)); }
             public void Start() { Device.Start(); }
             public bool HasMessage(string part) { lock (Messages) return Messages.Any(m => m.Contains(part)); }
             public int MessageCount(string part) { lock (Messages) return Messages.Count(m => m.Contains(part)); }
@@ -72,6 +73,7 @@ namespace MeuCardapio.PrintClient
             NoHotLoop();
             FailedPrinterDoesNotHoldJob();
             ContractTable();
+            FailureReportsOnlyCodes();
             ReclaimedBySameOwner();
             BadJobDoesNotBlockQueue();
             TestJobWithTicket();
@@ -210,7 +212,7 @@ namespace MeuCardapio.PrintClient
                     {
                         rig.Start();
                         bool done = WaitFor(() => api.AcksOf("j6", "FAILED") >= 1 && api.AcksOf("j7", "FAILED") >= 1, 20000);
-                        Check("job de tipo desconhecido: ack FAILED 'tipo nao suportado' e NADA impresso", done && (api.JobLastError("j6") ?? "").Contains("tipo não suportado") && printer.Printed.Count == 0);
+                        Check("job de tipo desconhecido: ack FAILED 'nao suportado' (codigo OTHER) e NADA impresso", done && (api.JobLastError("j6") ?? "").Contains("não suportado") && api.JobLastCode("j6") == "OTHER" && printer.Printed.Count == 0);
                         Check("job sem ticket: ack FAILED 'tiquete ausente' e nada impresso", (api.JobLastError("j7") ?? "").Contains("ausente") && printer.Printed.Count == 0);
                         Check("job recusado nao fica em 'sem imprimir' no painel local (erro do servidor, nao da impressora)", rig.ProblemCount == 0);
                     }
@@ -409,6 +411,99 @@ namespace MeuCardapio.PrintClient
                 }
             }
             finally { Clean(dir); }
+        }
+
+        // O que sai do computador da loja no ack FAILED e SO o codigo da lista fechada + frase fixa nossa (ADR-0004 §8 item 8):
+        // a mensagem da excecao (nome de impressora/servidor, caminho, usuario do Windows) fica no log local.
+        sealed class ThrowingTarget : IPrintTarget
+        {
+            readonly Func<Exception> _make; public ThrowingTarget(Func<Exception> make) { _make = make; }
+            public void Print(TicketDocument document) { throw _make(); }
+        }
+
+        static void FailureReportsOnlyCodes()
+        {
+            const string leak = @"Acesso negado a \\SERVIDOR\HP-Joao em C:\Users\joao.silva\AppData\spool";
+            var cases = new[]
+            {
+                new { id = "e1", make = (Func<Exception>)(() => new InvalidOperationException(leak)), code = "OTHER", phrase = "falha na impressão", label = "excecao qualquer (texto de terceiros)" },
+                new { id = "e2", make = (Func<Exception>)(() => new PrinterUnavailableException(leak, "DRIVER_ERROR")), code = "DRIVER_ERROR", phrase = "erro do driver da impressora", label = "erro de driver" },
+                new { id = "e3", make = (Func<Exception>)(() => new PrinterUnavailableException(leak, "<script>alert(1)</script>")), code = "OTHER", phrase = "falha na impressão", label = "codigo fora da lista (normalizado)" },
+                new { id = "e4", make = (Func<Exception>)(() => new PrinterUnavailableException(leak, "PRINTER_NOT_FOUND")), code = "PRINTER_NOT_FOUND", phrase = "impressora não encontrada", label = "impressora nao encontrada" },
+            };
+            foreach (var c in cases)
+            {
+                var dir = Tmp();
+                try
+                {
+                    using (var api = new FakeApi())
+                    {
+                        api.AddJob(c.id, Order("E", "9" + c.id));
+                        using (var rig = new Rig(api, new VirtualPrintTarget(Path.Combine(dir, "out")), null, "mcd_impressora1_segredo"))
+                        {
+                            // troca o destino de impressao por um que lanca a excecao do caso
+                            var coord = new PrintCoordinator(rig.Device, new ThrowingTarget(c.make), () => 58, SelfTestPrint.Tz);
+                            coord.Message += m => { lock (rig.Messages) rig.Messages.Add(m); };
+                            rig.Device.TicketReady -= rig.OnTicket;
+                            rig.Device.TicketReady += o => System.Threading.Tasks.Task.Run(() => coord.Handle(o));
+                            rig.Start();
+                            bool acked = WaitFor(() => api.AcksOf(c.id, "FAILED") >= 1, 20000);
+                            var bodies = api.AllAckBodies();
+                            Check("erro so codigo (" + c.label + "): o ack FAILED leva code=" + c.code + " e a frase fixa", acked && api.JobLastCode(c.id) == c.code && api.JobLastError(c.id) == c.phrase);
+                            Check("erro so codigo (" + c.label + "): NADA do texto da excecao sai da maquina (sem servidor, usuario, caminho, impressora nem script)",
+                                acked && !bodies.Contains("SERVIDOR") && !bodies.Contains("joao") && !bodies.Contains("HP-") && !bodies.Contains("C:\\") && !bodies.Contains("spool") && !bodies.Contains("script"));
+                            Check("erro so codigo (" + c.label + "): o DETALHE segue disponivel no log local (mensagem da tela)", rig.HasMessage("SERVIDOR"));
+                        }
+                    }
+                }
+                finally { Clean(dir); }
+            }
+
+            // codigos das falhas SIMULADAS da impressora virtual (e do tipo desconhecido, que nao ecoa o tipo recebido)
+            foreach (var f in new[] { new { fault = VirtualFault.Offline, code = "PRINTER_OFFLINE" }, new { fault = VirtualFault.OutOfPaper, code = "NO_PAPER" }, new { fault = VirtualFault.DropMidJob, code = "PRINTER_OFFLINE" } })
+            {
+                var dir = Tmp();
+                try
+                {
+                    using (var api = new FakeApi())
+                    {
+                        api.AddJob("v1", Order("V", "9100"));
+                        using (var rig = new Rig(api, new VirtualPrintTarget(Path.Combine(dir, "out")) { Fault = f.fault }, null, "mcd_impressora1_segredo"))
+                        {
+                            rig.Start();
+                            bool acked = WaitFor(() => api.AcksOf("v1", "FAILED") >= 1, 20000);
+                            Check("codigo da falha simulada " + f.fault + " => " + f.code, acked && api.JobLastCode("v1") == f.code);
+                        }
+                    }
+                }
+                finally { Clean(dir); }
+            }
+            var dirK = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.AddJob("k9", Order("K", "9200"), "EVIL<script>kind");
+                    using (var rig = new Rig(api, new VirtualPrintTarget(Path.Combine(dirK, "out")), null, "mcd_impressora1_segredo"))
+                    {
+                        rig.Start();
+                        bool acked = WaitFor(() => api.AcksOf("k9", "FAILED") >= 1, 20000);
+                        var bodies = api.AllAckBodies();
+                        Check("tipo de job desconhecido NAO e ecoado de volta ao servidor (frase fixa, codigo OTHER)", acked && !bodies.Contains("EVIL") && !bodies.Contains("script") && api.JobLastCode("k9") == "OTHER");
+                    }
+                }
+            }
+            finally { Clean(dirK); }
+
+            // unidade: lista fechada
+            Check("PrintFailure: a lista fechada tem 5 codigos e Normalize manda o resto para OTHER (inclusive nulo, vazio e minusculas validas)",
+                PrintFailure.All.Length == 5 && PrintFailure.Normalize(null) == "OTHER" && PrintFailure.Normalize("") == "OTHER" && PrintFailure.Normalize("hack") == "OTHER"
+                && PrintFailure.Normalize("no_paper") == "NO_PAPER" && PrintFailure.Normalize(" PRINTER_OFFLINE ") == "PRINTER_OFFLINE");
+            Check("PrintFailure: toda frase e nossa, em portugues, sem caminho e sem barra invertida", PrintFailure.All.All(code => PrintFailure.Phrase(code).Length > 5 && !PrintFailure.Phrase(code).Contains("\\") && !PrintFailure.Phrase(code).Contains(":")));
+            Check("PrinterProbe.CodeOf: offline => PRINTER_OFFLINE, sem papel => NO_PAPER, o resto => OTHER",
+                PrinterProbe.CodeOf(true, 3, 2) == "PRINTER_OFFLINE" && PrinterProbe.CodeOf(false, 7, 2) == "PRINTER_OFFLINE" && PrinterProbe.CodeOf(false, 3, 4) == "NO_PAPER" && PrinterProbe.CodeOf(false, 3, 7) == "OTHER" && PrinterProbe.CodeOf(false, 6, 2) == "OTHER");
+            string noPrinterCode; PrinterProbe.Check("", out noPrinterCode);
+            Check("PrinterProbe: sem impressora selecionada => PRINTER_NOT_FOUND", noPrinterCode == "PRINTER_NOT_FOUND");
         }
 
         // ---- ADR-0004 §8 como TABELA DE CONTRATO sobre o servidor falso (o Turing pode reaproveitar estes casos na API-12) ----

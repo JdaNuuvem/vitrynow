@@ -6,8 +6,10 @@ namespace MeuCardapio.PrintClient.Printing
     // recuo do PrintLedger e entra no indicador "sem imprimir". A mensagem aparece para o lojista.
     public class PrinterUnavailableException : Exception
     {
-        public PrinterUnavailableException(string message) : base(message) { }
-        public PrinterUnavailableException(string message, Exception inner) : base(message, inner) { }
+        // Código de lista fechada (Services\PrintFailure): é o que vai ao servidor. A mensagem fica só no log local.
+        public string Code { get; private set; }
+        public PrinterUnavailableException(string message, string code = "OTHER") : base(message) { Code = code; }
+        public PrinterUnavailableException(string message, Exception inner, string code = "OTHER") : base(message, inner) { Code = code; }
     }
 
     // Para onde o tíquete vai: impressora Windows (GdiPrintTarget), arquivos (VirtualPrintTarget, harness

@@ -24,7 +24,13 @@ Entrega o PRÓXIMO job pendente da loja **com lease** (o servidor decide; o clie
 - Kind desconhecido (ex.: `TAB_BILL`, que é do PC-08) ⇒ o cliente responde `FAILED` com "tipo não suportado" e não imprime.
 
 ## `POST /api/device/print-jobs/:id/ack`
-Corpo: `{"status":"PRINTED"}` ou `{"status":"FAILED","error":"<texto curto, até 200 caracteres>"}`.
+Corpo: `{"status":"PRINTED"}` ou `{"status":"FAILED","code":"<CÓDIGO>","error":"<frase fixa nossa>"}`.
+
+**O que sai do computador da loja no `FAILED` é só um CÓDIGO de lista fechada e uma frase fixa em português** (ADR-0004 §8 item 8, parecer da Nightingale): `PRINTER_OFFLINE` ("impressora offline"),
+`NO_PAPER` ("impressora sem papel"), `DRIVER_ERROR` ("erro do driver da impressora"), `PRINTER_NOT_FOUND` ("impressora não encontrada"), `OTHER` ("falha na impressão"). A mensagem da exceção (do .NET,
+do driver, do spooler) pode trazer o nome da impressora ou do compartilhamento (por exemplo, um caminho de rede como `\\SERVIDOR\HP-Joao`), caminho ou usuário do Windows e **nunca** é enviada: fica só no log local. Código fora da lista vira
+`OTHER`; o tipo de job desconhecido recebido do servidor **não** é ecoado de volta. O servidor (API-12) deve tratar `error` como **não confiável** (sanitizar C0/C1/bidi, nunca interpolar em log/HTML/WhatsApp) e
+mostrar ao dono a frase traduzida do `code`.
 
 | Resposta | O que o cliente faz |
 |---|---|

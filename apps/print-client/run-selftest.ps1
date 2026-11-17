@@ -23,7 +23,7 @@ $srcs = @(
   "Models\PrintableOrder.cs", "Models\PrintJob.cs",
   "Printing\TicketDocument.cs", "Printing\TicketText.cs", "Printing\TicketBuilder.cs", "Printing\TextTicketWriter.cs", "Printing\IPrintTarget.cs",
   "Printing\GdiTicketPainter.cs", "Printing\VirtualPrintTarget.cs", "Printing\PrinterProbe.cs",
-  "Services\PrintCoordinator.cs", "Services\SingleInstance.cs", "Services\AlertSounds.cs", "Services\AudioPlayer.cs", "Services\DeviceClient.cs", "Services\PrintLedger.cs", "Services\SecretStore.cs",
+  "Services\PrintFailure.cs", "Services\PrintCoordinator.cs", "Services\SingleInstance.cs", "Services\AlertSounds.cs", "Services\AudioPlayer.cs", "Services\DeviceClient.cs", "Services\PrintLedger.cs", "Services\SecretStore.cs",
   "Services\AppSettings.cs", "Services\ApiUrlPolicy.cs",
   "Services\Updater.cs", "Services\UpdateState.cs", "Services\UpdateTransport.cs", "Services\UpdateVerifier.cs", "Services\Logger.cs"
 ) | ForEach-Object { Join-Path $base $_ }

@@ -48,10 +48,11 @@ namespace MeuCardapio.PrintClient
         {
             public string Id; public string Kind = "ORDER_KITCHEN"; public string TicketJson;
             public string State = "PENDING";            // PENDING | CLAIMED | PRINTED | FAILED
-            public string ClaimedBy; public DateTime LeaseUntilUtc; public DateTime AvailableAtUtc = DateTime.MinValue; public int Attempts; public int MaxAttempts = 3; public string LastError;
+            public string LastCode; public string ClaimedBy; public DateTime LeaseUntilUtc; public DateTime AvailableAtUtc = DateTime.MinValue; public int Attempts; public int MaxAttempts = 3; public string LastError;
         }
         public readonly List<FakeJob> Jobs = new List<FakeJob>();
         public readonly List<string> JobAcks = new List<string>();   // "id|status|erro|auth"
+        public readonly List<string> JobAckBodies = new List<string>(); // corpo CRU de cada ack (para provar o que sai do computador da loja)
         public int LeaseMs = 120000;                                  // ADR-0004 §8: lease padrao 120 s
         public int FailBackoffMs = 300;                               // recuo do servidor depois de FAILED (no ADR: 15 s, 60 s, 5 min); curto para o teste
         public bool EmptyAs204;                                       // fila vazia: 204 em vez de {"job":null}
@@ -69,6 +70,8 @@ namespace MeuCardapio.PrintClient
         }
         public string JobState(string id) { lock (Lock) { var j = Jobs.FirstOrDefault(x => x.Id == id); ExpireLeases(); return j == null ? null : j.State; } }
         public int JobAttempts(string id) { lock (Lock) { var j = Jobs.FirstOrDefault(x => x.Id == id); return j == null ? -1 : j.Attempts; } }
+        public string JobLastCode(string id) { lock (Lock) { var j = Jobs.FirstOrDefault(x => x.Id == id); return j == null ? null : j.LastCode; } }
+        public string AllAckBodies() { lock (Lock) return string.Join("\n", JobAckBodies); }
         public string JobLastError(string id) { lock (Lock) { var j = Jobs.FirstOrDefault(x => x.Id == id); return j == null ? null : j.LastError; } }
         public int AcksOf(string id, string status) { lock (Lock) return JobAcks.Count(a => a.StartsWith(id + "|" + status + "|", StringComparison.Ordinal)); }
         void ExpireLeases() { var now = DateTime.UtcNow; foreach (var j in Jobs) if (j.State == "CLAIMED" && j.LeaseUntilUtc < now) j.State = "PENDING"; }
@@ -184,12 +187,13 @@ namespace MeuCardapio.PrintClient
                 string auth = c.Request.Headers["Authorization"] ?? "";
                 string raw; using (var rd = new StreamReader(c.Request.InputStream, Encoding.UTF8)) raw = rd.ReadToEnd();
                 var parsed = Newtonsoft.Json.Linq.JObject.Parse(string.IsNullOrWhiteSpace(raw) ? "{}" : raw);
-                string st = (string)parsed["status"], err = (string)parsed["error"];
+                string st = (string)parsed["status"], err = (string)parsed["error"], codeIn = (string)parsed["code"];
                 int reply;
                 lock (Lock)
                 {
                     int n = ++_jobAckCalls;
                     JobAcks.Add(id + "|" + st + "|" + err + "|" + auth);
+                    JobAckBodies.Add(raw);
                     ExpireLeases();
                     var j = Jobs.FirstOrDefault(x => x.Id == id);
                     if (JobAckFailFirst > 0 && n <= JobAckFailFirst) reply = JobAckStatus;
@@ -199,7 +203,7 @@ namespace MeuCardapio.PrintClient
                     else if (j.State == "CLAIMED" && j.ClaimedBy == auth)                                         // lease valida e dono
                     {
                         if (st == "PRINTED") j.State = "PRINTED";
-                        else { j.LastError = err; j.State = j.Attempts >= j.MaxAttempts ? "FAILED" : "PENDING"; j.AvailableAtUtc = DateTime.UtcNow.AddMilliseconds(FailBackoffMs); }
+                        else { j.LastError = err; j.LastCode = codeIn; j.State = j.Attempts >= j.MaxAttempts ? "FAILED" : "PENDING"; j.AvailableAtUtc = DateTime.UtcNow.AddMilliseconds(FailBackoffMs); }
                         reply = 200;
                     }
                     else reply = 409;                                                                             // lease vencida ou nao e o dono

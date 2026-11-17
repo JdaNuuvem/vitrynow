@@ -68,6 +68,7 @@
     <Compile Include="Services\DeviceClient.cs" />
     <Compile Include="Services\PrintLedger.cs" />
     <Compile Include="Services\SecretStore.cs" />
+    <Compile Include="Services\PrintFailure.cs" />
     <Compile Include="Services\PrintCoordinator.cs" />
     <Compile Include="Printing\TicketDocument.cs" />
     <Compile Include="Printing\TicketText.cs" />
