@@ -15,6 +15,35 @@ namespace MeuCardapio.PrintClient
 {
     public static class LiveCheck
     {
+        // Conferencia cruzada do ALERTA CENTRAL (PC-24): o DeviceClient REAL manda os 5 codigos da lista a uma API LOCAL e devolve o que enviou.
+        // ownOrderId = pedido da loja do token; foreignOrderId = de outra loja; unknownOrderId = formato valido que nao existe.
+        public static string Alerts(string baseUrl, string token, string ownOrderId, string foreignOrderId, string unknownOrderId)
+        {
+            var sb = new StringBuilder();
+            var settings = new AppSettings { ApiBaseUrl = baseUrl, DeviceToken = token };
+            var ledger = new PrintLedger(Path.Combine(Path.GetTempPath(), "live-alerts-" + Guid.NewGuid().ToString("N") + ".json"), () => DateTime.UtcNow);
+            var device = new DeviceClient(ledger, settings) { PollIntervalMs = 60000 };
+            device.Start();   // so para o app ter a URL base, como em producao
+            var plan = new[]
+            {
+                new[] { DeviceAlertCode.NothingToChargeConflict, ownOrderId },
+                new[] { DeviceAlertCode.NothingToChargeInvalid, foreignOrderId },
+                new[] { DeviceAlertCode.EmptyZeroTicket, unknownOrderId },
+                new[] { DeviceAlertCode.ModeUnconfirmed, null },
+                new[] { DeviceAlertCode.ModeRecovered, null },
+            };
+            foreach (var item in plan)
+            {
+                bool ok = device.ReportAlert(item[0], item[1]);
+                sb.AppendLine("ENVIO " + item[0] + " -> " + (ok ? "enviado" : "descartado"));
+                Thread.Sleep(400);
+            }
+            sb.AppendLine("ENVIO QUEUE_WITHOUT_PRINTER -> " + (device.ReportAlert("QUEUE_WITHOUT_PRINTER", ownOrderId) ? "ENVIADO (ERRO)" : "descartado (lista fechada)"));
+            Thread.Sleep(800);
+            try { device.Dispose(); } catch { }
+            return sb.ToString();
+        }
+
         // fault: "" (impressora boa) | "offline" | "nopaper" | "driver"
         // startLegacy: o cliente PADRAO (UsePrintJobs desligado) comeca no legado; a virada para a fila vem do servidor (PC-18/PC-22).
         public static string Run(string baseUrl, string token, string outDir, string ledgerPath, int seconds, string fault, bool startLegacy = false)
