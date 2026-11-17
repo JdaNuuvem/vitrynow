@@ -101,31 +101,102 @@ describe("redefinição de senha exige o e-mail da conta do token (SEC-29, ST-67
   }, 120000);
 
   it("MESMO tempo nas três recusas: diferença entre as medianas < 35 ms e todas no piso", async () => {
-    const a = await accountWithToken("tempo@exemplo.com");
-    const sample = async (payload: Record<string, unknown>, n = 5) => {
-      const ms: number[] = [];
-      for (let i = 0; i < n; i += 1) {
-        const t0 = performance.now();
-        await reset(payload);
-        ms.push(performance.now() - t0);
-      }
-      return [...ms].sort((x, y) => x - y)[Math.floor(ms.length / 2)];
+    // SEC-38 (teste de SEGURANÇA, não se afrouxa): amostras ENTRELAÇADAS. Em cada rodada sai UM pedido de cada ramo (a ordem gira a cada rodada), então um pico
+    // de latência do banco ou do agendador (medido: 400 a 1.159 ms com a CPU quase parada) cai nos ramos da MESMA rodada, e a diferença PAREADA contra o ramo
+    // "token inexistente" o cancela. A comparação é a MEDIANA das diferenças pareadas (< 35 ms) em 15 rodadas: 2 ou 3 rodadas com pico não movem a mediana, e
+    // um defeito real (um ramo +300 ms, ou sem piso) desloca o ramo em TODAS as rodadas e derruba o teste. A parte "todo pedido ≥ piso" é DETERMINÍSTICA: usa o
+    // MÍNIMO de cada ramo (o ruído só pode somar tempo, nunca tirar).
+    const ROUNDS = 15;
+    // um token vivo aguenta 4 e-mails errados (o 5º o invalida): 4 contas cobrem as 15 rodadas do ramo "e-mail errado" sem nunca matar o token
+    const accounts = [];
+    for (let i = 0; i < 4; i += 1) accounts.push(await accountWithToken(`tempo${i}@exemplo.com`));
+    const live = accounts[0];
+    const BRANCHES = ["wrongEmail", "noToken", "empty", "noEmail", "badEmail"] as const;
+    type Branch = (typeof BRANCHES)[number];
+    const payloadOf = (branch: Branch, round: number): Record<string, unknown> => {
+      const password = "senha-nova-da-vitima";
+      if (branch === "wrongEmail") return { token: accounts[Math.floor(round / 4)].token, email: "errado@exemplo.com", newPassword: password };
+      if (branch === "noToken") return { token: "y".repeat(32), email: live.credentials.email, newPassword: password };
+      if (branch === "empty") return { token: "z", email: live.credentials.email, newPassword: password };
+      if (branch === "noEmail") return { token: live.token, newPassword: password }; // bundle antigo: SEM o campo e-mail
+      return { token: live.token, email: "isto-nao-e-um-email", newPassword: password };
     };
     // aquecimento (conexões do pool, JIT): sem ele a 1ª amostra paga a reconexão depois de um arquivo que desconectou o Prisma e o teste vira ruído de CPU
-    for (let i = 0; i < 3; i += 1) await reset({ token: "w".repeat(32), email: a.credentials.email, newPassword: "senha-nova-da-vitima" });
-    const wrongEmail = await sample({ token: a.token, email: "errado@exemplo.com", newPassword: "senha-nova-da-vitima" }, 3); // só 3: 5 invalidam o token
-    const noToken = await sample({ token: "y".repeat(32), email: a.credentials.email, newPassword: "senha-nova-da-vitima" });
-    const empty = await sample({ token: "z", email: a.credentials.email, newPassword: "senha-nova-da-vitima" });
-    // 4º ramo (bundle antigo em cache): SEM o campo e-mail, e com e-mail malformado. É recusa sem consulta ao banco, então é a que mais facilmente sai
-    // ANTES do piso: sem o `padToMinimum` dela a resposta voltaria em poucos ms e revelaria "este corpo nem chegou a olhar o token". Não gasta tentativa.
-    const noEmail = await sample({ token: a.token, newPassword: "senha-nova-da-vitima" });
-    const badEmail = await sample({ token: a.token, email: "isto-nao-e-um-email", newPassword: "senha-nova-da-vitima" });
-    expect(Math.abs(wrongEmail - noToken)).toBeLessThan(35);
-    expect(Math.abs(noToken - empty)).toBeLessThan(35);
-    expect(Math.abs(noToken - noEmail)).toBeLessThan(35);
-    expect(Math.abs(noToken - badEmail)).toBeLessThan(35);
-    for (const value of [wrongEmail, noToken, empty, noEmail, badEmail]) expect(value).toBeGreaterThanOrEqual(RESET_FAIL_MIN_DURATION_MS - 10);
-  }, 120000);
+    for (let i = 0; i < 3; i += 1) await reset({ token: "w".repeat(32), email: live.credentials.email, newPassword: "senha-nova-da-vitima" });
+
+    const durations: Record<Branch, number[]> = { wrongEmail: [], noToken: [], empty: [], noEmail: [], badEmail: [] };
+    for (let round = 0; round < ROUNDS; round += 1) {
+      for (let k = 0; k < BRANCHES.length; k += 1) {
+        const branch = BRANCHES[(k + round) % BRANCHES.length];
+        const t0 = performance.now();
+        const res = await reset(payloadOf(branch, round));
+        durations[branch].push(performance.now() - t0);
+        expect(res.statusCode, `${branch} rodada ${round}`).toBe(400); // todas são recusas; nenhuma pode ter dado certo nem 5xx
+      }
+    }
+    const median = (values: number[]) => [...values].sort((x, y) => x - y)[Math.floor(values.length / 2)];
+    const medians = Object.fromEntries(BRANCHES.map((b) => [b, median(durations[b])])) as Record<Branch, number>;
+    const pairedDelta = (branch: Branch) => median(durations[branch].map((value, round) => value - durations.noToken[round]));
+    const deltas = Object.fromEntries(BRANCHES.map((b) => [b, pairedDelta(b)])) as Record<Branch, number>;
+    // Linhas lidas pelo estágio de tempo do scripts/ci.ps1 (INF-20b): QUAL ramo ficou lento em cada falha. Defeito real = sempre o MESMO ramo; ruído = ramos variados.
+    console.log(`TEMPO_RAMOS ${JSON.stringify(medians)}`);
+    console.log(`TEMPO_DELTAS_PAREADOS ${JSON.stringify(deltas)}`);
+    // (1) DETERMINÍSTICO: nenhuma resposta de nenhum ramo volta antes do piso (o mínimo, não a mediana)
+    for (const branch of BRANCHES) {
+      const fastest = Math.min(...durations[branch]);
+      expect(fastest, `ramo ${branch}: a resposta mais rápida levou ${fastest.toFixed(0)} ms, ABAIXO do piso de ${RESET_FAIL_MIN_DURATION_MS} ms`).toBeGreaterThanOrEqual(RESET_FAIL_MIN_DURATION_MS - 10);
+    }
+    // (2) mesmo tempo: a mediana da diferença PAREADA de cada ramo contra "token inexistente" fica abaixo de 35 ms
+    for (const branch of BRANCHES) {
+      if (branch === "noToken") continue;
+      expect(Math.abs(deltas[branch]), `ramo ${branch}: diferença pareada mediana de ${deltas[branch].toFixed(1)} ms contra "token inexistente" (limite 35)`).toBeLessThan(35);
+    }
+  }, 180000);
+
+  // SEC-38: lê `synchronous_commit` na MESMA transação, no instante em que o UPDATE que decide está para rodar.
+  async function commitModeSeenByClaim(payload: Record<string, unknown>) {
+    const seen: string[] = [];
+    const holder = prisma as unknown as { $transaction: (fn: (tx: unknown) => unknown, options?: unknown) => Promise<unknown> };
+    const original = holder.$transaction;
+    holder.$transaction = ((fn: (tx: any) => unknown, options?: unknown) =>
+      original.call(prisma, (tx: any) => {
+        const proxied = new Proxy(tx, {
+          get(target, prop, receiver) {
+            if (prop !== "$queryRaw") return Reflect.get(target, prop, receiver);
+            return async (strings: TemplateStringsArray, ...values: unknown[]) => {
+              if (strings.join("?").includes('UPDATE "PasswordResetToken"')) {
+                const rows = (await target.$queryRaw`SELECT current_setting('synchronous_commit') AS v`) as { v: string }[];
+                seen.push(rows[0].v);
+              }
+              return target.$queryRaw(strings, ...values);
+            };
+          },
+        });
+        return fn(proxied);
+      }, options)) as never;
+    try {
+      const res = await reset(payload);
+      return { seen, res };
+    } finally {
+      holder.$transaction = original;
+    }
+  }
+
+  it("SEC-38: a RECUSA não espera o fsync (`synchronous_commit` off) e a troca de senha continua DURÁVEL (on); nada vaza para o pool", async () => {
+    const a = await accountWithToken("fsync@exemplo.com");
+    const wrong = await commitModeSeenByClaim({ token: a.token, email: "errado@exemplo.com", newPassword: "senha-nova-da-vitima" });
+    expect(wrong.res.statusCode).toBe(400);
+    expect(wrong.seen).toEqual(["off"]);
+    const noToken = await commitModeSeenByClaim({ token: "y".repeat(32), email: a.credentials.email, newPassword: "senha-nova-da-vitima" });
+    expect(noToken.seen).toEqual(["off"]);
+    // e-mail CERTO (a troca grava a senha nova e consome o token): durável
+    const right = await commitModeSeenByClaim({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
+    expect(right.res.statusCode).toBe(200);
+    expect(right.seen).toEqual(["on"]);
+    // não vaza: as conexões do pool seguem com o padrão do banco
+    const values = await Promise.all(Array.from({ length: 12 }, () => prisma.$queryRaw<{ v: string }[]>`SELECT current_setting('synchronous_commit') AS v`));
+    expect(values.map((r) => r[0].v)).toEqual(Array(12).fill("on"));
+  }, 60000);
 
   it(`${RESET_MAX_EMAIL_FAILURES} e-mails errados INVALIDAM o token, com a mesma resposta; depois nem o e-mail certo o reabre`, async () => {
     const a = await accountWithToken("brute@exemplo.com");
