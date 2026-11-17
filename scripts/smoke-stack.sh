@@ -172,6 +172,23 @@ for try in 1 2 3; do
   ra="$(printf '%s' "$lh" | awk -F': ' 'tolower($1)=="retry-after"{print $2}')"; sleep "$(( ${ra:-30} + 2 ))"
 done
 if [ "$lrc" = 200 ] && grep -q mc_session "$jar" 2>/dev/null; then check ok "login BEM-SUCEDIDO pela API da imagem (hash de senha carregado e conferido, cookie de sessão emitido)"; else check fail "login do usuário recém-cadastrado falhou (HTTP $lrc)"; fi
+# SEC-34: QUAL binário do bcrypt a API da imagem carregou. O Dockerfile compila do fonte e apaga o `prebuilds/`: aqui se confere NA IMAGEM EM EXECUÇÃO que o compilado existe,
+# que `prebuilds/` não existe (então só o compilado pode ter carregado: o login acima passou), que o addon aponta para esse caminho e que NÃO há compilador na imagem final.
+bres="$("${DC[@]}" exec -T api node -e "
+const path=require('path'),fs=require('fs');
+const dir=path.dirname(require.resolve('bcrypt/package.json'));
+const rel=p=>path.relative('/repo',p);
+const compiled=fs.existsSync(path.join(dir,'build/Release/bcrypt_lib.node'));
+const pre=fs.existsSync(path.join(dir,'prebuilds'));
+const b=require('bcrypt');
+const loaded=Object.keys(require.cache).filter(k=>/bcrypt_lib\.node$/.test(k)).map(rel);
+console.log(JSON.stringify({compiled,prebuildsPresent:pre,version:require('bcrypt/package.json').version,okHash:b.compareSync('x',b.hashSync('x',4)),loaded}));
+" 2>&1 | tr -d '\r' | tail -1)"
+if [[ "$bres" == *'"compiled":true'* && "$bres" == *'"prebuildsPresent":false'* && "$bres" == *'"okHash":true'* && "$bres" == *'"version":"6.0.0"'* ]]; then check ok "bcrypt 6.0.0 COMPILADO DO FONTE na imagem: build/Release/bcrypt_lib.node existe, prebuilds/ não existe, hash e compare funcionam ($bres)"; else check fail "binário do bcrypt na imagem não é o esperado: $bres"; fi
+ccomp="$("${DC[@]}" exec -T api sh -c 'command -v g++ gcc make python3 cc 2>/dev/null | wc -l' | tr -d '\r\n ')"
+[ "$ccomp" = 0 ] && check ok "a imagem final da API NÃO tem compilador (g++/gcc/make/python3 ausentes)" || check fail "a imagem final da API tem $ccomp ferramentas de compilação"
+uvt="$("${DC[@]}" exec -T api printenv UV_THREADPOOL_SIZE | tr -d '\r\n')"
+[ "$uvt" = 4 ] && check ok "UV_THREADPOOL_SIZE=4 explícito na API (a faixa de hash dimensiona por ele)" || check fail "UV_THREADPOOL_SIZE da API = '$uvt' (esperado 4)"
 nrc="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/orders")"
 [ "$nrc" = 401 ] && check ok "controle: /api/orders SEM cookie é recusada (401)" || check fail "/api/orders sem cookie devolveu $nrc (esperado 401)"
 for p in /auth/me /api/orders /api/catalog/categories /api/store/settings /api/store/subscription /api/reports/summary; do
