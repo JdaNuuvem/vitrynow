@@ -28,6 +28,7 @@ EOF
 ROOTW="$(cygpath -m "$ROOT")"   # docker.exe (Windows) precisa de C:/...
 DC=(docker compose -p "$PROJ" -f "$ROOTW/infra/docker-compose.yml" -f "$ROOTW/infra/docker-compose.smoke.yml" --env-file "$ROOTW/infra/.smoke.env")
 check() { if [ "$1" = ok ]; then PASS=$((PASS+1)); echo "  [ok]    $2"; else FAILS=$((FAILS+1)); echo "  [FALHA] $2"; fi; }
+KRED=0   # vermelhos CONHECIDOS (abertos, visíveis, que não contam como falha nova); a linha final os mostra
 cleanup() {
   [ "${KEEP:-0}" = 1 ] && { echo "KEEP=1: stack mantida ($PROJ), porta $PORT"; return; }
   "${DC[@]}" down -v --remove-orphans >/dev/null 2>&1; docker rm -f "$PROJ-xffecho" >/dev/null 2>&1
@@ -354,26 +355,55 @@ echo "   imagem final (id): $(docker inspect -f '{{.Image}}' "$CID")"
 docker exec "$CID" caddy build-info 2>&1 | tr -d '\r' | grep -qi 'caddy-ratelimit.*5625512f24f6' && check ok "o binário contém o módulo no commit travado 5625512f24f6" || check fail "build-info não mostra o commit esperado do módulo"
 
 
-echo "== 11 C1 (INF-19): o log de ERRO do Caddy, com web/API fora do ar, não grava token, caminho nem cabeçalhos"
-# Tem de ser a ÚLTIMA seção: derruba web e api. Valores ÚNICOS por execução. O log de erro padrão do Caddy (`http.log.error`) existe MESMO sem
-# diretiva `log` e, sem filtro, grava o objeto `request` inteiro (medido em 17/11: ?token=, token no caminho e cabeçalhos custom saíam em claro;
-# só Authorization/Cookie/Set-Cookie/Proxy-Authorization saíam REDACTED). O filtro do Caddyfile apaga `request>headers` e reduz o `uri`.
-u1="smoke-u1-$RANDOM$RANDOM"; u2="smoke-u2-$RANDOM$RANDOM"; u3="smoke-u3-$RANDOM$RANDOM"; u4="smoke-u4-$RANDOM$RANDOM"; u5="smoke-u5-$RANDOM$RANDOM"; u6="smoke-u6-$RANDOM$RANDOM"; u7="smoke-u7-$RANDOM$RANDOM"
+echo "== 11 C1 (INF-19): NENHUM segredo em log de contêiner nenhum (caddy, web e api), com a pilha de pé e depois com web e API derrubados"
+# Tem de ser a ÚLTIMA seção: derruba web e api. Valores ÚNICOS por execução, mandados a todas as rotas PELO CADDY (a porta publicada).
+#  V1 query do reset (web) | V2 token no CAMINHO do QR de mesa (web) | V3 x-order-token | V4 orderId no CAMINHO da API (a credencial do cliente, ST-70)
+#  V5 X-Mfa-Challenge | V6 X-Admin-Token | V7 Authorization | V8 Cookie | V9 ?token= na query da API
+# Contexto (medido em 17/11): o log de ERRO do Caddy gravava `request` inteiro com o upstream fora do ar (filtrado no Caddyfile desde a INF-19).
+# O web (`next start`) não escreve nada por requisição (medição da Tesla; por isso o controle do web é o STATUS da resposta, não uma linha de log).
+# A API loga `incoming request`/`request completed` com o CAMINHO cru: o V4 SAI EM CLARO ENQUANTO O ST-70 (SEC-31, Nightingale) NÃO FOR CORRIGIDO.
+KNOWN_RED_ST70="${KNOWN_RED_ST70:-1}"   # 1 = o vazamento do caminho da API (V4) é VERMELHO CONHECIDO (visível, não conta como falha). Ponha 0 quando a SEC-31 entrar.
+V1="smoke-v1-$RANDOM$RANDOM"; V2="smoke-v2-$RANDOM$RANDOM"; V3="smoke-v3-$RANDOM$RANDOM"; V4="smoke-v4-$RANDOM$RANDOM"; V5="smoke-v5-$RANDOM$RANDOM"
+V6="smoke-v6-$RANDOM$RANDOM"; V7="smoke-v7-$RANDOM$RANDOM"; V8="smoke-v8-$RANDOM$RANDOM"; V9="smoke-v9-$RANDOM$RANDOM"
+c11_envia() { # imprime os 3 códigos: web-query / web-caminho / api
+  local a b c
+  a="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "http://127.0.0.1:$PORT/reset-senha?token=$V1")"
+  b="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "http://127.0.0.1:$PORT/loja/x/m/$V2")"
+  c="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 -H "x-order-token: $V3" -H "X-Mfa-Challenge: $V5" -H "X-Admin-Token: $V6" -H "Authorization: $V7" -H "Cookie: sid=$V8" "http://127.0.0.1:$PORT/stores/x/orders/$V4/payment-status?token=$V9")"
+  echo "$a/$b/$c"
+}
+cA="$(c11_envia)"                      # momento A: pilha de pé
 "${DC[@]}" stop web api >/dev/null 2>&1
-c1="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "http://127.0.0.1:$PORT/reset-senha?token=$u1")"                       # web fora: token na QUERY
-c2="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "http://127.0.0.1:$PORT/loja/x/m/$u2")"                                # web fora: token no CAMINHO (QR de mesa)
-c3="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 -H "X-Mfa-Challenge: $u3" -H "X-Order-Token: $u5" -H "X-Admin-Token: $u6" -H "Authorization: $u4" -H "Cookie: sid=$u7" "http://127.0.0.1:$PORT/stores/x/menu")"   # API fora: cabeçalhos
+cB="$(c11_envia)"                      # momento B: web e API fora do ar (o erro do proxy cai no log de erro do Caddy)
 sleep 2
-cl="$("${DC[@]}" logs caddy 2>&1)"
-# autoverificação: se alguma requisição NÃO chegou ao proxy e falhou (ex.: 429 do limite por IP, 404), o teste não provou nada
-if [ "$c1/$c2/$c3" = "502/502/502" ]; then check ok "as 3 requisições chegaram ao proxy e falharam com 502 (web e API fora do ar): o teste vale"
-else check fail "TESTE INVÁLIDO: esperava 502/502/502 (proxy sem upstream) e veio $c1/$c2/$c3 (429 = limite por IP ainda ativo)"; fi
-leaks=0; for u in "$u1" "$u2" "$u3" "$u4" "$u5" "$u6" "$u7"; do leaks=$((leaks + $(printf '%s' "$cl" | grep -c "$u"))); done
-[ "$leaks" = 0 ] && check ok "C1: nenhum dos 7 valores únicos (query, caminho, X-Mfa-Challenge, X-Order-Token, X-Admin-Token, Authorization, Cookie) aparece no log de erro do Caddy" || check fail "C1: $leaks ocorrência(s) de segredo no log de erro do Caddy"
-# CONTROLE POSITIVO: o log de erro continua existindo (mensagem e status 502) e é o FILTRO que age (uri reduzido), não a ausência de log
-nerr="$(printf '%s' "$cl" | grep -c '"logger":"http.log.error".*"status":502')"
-[ "$nerr" -ge 3 ] && check ok "controle: o log de erro AINDA existe ($nerr linhas http.log.error com status 502 e a mensagem do erro)" || check fail "controle: só $nerr linha(s) de erro 502 no log do Caddy (esperava >= 3): o filtro virou 'sem log'?"
-red=0; for f in '/reset-senha/REDACTED' '/loja/REDACTED' '/stores/REDACTED'; do printf '%s' "$cl" | grep -q "\"uri\":\"$f\"" && red=$((red+1)); done
-[ "$red" = 3 ] && check ok "controle: o filtro agiu nas 3 rotas (uri reduzido ao 1º segmento + /REDACTED; cabeçalhos removidos)" || check fail "controle: o filtro só reduziu $red de 3 uri (confira o bloco log do Caddyfile)"
-echo; echo "RESULTADO: $PASS ok, $FAILS falhas"
+# autoverificação: A precisa ter ALCANÇADO web e API (nem 502 nem 429 nem 000); B precisa ser 502 nas 3. Senão o teste não provou nada.
+okA=1; for code in $(echo "$cA" | tr '/' ' '); do case "$code" in 502|429|000) okA=0;; esac; done
+if [ "$okA" = 1 ] && [ "$cB" = "502/502/502" ]; then check ok "as requisições chegaram ao web e à API com a pilha de pé ($cA) e voltaram 502 com eles fora do ar ($cB): o teste vale"
+else check fail "TESTE INVÁLIDO: esperava códigos que alcançam web/API com a pilha de pé (veio $cA; 429 = limite por IP ainda ativo) e 502/502/502 com eles fora (veio $cB)"; fi
+LOGC="$("${DC[@]}" logs caddy 2>&1)"; LOGW="$("${DC[@]}" logs web 2>&1)"; LOGA="$("${DC[@]}" logs api 2>&1)"
+cnt() { printf '%s' "$2" | grep -c -- "$1"; }
+# --- CADDY e WEB: nenhum dos 9 valores, em nenhum momento
+for svc in caddy web; do
+  case "$svc" in caddy) L="$LOGC";; web) L="$LOGW";; esac
+  n=0; for v in "$V1" "$V2" "$V3" "$V4" "$V5" "$V6" "$V7" "$V8" "$V9"; do n=$((n + $(cnt "$v" "$L"))); done
+  [ "$n" = 0 ] && check ok "C1 [$svc]: nenhum dos 9 valores únicos aparece no log do $svc (query, caminhos, 5 cabeçalhos)" || check fail "C1 [$svc]: $n ocorrência(s) de segredo no log do $svc"
+done
+# --- API: a query e os cabeçalhos NÃO podem aparecer (NG-16); o CAMINHO (V4) é o ST-70
+n=0; for v in "$V1" "$V2" "$V3" "$V5" "$V6" "$V7" "$V8" "$V9"; do n=$((n + $(cnt "$v" "$LOGA"))); done
+[ "$n" = 0 ] && check ok "C1 [api]: query (V9) e os 5 cabeçalhos (V3,V5..V8) não aparecem no log da API (NG-16)" || check fail "C1 [api]: $n ocorrência(s) de segredo de query/cabeçalho no log da API"
+nv4="$(cnt "$V4" "$LOGA")"
+if [ "$nv4" = 0 ]; then check ok "C1 [api]: o orderId no CAMINHO (V4) NÃO aparece no log da API (ST-70 corrigido; ponha KNOWN_RED_ST70=0 para travar)"
+elif [ "$KNOWN_RED_ST70" = 1 ]; then KRED=$((KRED+1)); echo "  [VERMELHO CONHECIDO] ST-70 (SEC-31, Nightingale): o orderId no CAMINHO apareceu $nv4 vez(es) no log da API (incoming request / request completed com o caminho cru). NÃO é falha nova: continua aberto"
+else check fail "C1 [api]: o orderId no CAMINHO (V4) aparece $nv4 vez(es) no log da API (ST-70)"; fi
+# --- CONTROLES POSITIVOS, um por serviço (provam que o log do serviço existe e que a ausência dos valores é significativa)
+nerr="$(printf '%s' "$LOGC" | grep -c '"logger":"http.log.error".*"status":502')"
+nred="$(for f in '/reset-senha/REDACTED' '/loja/REDACTED' '/stores/REDACTED'; do printf '%s' "$LOGC" | grep -q "\"uri\":\"$f\"" && echo 1; done | wc -l | tr -d ' ')"
+{ [ "$nerr" -ge 3 ] && [ "$nred" = 3 ]; } && check ok "controle [caddy]: o log de ERRO existe ($nerr linhas http.log.error 502) e o filtro agiu nas 3 rotas (uri reduzido; cabeçalhos removidos)" || check fail "controle [caddy]: $nerr linha(s) de erro 502 e $nred/3 uri filtrados (o filtro virou 'sem log' ou não agiu)"
+napi="$(printf '%s' "$LOGA" | grep -c 'payment-status')"
+[ "$napi" -ge 1 ] && check ok "controle [api]: o log da API registra a requisição ($napi linha(s) com a rota payment-status): a ausência dos valores de query/cabeçalho é significativa" || check fail "controle [api]: nenhuma linha de log da requisição à API (o teste não distingue 'redigido' de 'sem log')"
+# web: `next start` não escreve linha por requisição; o controle é a resposta (já conferida acima) e o log só ter a inicialização
+nweb="$(printf '%s' "$LOGW" | grep -c .)"
+echo "   controle [web]: sem linha por requisição (esperado no next start); o log do web tem $nweb linha(s) (inicialização); o controle é que o web RESPONDEU ($cA) com os valores na URL"
+
+echo; echo "RESULTADO: $PASS ok, $FAILS falhas, $KRED vermelho(s) conhecido(s)$([ "$KRED" -gt 0 ] && echo " (ST-70: ver acima; NÃO é sucesso total)")"
 [ "$FAILS" -eq 0 ]
