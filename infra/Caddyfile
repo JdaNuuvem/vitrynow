@@ -44,6 +44,23 @@
 	handle /health {
 		reverse_proxy api:3001
 	}
+	# SEC-26 / ST-44: o cardápio público (/loja/*) faz o web chamar a API por slug; sem limite, varrer /loja/<aleatório> esgota
+	# o balde de serviço da API. Limite POR IP REAL (remote_host da conexão: o X-Forwarded-For do cliente não conta). 120/min
+	# cobre um restaurante inteiro atrás do mesmo Wi-Fi; quem passa disso recebe 429 com Retry-After. /health e a API não são afetados.
+	handle /loja/* {
+		rate_limit {
+			zone loja_por_ip {
+				key {remote_host}
+				events 120
+				window 1m
+				# ST-45: IPv6 agrupado em /64 (um atacante com um /64 tem 2^64 endereços; sem isto cada um teria o seu limite).
+				ipv6_prefix 64
+			}
+			# ST-49: o módulo varre e apaga limitadores vencidos (a cada 1 min por padrão); explícito para o runbook.
+			sweep_interval 1m
+		}
+		reverse_proxy web:3000
+	}
 	handle {
 		reverse_proxy web:3000
 	}

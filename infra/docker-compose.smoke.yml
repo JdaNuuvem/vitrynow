@@ -5,8 +5,12 @@ services:
   caddy:
     ports: !override
       - "127.0.0.1:${SMOKE_PORT:-55443}:80"
+    # !override troca a lista INTEIRA: sem repetir caddy_data/caddy_config o smoke rodava um Caddy sem /data e /config
+    # (somente leitura) e a checagem de escrita falhava por culpa do override, não do compose de produção.
     volumes: !override
       - ./Caddyfile.smoke:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
   postgres-backup:
     environment:
       BACKUP_INTERVAL_SECONDS: "3600"

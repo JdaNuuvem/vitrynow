@@ -16,6 +16,7 @@ x-api-build: &api-build
 
 services:
   postgres:
+    networks: [data]            # só na rede de dados (interna, sem saída à internet): caddy e web não alcançam o banco
     image: postgres:16-alpine
     restart: unless-stopped
     logging: *default-logging
@@ -41,6 +42,7 @@ services:
   # Aplica as migrações pendentes (prisma migrate deploy) e termina. A API só sobe depois que
   # isto sai com sucesso; se a migração falhar, a API antiga continua rodando e o deploy para.
   migrate:
+    networks: [data]
     build: *api-build
     image: meucardapio-api:${APP_VERSION:-local}
     logging: *default-logging
@@ -54,6 +56,7 @@ services:
     restart: "no"
 
   api:
+    networks: [default, data]   # default = rede de borda (Caddy, web, internet para MP/e-mail); data = banco
     build: *api-build
     image: meucardapio-api:${APP_VERSION:-local}
     restart: unless-stopped
@@ -130,11 +133,20 @@ services:
       retries: 5
 
   caddy:
-    image: caddy:2-alpine
+    build:
+      context: ./caddy
+    image: meucardapio-caddy:${APP_VERSION:-local}
     restart: unless-stopped
     logging: *default-logging
     security_opt:
       - no-new-privileges:true
+    # Privilégio mínimo: sem capabilities, só a de abrir as portas 80/443; sistema de arquivos somente leitura (só /data,
+    # /config e /tmp são graváveis). Provado pelo smoke: o Caddy sobe e atende assim.
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    read_only: true
+    tmpfs:
+      - /tmp
     depends_on:
       - api
       - web
@@ -144,18 +156,33 @@ services:
     environment:
       DOMAIN: ${DOMAIN:?defina DOMAIN no .env}
       ACME_EMAIL: ${ACME_EMAIL:?defina ACME_EMAIL no .env}
+      # O Go passa a devolver memória ANTES de bater no teto do container (mem_limit); sem isso ele retém o heap liberado e o
+      # container pode ser morto por falta de memória. É um TETO, não uma reserva. Mantenha ~20% abaixo do mem_limit.
+      GOMEMLIMIT: 600MiB
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
+      - caddy_config:/config
+    # Teto de memória (ST-49/ST-50). Medido: 6 a 7 KB por IP distinto na janela. Decisão do Atlas (17/11): 768 MB, porque com 512 MB
+    # o Caddy chegou a ~450 MB sob rotatividade alta de IPs (o cenário do ataque) e a folga era pequena. É um TETO (custo só de RAM
+    # se for usado). O smoke exige que o teto sustente >= 60 mil IPs a 80%. Acima disso (ataque distribuído) o Caddy é morto e volta
+    # em segundos (restart); risco ACEITO: tratar na borda/CDN. RISCO ABERTO: há um crescimento lento que não expliquei (ST-50-levas.md).
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2019/config/"]   # API de administração do Caddy, só dentro do container
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   # Backup lógico do Postgres, verificado a cada execução (scripts/backup/backup.sh): dump vazio ou
   # sem as tabelas é recusado e o healthcheck acusa. Guarda ./backups (host). ATENÇÃO: isto ainda
   # está NO MESMO servidor — a cópia externa (off-site) precisa de um destino definido pelo Claudio.
   # Prova de restauração: scripts/backup/restore-verify.sh.
   postgres-backup:
+    networks: [data]
     image: postgres:16-alpine
     restart: unless-stopped
     logging: *default-logging
@@ -184,6 +211,15 @@ services:
       retries: 1
 
 networks:
+  # data: só Postgres, migrate, backup e API. internal: true = sem saída à internet nem acesso do Caddy/web ao banco.
+  data:
+    internal: true
+    ipam:
+      config:
+        # Faixa FIXA também aqui: sem ela o Docker sorteia um /16 do pool (ex.: 172.29.0.0/16) que pode ENGLOBAR a faixa
+        # fixa da rede de borda e a criação falha com "Pool overlaps" (visto no smoke de 17/11, com 172.28 já ocupada).
+        - subnet: ${DATA_SUBNET:-172.29.251.0/24}
+  # default = rede de borda (Caddy, web, API); sub-rede e IP do Caddy fixos (a API só confia no X-Forwarded-For dele).
   default:
     ipam:
       config:
@@ -192,3 +228,4 @@ networks:
 volumes:
   postgres_data:
   caddy_data:
+  caddy_config:

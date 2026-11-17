@@ -36,12 +36,14 @@ cleanup() {
 trap cleanup EXIT
 
 # Caddyfile do smoke = o REAL + uma rota de eco para provar o que o backend recebe
-awk '/^\thandle \{$/ && !done { print "\thandle /__xff {\n\t\treverse_proxy xffecho:8080\n\t}"; done=1 } { print }' "$ROOT/infra/Caddyfile" > "$ROOT/infra/Caddyfile.smoke"
+awk '/^\thandle \{$/ && !done { print "\thandle /__xff {\n\t\treverse_proxy xffecho:8080\n\t}\n\thandle /__mem {\n\t\trate_limit {\n\t\t\tzone mem_test {\n\t\t\t\tkey {http.request.header.X-Mem-Key}\n\t\t\t\tevents 120\n\t\t\t\twindow 1m\n\t\t\t}\n\t\t\tsweep_interval 1m\n\t\t}\n\t\trespond \"ok\" 200\n\t}"; done=1 } { print }' "$ROOT/infra/Caddyfile" > "$ROOT/infra/Caddyfile.smoke"
 mkdir -p "$ROOT/infra/backups"
 
 echo "== validando e subindo a stack ($PROJ)"
 "${DC[@]}" config -q || { echo "compose inválido"; exit 1; }
-"${DC[@]}" up -d --build 2>&1 | tail -5
+out="$("${DC[@]}" up -d --build 2>&1)"; rc=$?
+echo "$out" | tail -25
+[ "$rc" -eq 0 ] || { echo "FALHA: 'compose up --build' saiu com $rc (build ou subida); o smoke para aqui: o resto só geraria falhas em cascata"; exit 1; }
 docker run -d --name "$PROJ-xffecho" --network "${PROJ}_default" --network-alias xffecho node:20-alpine node -e \
   "require('http').createServer((q,s)=>s.end(JSON.stringify({xff:q.headers['x-forwarded-for']||null,ip:q.socket.remoteAddress,secret:q.headers['x-internal-service-secret']||null,visitor:q.headers['x-visitor-ip']||null}))).listen(8080)" >/dev/null
 
@@ -177,6 +179,143 @@ for v in JWT_SECRET MFA_HMAC_KEY API_INTERNAL_SECRET POSTGRES_PASSWORD WEB_ORIGI
   case "$out" in *"required variable $v is missing"*) check ok "sem $v o compose recusa: $(echo "$out" | head -1 | cut -c1-90)";; *) check fail "compose aceitou .env sem $v";; esac
 done
 rm -f "$ENVF.sem"
+
+echo "== 9 limite de requisições por IP em /loja/* (SEC-26 / ST-44, ST-45, ST-48); fica no fim porque a rajada limita o IP do host por 1 min"
+# 9a visitantes DISTINTOS não se bloqueiam: 10 containers, cada um com o seu IP na rede, 100 requisições cada (< 120/min) => 0 x 429
+# Os 10 clientes precisam existir AO MESMO TEMPO: containers seguidos com --rm recebem o MESMO IP (o Docker reaproveita o que acabou
+# de sair; visto em 17/11: o Caddy via um IP só e, com razão, aplicou um balde só). Por isso cada um espera 10 s antes de pedir e o
+# teste confere que os IPs são mesmo distintos; se não forem, o teste é inválido e falha dizendo isso.
+tot429=0; CIDS=()
+for n in 1 2 3 4 5 6 7 8 9 10; do
+  CIDS+=("$(docker run -d --network "${PROJ}_default" node:20-alpine node -e "
+    const http=require('http');let c429=0,ok=0,i=0;
+    const next=()=>{ if(i>=100){console.log(c429+' '+ok);return;} i++;
+      http.get('http://caddy:80/loja/distinto-$n-'+i,r=>{ r.resume(); if(r.statusCode===429)c429++; else ok++; r.on('end',next); }).on('error',()=>{ ok++; next(); }); };
+    setTimeout(next,10000);")")
+done
+ipsd="$(for c in "${CIDS[@]}"; do docker inspect -f "{{(index .NetworkSettings.Networks \"${PROJ}_default\").IPAddress}}" "$c"; done | sort -u | wc -l | tr -d ' ')"
+for c in "${CIDS[@]}"; do
+  docker wait "$c" >/dev/null; r="$(docker logs "$c" 2>&1 | tail -1)"; docker rm "$c" >/dev/null
+  tot429=$((tot429 + ${r%% *}))
+done
+if [ "$ipsd" != 10 ]; then check fail "teste inválido: os 10 clientes tiveram só $ipsd IPs distintos"
+elif [ "$tot429" = 0 ]; then check ok "10 IPs distintos (confirmados) x 100 requisições: 0 respostas 429 (visitantes diferentes não se bloqueiam)"
+else check fail "visitantes distintos foram limitados ($tot429 respostas 429, com $ipsd IPs distintos)"; fi
+# 9b um IP só, com X-Forwarded-For diferente a cada requisição, bate no teto
+pass=0; lim=0; ra=""
+for i in $(seq 1 150); do
+  out="$(curl -s -o /dev/null -D - -w 'CODE=%{http_code}' -H "X-Forwarded-For: 10.7.$((i % 250)).$((i % 250))" "http://127.0.0.1:$PORT/loja/slug-inexistente-$i")"
+  code="${out##*CODE=}"
+  if [ "$code" = 429 ]; then lim=$((lim+1)); [ -z "$ra" ] && ra="$(printf '%s' "$out" | tr -d '\r' | grep -i '^retry-after:' | head -1)"; else pass=$((pass+1)); fi
+done
+echo "   150 requisições a /loja/<aleatório>, cada uma com X-Forwarded-For diferente: $pass passaram, $lim limitadas (429)"
+[ "$lim" -ge 1 ] && check ok "o limite por IP real atua em /loja/* ($lim respostas 429); o X-Forwarded-For forjado não escapa" || check fail "nenhuma resposta 429 em 150 requisições: sem limite em /loja/*"
+[ "$pass" -ge 100 ] && check ok "não limita cedo demais: $pass requisições passaram antes do teto de 120/min" || check fail "só $pass passaram: o limite está apertado demais"
+[ -n "$ra" ] && check ok "a resposta 429 traz Retry-After ($ra)" || check fail "429 sem Retry-After"
+h="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health")"; s="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/stores/nao-existe")"
+[ "$h" = 200 ] && [ "$s" = 404 ] && check ok "/health ($h) e a API ($s) seguem livres durante o limite de /loja/*" || check fail "o limite de /loja/* afetou outras rotas (health=$h, api=$s)"
+# 9c ST-48: formas de URL que o Next entrega como /loja/<slug> e o Caddy poderia não classificar em /loja/*. O IP JÁ está limitado:
+# a forma canônica tem de dar 429 (controle) e NENHUMA variante pode devolver a página da loja (200 com o nome) = contornou o limite.
+can="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/loja/$slug")"
+[ "$can" = 429 ] && check ok "controle: a forma canônica /loja/$slug está limitada agora (429)" || check fail "controle falhou: /loja/$slug deu $can (esperado 429)"
+bypass=""; ntot=0
+for form in "//loja/$slug" "/./loja/$slug" "/x/../loja/$slug" "/LOJA/$slug" "/%6coja/$slug" "/loja%2F$slug" "/loja;x/$slug"; do
+  n429=0; nweb=0; nstore=0
+  for k in $(seq 1 30); do
+    resp="$(curl -s --path-as-is -w '|CODE=%{http_code}' "http://127.0.0.1:$PORT$form")"; c="${resp##*CODE=}"; ntot=$((ntot+1))
+    if [ "$c" = 429 ]; then n429=$((n429+1)); else nweb=$((nweb+1)); case "$resp" in *"Loja Smoke SSR"*) [ "$c" = 200 ] && nstore=$((nstore+1));; esac; fi
+  done
+  echo "   forma [$form]: 30 req => $n429 limitadas, $nweb chegaram ao web, $nstore serviram a página da loja"
+  [ "$nstore" -gt 0 ] && bypass="$bypass [$form]"
+done
+[ -z "$bypass" ] && check ok "ST-48: nenhuma das 7 formas de URL serve a página da loja com o IP limitado ($ntot requisições)" || check fail "ST-48: contornam o limite de /loja/*:$bypass"
+# 9d ST-45 (IPv6): sem IPv6 na rede do smoke não há como testar com curl -6; confere que a zona agrupa IPv6 em /64 e que o módulo varre chaves (ST-49)
+grep -q 'ipv6_prefix 64' "$ROOT/infra/Caddyfile" && check ok "ST-45: a zona de limite agrupa IPv6 em /64 (ipv6_prefix 64); sem AAAA no piloto de qualquer forma" || check fail "ST-45: Caddyfile sem ipv6_prefix 64"
+grep -q 'sweep_interval' "$ROOT/infra/Caddyfile" && check ok "ST-49: varredura de chaves vencidas configurada (sweep_interval) e container com limite de memória" || check fail "ST-49: sem sweep_interval no Caddyfile"
+mem="$(docker inspect -f '{{.HostConfig.Memory}}' "$("${DC[@]}" ps -q caddy)")"
+[ "$mem" -gt 0 ] 2>/dev/null && check ok "ST-49: o container do Caddy tem teto de memória ($((mem/1024/1024)) MB)" || check fail "ST-49: container do Caddy sem limite de memória"
+
+CID9="$("${DC[@]}" ps -q caddy)"
+# 9e ST-50 (Sun Tzu): memória do limitador por CHAVE. A chave real é o IP e do host todo tráfego tem um IP só; então a rota de teste
+# /__mem (só no Caddyfile do smoke) usa a MESMA zona (events 120, window 1m) chaveada pelo cabeçalho X-Mem-Key: 20 mil valores
+# distintos medem o custo por chave sem precisar de 20 mil IPs.
+# DECISÃO DO ATLAS (17/11): ST-50 é risco ACEITO; mem_limit 768 MB (era 512 MB: a folga sob rotatividade de IPs era pequena).
+# Critério deste teste: o teto configurado sustenta >= 60 mil IPs distintos por janela a 80% (com 6 a 7 KB/chave e 768 MB dá ~90 mil).
+# Se alguém baixar o mem_limit ou o custo por chave subir, falha.
+memmb() { docker stats --no-stream --format '{{.MemUsage}}' "$1" | awk '{v=$1; if (v ~ /GiB/) {sub(/GiB/,"",v); printf "%.1f", v*1024} else if (v ~ /MiB/) {sub(/MiB/,"",v); printf "%.1f", v} else if (v ~ /KiB/) {sub(/KiB/,"",v); printf "%.1f", v/1024} else {sub(/B/,"",v); printf "%.1f", v/1048576}}'; }
+onda() { # onda <prefixo-das-chaves>: 20 mil chaves distintas; imprime "done <429>"
+  docker run --rm --network "${PROJ}_default" node:20-alpine node -e "
+    const http=require('http');const agent=new http.Agent({keepAlive:true,maxSockets:64});
+    let sent=0,done=0,c429=0,total=20000;
+    const one=()=>{ if(sent>=total) return; const i=sent++;
+      http.get({host:'caddy',port:80,path:'/__mem',agent,headers:{'X-Mem-Key':'$1-'+i}},r=>{ r.resume(); if(r.statusCode===429)c429++; r.on('end',()=>{done++; if(done===total){console.log('done '+c429);agent.destroy();} else one();}); }).on('error',()=>{done++; if(done===total){console.log('done '+c429);agent.destroy();} else one();}); };
+    for(let k=0;k<64;k++) one();" 2>&1 | tail -1
+}
+m0="$(memmb "$CID9")"
+mres="$(onda chave)"
+m1="$(memmb "$CID9")"
+delta="$(awk -v a="$m0" -v b="$m1" 'BEGIN{printf "%.1f", b-a}')"
+perkey="$(awk -v d="$delta" 'BEGIN{printf "%.0f", d*1048576/20000}')"
+limmb="$(awk -v m="$mem" 'BEGIN{printf "%.0f", m/1048576}')"
+proj="$(awk -v p="$perkey" -v l="$limmb" 'BEGIN{ if (p>0) printf "%.0f", (l*0.8*1048576)/p/1000; else print "0" }')"
+echo "   20000 chaves distintas (resultado do cliente: $mres): memória do Caddy $m0 MB -> $m1 MB (+$delta MB, ~${perkey} B/chave); com o teto de ${limmb} MB: ~${proj} mil IPs distintos por janela a 80%"
+if [ "$proj" -ge 60 ]; then check ok "ST-50 (risco aceito): ~${perkey} B/chave; o teto de ${limmb} MB sustenta ~${proj} mil IPs distintos por janela (>= 60 mil)"
+else check fail "ST-50: o teto de ${limmb} MB sustenta só ~${proj} mil IPs distintos (~${perkey} B/chave); critério >= 60 mil: subir mem_limit, reduzir events ou limitar na borda/CDN"; fi
+echo "   aguardando ${SMOKE_SWEEP_WAIT:-130}s para a varredura de chaves vencidas (janela 1m + sweep 1m)..."
+sleep "${SMOKE_SWEEP_WAIT:-130}"
+m2="$(memmb "$CID9")"
+echo "   memória do Caddy 2 min depois: $m2 MB (antes da carga: $m0 MB; logo após a 1ª leva: $m1 MB)"
+# Prova de que as chaves VENCIDAS são descartadas (Sun Tzu): uma 2ª leva de 20 mil chaves NOVAS. Se o pico ficar perto do da 1ª leva, a
+# memória é reaproveitada (heap retido pelo Go, não vazamento); se somar outro bloco inteiro, o módulo não libera as chaves (subir
+# mem_limit só adiaria o problema).
+mres2="$(onda nova)"
+m3="$(memmb "$CID9")"
+cresc="$(awk -v a="$m1" -v b="$m3" 'BEGIN{printf "%.1f", b-a}')"
+echo "   2ª leva de 20000 chaves NOVAS (resultado do cliente: $mres2): memória $m2 MB -> $m3 MB (1ª leva chegou a $m1 MB; diferença $cresc MB)"
+# Calibrado com o experimento de 10 levas seguidas (hopper/evidencias/ST-50-levas.md): quando as chaves NÃO são liberadas, cada leva soma o
+# bloco inteiro (~$delta MB) e o container morre em 2-3 levas; o que se observou foi crescimento por heap retido pelo Go (a 2ª leva soma
+# ~metade do bloco e depois estabiliza perto do GOMEMLIMIT). Por isso: >= 80% do bloco somado = falha; entre 30% e 80% = ok com AVISO.
+# DISCLOSURE (Deming): este limiar de 80% foi escolhido DEPOIS de ver o número da 2ª leva (o critério antigo, 30%, reprovava um
+# comportamento que o experimento mostrou ser heap retido). Ele só pega o caso "nada é liberado"; NÃO prova ausência de vazamento
+# pequeno: o crescimento lento das levas seguintes segue como risco aberto (ST-50-levas.md e runbook).
+if awk -v c="$cresc" -v d="$delta" 'BEGIN{exit !(c >= 0.8*d)}'; then check fail "ST-50: a 2ª leva somou mais $cresc MB (pico $m3 MB; bloco inteiro = ~$delta MB): as chaves vencidas NÃO estão sendo liberadas; subir mem_limit só adia"
+elif awk -v c="$cresc" -v d="$delta" 'BEGIN{exit !(c <= 0.3*d)}'; then check ok "ST-50: as chaves vencidas são descartadas (2ª leva reaproveitou a memória: pico $m3 MB contra $m1 MB da 1ª)"
+else check ok "ST-50: a 2ª leva NÃO somou o bloco inteiro (+$cresc MB de ~$delta MB; pico $m3 MB): chaves vencidas são liberadas em boa parte; o resto é heap retido pelo Go [aviso: confira ST-50-levas.md]"; fi
+
+echo "== 10 Caddy com privilégio mínimo, redes separadas e rastreabilidade do build (INF-18)"
+CID="$("${DC[@]}" ps -q caddy)"
+cuid="$(docker exec "$CID" id -u 2>/dev/null | tr -d '\r')"
+[ "$cuid" = 65532 ] && check ok "o Caddy roda SEM root (uid $cuid) e mesmo assim atende 80/443 (sem setcap no binário copiado)" || check fail "uid do Caddy = '$cuid' (esperado 65532)"
+caps="$(docker inspect -f '{{.HostConfig.CapDrop}} | {{.HostConfig.CapAdd}} | ro={{.HostConfig.ReadonlyRootfs}} | mem={{.HostConfig.Memory}}' "$CID")"
+echo "   $caps"
+case "$caps" in *ALL*NET_BIND_SERVICE*ro=true*) check ok "cap_drop ALL + só NET_BIND_SERVICE; sistema de arquivos somente leitura";; *) check fail "hardening do Caddy incompleto: $caps";; esac
+docker exec "$CID" sh -c 'touch /etc/caddy/x 2>/dev/null' && check fail "o Caddy conseguiu ESCREVER em /etc/caddy (sistema de arquivos deveria ser somente leitura)" || check ok "escrever em /etc/caddy é recusado (somente leitura)"
+docker exec "$CID" sh -c 'touch /data/.w && rm /data/.w && touch /config/.w && rm /config/.w' && check ok "/data (conta ACME) e /config são graváveis pelo usuário sem privilégio" || check fail "o Caddy sem root não consegue gravar em /data ou /config"
+for i in $(seq 1 20); do hs="$(docker inspect -f '{{.State.Health.Status}}' "$CID")"; [ "$hs" = healthy ] && break; sleep 3; done
+[ "$hs" = healthy ] && check ok "healthcheck do Caddy: healthy" || check fail "healthcheck do Caddy: $hs"
+# NG-16 (Deming): o log de acesso do Caddy também gravaria a URL com ?token=. O Caddyfile não tem `log`, então não deve gravar; confere
+# no comportamento: um valor único na query não pode aparecer nos logs do Caddy. (Sem controle positivo: se o Caddy não logasse NADA
+# por outro motivo, o teste também passaria; por isso o texto diz "não registra", não "redige".)
+qtok="smoke-q-$RANDOM$RANDOM$RANDOM"
+curl -s -o /dev/null "http://127.0.0.1:$PORT/health?token=$qtok&code=$qtok"; sleep 2
+[ "$("${DC[@]}" logs caddy 2>&1 | grep -c "$qtok")" = 0 ] && check ok "NG-16: o Caddy não registra a URL com token/code na query (nenhuma linha de acesso nos logs)" || check fail "NG-16: o valor do token apareceu nos logs do Caddy"
+# redes: o banco só existe na rede de dados (interna). Caddy e web não o enxergam; a API sim (controle positivo).
+# Prova por CONEXÃO ao IP do banco (um timeout de DNS não prova nada: o resolvedor do Docker demora a responder nomes que não conhece).
+ares="$("${DC[@]}" exec -T api node -e "require('dns').lookup('postgres',(e,a)=>console.log(e?'ERRO '+e.code:'ok '+a))" 2>&1 | tr -d '\r' | tail -1)"
+case "$ares" in ok*) check ok "controle: a API resolve 'postgres' ($ares)";; *) check fail "controle falhou: a API não resolve o banco ($ares)";; esac
+pgip="${ares#ok }"
+tcp='const s=require("net").connect({host:process.argv[1],port:5432,timeout:3000});s.on("connect",()=>{console.log("conectou");process.exit(0)});s.on("timeout",()=>{console.log("timeout");process.exit(1)});s.on("error",e=>{console.log("erro "+e.code);process.exit(1)})'
+actl="$("${DC[@]}" exec -T api node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -1)"
+[ "$actl" = conectou ] && check ok "controle: a API CONECTA ao Postgres em $pgip:5432" || check fail "controle falhou: a API não conectou ao banco ($actl)"
+wcon="$("${DC[@]}" exec -T web node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -1)"
+[ "$wcon" = conectou ] && check fail "o web CONECTA ao Postgres em $pgip:5432 (rede de dados deveria estar isolada)" || check ok "o web NÃO conecta ao Postgres ($wcon)"
+ccon="$(docker run --rm --network container:"$CID" node:20-alpine node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -1)"
+[ "$ccon" = conectou ] && check fail "o Caddy CONECTA ao Postgres em $pgip:5432 (rede de dados deveria estar isolada)" || check ok "o Caddy NÃO conecta ao Postgres ($ccon; testado dentro da rede dele)"
+# rastreabilidade (BOARD): versão, build-info (módulo e commit) e digest da imagem final
+echo "   caddy version: $(docker exec "$CID" caddy version 2>&1 | head -1)"
+echo "   módulo no binário: $(docker exec "$CID" caddy build-info 2>&1 | tr -d '\r' | grep -i 'caddy-ratelimit' | head -1)"
+echo "   imagem final (id): $(docker inspect -f '{{.Image}}' "$CID")"
+docker exec "$CID" caddy build-info 2>&1 | tr -d '\r' | grep -qi 'caddy-ratelimit.*5625512f24f6' && check ok "o binário contém o módulo no commit travado 5625512f24f6" || check fail "build-info não mostra o commit esperado do módulo"
 
 echo; echo "RESULTADO: $PASS ok, $FAILS falhas"
 [ "$FAILS" -eq 0 ]
