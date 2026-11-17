@@ -1,5 +1,7 @@
 # Roteiro: instalador numa máquina limpa (aceite G3 com o Claudio)
 
+> **CL-15 (decisão do Claudio):** este teste é só antes do piloto; não faz parte do desenvolvimento. O roteiro fica pronto para quando ele pedir.
+
 Objetivo: provar que o instalador (`MeuCardapio-PrintClient-Setup.exe`) instala, atualiza e desinstala sem deixar lixo, **numa máquina que nunca viu o app**. **Não faça isto no PC do Claudio** (nem em loja real): use uma VM do Windows 10/11 limpa ou o Windows Sandbox.
 O Windows Sandbox **não está instalado** neste computador (ativar exige administrador e reinício, e é decisão do Claudio). Alternativa: qualquer VM (Hyper-V, VirtualBox) com um snapshot limpo.
 
