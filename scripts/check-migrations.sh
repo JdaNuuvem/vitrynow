@@ -25,10 +25,14 @@ PASS=0; FAILS=0; DBS=()
 ok()   { PASS=$((PASS+1)); echo "  [ok]    $1"; }
 bad()  { FAILS=$((FAILS+1)); echo "  [FALHA] $1"; }
 PSQL=(docker exec -i -e PGPASSWORD=meucardapio "$CT" psql -U meucardapio -X -q -v ON_ERROR_STOP=1)
-cleanup() { for d in "${DBS[@]:-}"; do [ -n "$d" ] && "${PSQL[@]}" -d postgres -c "drop database if exists \"$d\"" >/dev/null 2>&1; done; rm -rf "$TMP"; }
+# Limpeza por PREFIXO (chk_*), não por lista: newdb() roda em subshell ($(newdb ...)), então uma lista DBS nunca
+# recebia os nomes e os bancos vazavam (~75 num só dia). Também varre sobras de execuções interrompidas.
+sweep_dbs() { local d; for d in $("${PSQL[@]}" -d postgres -At -c "select datname from pg_database where datname like 'chk\_%'" 2>/dev/null); do "${PSQL[@]}" -d postgres -c "drop database if exists \"$d\"" >/dev/null 2>&1; done; }
+cleanup() { sweep_dbs; rm -rf "$TMP"; }
 trap cleanup EXIT
 
 docker ps --format '{{.Names}}' | grep -qx "$CT" || { echo "container $CT não está rodando (rode scripts/test-db.ps1 -Agent $AGENT -Port $PORT)"; exit 2; }
+sweep_dbs   # sobras de execuções anteriores interrompidas
 G() { git -C "$ROOTW" "$@"; }   # git.exe (Windows) precisa de C:/...
 
 # ---------- S0: montar a união ----------
