@@ -1,5 +1,6 @@
 import Fastify, { type FastifyServerOptions } from "fastify";
 import { prisma } from "@meucardapio/db";
+import { nanoid } from "nanoid";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
@@ -35,7 +36,14 @@ import jobsPlugin from "./jobs/plugin";
 export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = {}) {
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
   // e o rate limit deixa de contar o IP do proxy. Vazio = ignora X-Forwarded-For (não forjável).
-  const app = Fastify({ logger: options.logger ?? (process.env.NODE_ENV !== "test" ? loggerOptions() : false), trustProxy: trustProxySetting() });
+  // ST-76: o id padrão do Fastify é um contador sequencial (`req-1`, `req-2`…) e o 5xx devolve esse id ao cliente (ST-75): dois erros espaçados
+  // mediriam o tráfego da API desde o boot. Id aleatório curto, e `requestIdHeader: false` para NÃO aceitar o `request-id` do cliente como id do log.
+  const app = Fastify({
+    logger: options.logger ?? (process.env.NODE_ENV !== "test" ? loggerOptions() : false),
+    trustProxy: trustProxySetting(),
+    genReqId: () => nanoid(12),
+    requestIdHeader: false,
+  });
 
   // app.close() (graceful shutdown) também desconecta o Prisma — ele é um singleton
   // importado direto de @meucardapio/db, não um plugin fastify com ciclo de vida próprio.

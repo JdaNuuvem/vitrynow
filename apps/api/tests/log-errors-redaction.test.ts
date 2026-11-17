@@ -223,6 +223,32 @@ describe("ST-71: erro do Prisma (e 5xx em geral) não leva valores nem caminho a
   });
 });
 
+describe("ST-76: o id da requisição devolvido ao cliente não é um contador nem vem do cliente", () => {
+  it("dois 5xx seguidos ⇒ ids aleatórios (12 caracteres, não `req-N`, não consecutivos) que aparecem na linha de erro; `request-id`/`x-request-id` do cliente não viram o id", async () => {
+    const { app, parsed } = capture();
+    app.get("/simula/falha", async () => {
+      throw new Error("falha interna");
+    });
+    await app.ready();
+    const a = await app.inject({ method: "GET", url: "/simula/falha" });
+    const b = await app.inject({ method: "GET", url: "/simula/falha" });
+    const c = await app.inject({ method: "GET", url: "/simula/falha", headers: { "request-id": "ATACANTE-ESCOLHEU", "x-request-id": "ATACANTE-2" } });
+    await app.close();
+    const ids = [a, b, c].map((r) => r.json().requestId as string);
+    for (const id of ids) {
+      expect(id).toMatch(/^[A-Za-z0-9_-]{12}$/);
+      expect(id).not.toMatch(/^req-\d+$/);
+    }
+    expect(new Set(ids).size).toBe(3);
+    expect(ids).not.toContain("ATACANTE-ESCOLHEU");
+    expect(ids).not.toContain("ATACANTE-2");
+    // o MESMO valor está na linha de erro correspondente (suporte liga a queixa ao log)
+    const errorIds = parsed().filter((l) => l.level === 50).map((l) => l.reqId);
+    expect(errorIds).toEqual(ids);
+    expect(JSON.stringify(parsed())).not.toContain("ATACANTE");
+  });
+});
+
 describe("ST-74: texto digitado pelo cliente tem teto no log", () => {
   it("404 com 1º segmento de 8 KB e Host de 8 KB: a linha leva no máximo 32 caracteres do segmento e 255 do Host; CONTROLE POSITIVO: a linha existe", async () => {
     const { app, lines, parsed } = capture();
