@@ -10,7 +10,8 @@ const store: StoreInfo = {
   deliveryEnabled: true, pickupEnabled: true, acceptingOrders: true, deliveryFeeCents: 0,
 };
 
-const setup = (over: Partial<StoreInfo> = {}) => render(<StoreHeader store={{ ...store, ...over }} onOpenSearch={vi.fn()} />);
+const setup = (over: Partial<StoreInfo> = {}, extra: { showCategoriesHead?: boolean; onViewAllCategories?: () => void; onOpenSearch?: () => void } = {}) =>
+  render(<StoreHeader store={{ ...store, ...over }} onOpenSearch={extra.onOpenSearch ?? vi.fn()} onViewAllCategories={extra.onViewAllCategories ?? vi.fn()} showCategoriesHead={extra.showCategoriesHead ?? false} />);
 
 describe("capa (spec 09 §2.1)", () => {
   it("com capa válida usa a imagem e não o bloco vazio", () => {
@@ -50,10 +51,10 @@ describe("logo (spec 09 §2.2)", () => {
   });
 });
 
-describe("horário (spec 09 §2.4)", () => {
-  it("a linha inteira é um botão com aria-expanded e aria-controls, e mostra o texto ao abrir", async () => {
+describe("horário e status (spec 12 §2.5)", () => {
+  it("'Ver horários' é um botão com aria-expanded e aria-controls, e mostra o texto ao abrir", async () => {
     const { container } = setup();
-    const button = screen.getByRole("button", { name: /Horário de funcionamento/ });
+    const button = screen.getByRole("button", { name: /Ver horários/ });
     expect(button).toHaveAttribute("aria-expanded", "false");
     expect(button).toHaveAttribute("aria-controls", "loja-horarios");
     expect(container.querySelector("#loja-horarios")).not.toBeVisible();
@@ -62,14 +63,57 @@ describe("horário (spec 09 §2.4)", () => {
     expect(screen.getByText("Seg a sex, 18h às 23h")).toBeVisible();
   });
 
-  it("não afirma 'aberto agora' nem 'fechado agora' (o servidor ainda não sabe: B5)", () => {
+  it("recebendo pedidos: diz só o que o servidor sabe, nunca 'aberto agora' nem hora de fechar (B5 pendente)", () => {
     setup();
-    expect(screen.queryByText(/aberto agora|fechado agora/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Recebendo pedidos")).toBeInTheDocument();
+    expect(screen.queryByText(/aberto agora|fecha às|fechado agora/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
-  it("sem horário cadastrado não há linha de horário", () => {
+  it("loja que não aceita pedidos: 'Fechado agora' com a frase de apoio anunciada como status", () => {
+    setup({ acceptingOrders: false });
+    expect(screen.getByText("Fechado agora")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Esta loja não está recebendo pedidos agora.");
+    expect(screen.queryByText("Recebendo pedidos")).not.toBeInTheDocument();
+  });
+
+  it("sem horário cadastrado não há 'Ver horários'", () => {
     setup({ openingHours: null });
-    expect(screen.queryByRole("button", { name: /Horário/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Ver horários/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("identidade e condições (spec 12 §2.4)", () => {
+  it("nome é o h1; endereço e a linha 'Mínimo · Entrega · Retirada' só com o que existe", () => {
+    setup({ minOrderCents: 2000, deliveryFeeCents: 600 });
+    expect(screen.getByRole("heading", { level: 1, name: "Pizzaria Boa Massa" })).toBeInTheDocument();
+    expect(screen.getByText("Rua A, 1")).toBeInTheDocument();
+    expect(screen.getByText(/Mínimo R\$\s?20,00 · Entrega R\$\s?6,00 · Retirada/)).toBeInTheDocument();
+  });
+
+  it("sem endereço nem condições, as linhas somem (sem texto inventado)", () => {
+    setup({ address: null, minOrderCents: null, deliveryEnabled: false, pickupEnabled: false });
+    expect(screen.queryByText(/Mínimo|Entrega|Retirada/)).not.toBeInTheDocument();
+  });
+});
+
+describe("busca e categorias", () => {
+  it("a busca tem 48 px de altura de alvo e abre a tela Buscar", async () => {
+    const onOpenSearch = vi.fn();
+    setup({}, { onOpenSearch });
+    await userEvent.click(screen.getByRole("button", { name: /Pesquisar/ }));
+    expect(onOpenSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("'Categorias / Ver todas ›' só aparece quando há o que escolher", async () => {
+    const onViewAllCategories = vi.fn();
+    const { unmount } = setup({}, { showCategoriesHead: false });
+    expect(screen.queryByRole("button", { name: /Ver todas/ })).not.toBeInTheDocument();
+    unmount();
+    setup({}, { showCategoriesHead: true, onViewAllCategories });
+    expect(screen.getByRole("heading", { level: 2, name: "Categorias" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Ver todas/ }));
+    expect(onViewAllCategories).toHaveBeenCalledTimes(1);
   });
 });
 

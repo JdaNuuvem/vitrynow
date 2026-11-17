@@ -111,3 +111,19 @@ export function InfoIcon() {
     </Svg>
   );
 }
+
+export function PlusIcon() {
+  return (
+    <Svg size="md" strokeWidth={2.4}>
+      <path d="M12 5v14M5 12h14" />
+    </Svg>
+  );
+}
+
+export function MinusIcon() {
+  return (
+    <Svg size="md" strokeWidth={2.4}>
+      <path d="M5 12h14" />
+    </Svg>
+  );
+}
