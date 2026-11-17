@@ -114,6 +114,7 @@ model Store {
   coupons      Coupon[]
   deliverers   Deliverer[]
   auditLogs    AuditLog[]
+  deviceAlerts DeviceAlert[]
   subscription Subscription?
   counter      StoreCounter?
   printJobs    PrintJob[]
@@ -405,6 +406,37 @@ model Payment {
 
 // Log de ações sensíveis (quem fez o quê) — não é feature de produto, é rastro pra
 // investigar disputa/incidente depois (ex.: "quem revogou essa chave", "quem fechou o caixa").
+// PC-24: alertas dos dispositivos de impressão (cliente) e do detector do servidor. TELEMETRIA NÃO CONFIÁVEL: serve de aviso ao dono e à
+// operação, nunca decide nada (não muda modo, não libera cobrança). Sem PII por construção: só código fechado, id opaco do pedido e versão.
+enum DeviceAlertCode {
+  NOTHING_TO_CHARGE_CONFLICT // cliente: servidor disse "nada a cobrar" mas o total não veio presente e 0 (alerta de DINHEIRO)
+  NOTHING_TO_CHARGE_INVALID // cliente: `nothingToCharge` chegou com valor que não é booleano (alerta de DINHEIRO)
+  EMPTY_ZERO_TICKET // cliente: tíquete sem itens e total zero impresso como "sem cobrança" (alerta de DINHEIRO)
+  MODE_UNCONFIRMED // cliente: não consegue confirmar o modo de impressão da loja
+  MODE_RECOVERED // cliente: voltou a confirmar (NÃO apaga alerta do detector do servidor)
+  QUEUE_WITHOUT_PRINTER // SERVIDOR: loja em QUEUE com job pendente há minutos e nenhum claim (cozinha sem tíquete)
+}
+
+model DeviceAlert {
+  id            String          @id @default(cuid())
+  storeId       String
+  store         Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  tokenId       String? // impressora que avisou (nulo no detector do servidor); sem FK de propósito: o alerta sobrevive ao token
+  code          DeviceAlertCode
+  orderId       String? // só quando o pedido é DA LOJA do token; mostrado ao dono pelo CÓDIGO do pedido
+  orderKey      String          @default("") // orderId ?? "" (chave do dedupe; índice único não aceita nulo como valor igual)
+  clientVersion String?
+  count         Int             @default(1)
+  windowStart   DateTime // início da janela de 10 min do dedupe
+  firstAt       DateTime        @default(now())
+  lastAt        DateTime        @default(now())
+  expiresAt     DateTime // lastAt + 30 dias (a `tech.cleanup` apaga depois)
+
+  @@unique([storeId, code, orderKey, windowStart])
+  @@index([storeId, lastAt])
+  @@index([expiresAt])
+}
+
 model AuditLog {
   id         String   @id @default(cuid())
   storeId    String

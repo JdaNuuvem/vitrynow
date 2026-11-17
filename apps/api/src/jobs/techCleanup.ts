@@ -64,6 +64,21 @@ const TARGETS = {
       return (await tx.revokedSession.aggregate({ _min: { expiresAt: true } }))._min.expiresAt;
     },
   },
+  // PC-24: alertas de dispositivo (telemetria): `expiresAt` = último aviso + 30 dias. Sem PII por construção.
+  DeviceAlert: {
+    async claim(tx, cutoff, limit) {
+      const rows = await tx.$queryRaw<{ id: string }[]>`
+        SELECT "id" FROM "DeviceAlert" WHERE "expiresAt" < ${cutoff}
+        ORDER BY "expiresAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED`;
+      return rows.map((row) => row.id);
+    },
+    async remove(tx, ids) {
+      return (await tx.deviceAlert.deleteMany({ where: { id: { in: ids } } })).count;
+    },
+    async oldestExpiry(tx) {
+      return (await tx.deviceAlert.aggregate({ _min: { expiresAt: true } }))._min.expiresAt;
+    },
+  },
 } satisfies Record<string, Target>;
 
 export type TechTable = keyof typeof TARGETS;
