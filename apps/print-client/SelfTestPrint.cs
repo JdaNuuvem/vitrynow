@@ -333,6 +333,14 @@ namespace MeuCardapio.PrintClient
             Check("N1: endereco cortado => aviso (entregador nao pode ir a um endereco incompleto sem saber)", bd2(addrCut).Lines.Any(l => l.Text == "(endereço cortado — ver no painel)"));
             var nameCut = Basic(); nameCut.Items[1].ProductName = new string('n', 400);
             Check("N1: nome de item cortado => aviso", bd2(nameCut).Lines.Any(l => l.Text == "(nome do item cortado — ver no painel)"));
+            var addCut = Basic(); addCut.Items[0].Additionals[0].Name = "Borda " + new string('q', 400);
+            var acd = bd2(addCut);
+            int ai = acd.Lines.FindIndex(l => l.Text.StartsWith("  + Borda q"));
+            Check("N1: nome de ADICIONAL cortado => aviso em linha propria logo depois do adicional, em negrito", ai >= 0 && acd.Lines[ai].Text.Contains(C(0x2026)) && acd.Lines[ai + 1].Text == "(adicional cortado — ver no painel)" && acd.Lines[ai + 1].Bold);
+            var addExact = Basic(); addExact.Items[0].Additionals[0].Name = new string('q', 300);
+            Check("N1: adicional com exatamente 300 caracteres NAO tem aviso", !bd2(addExact).Lines.Any(l => l.Text.Contains("adicional cortado")));
+            var custCut = Basic(); custCut.CustomerName = new string('m', 400);
+            Check("N1: nome do cliente cortado => aviso", bd2(custCut).Lines.Any(l => l.Text == "(nome do cliente cortado — ver no painel)"));
             Check("N1: pedido normal nao tem nenhum aviso de corte", !bd2(Basic()).Lines.Any(l => l.Text.Contains("cortad")));
 
             // 500 itens, 40 adicionais no primeiro: papel limitado, subtotal e TOTAL corretos, coluna ainda soma

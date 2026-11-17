@@ -45,7 +45,7 @@ namespace MeuCardapio.PrintClient.Printing
 
             // 2) cliente
             bool anyCustomer = false;
-            if (!string.IsNullOrWhiteSpace(order.CustomerName)) { doc.Text("Cliente: " + S(order.CustomerName)); anyCustomer = true; }
+            if (!string.IsNullOrWhiteSpace(order.CustomerName)) { doc.Text("Cliente: " + S(order.CustomerName)); CutWarning(doc, order.CustomerName, "nome do cliente cortado"); anyCustomer = true; }
             if (!string.IsNullOrWhiteSpace(order.CustomerPhone)) { doc.Text("Telefone: " + S(order.CustomerPhone)); anyCustomer = true; }
             if (!string.IsNullOrWhiteSpace(order.Address)) { doc.Text("Endereço: " + S(order.Address)); CutWarning(doc, order.Address, "endereço cortado"); anyCustomer = true; }
             if (anyCustomer) doc.Rule();
@@ -75,6 +75,7 @@ namespace MeuCardapio.PrintClient.Printing
                     if (shownAdds >= TicketText.MaxAdditionalsPerItem) { hiddenAdds++; hiddenAddSum += addTotal; continue; }
                     shownAdds++;
                     doc.Pair("  + " + S(add.Name) + (item.Quantity > 1 ? " (" + item.Quantity + "x)" : ""), "+" + Money(addTotal), scale: 0.85f);
+                    CutWarning(doc, add.Name, "adicional cortado");
                 }
                 if (hiddenAdds > 0) doc.Pair("  + mais " + hiddenAdds + " adicionais", "+" + Money(hiddenAddSum), scale: 0.85f);
                 if (!string.IsNullOrWhiteSpace(item.Notes))
