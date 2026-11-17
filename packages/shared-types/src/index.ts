@@ -162,19 +162,23 @@ export const productAdditionalInputSchema = z.object({
 });
 
 export const createProductSchema = z.object({
-  categoryId: z.string().min(1).optional(),
+  categoryId: z.string().min(1), // obrigatório (RN-CT-07): produto sem categoria nunca aparece na vitrine
   name: z.string().min(1).max(150),
   description: z.string().max(1000).optional(),
   imageUrl: z.string().url().max(500).optional().or(z.literal("")),
   priceCents: z.number().int().nonnegative().max(100_000_000),
   active: z.boolean().optional(),
-  featured: z.boolean().optional(),
+  // `featured` não é aceito: a coluna existe, mas nenhuma tela a usa (RN-CT-14).
   position: z.number().int().optional(),
   additionals: z.array(productAdditionalInputSchema).max(50).optional(),
 });
 export type CreateProductInput = z.infer<typeof createProductSchema>;
 
 export const updateProductSchema = createProductSchema.partial();
+
+export const moveProductsSchema = z.object({ toCategoryId: z.string().min(1) });
+export const reorderCategoriesSchema = z.object({ ids: z.array(z.string().min(1)).min(1).max(200) });
+export const reorderProductsSchema = z.object({ categoryId: z.string().min(1), ids: z.array(z.string().min(1)).min(1).max(1000) });
 export type UpdateProductInput = z.infer<typeof updateProductSchema>;
 
 // ---- Caixa (painel) ----
