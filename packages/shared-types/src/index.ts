@@ -117,9 +117,32 @@ export const wsServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("print.job_failed"), jobId: z.string() }),
   // Caixa (CA-CX-28): o STAFF fechou com diferença ACIMA da tolerância. Só o id do caixa, o papel e o valor em centavos; nunca o texto do motivo.
   z.object({ type: z.literal("cashier.difference_over_tolerance"), sessionId: z.string() }),
+  // PC-24: alerta de dispositivo para o painel do dono. Só o CÓDIGO (a frase sai do código no painel); nada de pedido, cliente ou texto livre.
+  z.object({ type: z.literal("device.alert"), code: z.string() }),
   z.object({ type: z.literal("ping") }),
 ]);
 export type WsServerMessage = z.infer<typeof wsServerMessageSchema>;
+
+// PC-24: alertas que o CLIENTE de impressão pode mandar (lista FECHADA). `QUEUE_WITHOUT_PRINTER` é só do servidor: o cliente nunca o envia.
+export const DEVICE_ALERT_CLIENT_CODES = [
+  "NOTHING_TO_CHARGE_CONFLICT",
+  "NOTHING_TO_CHARGE_INVALID",
+  "EMPTY_ZERO_TICKET",
+  "MODE_UNCONFIRMED",
+  "MODE_RECOVERED",
+] as const;
+// Alertas de DINHEIRO (regra de não cobrar / total zero): o aviso em tempo real vai SÓ ao OWNER (decisão do Leonardo e do Atlas); o hub aplica o filtro.
+export const DEVICE_ALERT_MONEY_CODES: readonly string[] = ["NOTHING_TO_CHARGE_CONFLICT", "NOTHING_TO_CHARGE_INVALID", "EMPTY_ZERO_TICKET"];
+// Corpo ESTRITO: chave desconhecida é recusada (nenhum texto livre cabe aqui). `orderId` é frouxo de propósito (o formato é conferido no
+// serviço, que NÃO recusa: grava sem o id e responde igual); `clientVersion` só com a lista curta de caracteres.
+export const deviceAlertBodySchema = z
+  .object({
+    code: z.enum(DEVICE_ALERT_CLIENT_CODES),
+    orderId: z.string().max(64).optional(),
+    clientVersion: z.string().regex(/^[0-9A-Za-z._-]{1,20}$/).optional(),
+  })
+  .strict();
+export type DeviceAlertBody = z.infer<typeof deviceAlertBodySchema>;
 
 // Tíquete pronto para impressão — contrato entre API e print-client (equivalente ao
 // textSaleNew do original, mas como JSON estruturado em vez de HTML pronto para GDI+).

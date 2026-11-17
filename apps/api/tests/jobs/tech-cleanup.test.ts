@@ -28,7 +28,7 @@ describe("tech.cleanup — lista de permissão (ADR-0011 §4)", () => {
   // Se este teste falhar porque alguém acrescentou uma tabela, a revisão precisa decidir se ela
   // é mesmo técnica (token/desafio expirado) e nunca dado de negócio.
   it("limpa SOMENTE estas tabelas técnicas", () => {
-    expect([...TECH_CLEANUP_ALLOWLIST].sort()).toEqual(["MfaChallenge", "PasswordResetToken", "RevokedSession"]);
+    expect([...TECH_CLEANUP_ALLOWLIST].sort()).toEqual(["DeviceAlert", "MfaChallenge", "PasswordResetToken", "RevokedSession"]); // DeviceAlert (PC-24): telemetria técnica, sem PII; o alerta expira 30 dias depois do último aviso
   });
 });
 
