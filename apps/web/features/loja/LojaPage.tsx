@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { Menu, Product } from "@/core/domain/storefront";
 import { formatCents } from "@/shared/format/money";
 import { BottomNav, type NavTab } from "./components/BottomNav";
@@ -15,6 +15,7 @@ import { ProductListItem } from "./components/ProductListItem";
 import { SearchScreen } from "./components/SearchScreen";
 import { StoreHeader } from "./components/StoreHeader";
 import { STORE_CLOSED_MESSAGE, buildOrderSummary, type CheckoutForm, type CheckoutTotals } from "./checkoutForm";
+import { restoreReturnPoint, type ReturnPoint } from "./focusReturn";
 import { InfoIcon } from "./icons";
 import { useCart } from "./hooks/useCart";
 import { useMenu } from "./hooks/useMenu";
@@ -22,6 +23,9 @@ import { useOrderFlow } from "./hooks/useOrderFlow";
 import { useOrderHistory } from "./hooks/useOrderHistory";
 import { scrollBehavior } from "@/lib/motion";
 import "./loja.css";
+
+// useLayoutEffect avisa no servidor (SSR); lá o efeito não precisa rodar.
+const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 // Orquestra as telas da loja pública: decide qual aparece e liga carrinho e pedido.
 // Desenho, regras do carrinho, ciclo do pedido e HTTP vivem em arquivos próprios.
@@ -36,6 +40,8 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
   const [detailProduct, setDetailProduct] = useState<Product | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  // De onde o detalhe abriu: ao fechar, a rolagem e o foco voltam para lá (WEB-22, F2).
+  const returnPoint = useRef<ReturnPoint | null>(null);
 
   const productsById = useMemo(
     () => new Map(menu?.categories.flatMap((c) => c.products.map((p) => [p.id, p] as const)) ?? []),
@@ -50,8 +56,23 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
 
   const rootStyle = menu?.store.primaryColor ? ({ "--loja-accent": menu.store.primaryColor } as CSSProperties) : undefined;
 
+  function openProduct(product: Product) {
+    returnPoint.current = { productId: product.id, scrollY: window.scrollY };
+    setDetailProduct(product);
+  }
+
+  useIsomorphicLayoutEffect(() => {
+    if (detailProduct) {
+      window.scrollTo(0, 0); // o detalhe começa no topo (sem `return`: o valor devolvido por um efeito vira função de limpeza)
+      return;
+    }
+    const point = returnPoint.current;
+    returnPoint.current = null;
+    if (point) restoreReturnPoint(document, point, (y) => window.scrollTo(0, y));
+  }, [detailProduct]);
+
   function quickAdd(product: Product) {
-    if (product.additionals.length > 0) return setDetailProduct(product);
+    if (product.additionals.length > 0) return openProduct(product);
     cart.add(product.id, 1, [], "");
   }
 
@@ -125,7 +146,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
           closed={closed}
           quantityByProduct={cart.quantityByProduct}
           onClose={() => setTab("itens")}
-          onOpenProduct={setDetailProduct}
+          onOpenProduct={openProduct}
           onQuickAdd={quickAdd}
         />
       );
@@ -178,7 +199,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
                         closed={closed}
                         product={product}
                         quantityInCart={cart.quantityByProduct[product.id] ?? 0}
-                        onOpen={setDetailProduct}
+                        onOpen={openProduct}
                         onQuickAdd={quickAdd}
                       />
                     ))}

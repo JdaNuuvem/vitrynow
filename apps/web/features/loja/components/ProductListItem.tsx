@@ -21,8 +21,16 @@ export function ProductListItem({
     <div
       role="button"
       tabIndex={0}
+      data-product-id={product.id}
       onClick={() => onOpen(product)}
-      onKeyDown={(e) => e.key === "Enter" && onOpen(product)}
+      onKeyDown={(e) => {
+        // role="button" promete Enter e Espaço (o Espaço também não pode rolar a página).
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen(product);
+        }
+      }}
       className="loja__item"
     >
       <div className="loja__item-row">

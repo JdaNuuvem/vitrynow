@@ -185,6 +185,7 @@
 }
 
 .loja__whatsapp {
+  position: relative;
   display: flex;
   height: 2.25rem;
   width: 2.25rem;
@@ -194,6 +195,12 @@
   border-radius: 9999px;
   background: #dcfce7;
   color: #15803d;
+}
+/* O círculo continua com 36 px; a área de toque sobe a 44 px (WCAG 2.5.8; achado F1 do Deming). */
+.loja__whatsapp::after {
+  content: "";
+  position: absolute;
+  inset: -0.25rem;
 }
 
 .loja__hours-row {
