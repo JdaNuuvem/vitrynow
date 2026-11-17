@@ -16,6 +16,32 @@
   --loja-danger-ink: #b91c1c; /* texto de erro sobre fundo rosado */
   --loja-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
   --loja-shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+
+  /* Movimento (spec 12 §8, WEB-28). Nada usa estes tokens ainda: as telas passam a usá-los fatia a fatia.
+     Duração entre 80 e 420 ms; a rolagem suave dos chips (~400 ms) vem do navegador. */
+  --loja-dur-1: 120ms;
+  --loja-dur-2: 200ms;
+  --loja-dur-3: 280ms;
+  --loja-dur-4: 420ms;
+  --loja-ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --loja-ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --loja-ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  /* entrada em cascata: 40 ms entre itens, no máximo 8 por entrada (M-01); a tela põe `--loja-index` */
+  --loja-stagger: 40ms;
+  --loja-shimmer: 1200ms;
+}
+
+/* Quem pediu menos movimento: todo token de tempo vira ~0 e quem usa o token já respeita a preferência.
+   Todo `--loja-dur-*` novo precisa de linha aqui (motion.test.ts confere). */
+@media (prefers-reduced-motion: reduce) {
+  .loja {
+    --loja-dur-1: 0.01ms;
+    --loja-dur-2: 0.01ms;
+    --loja-dur-3: 0.01ms;
+    --loja-dur-4: 0.01ms;
+    --loja-stagger: 0ms;
+    --loja-shimmer: 0.01ms;
+  }
 }
 
 .loja__message {

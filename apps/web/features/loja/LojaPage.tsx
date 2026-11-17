@@ -23,6 +23,7 @@ import { useOrderFlow } from "./hooks/useOrderFlow";
 import { useOrderHistory } from "./hooks/useOrderHistory";
 import { scrollBehavior } from "@/lib/motion";
 import "./loja.css";
+import "./motion.css";
 
 // useLayoutEffect avisa no servidor (SSR); lá o efeito não precisa rodar.
 const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
