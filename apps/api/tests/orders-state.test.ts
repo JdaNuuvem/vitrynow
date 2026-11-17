@@ -503,7 +503,7 @@ describe("API-02 — estados do pedido", () => {
       const res = await cancel(ctx.cookie, id, { code, text: "nota interna do dono", customerMessage: hostil });
       expect(res.statusCode, code).toBe(200);
       expect(json(res).order.cancel.customerMessage).toBe(esperado);
-      const publico = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status` }));
+      const publico = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status`, headers: orderTokenHeader(id) }));
       expect(publico.cancelReason.customerMessage).toBe(esperado);
       // Nada do texto hostil nem da nota interna chega ao cliente; a nota continua só no painel.
       expect(JSON.stringify(publico)).not.toMatch(/golpe|0800|nota interna/);
@@ -518,7 +518,7 @@ describe("API-02 — estados do pedido", () => {
     const id = await paidOrder(ctx);
     refundPayment.mockRejectedValueOnce(new Error("timeout"));
     expect((await customerCancel(ctx.slug, id)).statusCode).toBe(200);
-    const status = () => app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status` }).then(json);
+    const status = () => app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${id}/payment-status`, headers: orderTokenHeader(id) }).then(json);
     // Estorno em andamento: o pedido AINDA não está cancelado (ADR-0007 §5.2), então não há motivo a mostrar.
     expect(await status()).toMatchObject({ orderStatus: "PENDENTE", cancelReason: null });
     refundPayment.mockResolvedValue(undefined);

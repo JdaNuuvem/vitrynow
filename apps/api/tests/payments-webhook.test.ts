@@ -346,7 +346,7 @@ describe("API-03 — webhook e PIX", () => {
     const oa = await orderOf(a.orderId);
     expect({ status: oa?.status, payment: oa?.payment?.status, note: oa?.payment?.reconcileNote }).toEqual({ status: "CANCELADO", payment: "REEMBOLSADO", note: null });
     // Condições do Leonardo (CA-MC-15): frase aprovada ao cliente e linha de dinheiro sempre a de "estornado" (caso B).
-    const publico = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${a.orderId}/payment-status` }));
+    const publico = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${a.orderId}/payment-status`, headers: orderTokenHeader(a.orderId) }));
     expect(publico.cancelReason).toEqual({
       customerMessage: "O pagamento foi estornado e o pedido foi cancelado.",
       moneyLine: "O valor de R$ 10,00 foi estornado. O prazo para aparecer depende do seu banco.",
@@ -364,7 +364,7 @@ describe("API-03 — webhook e PIX", () => {
     // Chargeback NÃO cancela o pedido (ADR-0007 §6.1): só conciliação e alerta; o pedido segue ativo e sem motivo de cancelamento.
     expect(ob?.status).toBe("PENDENTE");
     expect(await prisma.orderStatusHistory.count({ where: { orderId: b.orderId, kind: "CANCEL" } })).toBe(0);
-    const pubB = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${b.orderId}/payment-status` }));
+    const pubB = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${b.orderId}/payment-status`, headers: orderTokenHeader(b.orderId) }));
     expect(pubB.cancelReason).toBeNull();
     expect(ob?.payment?.reconcileNote).toContain("Contestação");
   });
