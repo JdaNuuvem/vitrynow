@@ -1,11 +1,21 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useId, useState } from "react";
+import Link from "next/link";
+import { useEffect, useId, useRef, useState } from "react";
 import { PasswordField } from "@/shared/ui/PasswordField";
-import { isPasswordRuleError, PASSWORD_HELP } from "@/shared/auth/passwordPolicy";
+import {
+  classifyResetFailure,
+  isEmailShapeValid,
+  isPasswordLongEnough,
+  PASSWORD_HELP,
+  RESET_RATE_LIMITED_MESSAGE,
+  RESET_REFUSED_MESSAGE,
+  RESET_REFUSED_NEW_LINK,
+} from "@/shared/auth/passwordPolicy";
 import { usePasswordRule } from "@/shared/auth/usePasswordRule";
 import { AuthCard } from "./components/AuthCard";
+import { ConfirmEmailField } from "./components/ConfirmEmailField";
 import { useResetInspect } from "./hooks/useResetInspect";
 import { useResetPassword } from "./hooks/useResetPassword";
 import { clearResetTokenFromUrl, readResetToken } from "./resetToken";
@@ -49,12 +59,25 @@ export function ResetPasswordPage() {
 
 function ResetFlow({ token }: { token: string }) {
   const router = useRouter();
-  const { submit, loading, error, done } = useResetPassword(token);
+  const { submit, loading, error, status, failures, done } = useResetPassword(token);
   const { result: inspect, retry } = useResetInspect(token);
   const noteId = useId();
   const [newPassword, setNewPassword] = useState("");
-  const serverRejectedLength = isPasswordRuleError(error);
+  const [email, setEmail] = useState("");
+  const emailRef = useRef<HTMLInputElement>(null);
+  const failure = classifyResetFailure(status, error);
+  const serverRejectedLength = failure === "rule";
   const rule = usePasswordRule(newPassword, serverRejectedLength);
+  const rateLimited = failure === "rate";
+
+  // Recusa do envio (e-mail que não bate OU link inválido: a tela NÃO diferencia): a senha digitada fica, o e-mail é limpo e o foco
+  // volta para ele. O link segue valendo; a tela cheia "Link inválido" só nasce da conferência inicial, nunca do envio.
+  useEffect(() => {
+    if (failure === "refused") {
+      setEmail("");
+      emailRef.current?.focus();
+    }
+  }, [failure, failures]);
 
   // Inválido, vencido, usado ou malformado: a API não diferencia o motivo e a tela também não.
   if (inspect.state === "invalid") return <InvalidLink />;
@@ -101,6 +124,9 @@ function ResetFlow({ token }: { token: string }) {
     );
   }
 
+  const emailOk = isEmailShapeValid(email);
+  const passwordOk = isPasswordLongEnough(newPassword);
+
   return (
     <AuthCard title="Nova senha" backToLogin>
       <form
@@ -108,17 +134,19 @@ function ResetFlow({ token }: { token: string }) {
         noValidate
         onSubmit={(event) => {
           event.preventDefault();
-          if (loading || !rule.validate()) return;
-          void submit(newPassword);
+          if (loading || rateLimited || !emailOk || !rule.validate()) return;
+          void submit(newPassword, email.trim());
         }}
       >
-        {/* Conferência: DE QUAL conta é este link (o e-mail mascarado entra como TEXTO, nunca HTML) e o aviso de quem recebeu o link de outra pessoa */}
+        {/* Contexto: DE QUAL conta é este link (a máscara é só DICA: maria@gmail.com e mallory@gmail.com mostram o mesmo; o e-mail mascarado entra como TEXTO, nunca HTML) e o aviso de quem recebeu o link de outra pessoa */}
         <div id={noteId} role="note" className="auth__note">
           <p>
             Você está redefinindo a senha de <strong>{inspect.email}</strong>
           </p>
           <p>Se esta não for a sua conta, feche esta página e não digite nenhuma senha.</p>
         </div>
+        {/* A prova de que a pessoa é dona do link: DIGITAR o e-mail, ACIMA da senha. Quem compara é o servidor. */}
+        <ConfirmEmailField ref={emailRef} value={email} onChange={setEmail} disabled={rateLimited || loading} describedBy={[noteId]} />
         <PasswordField
           label="Nova senha"
           value={newPassword}
@@ -128,9 +156,24 @@ function ResetFlow({ token }: { token: string }) {
           onBlur={rule.onBlur}
           describedBy={[noteId]}
           inputClassName="auth__input"
+          disabled={rateLimited || loading}
         />
-        {error && !serverRejectedLength && <p className="auth__error">{error}</p>}
-        <button className="auth__button" type="submit" disabled={loading}>
+        {failure === "refused" && (
+          <div role="alert" className="auth__error auth__refused">
+            <p>{RESET_REFUSED_MESSAGE}</p>
+            {/* saída legítima nos dois casos (e-mail que não bate OU link morto) e não revela qual foi */}
+            <Link href="/esqueci-senha" className="auth__link auth__link--target">
+              {RESET_REFUSED_NEW_LINK}
+            </Link>
+          </div>
+        )}
+        {failure === "rate" && (
+          <p role="alert" className="auth__error">
+            {RESET_RATE_LIMITED_MESSAGE}
+          </p>
+        )}
+        {failure === "server" && error && <p className="auth__error">{error}</p>}
+        <button className="auth__button" type="submit" disabled={loading || rateLimited || !emailOk || !passwordOk}>
           {loading ? "Salvando..." : "Salvar nova senha"}
         </button>
       </form>

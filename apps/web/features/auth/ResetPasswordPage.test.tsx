@@ -27,7 +27,10 @@ function setup(url: string, { strict = false, inspect = GOOD as Inspect | Promis
 }
 
 const field = () => screen.findByLabelText("Nova senha");
-const typeAndSend = async (password: string) => {
+const EMAIL = "maria@gmail.com";
+const emailField = () => screen.findByLabelText("Confirme o e-mail desta conta");
+const typeAndSend = async (password: string, email = EMAIL) => {
+  await userEvent.type(await emailField(), email);
   await userEvent.type(await field(), password);
   await userEvent.click(screen.getByRole("button", { name: "Salvar nova senha" }));
 };
@@ -59,7 +62,7 @@ describe("ResetPasswordPage: token no fragmento (ST-56 / NG-17)", () => {
     expect(window.location.href).not.toMatch(/velho|novo/);
     await typeAndSend("minhaSenha123");
     expect(inspectResetToken).toHaveBeenCalledWith("novo");
-    expect(resetPassword).toHaveBeenCalledWith("novo", "minhaSenha123");
+    expect(resetPassword).toHaveBeenCalledWith("novo", "minhaSenha123", "maria@gmail.com");
   });
 
   it("sem token: 'Link inválido', sem formulário e SEM chamar a API (nem a conferência)", () => {
@@ -79,7 +82,7 @@ describe("ResetPasswordPage: token no fragmento (ST-56 / NG-17)", () => {
   it("o token vai no CORPO da chamada (gateway), com a senha nova, e nunca na URL", async () => {
     const { resetPassword } = setup("/reset-senha#token=corpo-e-so-corpo");
     await typeAndSend("outraSenha1234");
-    expect(resetPassword).toHaveBeenCalledWith("corpo-e-so-corpo", "outraSenha1234");
+    expect(resetPassword).toHaveBeenCalledWith("corpo-e-so-corpo", "outraSenha1234", "maria@gmail.com");
     expect(window.location.href).not.toContain("corpo-e-so-corpo");
     expect(await screen.findByText("Senha alterada com sucesso.")).toBeInTheDocument();
   });
@@ -104,7 +107,7 @@ describe("ResetPasswordPage: token no fragmento (ST-56 / NG-17)", () => {
     expect(window.location.hash).toBe("");
     expect(window.location.href).not.toContain("link-novo-colado");
     await typeAndSend("SenhaColada1234");
-    expect(resetPassword).toHaveBeenCalledWith("link-novo-colado", "SenhaColada1234");
+    expect(resetPassword).toHaveBeenCalledWith("link-novo-colado", "SenhaColada1234", "maria@gmail.com");
   });
 
   it("o link novo (mesmo inválido) substitui o anterior: um fragmento com cara de HTML nunca fica na barra", async () => {
@@ -284,9 +287,12 @@ describe("ResetPasswordPage: conferência da conta antes da senha (SEC-29 / ST-6
 describe("ResetPasswordPage: senha mínima de 10 (SEC-29)", () => {
   afterEach(() => window.history.replaceState(null, "", "/"));
 
-  it("UI-PW-04: com 9 caracteres mostra o erro junto do campo, mantém a ajuda e NÃO chama a API", async () => {
+  it("UI-PW-04: com 9 caracteres o botão não habilita e, ao sair do campo, mostra o erro junto dele, mantém a ajuda e NÃO chama a API", async () => {
     const { resetPassword } = setup("/reset-senha#token=abc123");
-    await typeAndSend("123456789");
+    await userEvent.type(await emailField(), EMAIL);
+    await userEvent.type(await field(), "123456789");
+    expect(screen.getByRole("button", { name: "Salvar nova senha" })).toBeDisabled();
+    await userEvent.tab(); // sai do campo da senha
     const input = await field();
     expect(await screen.findByRole("alert")).toHaveTextContent(PASSWORD_TOO_SHORT_MESSAGE);
     expect(input).toHaveAttribute("aria-invalid", "true");
@@ -297,7 +303,7 @@ describe("ResetPasswordPage: senha mínima de 10 (SEC-29)", () => {
   it("com 10 caracteres envia", async () => {
     const { resetPassword } = setup("/reset-senha#token=abc123");
     await typeAndSend("1234567890");
-    expect(resetPassword).toHaveBeenCalledWith("abc123", "1234567890");
+    expect(resetPassword).toHaveBeenCalledWith("abc123", "1234567890", "maria@gmail.com");
   });
 
   it("o erro não aparece a cada tecla: só ao sair do campo ou ao tentar enviar", async () => {
@@ -323,10 +329,11 @@ describe("ResetPasswordPage: senha mínima de 10 (SEC-29)", () => {
     expect(document.body.textContent).not.toMatch(/String must contain|newPassword/);
   });
 
-  it("outro erro do servidor (token usado) continua como veio, no formulário", async () => {
+  it("outra recusa do servidor (link vencido) NÃO mostra o texto do servidor: vira a frase única, e não a do tamanho", async () => {
     setup("/reset-senha#token=abc123", { reset: { ok: false, status: 400, error: "Link inválido ou vencido." } });
     await typeAndSend("1234567890");
-    expect(await screen.findByText("Link inválido ou vencido.")).toBeInTheDocument();
+    expect(await screen.findByText("Não foi possível redefinir a senha. Confira o e-mail e o link e tente de novo.")).toBeInTheDocument();
+    expect(screen.queryByText("Link inválido ou vencido.")).not.toBeInTheDocument();
     expect(screen.queryByText(PASSWORD_TOO_SHORT_MESSAGE)).not.toBeInTheDocument();
   });
 
@@ -348,21 +355,182 @@ describe("ResetPasswordPage: senha mínima de 10 (SEC-29)", () => {
 
   it("UI-PW-08: a ordem do Tab é campo, 'Mostrar senha', enviar", async () => {
     setup("/reset-senha#token=abc123");
-    await field();
-    const order: string[] = [];
-    for (let i = 0; i < 4; i++) {
-      await userEvent.tab();
-      const el = document.activeElement as HTMLElement | null;
-      if (el) order.push((el.getAttribute("aria-label") ?? el.textContent ?? el.tagName).trim() || el.tagName);
-    }
-    const iToggle = order.findIndex((t) => /Mostrar senha/.test(t));
-    const iSend = order.findIndex((t) => /Salvar nova senha/.test(t));
-    expect(iToggle).toBeGreaterThanOrEqual(0);
-    expect(iSend).toBeGreaterThan(iToggle);
+    const email = await emailField();
+    await userEvent.type(email, EMAIL);
+    const password = await field();
+    await userEvent.type(password, "1234567890");
+    password.focus();
+    await userEvent.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Mostrar senha" }));
+    await userEvent.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Salvar nova senha" }));
   });
 
   it("aguarda um instante sem quebrar: a página resolve a conferência sem aviso de act", async () => {
     setup("/reset-senha#token=abc123");
     await waitFor(() => expect(screen.getByLabelText("Nova senha")).toBeInTheDocument());
+  });
+});
+
+
+// ---- WEB-42 / SEC-29 parte 2 (ST-67, spec 16 §6): confirmar o e-mail DIGITANDO
+const REFUSED = "Não foi possível redefinir a senha. Confira o e-mail e o link e tente de novo.";
+
+describe("ResetPasswordPage: confirmação do e-mail por digitação (ST-67)", () => {
+  afterEach(() => window.history.replaceState(null, "", "/"));
+
+  it("UI-PW-09: o campo 'Confirme o e-mail desta conta' fica ACIMA da senha, logo depois do bloco de contexto, com a ajuda e sem foco automático", async () => {
+    setup("/reset-senha#token=abc123");
+    const email = (await emailField()) as HTMLInputElement;
+    const password = await field();
+    const note = screen.getByRole("note");
+    expect(note.compareDocumentPosition(email) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(email.compareDocumentPosition(password) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(email).not.toHaveFocus();
+    expect(email.value).toBe(""); // nada preenchido sozinho, nem com a máscara
+    const help = screen.getByText("Digite o e-mail completo da conta, como você o usa para entrar.");
+    expect((email.getAttribute("aria-describedby") ?? "").split(" ")).toContain(help.id);
+    expect(screen.getByText("Digite o e-mail completo da conta, como você o usa para entrar.")).toBeInTheDocument();
+  });
+
+  it("o campo é type=email, autocomplete=username e não repete a máscara como exemplo", async () => {
+    setup("/reset-senha#token=abc123");
+    const email = await emailField();
+    expect(email).toHaveAttribute("type", "email");
+    expect(email).toHaveAttribute("autocomplete", "username");
+    expect(email).not.toHaveAttribute("placeholder");
+    expect(screen.queryByPlaceholderText(/@/)).not.toBeInTheDocument();
+  });
+
+  it("UI-PW-10: o botão só habilita com e-mail em formato válido E senha de 10 ou mais", async () => {
+    setup("/reset-senha#token=abc123");
+    const send = await screen.findByRole("button", { name: "Salvar nova senha" });
+    expect(send).toBeDisabled();
+    await userEvent.type(await field(), "1234567890");
+    expect(send).toBeDisabled(); // falta o e-mail
+    await userEvent.type(await emailField(), "maria");
+    expect(send).toBeDisabled(); // e-mail sem forma de e-mail
+    await userEvent.type(await emailField(), "@gmail.com");
+    expect(send).toBeEnabled();
+    await userEvent.clear(await field());
+    await userEvent.type(await field(), "123456789");
+    expect(send).toBeDisabled(); // senha com 9
+  });
+
+  it("UI-PW-11: o e-mail DIGITADO (sem espaços nas pontas) vai no corpo do envio; a máscara não é comparada na tela (quem decide é o servidor)", async () => {
+    const { resetPassword } = setup("/reset-senha#token=abc123");
+    // máscara m***@gmail.com e e-mail digitado de OUTRA pessoa do mesmo provedor: a tela envia igual
+    await typeAndSend("1234567890", "  mallory@gmail.com  ");
+    expect(resetPassword).toHaveBeenCalledWith("abc123", "1234567890", "mallory@gmail.com");
+  });
+
+  it("UI-PW-12: recusa (e-mail não bate OU link inválido): a MESMA frase, a senha fica, o e-mail some, o foco volta para ele e o formulário continua", async () => {
+    const { resetPassword } = setup("/reset-senha#token=abc123", { reset: { ok: false, status: 400, error: "Link inválido ou vencido." } });
+    await typeAndSend("SenhaDigitada1");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(REFUSED);
+    expect(((await emailField()) as HTMLInputElement).value).toBe("");
+    expect(await emailField()).toHaveFocus();
+    expect(((await field()) as HTMLInputElement).value).toBe("SenhaDigitada1");
+    expect(screen.queryByText(/Link inválido —/)).not.toBeInTheDocument(); // a tela cheia só nasce da conferência inicial
+    expect(screen.getByRole("button", { name: "Salvar nova senha" })).toBeDisabled(); // sem e-mail de novo
+    expect(resetPassword).toHaveBeenCalledTimes(1);
+  });
+
+  it("a recusa nunca diz 'e-mail incorreto' (senão o e-mail certo sairia por tentativa e erro) nem repete o texto do servidor", async () => {
+    setup("/reset-senha#token=abc123", { reset: { ok: false, status: 400, error: "E-mail incorreto para este link" } });
+    await typeAndSend("SenhaDigitada1");
+    await screen.findByRole("alert");
+    expect(document.body.textContent).not.toMatch(/incorret|não confere|não bate|e-mail errado|inválido ou vencido/i);
+    expect(document.body.textContent).not.toContain("E-mail incorreto para este link");
+  });
+
+  it("UI-PW-16: qualquer recusa mostra a MESMA frase e o link 'Pedir um novo link' (alvo de 44 px) para o 'Esqueci a senha'", async () => {
+    setup("/reset-senha#token=abc123", { reset: { ok: false, status: 400, error: "qualquer coisa do servidor" } });
+    await typeAndSend("SenhaDigitada1");
+    const link = await screen.findByRole("link", { name: "Pedir um novo link" });
+    expect(link).toHaveAttribute("href", "/esqueci-senha");
+    expect(link).toHaveClass("auth__link--target");
+    expect(screen.getByRole("alert")).toContainElement(link);
+  });
+
+  it("recusas de motivos diferentes (e-mail, link vencido, link usado) deixam a tela IDÊNTICA: nada que diferencie", async () => {
+    const textos: string[] = [];
+    for (const motivo of ["E-mail não confere", "Link inválido ou vencido.", "Link já usado"]) {
+      const { unmount } = render(<div />); // isola
+      unmount();
+      document.body.innerHTML = "";
+      setup("/reset-senha#token=abc123", { reset: { ok: false, status: 400, error: motivo } });
+      await typeAndSend("SenhaDigitada1");
+      await screen.findByRole("alert");
+      textos.push(screen.getByRole("alert").textContent ?? "");
+      document.body.innerHTML = "";
+    }
+    expect(new Set(textos).size).toBe(1);
+  });
+
+  it("UI-PW-17: depois de várias recusas (o servidor invalida o token após 5) a tela continua igual: sem contador e sem dizer que o link morreu", async () => {
+    const { resetPassword } = setup("/reset-senha#token=abc123", { reset: { ok: false, status: 400, error: "erro genérico" } });
+    for (let i = 0; i < 5; i++) {
+      await userEvent.type(await emailField(), `tentativa${i}@gmail.com`);
+      if (i === 0) await userEvent.type(await field(), "SenhaDigitada1");
+      await userEvent.click(screen.getByRole("button", { name: "Salvar nova senha" }));
+      await screen.findByRole("alert");
+    }
+    expect(resetPassword).toHaveBeenCalledTimes(5);
+    expect(screen.getByRole("alert")).toHaveTextContent(REFUSED);
+    expect(document.body.textContent).not.toMatch(/\b[1-5] de 5\b|restam|tentativas restantes|expirou|morreu|inválido/i);
+    expect(screen.getByRole("link", { name: "Pedir um novo link" })).toBeInTheDocument();
+  });
+
+  it("UI-PW-13: 429 mostra 'Muitas tentativas…', desabilita campos e botão, sem contador e sem o link de refazer", async () => {
+    setup("/reset-senha#token=abc123", { reset: { ok: false, status: 429, error: "Too Many Requests" } });
+    await typeAndSend("SenhaDigitada1");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Muitas tentativas. Aguarde alguns minutos e tente de novo.");
+    expect(await emailField()).toBeDisabled();
+    expect(await field()).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Salvar nova senha" })).toBeDisabled();
+    expect(screen.queryByRole("link", { name: "Pedir um novo link" })).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/\d+ ?(s|seg|min)\b.*restan/i);
+  });
+
+  it("erro do servidor ou da rede (5xx/503) mostra o texto da rede e NÃO acusa e-mail nem link", async () => {
+    setup("/reset-senha#token=abc123", { reset: { ok: false, status: 503, error: "Não foi possível conectar ao servidor. Verifique sua internet e tente de novo." } });
+    await typeAndSend("SenhaDigitada1");
+    expect(await screen.findByText(/Não foi possível conectar ao servidor/)).toBeInTheDocument();
+    expect(screen.queryByText(REFUSED)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Pedir um novo link" })).not.toBeInTheDocument();
+    expect(await emailField()).toBeEnabled();
+  });
+
+  it("a recusa por TAMANHO da senha segue mostrando a frase do campo e não a frase única", async () => {
+    setup("/reset-senha#token=abc123", { reset: { ok: false, status: 400, error: "newPassword: String must contain at least 10 character(s)" } });
+    await typeAndSend("1234567890");
+    expect(await screen.findByRole("alert")).toHaveTextContent(PASSWORD_TOO_SHORT_MESSAGE);
+    expect(screen.queryByText(REFUSED)).not.toBeInTheDocument();
+  });
+
+  it("o e-mail digitado não vai para URL, localStorage nem sessionStorage", async () => {
+    localStorage.clear();
+    sessionStorage.clear();
+    setup("/reset-senha#token=abc123", { reset: { ok: false, status: 400, error: "x" } });
+    await typeAndSend("SenhaDigitada1", "privado@exemplo.com");
+    await screen.findByRole("alert");
+    expect(window.location.href).not.toContain("privado");
+    expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toMatch(/privado|exemplo/);
+  });
+
+  it("a ordem do Tab é e-mail, senha, 'Mostrar senha', enviar", async () => {
+    setup("/reset-senha#token=abc123");
+    const email = await emailField();
+    await userEvent.type(email, EMAIL);
+    await userEvent.type(await field(), "1234567890");
+    email.focus();
+    await userEvent.tab();
+    expect(document.activeElement).toBe(await field());
+    await userEvent.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Mostrar senha" }));
+    await userEvent.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Salvar nova senha" }));
   });
 });
