@@ -2,7 +2,7 @@ import bcrypt from "bcryptjs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import * as emailLib from "../src/lib/email";
-import { RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, resetHooks } from "../src/lib/passwordReset";
+import { RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, makeResetHooks, resetHooks } from "../src/lib/passwordReset";
 import { hashToken } from "../src/lib/tokenHash";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
@@ -147,17 +147,29 @@ describe("redefinição de senha exige o e-mail da conta do token (SEC-29, ST-67
   // tomada com a leitura velha (antes do UPDATE), o certo passaria mesmo com 5 falhas já gravadas.
   it("ST-68: rajada de 30 e-mails errados + o CERTO por último (lendo o token antes de as falhas serem gravadas) ⇒ o certo é RECUSADO", async () => {
     const a = await accountWithToken("rajada@exemplo.com");
-    // o pedido CERTO lê o token "vivo" e o e-mail certo e ESPERA aqui; enquanto isso os 30 errados gravam as falhas e o token morre na 5ª
-    resetHooks.beforeClaim = async ({ email }) => {
-      if (email === a.credentials.email) await new Promise((resolve) => setTimeout(resolve, 800));
+    // O gancho não recebe o e-mail (ST-69): o PRIMEIRO pedido a chegar nele é o CERTO (é enviado antes e o teste espera ele parar no portão);
+    // ele já leu o token "vivo" e o e-mail certo e ESPERA aqui, enquanto os 30 errados gravam as falhas e o token morre na 5ª.
+    let reachedGate!: () => void;
+    let openGate!: () => void;
+    const reached = new Promise<void>((resolve) => (reachedGate = resolve));
+    const gate = new Promise<void>((resolve) => (openGate = resolve));
+    let calls = 0;
+    resetHooks.beforeClaim = async () => {
+      calls += 1;
+      if (calls === 1) {
+        reachedGate();
+        await gate;
+      }
     };
     try {
-      const wrong = Array.from({ length: 30 }, (_, i) => reset({ token: a.token, email: `chute${i}@exemplo.com`, newPassword: "senha-nova-da-vitima" }));
-      await new Promise((resolve) => setTimeout(resolve, 30)); // os errados já leram o token; o certo chega logo depois e também lê "vivo"
       const right = reset({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
-      const [rightRes] = await Promise.all([right, ...wrong]);
+      await reached; // o certo já leu o token "vivo" e está parado antes do UPDATE
+      await Promise.all(Array.from({ length: 30 }, (_, i) => reset({ token: a.token, email: `chute${i}@exemplo.com`, newPassword: "senha-nova-da-vitima" })));
+      openGate();
+      const rightRes = await right;
       expect(rightRes.statusCode).toBe(400); // vulnerável (antes do conserto): 200
     } finally {
+      openGate();
       resetHooks.beforeClaim = undefined;
     }
     const row = await prisma.passwordResetToken.findFirstOrThrow({ where: { tokenHash: hashToken(a.token) } });
@@ -165,6 +177,40 @@ describe("redefinição de senha exige o e-mail da conta do token (SEC-29, ST-67
     expect(row.emailFailures).toBe(RESET_MAX_EMAIL_FAILURES); // o contador parou na 5ª: o resto nem o toca
     const login = await app.inject({ method: "POST", url: "/auth/login", remoteAddress: ip(), payload: { email: a.credentials.email, password: a.credentials.password } });
     expect(login.statusCode).toBe(200); // a senha NÃO mudou
+  }, 120000);
+
+  // ST-69: o gancho de teste não pode ser uma porta de produção. Fora de NODE_ENV=test ele nasce congelado e a rota nem o consulta.
+  it("ST-69: fora de NODE_ENV=test o gancho definido NÃO é chamado e o objeto de produção é congelado", async () => {
+    const a = await accountWithToken("gancho@exemplo.com");
+    const hook = vi.fn(async () => {});
+    resetHooks.beforeClaim = hook;
+    try {
+      vi.stubEnv("NODE_ENV", "production");
+      const res = await reset({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
+      expect(res.statusCode).toBe(200); // o fluxo segue normal sem o gancho
+      expect(hook).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      resetHooks.beforeClaim = undefined;
+    }
+    // controle positivo: em test o mesmo gancho É chamado
+    const b = await accountWithToken("gancho2@exemplo.com");
+    resetHooks.beforeClaim = hook;
+    try {
+      await reset({ token: b.token, email: b.credentials.email, newPassword: "senha-nova-do-dono" });
+      expect(hook).toHaveBeenCalledTimes(1);
+    } finally {
+      resetHooks.beforeClaim = undefined;
+    }
+    // fora de test (produção, desenvolvimento, NODE_ENV ausente) o objeto nasce congelado: ninguém consegue defini-lo
+    for (const env of ["production", "development", undefined]) {
+      const frozen = makeResetHooks(env);
+      expect(Object.isFrozen(frozen), String(env)).toBe(true);
+      expect(() => {
+        frozen.beforeClaim = async () => {};
+      }, String(env)).toThrow(TypeError);
+    }
+    expect(Object.isFrozen(makeResetHooks("test"))).toBe(false);
   }, 120000);
 
   it("tempo: e-mail CERTO contra token já MORTO tem a mesma duração das outras recusas (a recusa nunca paga o bcrypt)", async () => {

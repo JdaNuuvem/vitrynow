@@ -10,7 +10,7 @@ import { SESSION_COOKIE, revokeSession, sessionCookieOptions, signSession } from
 import { disconnectSession, disconnectUser } from "../realtime/hub";
 import { hashToken } from "../lib/tokenHash";
 import { LoginThrottle } from "../lib/loginThrottle";
-import { NOW, RESET_FAIL_MIN_DURATION_MS, resetHooks, RESET_MAX_EMAIL_FAILURES, constantTimeEqual, issueResetToken, padToMinimum } from "../lib/passwordReset";
+import { NOW, RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, constantTimeEqual, issueResetToken, padToMinimum, runBeforeClaimHook } from "../lib/passwordReset";
 
 // Hash de uma senha que ninguém conhece, no mesmo custo dos hashes reais: login com e-mail inexistente
 // gasta o mesmo tempo do login com senha errada (ST-05, sem enumeração de contas por tempo).
@@ -208,9 +208,9 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       const resetToken = await prisma.passwordResetToken.findUnique({ where: { tokenHash: hashToken(parsed.data.token) } });
       const owner = await prisma.user.findUnique({ where: { id: resetToken?.userId ?? "-" }, select: { email: true } });
       const sameEmail = constantTimeEqual(parsed.data.email, owner?.email ?? "");
-      // Gancho só de TESTE (indefinido em produção): deixa um teste atrasar o pedido entre a leitura de cima e o UPDATE, para provar que a
-      // decisão não depende da leitura velha.
-      await resetHooks.beforeClaim?.({ email: parsed.data.email });
+      // Gancho só de TESTE (ST-69: honrado só com NODE_ENV=test, sem receber dado): deixa um teste atrasar o pedido entre a leitura de cima
+      // e o UPDATE, para provar que a decisão não depende da leitura velha.
+      await runBeforeClaimHook();
 
       // ST-68: a DECISÃO sai NO BANCO, numa instrução só, com o relógio do banco. Lê-la antes (live/sameEmail em memória) deixava uma rajada
       // paralela ver o token "vivo" antes de qualquer falha ser gravada: um palpite certo passava mesmo depois de 5 falhas, e duas

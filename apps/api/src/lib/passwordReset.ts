@@ -61,6 +61,18 @@ export function constantTimeEqual(a: string, b: string): boolean {
 // Relógio do BANCO em UTC (mesma convenção do claim e da troca de modo: colunas TIMESTAMP sem fuso, gravadas em UTC).
 export const NOW = Prisma.raw("(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')");
 
-// Gancho de TESTE (nunca definido em produção): atrasar um pedido entre a leitura do token e o UPDATE que decide, para reproduzir a rajada
-// do ST-68 sem depender de sorte. Mesmo estilo dos outros pontos de injeção do repositório (setOAuthProvider, setGatewayMaker).
-export const resetHooks: { beforeClaim?: (info: { email: string }) => Promise<void> } = {};
+// Gancho de TESTE: atrasar um pedido entre a leitura do token e o UPDATE que decide, para reproduzir a rajada do ST-68 sem depender de
+// sorte. ST-69: "indefinido em produção" não pode ser só convenção. Fora de NODE_ENV=test o objeto nasce CONGELADO (ninguém o define) e a
+// rota nem o consulta; e o gancho não recebe dado nenhum (o e-mail digitado nunca chega a código de terceiros).
+export type ResetHooks = { beforeClaim?: () => Promise<void> };
+
+export function makeResetHooks(nodeEnv: string | undefined): ResetHooks {
+  return nodeEnv === "test" ? {} : Object.freeze({});
+}
+
+export const resetHooks: ResetHooks = makeResetHooks(process.env.NODE_ENV);
+
+export async function runBeforeClaimHook(): Promise<void> {
+  if (process.env.NODE_ENV !== "test") return;
+  await resetHooks.beforeClaim?.();
+}
