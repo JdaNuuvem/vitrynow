@@ -58,6 +58,14 @@ describe("excluir produto (UX-19): nunca no primeiro toque", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("'Excluir de vez' é só contorno e 'Ocultar' é o botão cheio (a irreversível não compete com a segura)", async () => {
+    setup(category([product()]));
+    await userEvent.click(screen.getByRole("button", { name: "excluir" }));
+    expect(screen.getByRole("button", { name: "Excluir de vez" })).toHaveClass("confirm-dialog__confirm--danger-outline");
+    expect(screen.getByRole("button", { name: "Excluir de vez" })).not.toHaveClass("confirm-dialog__confirm--danger");
+    expect(screen.getByRole("button", { name: "Ocultar do cardápio" })).toHaveClass("confirm-dialog__confirm--primary");
+  });
+
   it("'Voltar' fecha sem fazer nada", async () => {
     const { onDeleteProduct, onSaveProduct } = setup(category([product()]));
     await userEvent.click(screen.getByRole("button", { name: "excluir" }));

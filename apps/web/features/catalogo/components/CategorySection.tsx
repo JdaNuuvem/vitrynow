@@ -106,7 +106,7 @@ export function CategorySection({ category, onUpdateIcon, onDeleteCategory, onDe
           tone={copy.confirmTone}
           busy={busy}
           error={error}
-          alternative={copy.alternativeLabel ? { label: copy.alternativeLabel, onClick: deleteForever, tone: "danger" } : undefined}
+          alternative={copy.alternativeLabel ? { label: copy.alternativeLabel, onClick: deleteForever } : undefined}
           hideCancel={copy.informOnly}
           onConfirm={confirm}
           onCancel={close}

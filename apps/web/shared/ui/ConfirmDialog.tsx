@@ -12,7 +12,9 @@ type ConfirmDialogProps = {
   busy?: boolean;
   error?: string | null;
   // Segunda ação entre a principal e o "Voltar" (ex.: "Excluir de vez" ao lado de "Ocultar").
-  alternative?: { label: string; onClick: () => void; tone?: "primary" | "danger" };
+  // "danger-outline" (padrão): só contorno, para não competir com a ação principal (dois vermelhos cheios
+  // lado a lado deixavam a escolha irreversível tão chamativa quanto a segura: revisão da Da Vinci, A1).
+  alternative?: { label: string; onClick: () => void; tone?: "primary" | "danger" | "danger-outline" };
   // Janela só informativa: um botão só, sem "Voltar".
   hideCancel?: boolean;
   onConfirm: () => void;
@@ -37,7 +39,7 @@ export function ConfirmDialog({ open, title, message, confirmLabel, cancelLabel 
           {alternative && (
             <button
               type="button"
-              className={`confirm-dialog__confirm confirm-dialog__confirm--${alternative.tone ?? "danger"}`}
+              className={`confirm-dialog__confirm confirm-dialog__confirm--${alternative.tone ?? "danger-outline"}`}
               disabled={busy}
               onClick={alternative.onClick}
             >
