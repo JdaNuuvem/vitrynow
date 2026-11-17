@@ -21,7 +21,10 @@ describe("POST /auth/reset-password/inspect (SEC-29)", () => {
     });
     await app.ready();
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await resetDb(); // o último teste do arquivo não pode deixar loja/usuário para o vizinho (409 EMAIL_IN_USE/STORE_IN_USE)
+  });
 
   const tokenOf = (url: string) => new URLSearchParams(new URL(url).hash.slice(1)).get("token")!;
   const inspect = (payload: unknown, ip = nextIp()) => app.inject({ method: "POST", url: "/auth/reset-password/inspect", remoteAddress: ip, payload: payload as never });

@@ -71,7 +71,10 @@ describe("o link de redefinição leva o token no fragmento, não na query (NG-1
     });
     await app.ready();
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await resetDb(); // o último teste do arquivo não pode deixar loja/usuário para o vizinho (409 EMAIL_IN_USE/STORE_IN_USE)
+  });
 
   it("forgot-password monta /reset-senha#token=… sem '?' e sem o token na query; o token do fragmento redefine a senha", async () => {
     const { credentials } = await registerStore(app);

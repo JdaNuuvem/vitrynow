@@ -28,7 +28,10 @@ describe("forgot-password: tempo igual, limite por conta e um token ativo (SEC-2
     vi.spyOn(emailLib, "sendPasswordResetEmail").mockImplementation((input) => sendImpl(input));
     await app.ready();
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await resetDb(); // o último teste do arquivo não pode deixar loja/usuário para o vizinho (409 EMAIL_IN_USE/STORE_IN_USE)
+  });
 
   const forgot = (email: string) => app.inject({ method: "POST", url: "/auth/forgot-password", remoteAddress: nextIp(), payload: { email } });
   const activeTokens = (userId: string) => prisma.passwordResetToken.count({ where: { userId, usedAt: null, expiresAt: { gt: new Date() } } });

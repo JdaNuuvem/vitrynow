@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import * as emailLib from "../src/lib/email";
 import { RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, makeResetHooks, resetHooks } from "../src/lib/passwordReset";
@@ -33,6 +33,10 @@ describe("redefinição de senha exige o e-mail da conta do token (SEC-29, ST-67
     await resetDb();
     app = makeApp();
     await app.ready();
+  });
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await resetDb(); // o último teste do arquivo não pode deixar loja/usuário para o vizinho (409 EMAIL_IN_USE/STORE_IN_USE)
   });
 
   it("token da conta A + e-mail da conta B ⇒ recusado, o token NÃO é gasto e continua válido (o dono ainda o usa)", async () => {

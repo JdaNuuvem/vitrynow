@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { MIN_PASSWORD_LENGTH, PASSWORD_TOO_SHORT_MESSAGE } from "@meucardapio/shared-types";
 import * as emailLib from "../src/lib/email";
@@ -20,6 +20,10 @@ describe("política de senha: mínimo de 10 caracteres (SEC-29)", () => {
     await resetDb();
     app = makeApp(); // app novo por teste: cadastro e login têm limite por IP e o app guarda o contador
     await app.ready();
+  });
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await resetDb(); // o último teste do arquivo não pode deixar loja/usuário para o vizinho (409 EMAIL_IN_USE/STORE_IN_USE)
   });
 
   it("a constante é 10 e a mensagem diz 10", () => {
