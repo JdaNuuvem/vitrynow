@@ -668,14 +668,17 @@ namespace MeuCardapio.PrintClient
             {
                 using (var api = new FakeApi())
                 {
-                    var t = new PrintableOrder { OrderId = "t", Code = "TESTE", Type = "BALCAO", StoreName = "Loja de Teste", TotalCents = 0, Items = new List<PrintableOrderItem>(), PaymentMethod = "DINHEIRO", CreatedAt = "2026-11-16T12:00:00Z" };
+                    var t = new PrintableOrder { OrderId = "t", Code = "TESTE", Type = "BALCAO", StoreName = "Loja de Teste", TotalCents = 1000, Items = new List<PrintableOrderItem> { new PrintableOrderItem { ProductName = "Item de teste", Quantity = 1, UnitPriceCents = 1000 } }, PaymentMethod = "DINHEIRO", PaymentStatus = "A_COBRAR", CustomerName = "Fulana Segredo", CustomerPhone = "(11) 98888-7777", Address = "Rua Reservada 123", Notes = "OBS-DO-SERVIDOR", CreatedAt = "2026-11-16T12:00:00Z" };
                     api.AddJob("t1", t, "TEST");
                     var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
                     using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo"))
                     {
                         rig.Start();
                         bool done = WaitFor(() => api.JobState("t1") == "PRINTED" && printer.Printed.Count == 1, 20000);
-                        Check("job TEST com ticket do servidor: imprime pelo caminho normal e fecha", done && (Read(printer.Printed) ?? "").Contains("Loja de Teste"));
+                        var paper = Read(printer.Printed) ?? "";
+                        Check("job TEST com ticket do servidor: sai o tiquete de teste PROPRIO e o job fecha", done && paper.Contains("TESTE DE IMPRESSÃO") && paper.Contains("Loja de Teste"));
+                        Check("job TEST: ignora valor, pagamento, itens e contato (nome, telefone, endereco, observacao) do servidor (nunca 'COBRAR' nem 'Item de teste' no papel de teste)", !paper.Contains("COBRAR") && !paper.Contains("Item de teste") && !paper.Contains("TOTAL") && !paper.Contains("10,00")
+                            && !paper.Contains("Fulana") && !paper.Contains("98888") && !paper.Contains("Reservada") && !paper.Contains("OBS-DO-SERVIDOR"));
                         Check("job TEST: nao alerta (so ORDER_KITCHEN alerta)", rig.Alerts == 0);
                     }
                 }

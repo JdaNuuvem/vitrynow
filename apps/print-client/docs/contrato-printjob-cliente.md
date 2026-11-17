@@ -19,7 +19,7 @@ Entrega o PRÓXIMO job pendente da loja **com lease** (o servidor decide; o clie
 | sem permissão | `401`/`403` |
 
 - `ticket` é o payload do tíquete do ADR-0004 §6 (os mesmos campos de hoje + `paymentStatus`, `tableLabel`, `changeForCents`, `subtotalCents`, `discountCents`, `couponCode`,
-  `reprintCount`, `printedAtOriginal`, `cancelNotice`, `ticketSchemaVersion`). **Sem** token, QR, e-mail ou id do provedor de pagamento. Em `kind: "TEST"` o `ticket` pode faltar.
+  `reprintCount`, `printedAtOriginal`, `cancelNotice`, `ticketSchemaVersion`). **Sem** token, QR, e-mail ou id do provedor de pagamento. Em `kind: "TEST"` o `ticket` pode faltar. **No `TEST` o cliente imprime o PRÓPRIO tíquete de teste ("TESTE DE IMPRESSÃO") e ignora todo campo de pedido do servidor** (valor, pagamento, itens, nome, telefone, endereço, observação); só o nome da loja é aproveitado (ADR-0004 §8 itens 10-11). A regra fail-safe "COBRAR NO CAIXA sem prova de pagamento" vale só para pedidos reais.
 - `leaseSeconds` é **relativo** (o cliente não confia no relógio do PC): o cliente começa a contar quando recebe a resposta. Ausente = 60.
 - Kind desconhecido (ex.: `TAB_BILL`, que é do PC-08) ⇒ o cliente responde `FAILED` com "tipo não suportado" e não imprime.
 

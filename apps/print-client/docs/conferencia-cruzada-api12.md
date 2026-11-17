@@ -23,7 +23,7 @@ Feita em 2026-11-17 contra `feat/API-12-printjob` @`1fd2622` (Postgres de teste 
 
 ## Achados
 1. **`ORDER_CANCEL_NOTICE` (corrigido no PC-03c).** A API-12 emite o aviso de cancelamento como job de tipo próprio; o cliente só conhecia `ORDER_KITCHEN`/`ORDER_REPRINT`/`TEST`, recusava com `FAILED/OTHER` e a cozinha nunca saberia do cancelamento. O ADR-0004 lista só 4 tipos (`ORDER_KITCHEN`, `ORDER_REPRINT`, `TAB_BILL`, `TEST`): o ADR deve ganhar `ORDER_CANCEL_NOTICE`.
-2. **Tíquete de teste do servidor diz "COBRAR NO CAIXA R$ 10,00".** O `buildTestTicket` manda `paymentStatus: "A_COBRAR"`, e a regra fail-safe do cliente imprime a linha de cobrança. Não é erro do cliente; sugestão ao Turing: o tíquete de teste não deve ter valor a cobrar (ou o cliente usa o tíquete de teste próprio para `kind: TEST`, decisão do Atlas).
+2. **(Resolvido no PC-03c, decisão do Atlas) Tíquete de teste do servidor dizia "COBRAR NO CAIXA R$ 10,00".** O `buildTestTicket` manda `paymentStatus: "A_COBRAR"`, e a regra fail-safe do cliente imprime a linha de cobrança. Decisão (ADR-0004 §8 item 11): o cliente imprime o próprio tíquete de teste e ignora os campos de pedido do `TEST`; o servidor manda só o mínimo.
 3. **Aviso de cancelamento sem alerta sonoro** (por decisão do contrato: só `ORDER_KITCHEN` novo toca). Se o Claudio quiser um som diferente para "cancelado", é decisão de produto.
 
 ## Não coberto

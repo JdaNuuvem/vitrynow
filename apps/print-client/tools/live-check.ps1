@@ -1,9 +1,11 @@
 # Conferencia cruzada PC-03 x API-12 (SO DEV): roda o DeviceClient REAL (UsePrintJobs) contra uma API LOCAL, com impressora virtual.
 # Compila o nucleo do print-client + tools\LiveCheck.cs e executa em memoria (Smart App Control). Nao toca producao.
 # Passo a passo e resultados: docs\conferencia-cruzada-api12.md
-# Uso: .\live-check.ps1 -Token mcd_... -OutDir <pasta> -Ledger <printed.json> -Seconds 20 [-Fault offline|nopaper]
+# TOKEN: prefira a variavel de ambiente PC_LIVE_TOKEN ou o prompt (sem eco); -Token na linha de comando fica no historico do shell:
+#   so aceitavel para chave de teste de banco DESCARTAVEL de DEV. Nunca use uma chave de loja real.
+# Uso: .\live-check.ps1 [-Token mcd_...] -OutDir <pasta> -Ledger <printed.json> -Seconds 20 [-Fault offline|nopaper]
 param(
-  [Parameter(Mandatory = $true)][string]$Token,
+  [string]$Token = "",
   [Parameter(Mandatory = $true)][string]$OutDir,
   [Parameter(Mandatory = $true)][string]$Ledger,
   [string]$BaseUrl = "http://127.0.0.1:3011",
@@ -14,6 +16,14 @@ param(
 )
 $ErrorActionPreference = "Stop"
 if (-not $ClientDir) { $ClientDir = Split-Path -Parent $PSScriptRoot }
+if (-not $Token) { $Token = $env:PC_LIVE_TOKEN }
+if (-not $Token) {
+  $sec = Read-Host "Chave de impressora de TESTE (mcd_...)" -AsSecureString
+  $Token = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+}
+if (-not $Token) { throw "informe a chave por PC_LIVE_TOKEN, prompt ou -Token (so chave de teste)" }
+$uri = [Uri]$BaseUrl
+if ($uri.Host -notin @("127.0.0.1", "localhost", "::1", "[::1]")) { throw "live-check so roda contra uma API LOCAL (127.0.0.1/localhost); recusado: $($uri.Host)" }
 . (Join-Path $ClientDir "tools\toolchain.ps1")
 $csc = Get-Csc -RoslynDir $RoslynDir
 $json = Join-Path $ClientDir "libs\Newtonsoft.Json.dll"

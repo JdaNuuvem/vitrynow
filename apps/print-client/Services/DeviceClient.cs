@@ -278,7 +278,9 @@ namespace MeuCardapio.PrintClient.Services
             }
 
             var ticket = job.Ticket;
-            if (ticket == null && kind == PrintJobDto.KindTest) ticket = new PrintableOrder { IsTest = true, Code = "TESTE" };
+            // TEST (ADR-0004 §8 item 11): o CLIENTE imprime o proprio tiquete de teste e ignora todo campo de pedido do servidor
+            // (valor, pagamento, itens); so o nome da loja e aproveitado. Assim o papel de teste nunca manda "COBRAR".
+            if (kind == PrintJobDto.KindTest) ticket = new PrintableOrder { IsTest = true, Code = "TESTE", StoreName = ticket == null ? null : ticket.StoreName };
             if (ticket == null)
             {
                 await SendJobAckAsync(job.Id, "FAILED", PrintFailure.Other, "tíquete ausente no job", token);
