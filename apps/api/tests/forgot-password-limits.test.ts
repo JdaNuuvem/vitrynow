@@ -7,7 +7,7 @@ import { makeApp, registerStore, resetDb } from "./helpers";
 // SEC-28 (ST-57, ST-58, ST-62; Sun Tzu): o "esqueci a senha" (1) não revela por TEMPO se a conta existe, (2) tem limite POR CONTA, silencioso,
 // (3) mantém um só token ativo e (4) não escreve o e-mail inteiro em log de erro.
 
-const SEND_DELAY_MS = 300; // o envio real ao provedor leva centenas de ms; em teste ele seria instantâneo e esconderia o oráculo
+const SEND_DELAY_MS = 700; // o envio real ao provedor leva centenas de ms; em teste ele seria instantâneo e esconderia o oráculo (tem de ser MAIOR que o piso de 350 ms)
 let ipSeq = 0;
 const nextIp = () => `10.77.${Math.floor(++ipSeq / 250)}.${(ipSeq % 250) + 1}`; // o limite por IP da rota (5/min) não pode atrapalhar
 
@@ -41,7 +41,7 @@ describe("forgot-password: tempo igual, limite por conta e um token ativo (SEC-2
     return { ms: performance.now() - t0, res };
   }
 
-  it("ST-57: com o envio levando 300 ms, conta existente, inexistente e limitada respondem no mesmo tempo (diferença < 35 ms) e com o mesmo corpo", async () => {
+  it("ST-57: com o envio levando 700 ms, conta existente, inexistente e limitada respondem no mesmo tempo (diferença < 35 ms) e com o mesmo corpo", async () => {
     const users = [] as { email: string }[];
     for (let i = 0; i < 4; i += 1) users.push((await registerStore(app)).credentials);
 
