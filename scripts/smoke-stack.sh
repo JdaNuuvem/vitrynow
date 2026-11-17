@@ -182,16 +182,25 @@ rm -f "$ENVF.sem"
 
 echo "== 9 limite de requisições por IP em /loja/* (SEC-26 / ST-44, ST-45, ST-48); fica no fim porque a rajada limita o IP do host por 1 min"
 # 9a visitantes DISTINTOS não se bloqueiam: 10 containers, cada um com o seu IP na rede, 100 requisições cada (< 120/min) => 0 x 429
-tot429=0
+# Os 10 clientes precisam existir AO MESMO TEMPO: containers seguidos com --rm recebem o MESMO IP (o Docker reaproveita o que acabou
+# de sair; visto em 17/11: o Caddy via um IP só e, com razão, aplicou um balde só). Por isso cada um espera 10 s antes de pedir e o
+# teste confere que os IPs são mesmo distintos; se não forem, o teste é inválido e falha dizendo isso.
+tot429=0; CIDS=()
 for n in 1 2 3 4 5 6 7 8 9 10; do
-  r="$(docker run --rm --network "${PROJ}_default" node:20-alpine node -e "
+  CIDS+=("$(docker run -d --network "${PROJ}_default" node:20-alpine node -e "
     const http=require('http');let c429=0,ok=0,i=0;
     const next=()=>{ if(i>=100){console.log(c429+' '+ok);return;} i++;
       http.get('http://caddy:80/loja/distinto-$n-'+i,r=>{ r.resume(); if(r.statusCode===429)c429++; else ok++; r.on('end',next); }).on('error',()=>{ ok++; next(); }); };
-    next();" 2>&1 | tail -1)"
+    setTimeout(next,10000);")")
+done
+ipsd="$(for c in "${CIDS[@]}"; do docker inspect -f "{{(index .NetworkSettings.Networks \"${PROJ}_default\").IPAddress}}" "$c"; done | sort -u | wc -l | tr -d ' ')"
+for c in "${CIDS[@]}"; do
+  docker wait "$c" >/dev/null; r="$(docker logs "$c" 2>&1 | tail -1)"; docker rm "$c" >/dev/null
   tot429=$((tot429 + ${r%% *}))
 done
-[ "$tot429" = 0 ] && check ok "10 IPs distintos x 100 requisições: 0 respostas 429 (visitantes diferentes não se bloqueiam)" || check fail "visitantes distintos foram limitados ($tot429 respostas 429)"
+if [ "$ipsd" != 10 ]; then check fail "teste inválido: os 10 clientes tiveram só $ipsd IPs distintos"
+elif [ "$tot429" = 0 ]; then check ok "10 IPs distintos (confirmados) x 100 requisições: 0 respostas 429 (visitantes diferentes não se bloqueiam)"
+else check fail "visitantes distintos foram limitados ($tot429 respostas 429, com $ipsd IPs distintos)"; fi
 # 9b um IP só, com X-Forwarded-For diferente a cada requisição, bate no teto
 pass=0; lim=0; ra=""
 for i in $(seq 1 150); do
@@ -264,11 +273,17 @@ docker exec "$CID" sh -c 'touch /data/.w && rm /data/.w && touch /config/.w && r
 for i in $(seq 1 20); do hs="$(docker inspect -f '{{.State.Health.Status}}' "$CID")"; [ "$hs" = healthy ] && break; sleep 3; done
 [ "$hs" = healthy ] && check ok "healthcheck do Caddy: healthy" || check fail "healthcheck do Caddy: $hs"
 # redes: o banco só existe na rede de dados (interna). Caddy e web não o enxergam; a API sim (controle positivo).
-cres="$(docker exec "$CID" nslookup postgres 2>&1 | tr -d '\r' | tr '\n' ' ')"; wres="$("${DC[@]}" exec -T web nslookup postgres 2>&1 | tr -d '\r' | tr '\n' ' ')"
-case "$cres" in *"can't resolve"*|*NXDOMAIN*|*"server can't find"*) check ok "o Caddy NÃO resolve 'postgres' (rede de dados isolada)";; *) check fail "o Caddy enxerga o banco: $cres";; esac
-case "$wres" in *"can't resolve"*|*NXDOMAIN*|*"server can't find"*) check ok "o web NÃO resolve 'postgres' (só a API fala com o banco)";; *) check fail "o web enxerga o banco: $wres";; esac
+# Prova por CONEXÃO ao IP do banco (um timeout de DNS não prova nada: o resolvedor do Docker demora a responder nomes que não conhece).
 ares="$("${DC[@]}" exec -T api node -e "require('dns').lookup('postgres',(e,a)=>console.log(e?'ERRO '+e.code:'ok '+a))" 2>&1 | tr -d '\r' | tail -1)"
 case "$ares" in ok*) check ok "controle: a API resolve 'postgres' ($ares)";; *) check fail "controle falhou: a API não resolve o banco ($ares)";; esac
+pgip="${ares#ok }"
+tcp='const s=require("net").connect({host:process.argv[1],port:5432,timeout:3000});s.on("connect",()=>{console.log("conectou");process.exit(0)});s.on("timeout",()=>{console.log("timeout");process.exit(1)});s.on("error",e=>{console.log("erro "+e.code);process.exit(1)})'
+actl="$("${DC[@]}" exec -T api node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -1)"
+[ "$actl" = conectou ] && check ok "controle: a API CONECTA ao Postgres em $pgip:5432" || check fail "controle falhou: a API não conectou ao banco ($actl)"
+wcon="$("${DC[@]}" exec -T web node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -1)"
+[ "$wcon" = conectou ] && check fail "o web CONECTA ao Postgres em $pgip:5432 (rede de dados deveria estar isolada)" || check ok "o web NÃO conecta ao Postgres ($wcon)"
+ccon="$(docker run --rm --network container:"$CID" node:20-alpine node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -1)"
+[ "$ccon" = conectou ] && check fail "o Caddy CONECTA ao Postgres em $pgip:5432 (rede de dados deveria estar isolada)" || check ok "o Caddy NÃO conecta ao Postgres ($ccon; testado dentro da rede dele)"
 # rastreabilidade (BOARD): versão, build-info (módulo e commit) e digest da imagem final
 echo "   caddy version: $(docker exec "$CID" caddy version 2>&1 | head -1)"
 echo "   módulo no binário: $(docker exec "$CID" caddy build-info 2>&1 | tr -d '\r' | grep -i 'caddy-ratelimit' | head -1)"
