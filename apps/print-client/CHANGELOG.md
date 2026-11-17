@@ -10,6 +10,7 @@ O hash do EXE de cada release sai em `tools\build-installer.ps1` e entra no mani
 - Chave de impressora protegida pelo Windows (DPAPI); chave recusada pausa a impressão e volta sozinha quando a API aceitar.
 - Faixa "N pedidos sem imprimir" fixa na janela; balão de novo pedido não some mais na hora (R12).
 - Tíquete próprio (58 e 80 mm), com sanitização do texto do cliente, bloco de pagamento e impressora virtual para teste sem papel.
+- Pedido de total zero (cupom de 100%) imprime "SEM COBRANÇA: NADA A COBRAR" em vez de "COBRAR R$ 0,00" ou "PIX - CONFERIR NA HORA", também na 2ª via.
 - Atualização automática segura (HTTPS, manifesto assinado com duas chaves, validade, hash conferido antes de executar). Desligada até a chave de release existir.
 - A atualização nunca instala sozinha: pede confirmação do lojista; chave de release protegida por senha (formato v2; chave em texto puro é recusada na assinatura).
 - Modo PrintJob (claim/ack do ADR-0004) pronto no cliente, desligado por padrão (`UsePrintJobs`); conferido contra a API-12 local (pedido, falha, 2ª via, teste, cancelamento e duas impressoras na mesma fila).

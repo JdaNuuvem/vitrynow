@@ -172,6 +172,10 @@ namespace MeuCardapio.PrintClient.Printing
             string method = (o.PaymentMethod ?? "").Trim().ToUpperInvariant();
             string total = Money(o.TotalCents);
 
+            // Total zero (cupom que cobre o pedido inteiro; B4.2, RN-CP-12, CA-CP-07/18): a decisao e pelo TOTAL, qualquer paymentStatus
+            // ou forma de pagamento, e vale tambem na 2a via. Nao imprime "COBRAR R$ 0,00" nem "PIX - CONFERIR NA HORA".
+            if (IsNothingToCharge(o)) { lines.Add("SEM COBRANÇA: NADA A COBRAR"); return lines; }
+
             // Fail-safe: "NÃO COBRAR" só com PROVA de pagamento online (paymentStatus = PAGO, ADR-0004 §6; o antigo "APROVADO" NÃO vale: não reverta esta regra, ela evita deixar de cobrar um pedido não pago). PIX sem prova
             // (ex.: pedido manual com PIX presencial) manda conferir na hora, nunca deixa de cobrar por engano.
             if (method == "PIX")
@@ -203,6 +207,22 @@ namespace MeuCardapio.PrintClient.Printing
                     break;
             }
             return lines;
+        }
+
+        // Total zero so vale como "nada a cobrar" quando e COERENTE com um desconto: total 0 com itens que valem dinheiro e SEM desconto
+        // e dado faltando (campo ausente chega como 0), nunca "nada a cobrar": ai o tiquete segue a regra normal e a pessoa confere.
+        static bool IsNothingToCharge(PrintableOrder o)
+        {
+            if (o.TotalCents != 0) return false;
+            if (o.DiscountCents.HasValue && o.DiscountCents.Value > 0) return true;
+            long itemsValue = 0;
+            foreach (var item in o.Items ?? new List<PrintableOrderItem>())
+            {
+                long extras = 0;
+                foreach (var add in item.Additionals ?? new List<PrintableOrderAdditional>()) extras += add.PriceCents;
+                itemsValue += ((long)item.UnitPriceCents + extras) * item.Quantity;
+            }
+            return itemsValue == 0;
         }
 
         // Segurança alimentar (parecer Nightingale N1): se o texto foi cortado no teto, o papel AVISA em linha própria.

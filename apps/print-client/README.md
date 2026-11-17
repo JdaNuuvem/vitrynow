@@ -242,7 +242,7 @@ valores e bloco de pagamento (B4.2). A linha do item mostra produto x quantidade
   Campos que o cliente não conhece são ignorados (cliente antigo não quebra). Valor antigo `APROVADO` **não** vale como prova: só `PAGO`.
 - **Aviso de cancelamento** (`cancelNotice: true`, CA-B4-09): imprime só "PEDIDO #n CANCELADO / NÃO PREPARAR / NÃO ENTREGAR", tipo ou mesa, cliente e hora; sem itens, valores,
   endereço, telefone ou pagamento, e **não** reimprime o tíquete original.
-- Bloco de pagamento: PIX => `PAGO ONLINE (PIX) - NÃO COBRAR`; dinheiro => `COBRAR R$ X EM DINHEIRO` (+ troco em linhas separadas); cartão (crédito/débito/VR/VA);
+- Bloco de pagamento: **total zero => `SEM COBRANÇA: NADA A COBRAR`** (cupom que cobre o pedido inteiro; decidido pelo **total**, qualquer `paymentStatus` ou forma de pagamento, inclusive na 2ª via; vale só se coerente com um desconto: total 0 com itens de valor e sem desconto é dado faltando e segue a regra normal, nunca "nada a cobrar"); PIX => `PAGO ONLINE (PIX) - NÃO COBRAR`; dinheiro => `COBRAR R$ X EM DINHEIRO` (+ troco em linhas separadas); cartão (crédito/débito/VR/VA);
   balcão sem forma => `COBRAR NO CAIXA`; mesa => `PAGAMENTO NA MESA`; sem forma => `FORMA DE PAGAMENTO NÃO INFORMADA`.
 - **Ainda não:** o *disparo* do aviso de cancelamento e da reimpressão (precisam do `PrintJob`: PC-03/API-12/API-14); o desenho já está pronto;
   bairro/referência separados do endereço, opções agrupadas (B8).

@@ -96,6 +96,30 @@ namespace MeuCardapio.PrintClient
         }
 
         // 2a via (reimpressao) de um pedido pago por PIX.
+        // Cupom de 100% (FUNC-02): itens com valor, desconto igual ao subtotal, total 0, sem forma de pagamento. O servidor continua
+        // mandando paymentStatus A_COBRAR (sem enum novo); o print-client decide pelo TOTAL (CA-CP-18).
+        internal static PrintableOrder ZeroTotal()
+        {
+            return new PrintableOrder
+            {
+                OrderId = "ord-5200", Code = "5200", Type = "BALCAO", StoreName = "Lanchonete Boa Vista",
+                CustomerName = "Rita Gomes", CustomerPhone = "(21) 97777-6666", CreatedAt = "2026-11-17T14:05:00.000Z",
+                SubtotalCents = 5000, DiscountCents = 5000, CouponCode = "TUDOGRATIS", DeliveryFeeCents = 0, TipCents = 0,
+                TotalCents = 0, PaymentMethod = null, PaymentStatus = "A_COBRAR",
+                Items = new List<PrintableOrderItem>
+                {
+                    new PrintableOrderItem { ProductName = "X-Burger", Quantity = 2, UnitPriceCents = 2500 },
+                },
+            };
+        }
+
+        internal static PrintableOrder ZeroTotalReprint()
+        {
+            var o = ZeroTotal();
+            o.ReprintCount = 1; o.PrintedAtOriginal = "2026-11-17T14:06:00Z";
+            return o;
+        }
+
         internal static PrintableOrder Reprint()
         {
             var o = Basic();
@@ -152,6 +176,7 @@ namespace MeuCardapio.PrintClient
             Limits();
             DateAndMoney();
             PaymentBlock();
+            TotalZero();
             Writer();
             Golden();
             Probe();
@@ -492,6 +517,46 @@ namespace MeuCardapio.PrintClient
                 d.Lines[last].Divider && d.Lines[last - 1].Text == "LEVAR R$ 4,00 DE TROCO" && d.Lines[last - 1].Bold && d.Lines[last - 1].Scale > 1f && d.Lines[last - 1].Align == TicketAlign.Center);
         }
 
+        // PC-19 (RN-CP-12, CA-CP-07/18): total zero imprime "SEM COBRANÇA: NADA A COBRAR", decidido pelo TOTAL.
+        static void TotalZero()
+        {
+            const string Z = "SEM COBRANÇA: NADA A COBRAR";
+            Func<PrintableOrder, string> pay = o => string.Join("|", TicketBuilder.PaymentLines(o, (o.Type ?? "").ToUpperInvariant()));
+            var z = ZeroTotal();
+            Check("total zero: a linha de pagamento e exatamente 'SEM COBRANÇA: NADA A COBRAR' (com A_COBRAR do servidor)", pay(z) == Z);
+            foreach (var st in new[] { "A_COBRAR", "PAGO", "ESTORNADO", null, "QUALQUER-COISA" })
+                foreach (var method in new[] { null, "PIX", "DINHEIRO", "CREDITO", "DEBITO", "VR", "VA" })
+                {
+                    var o = ZeroTotal(); o.PaymentStatus = st; o.PaymentMethod = method; o.ChangeForCents = method == "DINHEIRO" ? 10000 : (int?)null;
+                    Check("total zero: qualquer paymentStatus/forma (" + (st ?? "ausente") + "/" + (method ?? "nula") + ") imprime so a frase", pay(o) == Z);
+                }
+            var mesa = ZeroTotal(); mesa.Type = "MESA"; mesa.TableLabel = "12";
+            Check("total zero na MESA: tambem 'SEM COBRANÇA' (nao 'PAGAMENTO NA MESA')", pay(mesa) == Z);
+            var delivery = ZeroTotal(); delivery.Type = "DELIVERY";
+            Check("total zero em ENTREGA: 'SEM COBRANÇA' (sem 'FORMA DE PAGAMENTO NAO INFORMADA')", pay(delivery) == Z);
+            var re = ZeroTotalReprint();
+            var reTxt = TextTicketWriter.RenderText(Build(re), 32);
+            Check("total zero na 2a via: mantem '2ª VIA (1)' e a frase 'SEM COBRANÇA'", reTxt.Contains("2ª VIA (1)") && reTxt.Contains(Z));
+
+            var txt = TextTicketWriter.RenderText(Build(z), 32);
+            Check("total zero: o papel traz a frase e NENHUM 'COBRAR R$' nem 'PIX' nem 'CONFERIR'", txt.Contains(Z) && !txt.Contains("COBRAR R$") && !txt.Contains("PIX") && !txt.Contains("CONFERIR") && !txt.Contains("COBRAR NO CAIXA"));
+            Check("total zero: o TOTAL R$ 0,00 e o desconto continuam visiveis", txt.Contains("TOTAL") && txt.Contains("R$ 0,00") && txt.Contains("TUDOGRATIS"));
+
+            // taxa de entrega nao e coberta pelo cupom: total R$ 6,00 segue o fluxo normal
+            var fee = ZeroTotal(); fee.Type = "DELIVERY"; fee.DeliveryFeeCents = 600; fee.TotalCents = 600; fee.PaymentMethod = "DINHEIRO";
+            Check("entrega com taxa de R$ 6,00 e cupom de 100% (total R$ 6,00): fluxo normal, sem 'SEM COBRANÇA'", pay(fee).StartsWith("COBRAR R$ 6,00 EM DINHEIRO") && !pay(fee).Contains("SEM COBRANÇA"));
+            var normal = Basic();
+            Check("pedido normal (total > 0): nenhuma linha 'SEM COBRANÇA'", !pay(normal).Contains("SEM COBRANÇA"));
+
+            // trava de consistencia: total 0 com itens que valem dinheiro e SEM desconto e dado faltando, nunca "nada a cobrar"
+            var missing = ZeroTotal(); missing.DiscountCents = null; missing.SubtotalCents = null; missing.CouponCode = null;
+            Check("total 0 SEM desconto e com itens de valor (dado faltando): NAO diz 'nada a cobrar'", !pay(missing).Contains("SEM COBRANÇA"));
+            var missing2 = ZeroTotal(); missing2.DiscountCents = 0;
+            Check("total 0 com desconto 0 e itens de valor: NAO diz 'nada a cobrar'", !pay(missing2).Contains("SEM COBRANÇA"));
+            var empty = new PrintableOrder { OrderId = "e", Code = "1", Type = "BALCAO", TotalCents = 0, Items = new List<PrintableOrderItem>() };
+            Check("pedido sem itens e total 0: 'SEM COBRANÇA' (nada a cobrar de fato)", pay(empty) == Z);
+        }
+
         static void Writer()
         {
             foreach (var fixture in new[] { Basic(), CurrentContract(), LongAndHostile(), ManyItems(), Reprint(), Quantities() })
@@ -526,6 +591,7 @@ namespace MeuCardapio.PrintClient
             {
                 { "basico", Basic() }, { "contrato-atual", CurrentContract() }, { "longo-emoji-hostil", LongAndHostile() },
                 { "muitos-itens", ManyItems() }, { "segunda-via", Reprint() }, { "quantidades", Quantities() }, { "cancelamento", CancelFixture() },
+                { "total-zero", ZeroTotal() }, { "total-zero-segunda-via", ZeroTotalReprint() },
             };
             foreach (var kv in fixtures)
             {
