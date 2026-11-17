@@ -116,6 +116,45 @@ describe("API-12b — modo de impressão e virada", () => {
     expect(json(c)).toEqual({ job: null, mode: "LEGACY" });
   });
 
+  it("X-Print-Mode em TODA resposta autenticada de /api/device/* (inclusive 409 e erros do próprio handler) e `mode` no corpo de /pending; o cabeçalho vem da loja do token", async () => {
+    const a = await setup();
+    const b = await setup();
+    await setMode(b, "QUEUE");
+    const idA = await order(a);
+    const get = (ctx: Ctx, url: string, extra: Record<string, string> = {}) => app.inject({ method: "GET", url, headers: { ...bearer(ctx.token), ...extra } });
+
+    // LEGACY: lista com o pedido + modo no corpo; cabeçalho LEGACY
+    const pendA = await pending(a);
+    expect(json(pendA)).toEqual({ orders: [{ id: idA, code: expect.any(String) }], mode: "LEGACY" });
+    expect(pendA.headers["x-print-mode"]).toBe("LEGACY");
+    expect((await get(a, `/api/device/orders/${idA}/printable`)).headers["x-print-mode"]).toBe("LEGACY");
+    expect((await get(a, "/api/device/orders/inexistente/printable")).headers["x-print-mode"]).toBe("LEGACY"); // até no 404
+
+    // QUEUE: corpo { orders: [], mode } (formato antigo preservado: `orders` continua array) e cabeçalho QUEUE, também no 409
+    const pendB = await pending(b);
+    expect(json(pendB)).toEqual({ orders: [], mode: "QUEUE" });
+    expect(Array.isArray(json(pendB).orders)).toBe(true);
+    expect(pendB.headers["x-print-mode"]).toBe("QUEUE");
+    const idB = await order(b);
+    const conflito = await get(b, `/api/device/orders/${idB}/printable`);
+    expect([conflito.statusCode, conflito.headers["x-print-mode"]]).toEqual([409, "QUEUE"]);
+    expect((await claim(b)).headers["x-print-mode"]).toBe("QUEUE");
+    expect((await get(b, "/api/device/config")).headers["x-print-mode"]).toBe("QUEUE");
+
+    // o cabeçalho é da loja do TOKEN: nada que o cliente mande (cabeçalho, query) o muda; e a virada aparece no ciclo seguinte
+    expect((await get(a, "/api/device/config?mode=QUEUE", { "x-print-mode": "QUEUE" })).headers["x-print-mode"]).toBe("LEGACY");
+    await setMode(a, "QUEUE");
+    expect((await pending(a)).headers["x-print-mode"]).toBe("QUEUE");
+
+    // sem token válido não há loja: 401 SEM o cabeçalho (nada vaza de loja nenhuma)
+    const semToken = await app.inject({ method: "GET", url: "/api/device/orders/pending" });
+    expect([semToken.statusCode, semToken.headers["x-print-mode"]]).toEqual([401, undefined]);
+    const tokenRuim = await app.inject({ method: "GET", url: "/api/device/orders/pending", headers: bearer("token-que-nao-existe") });
+    expect([tokenRuim.statusCode, tokenRuim.headers["x-print-mode"]]).toEqual([401, undefined]);
+    // rotas do painel não ganham o cabeçalho
+    expect((await app.inject({ method: "GET", url: "/api/store/print-mode", headers: { cookie: a.owner } })).headers["x-print-mode"]).toBeUndefined();
+  });
+
   it("o 409 MODE_QUEUE tem mensagem FIXA e nenhum dado de pedido/loja", async () => {
     const ctx = await setup();
     const id = await order(ctx, { type: "DELIVERY", customerName: "Ana Sigilosa", customerPhone: "11987654321", address: "Rua Sigilosa, 777" });
@@ -141,7 +180,7 @@ describe("API-12b — modo de impressão e virada", () => {
     const r = await claim(ctx);
     expect(json(r).mode).toBe("QUEUE");
     expect(json(r).job).toMatchObject({ kind: "ORDER_KITCHEN", ticket: { orderId: id } });
-    expect(json(await pending(ctx))).toEqual({ orders: [] });
+    expect(json(await pending(ctx))).toMatchObject({ orders: [] });
     const printable = await app.inject({ method: "GET", url: `/api/device/orders/${id}/printable`, headers: bearer(ctx.token) });
     expect([printable.statusCode, json(printable).code]).toEqual([409, "MODE_QUEUE"]);
     const printed = await app.inject({ method: "POST", url: `/api/device/orders/${id}/printed`, headers: bearer(ctx.token) });
@@ -157,7 +196,7 @@ describe("API-12b — modo de impressão e virada", () => {
     expect((await app.inject({ method: "POST", url: `/api/device/orders/${id}/printed`, headers: bearer(ctx.token) })).statusCode).toBe(200);
     expect((await prisma.order.findUniqueOrThrow({ where: { id } })).printedAt).not.toBeNull();
     expect((await kitchenJobs(id))[0]).toMatchObject({ status: "PRINTED", ackStatus: "PRINTED" });
-    expect(json(await pending(ctx))).toEqual({ orders: [] });
+    expect(json(await pending(ctx))).toMatchObject({ orders: [] });
     // e a virada logo depois NÃO reimprime: nada a reconciliar
     const virada = json(await setMode(ctx, "QUEUE"));
     expect(virada.reconciled).toEqual({ closedPendingJobs: 0, createdJobs: 0, markedOrdersPrinted: 0 });
@@ -276,7 +315,7 @@ describe("API-12b — modo de impressão e virada", () => {
     expect(r.statusCode, r.body).toBe(200);
     expect((await kitchenJobs(id))[0].status).toBe("PRINTED");
     expect((await prisma.order.findUniqueOrThrow({ where: { id } })).printedAt).not.toBeNull(); // o legado não reimprime
-    expect(json(await pending(ctx))).toEqual({ orders: [] });
+    expect(json(await pending(ctx))).toMatchObject({ orders: [] });
   });
 
   // ───────────── Janela entre impressoras (ADR-0004 §8 item 14) ─────────────
@@ -293,7 +332,7 @@ describe("API-12b — modo de impressão e virada", () => {
     expect(await modeOf(ctx.storeId)).toBe("QUEUE");
     expect((await kitchenJobs(id))[0].status).toBe("CLAIMED");
     // a lista legada segue vazia e o job segue do dono: nada foi tocado
-    expect(json(await pending(ctx))).toEqual({ orders: [] });
+    expect(json(await pending(ctx))).toMatchObject({ orders: [] });
     // com o ack, o recuo passa
     await app.inject({ method: "POST", url: `/api/device/print-jobs/${job.id}/ack`, headers: bearer(ctx.token), payload: { status: "PRINTED" } });
     expect((await setMode(ctx, "LEGACY")).statusCode).toBe(200);
@@ -365,7 +404,7 @@ describe("API-12b — modo de impressão e virada", () => {
     expect((await kitchenJobs(id))[0]).toMatchObject({ status: "PRINTED", ackStatus: "PRINTED" });
     expect((await prisma.order.findUniqueOrThrow({ where: { id } })).printedAt).not.toBeNull();
     expect((await printed(ctx, id)).statusCode).toBe(200); // repetido
-    expect(json(await pending(ctx))).toEqual({ orders: [] }); // a lista legada continua vazia em QUEUE
+    expect(json(await pending(ctx))).toMatchObject({ orders: [] }); // a lista legada continua vazia em QUEUE
     expect(json(await claim(ctx)).job).toBeNull(); // a fila não reimprime
     const pr = await app.inject({ method: "GET", url: `/api/device/orders/${id}/printable`, headers: bearer(ctx.token) });
     expect([pr.statusCode, json(pr).code]).toEqual([409, "MODE_QUEUE"]); // só o ACK é aceito

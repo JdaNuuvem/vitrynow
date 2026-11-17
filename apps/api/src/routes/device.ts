@@ -14,13 +14,16 @@ const deviceRoutes: FastifyPluginAsync = async (app) => {
   app.get("/api/device/orders/pending", { preHandler: app.requireDeviceAuth }, async (request) => {
     const storeId = request.deviceStoreId!;
     // Em QUEUE a lista legada vem VAZIA: quem imprime é a fila (o servidor impede a impressão em dobro).
-    if ((await loadPrintMode(prisma, storeId)) === "QUEUE") return { orders: [] };
+    // O corpo também diz o modo: o cliente legado já chama esta rota a cada ciclo, então descobre a fila sem requisição extra
+    // (clientes antigos ignoram o campo novo; o formato `{ orders }` não mudou).
+    const mode = await loadPrintMode(prisma, storeId);
+    if (mode === "QUEUE") return { orders: [], mode };
     const orders = await prisma.order.findMany({
       where: { storeId, printedAt: null, status: { not: "CANCELADO" }, awaitingPayment: false },
       orderBy: { createdAt: "asc" },
       select: { id: true, code: true },
     });
-    return { orders };
+    return { orders, mode };
   });
 
   app.get("/api/device/orders/:id/printable", { preHandler: app.requireDeviceAuth }, async (request, reply) => {

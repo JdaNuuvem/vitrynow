@@ -120,13 +120,20 @@ const authPlugin: FastifyPluginAsync = async (app) => {
       return;
     }
     // NG-06: o banco guarda só o hash; busca por índice único do hash do que chegou.
-    const deviceToken = await prisma.deviceToken.findUnique({ where: { tokenHash: hashToken(token) } });
+    // O modo de impressão da loja vem na MESMA consulta (sem ida extra ao banco) para o cabeçalho abaixo.
+    const deviceToken = await prisma.deviceToken.findUnique({
+      where: { tokenHash: hashToken(token) },
+      include: { store: { select: { printMode: true } } },
+    });
     if (!deviceToken || deviceToken.revokedAt) {
       reply.code(401).send({ error: "token de dispositivo inválido" });
       return;
     }
     request.deviceStoreId = deviceToken.storeId;
     request.deviceTokenId = deviceToken.id;
+    // Cinto barato (ADR-0004 §8.12): o modo da LOJA DO TOKEN vai em todas as respostas autenticadas de /api/device/*, inclusive 409.
+    // Valor de lista fechada vindo do banco; cliente que não conhece o cabeçalho o ignora.
+    reply.header("X-Print-Mode", deviceToken.store.printMode);
 
     // Heartbeat: não bloqueia a resposta — serve só pro painel saber se a impressora está
     // online (last seen), não é crítico se uma atualização ocasional se perder.
