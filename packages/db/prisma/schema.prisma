@@ -116,6 +116,7 @@ model Store {
   auditLogs    AuditLog[]
   deviceAlerts DeviceAlert[]
   subscription Subscription?
+  paymentAccounts PaymentAccount[]
   counter      StoreCounter?
   printJobs    PrintJob[]
   printMode    PrintMode @default(LEGACY) // modo de impressão decidido pelo SERVIDOR por loja (ADR-0004 §8.12)
@@ -298,6 +299,52 @@ model OrderItemAdditional {
   @@index([orderItemId])
 }
 
+// ---- API-07 (ADR-0001): PIX por loja via OAuth do Mercado Pago. Tokens SEMPRE cifrados (lib/paymentCrypto.ts). ----
+
+enum PaymentAccountStatus {
+  CONNECTED
+  NEEDS_RECONNECT // renovação falhou ou o provedor revogou: o PIX some do checkout e o dono é avisado
+  DISCONNECTED // histórico: sem tokens; pagamentos já criados com ela seguem resolvíveis pelo accountId do Payment
+}
+
+// Uma conta ativa (CONNECTED/NEEDS_RECONNECT) por loja e um vendedor do provedor em uma só loja: índices únicos PARCIAIS
+// na migração (o Prisma não os expressa). A conta anterior vira DISCONNECTED e fica no histórico (D1-2).
+model PaymentAccount {
+  id              String               @id @default(cuid())
+  storeId         String
+  store           Store                @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  provider        String               @default("mercadopago")
+  sellerUserId    String // id do vendedor no provedor (nunca vai a resposta, log ou auditoria sem máscara)
+  status          PaymentAccountStatus @default(CONNECTED)
+  accessTokenEnc  String? // `v1.<keyId>.<iv>.<tag>.<ct>`; null depois de desconectar (apagado, não só marcado)
+  refreshTokenEnc String?
+  expiresAt       DateTime? // fim do access_token
+  connectedAt     DateTime             @default(now())
+  disconnectedAt  DateTime?
+  lastRefreshAt   DateTime?
+  refreshFailures Int                  @default(0)
+  lastError       String? // texto curto, sem dado sensível
+  payments        Payment[]
+
+  @@unique([id, storeId])
+  @@index([storeId, status])
+  @@index([status, expiresAt])
+}
+
+// `state` do OAuth: só o HASH fica no banco, uso único, expira em minutos, preso à loja, ao usuário e à sessão (D1-1).
+model PaymentOAuthState {
+  id        String    @id @default(cuid())
+  storeId   String
+  userId    String
+  sid       String // sessão que iniciou a conexão
+  stateHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([expiresAt])
+}
+
 model OrderStatusHistory {
   id        String      @id @default(cuid())
   orderId   String
@@ -397,6 +444,8 @@ model Payment {
   lastRawStatus     String?
   lastCheckedAt     DateTime?
   reconcileNote     String? // estorno feito mas o pedido já estava finalizado: conciliação manual (nunca silencioso)
+  paymentAccountId  String? // conta do vendedor que criou a cobrança (API-07); pagamento antigo/da plataforma = null
+  paymentAccount    PaymentAccount? @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
