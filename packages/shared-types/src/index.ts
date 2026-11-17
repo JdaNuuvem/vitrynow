@@ -212,17 +212,21 @@ export type CreateCashMovementInput = z.infer<typeof createCashMovementSchema>;
 export const couponDiscountTypeSchema = z.enum(["PERCENT", "FIXED"]);
 
 export const createCouponSchema = z.object({
+  // RN-CP-08: 3 a 20 caracteres, só letras sem acento, números, hífen e sublinhado; guardado em maiúsculas.
   code: z
     .string()
-    .min(1)
-    .max(50)
-    .transform((v) => v.trim().toUpperCase()),
+    .transform((v) => v.trim().toUpperCase())
+    .pipe(z.string().regex(/^[A-Z0-9_-]{3,20}$/, "use de 3 a 20 caracteres: letras sem acento, números, hífen ou sublinhado")),
   discountType: couponDiscountTypeSchema,
   discountValue: z.number().int().positive().max(100_000_000),
   active: z.boolean().optional(),
   maxUses: z.number().int().positive().optional(),
   minOrderCents: z.number().int().nonnegative().max(100_000_000).optional(),
-  expiresAt: z.string().datetime().optional(),
+  // Validade: "AAAA-MM-DD" (vale até 23:59 desse dia, no fuso da loja) ou um instante ISO. Que não seja passado é regra do servidor.
+  expiresAt: z
+    .string()
+    .refine((v) => /^\d{4}-\d{2}-\d{2}$/.test(v) || !Number.isNaN(Date.parse(v)), "data inválida")
+    .optional(),
 });
 export type CreateCouponInput = z.infer<typeof createCouponSchema>;
 

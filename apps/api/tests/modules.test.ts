@@ -74,7 +74,7 @@ describe("módulos em camadas — contrato HTTP", () => {
     expect(json(created).coupon.code).toBe("PROMO10");
     const duplicate = await call("POST", "/api/coupons", { code: "PROMO10", discountType: "FIXED", discountValue: 500 });
     expect(duplicate.statusCode).toBe(409);
-    expect(json(duplicate).error).toBe("já existe um cupom com este código");
+    expect(json(duplicate)).toMatchObject({ code: "COUPON_CODE_TAKEN", error: "Já existe um cupom com esse código." });
   });
 
   it("entregador: atribuir a pedido inexistente é 404 e nada quebra", async () => {

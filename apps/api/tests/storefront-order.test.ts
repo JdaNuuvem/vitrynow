@@ -87,7 +87,7 @@ describe("pedido no storefront + cupom", () => {
       payload: { type: "BALCAO", items: [{ productId, quantity: 1 }], couponCode: "unico" },
     });
     expect(second.statusCode).toBe(400);
-    expect(JSON.parse(second.body).error).toMatch(/esgotado/);
+    expect(JSON.parse(second.body)).toMatchObject({ code: "COUPON_EXHAUSTED", error: "Esse cupom acabou." });
   });
 
   it("falha de PIX (sem MP_ACCESS_TOKEN em teste) cancela o pedido SEM apagá-lo e devolve o uso do cupom", async () => {
