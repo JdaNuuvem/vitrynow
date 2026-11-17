@@ -28,7 +28,7 @@ import noticeRoutes from "./routes/notices";
 import mfaRoutes from "./routes/mfa";
 import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
 import { clientKey } from "./lib/clientKey";
-import { loggerOptions, redactLogUrl } from "./lib/logging";
+import { isPrismaError, loggerOptions, redactLogUrl } from "./lib/logging";
 import { ORDER_TOKEN_HEADER } from "./lib/orderToken";
 import jobsPlugin from "./jobs/plugin";
 
@@ -47,6 +47,20 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   // (token, code e state do OAuth incluídos). Mesmo corpo de resposta, sem esse log e com os valores sensíveis trocados.
   app.setNotFoundHandler((request, reply) => {
     reply.code(404).send({ message: `Route ${request.method}:${redactLogUrl(request.url)} not found`, error: "Not Found", statusCode: 404 });
+  });
+
+  // SEC-31 (ST-71): erro 5xx (e QUALQUER erro do Prisma) nunca vai para o log nem para a resposta com `message`/`stack`: a mensagem do Prisma
+  // renderiza a chamada com os VALORES dos argumentos (nome, e-mail, telefone, endereço) e o caminho do arquivo do servidor. O log leva o erro
+  // reduzido (`safeError`: código, tabela/campo, operação) com mensagem FIXA; o cliente recebe um corpo genérico. Erros abaixo de 500 (validação,
+  // limite de taxa) seguem o tratamento padrão do Fastify. Os tratadores de DomainError dos módulos delegam para cá com `reply.send(error)`.
+  app.setErrorHandler((error, request, reply) => {
+    const status = (error as { statusCode?: number }).statusCode;
+    if (isPrismaError(error) || status === undefined || status >= 500) {
+      const code = status !== undefined && status >= 500 ? status : 500;
+      request.log.error({ req: request, err: error }, "erro interno não tratado"); // `req` = método, MODELO da rota e query redigida
+      return reply.code(code).send({ statusCode: code, error: "Internal Server Error", message: "Erro interno do servidor" });
+    }
+    return reply.send(error);
   });
 
   app.register(cors, {

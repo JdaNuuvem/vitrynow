@@ -282,10 +282,10 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         payment: { pixQrCode: pix.pixQrCode, pixQrCodeBase64: pix.pixQrCodeBase64, expiresAt: pix.expiresAt },
       });
     } catch (error) {
-      app.log.error(error);
+      app.log.error({ err: error }, "falha ao gerar o pagamento PIX do pedido");
       // O pedido NÃO é apagado (auditoria): vira CANCELADO com motivo e o cupom volta pelo fluxo de cancelamento.
       // Se o provedor chegou a criar a cobrança, o webhook/conciliação a encontra pela referência e estorna.
-      await orderService.cancelBySystem(store.id, order.id, "PAGAMENTO_NAO_APROVADO", "SYSTEM").catch((cancelError) => app.log.error(cancelError));
+      await orderService.cancelBySystem(store.id, order.id, "PAGAMENTO_NAO_APROVADO", "SYSTEM").catch((cancelError) => app.log.error({ err: cancelError }, "falha ao cancelar o pedido após erro no PIX"));
       return reply.code(502).send({ error: "não foi possível gerar o pagamento PIX, tente novamente" });
     }
     },
