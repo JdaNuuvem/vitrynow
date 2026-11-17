@@ -337,7 +337,7 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
         const [row] = json(res).rows;
         expect(row.customerPhone).toBe("*******4321");
         expect(Object.keys(row).sort()).toEqual(
-          ["code", "createdAt", "customerName", "customerPhone", "display", "hasPhone", "id", "notPrinted", "paymentMethod", "paymentStatus", "refundPending", "status", "totalCents", "type"].sort(),
+          ["anonymized", "code", "createdAt", "customerName", "customerPhone", "display", "hasPhone", "id", "notPrinted", "paymentMethod", "paymentStatus", "refundPending", "status", "totalCents", "type"].sort(),
         );
       }
     });

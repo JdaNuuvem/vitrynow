@@ -358,6 +358,26 @@ export const createFeedbackSchema = z.object({
 });
 export type CreateFeedbackInput = z.infer<typeof createFeedbackSchema>;
 
+// ---- Privacidade: anonimizar cliente (API-52, RN-PV-01..10) ----
+// Motivo por CÓDIGO, nunca texto livre (a auditoria não pode guardar dado pessoal): quem pediu a anonimização.
+export const ANONYMIZE_REASONS = ["HOLDER_REQUEST", "STORE_DECISION", "ACCOUNT_CLOSURE"] as const;
+export const anonymizeTargetSchema = z
+  .object({
+    phone: z.string().trim().min(8).max(30).optional(),
+    orderCode: z.string().trim().min(1).max(20).optional(),
+  })
+  .refine((v) => Boolean(v.phone) !== Boolean(v.orderCode), { message: "Informe o telefone OU o código do pedido." });
+export const anonymizeCustomerSchema = z
+  .object({
+    phone: z.string().trim().min(8).max(30).optional(),
+    orderCode: z.string().trim().min(1).max(20).optional(),
+    reason: z.enum(ANONYMIZE_REASONS),
+    // A confirmação REPETE o efeito: quantos pedidos o dono viu na prévia. Se o número mudou, nada é feito (409).
+    expectedOrders: z.number().int().min(1).max(10_000),
+  })
+  .refine((v) => Boolean(v.phone) !== Boolean(v.orderCode), { message: "Informe o telefone OU o código do pedido." });
+export type AnonymizeCustomerInput = z.infer<typeof anonymizeCustomerSchema>;
+
 // ---- Loja disponível/fechada ----
 
 export const storeAvailabilitySchema = z.object({ acceptingOrders: z.boolean() });
@@ -380,7 +400,7 @@ export type CreateNoticeInput = z.infer<typeof createNoticeSchema>;
 
 // ---- Confirmação de segurança (MFA por e-mail) ----
 
-export const MFA_PURPOSES = ["refund", "change_password", "delete_user"] as const;
+export const MFA_PURPOSES = ["refund", "change_password", "delete_user", "anonymize_customer"] as const;
 export const mfaPurposeSchema = z.enum(MFA_PURPOSES);
 export type MfaPurpose = z.infer<typeof mfaPurposeSchema>;
 
