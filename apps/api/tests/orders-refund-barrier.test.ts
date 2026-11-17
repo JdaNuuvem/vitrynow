@@ -19,6 +19,11 @@ const refundPayment = vi.mocked(mp.refundPayment);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const ROUNDS = 6;
 
+// Estes testes fazem várias rodadas completas (pedido + pagamento + barreira de 700 ms + estorno) e o tempo total varia de
+// 8 s a 45 s conforme a carga da máquina (medido pelo Hopper): com o limite padrão de 15 s passavam ou falhavam "por sorte".
+// O limite é só deste arquivo; o que cada teste afirma não mudou.
+vi.setConfig({ testTimeout: 120_000 });
+
 describe("C5 — estorno × pedido, com barreira de linha", () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
