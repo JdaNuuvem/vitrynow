@@ -20,6 +20,11 @@ const casos: [string, string, string][] = [
   ["URL com userinfo em https", "falha em https://usuario:SEGREDO-13b@api.exemplo.com/v1", "SEGREDO-13b"],
   ["refresh_token em JSON com espaço", '{ "refresh_token" : "SEGREDO-14abc" }', "SEGREDO-14abc"],
   ["Cookie com CRLF e duas linhas", "Cookie: a=SEGREDO-15\r\nCookie: b=SEGREDO-16", "SEGREDO-16"],
+  // SEC-33e: nomes em camelCase (corpo da API-52a e da redefinição) em texto
+  ["currentPassword em JSON (API-52a)", '{"currentPassword":"SEGREDO-17","expectedOrders":2}', "SEGREDO-17"],
+  ["newPassword em JSON (redefinição)", '{"newPassword":"SEGREDO-18"}', "SEGREDO-18"],
+  ["currentPassword com espaço e sem aspas", "currentPassword: minha frase SEGREDO-19 fim", "SEGREDO-19"],
+  ["accessToken e clientSecret camelCase", 'falha {"accessToken":"SEGREDO-20","clientSecret":"SEGREDO-21"}', "SEGREDO-21"],
 ];
 
 describe("SEC-33d: formatos de segredo em texto que ainda passavam", () => {
