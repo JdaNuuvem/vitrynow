@@ -68,6 +68,8 @@ namespace MeuCardapio.PrintClient.Models
     public class PendingOrdersResponse
     {
         [JsonProperty("orders")] public List<PendingOrderRef> Orders { get; set; } = new List<PendingOrderRef>();
+        // API-12b: o modo da loja tambem vai no corpo da lista legada ("LEGACY" | "QUEUE"); ausente (API antiga) = null.
+        [JsonProperty("mode")] public string Mode { get; set; }
     }
 
     public class PrintableOrderResponse
