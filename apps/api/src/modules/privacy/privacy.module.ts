@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@meucardapio/db";
 import { anonymizeCustomerSchema, anonymizeTargetSchema } from "@meucardapio/shared-types";
 import { useDomainErrors } from "../../shared/errors";
+import { AccountAttemptCap } from "../../lib/accountAttemptCap";
 import { LoginThrottle } from "../../lib/loginThrottle";
 import { mfaEnforced } from "../../lib/mfa";
 import { mfaProofAccepted } from "../../lib/mfaGate";
@@ -22,6 +23,8 @@ const actorOf = (request: FastifyRequest): PrivacyActor => ({ storeId: request.u
  * IP, bloqueio progressivo, em memória por instância; mover ao banco antes de 2+ instâncias) e NUNCA é registrada.
  */
 const reauthThrottle = new LoginThrottle();
+// E um teto por CONTA, de qualquer IP: a ameaça é sessão roubada, e quem a tem troca de IP (10 tentativas por 15 min).
+const reauthAccountCap = new AccountAttemptCap(10, 15 * 60 * 1000);
 
 async function reauthorize(request: FastifyRequest, reply: FastifyReply, currentPassword: string | undefined): Promise<boolean> {
   if (mfaEnforced()) {
@@ -29,19 +32,33 @@ async function reauthorize(request: FastifyRequest, reply: FastifyReply, current
     reply.code(403).send({ error: "Confirmação de segurança necessária.", code: "MFA_REQUIRED", purpose: "anonymize_customer" });
     return false;
   }
+  // Senha AUSENTE não gasta tentativa (RN-PV-28): só a senha ERRADA conta. A tela nem envia sem o campo preenchido.
+  if (!currentPassword) {
+    reply.code(403).send({ error: "Digite sua senha para confirmar.", code: "REAUTH_REQUIRED" });
+    return false;
+  }
   const user = await prisma.user.findUnique({ where: { id: request.user.userId }, select: { email: true, passwordHash: true } });
   const key = user?.email ?? request.user.userId;
-  const slot = reauthThrottle.reserve(key, request.ip); // síncrono: a tentativa é contada ANTES do bcrypt
+  // Duas reservas SÍNCRONAS, antes do bcrypt: por (conta, IP) e por CONTA (qualquer IP). Negada ⇒ 429 SEM testar a senha, mesmo certa.
+  const accountKey = `reauth:${request.user.userId}`;
+  const cap = reauthAccountCap.reserve(accountKey);
+  if (!cap.allowed) {
+    reply.header("Retry-After", String(cap.retryAfterSeconds)).code(429).send({ error: "Muitas tentativas. Aguarde um pouco e tente de novo.", code: "RATE_LIMITED" });
+    return false;
+  }
+  const slot = reauthThrottle.reserve(key, request.ip);
   if (!slot.allowed) {
+    reauthAccountCap.succeed(accountKey); // a tentativa negada pelo par não consome o teto da conta
     reply.header("Retry-After", String(slot.retryAfterSeconds)).code(429).send({ error: "Muitas tentativas. Aguarde um pouco e tente de novo.", code: "RATE_LIMITED" });
     return false;
   }
-  const ok = await bcrypt.compare(currentPassword ?? "", user?.passwordHash ?? DUMMY_HASH);
-  if (!ok || !currentPassword || !user) {
-    reply.code(403).send({ error: currentPassword ? "Senha incorreta." : "Digite sua senha para confirmar.", code: currentPassword ? "PASSWORD_INVALID" : "REAUTH_REQUIRED" });
+  const ok = await bcrypt.compare(currentPassword, user?.passwordHash ?? DUMMY_HASH);
+  if (!ok || !user) {
+    reply.code(403).send({ error: "Senha incorreta.", code: "PASSWORD_INVALID" });
     return false;
   }
   reauthThrottle.succeed(key, request.ip);
+  reauthAccountCap.succeed(accountKey);
   return true;
 }
 
@@ -55,7 +72,8 @@ const privacyRoutes: FastifyPluginAsync = async (app) => {
   app.post("/api/privacy/anonymize/preview", { preHandler: [app.requirePanelAuth, app.requireOwner], config: limit }, async (request, reply) => {
     const parsed = anonymizeTargetSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Informe o telefone OU o código do pedido.", code: "VALIDATION_ERROR" });
-    return privacyService.preview(actorOf(request), parsed.data);
+    // `reauth`: qual confirmação a execução vai pedir (a tela mostra só a certa): código MFA quando a MFA está ativa, senão a senha atual.
+    return { ...(await privacyService.preview(actorOf(request), parsed.data)), reauth: mfaEnforced() ? ("MFA" as const) : ("PASSWORD" as const) };
   });
 
   // Execução: irreversível. OWNER, reautenticação (MFA ou senha), motivo por código e a confirmação repete o efeito (`expectedOrders`).
