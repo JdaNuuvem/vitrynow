@@ -1,5 +1,6 @@
 import { Prisma, type prisma as prismaClient } from "@meucardapio/db";
 import { FINAL_STATUSES } from "../../lib/orderStateMachine";
+import { utc } from "../../lib/sqlTime";
 import { decodeCursor, encodeCursor } from "./orders.history";
 
 type Db = typeof prismaClient;
@@ -34,7 +35,7 @@ export async function closedTodayIds(
   const keyset = cursor
     ? (() => {
         const c = decodeCursor(cursor);
-        return Prisma.sql`WHERE ("closedAt", "id") < (${new Date(c.t)}, ${c.id})`;
+        return Prisma.sql`WHERE ("closedAt", "id") < (${utc(new Date(c.t))}, ${c.id})`;
       })()
     : Prisma.empty;
   const rows = await db.$queryRaw<{ id: string; closedAt: Date }[]>(Prisma.sql`
@@ -42,13 +43,13 @@ export async function closedTodayIds(
       SELECT o."id", max(h."createdAt") AS "closedAt"
       FROM "OrderStatusHistory" h
       JOIN "Order" o ON o."id" = h."orderId"
-      WHERE h."status" IN (${FINAL_SQL}) AND h."createdAt" >= ${todayStart}
+      WHERE h."status" IN (${FINAL_SQL}) AND h."createdAt" >= ${utc(todayStart)}
         AND o."storeId" = ${storeId} AND o."awaitingPayment" = false AND o."status" IN (${FINAL_SQL})
       GROUP BY o."id"
       UNION ALL
       SELECT o."id", o."createdAt" AS "closedAt"
       FROM "Order" o
-      WHERE o."storeId" = ${storeId} AND o."awaitingPayment" = false AND o."status" IN (${FINAL_SQL}) AND o."createdAt" >= ${todayStart}
+      WHERE o."storeId" = ${storeId} AND o."awaitingPayment" = false AND o."status" IN (${FINAL_SQL}) AND o."createdAt" >= ${utc(todayStart)}
         AND NOT EXISTS (SELECT 1 FROM "OrderStatusHistory" h WHERE h."orderId" = o."id" AND h."status" IN (${FINAL_SQL}))
     ) closed
     ${keyset}
