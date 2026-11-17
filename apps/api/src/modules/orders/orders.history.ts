@@ -2,7 +2,7 @@ import { Prisma, type prisma as prismaClient } from "@meucardapio/db";
 import { HISTORY_PERIODS, HISTORY_STATUS_FILTERS } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
 import { parseLocalDate, safeTimeZone, startOfStoreDay } from "../../lib/storeTime";
-import { maskPhone, RECENT_WINDOW_MS } from "./orders.view";
+import { maskPhone, recentWindowCutoff } from "./orders.view";
 import { utc } from "../../lib/sqlTime";
 import type { Role } from "../../lib/orderStateMachine";
 
@@ -174,8 +174,9 @@ export async function searchOrderHistory(
       if (role === "OWNER") any.push(phoneLike);
       else {
         // STAFF: mesma janela do contato completo (aberto, ou última mudança de estado há menos de 24 h). Pedido antigo não é achado por telefone.
-        const cutoff = new Date(now.getTime() - RECENT_WINDOW_MS);
-        any.push(Prisma.sql`(${phoneLike} AND (o."status" IN (${OPEN_SQL}) OR (SELECT max(h."createdAt") FROM "OrderStatusHistory" h WHERE h."orderId" = o."id") >= ${utc(cutoff)}))`);
+        // Mesma fronteira do detalhe (`isWithinRecentWindow`): idade < 24 h, ou seja, ESTRITAMENTE depois do corte. Ver a regra de revisão em orders.view.ts.
+        const cutoff = recentWindowCutoff(now);
+        any.push(Prisma.sql`(${phoneLike} AND (o."status" IN (${OPEN_SQL}) OR (SELECT max(h."createdAt") FROM "OrderStatusHistory" h WHERE h."orderId" = o."id") > ${utc(cutoff)}))`);
       }
     }
     where.push(any.length ? Prisma.sql`(${Prisma.join(any, " OR ")})` : Prisma.sql`false`);

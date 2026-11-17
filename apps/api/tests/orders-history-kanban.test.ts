@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { prisma } from "@meucardapio/db";
 import { HISTORY_PHONE_RATE_LIMIT, HISTORY_RATE_LIMIT, assertHistoryRate, assertPhoneSearchRate, foldText, parseSearch, recordPhoneRefusal, resetHistoryRate, resolvePeriod } from "../src/modules/orders/orders.history";
 import { OrderService } from "../src/modules/orders/orders.service";
+import { contactAccessFor, isWithinRecentWindow, RECENT_WINDOW_MS } from "../src/modules/orders/orders.view";
 import { prismaAuditLogger, type AuditLogger } from "../src/shared/audit";
 import { startOfStoreDay } from "../src/lib/storeTime";
 import { buildPrintableOrder } from "../src/lib/printable";
@@ -405,6 +406,32 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
       }
       // o STAFF continua achando o pedido antigo pelo NOME e pelo CÓDIGO (só o telefone tem a janela)
       expect((await busca(ctx.staff, "antigo")).rows.map((r: { id: string }) => r.id)).toEqual([antigo]);
+    });
+
+    it("fronteira de 24 h EXATA: a busca por telefone do STAFF e o contato do detalhe usam a MESMA regra (idade < 24 h); exatamente 24 h já é antigo nos dois", async () => {
+      const ctx = await setup();
+      const AGORA = new Date();
+      const W = RECENT_WINDOW_MS;
+      const idades = [W - 1000, W - 1, W, W + 1, W + 1000]; // ms de idade no instante do encerramento
+      const criados: { id: string; idade: number; closedAt: Date }[] = [];
+      for (const idade of idades) {
+        const closedAt = new Date(AGORA.getTime() - idade);
+        const id = await mk(ctx, { ago: 2 * DAY, status: "CONCLUIDO", phone: "11987654321", history: [{ status: "CONCLUIDO", ago: idade }] });
+        // `mk` usa Date.now() do próprio teste: reescreve o instante exato do encerramento a partir do AGORA fixo
+        await prisma.orderStatusHistory.updateMany({ where: { orderId: id }, data: { createdAt: closedAt } });
+        criados.push({ id, idade, closedAt });
+      }
+      const service = new OrderService(prisma, { log: () => {}, logStrict: async () => {} }, () => {}, () => AGORA);
+      const staff = { storeId: ctx.storeId, userId: "u-staff", role: "STAFF" as const };
+      const achados = new Set((await service.history(staff, { q: "11987654321" })).rows.map((r) => r.id));
+      for (const { id, idade, closedAt } of criados) {
+        const detalhe = contactAccessFor("STAFF", { status: "CONCLUIDO" }, closedAt, AGORA) === "FULL";
+        expect(achados.has(id), `idade ${idade - W >= 0 ? "W+" : "W"}${idade - W} ms: busca`).toBe(detalhe); // busca e detalhe nunca divergem
+        expect(isWithinRecentWindow(closedAt, AGORA)).toBe(detalhe);
+      }
+      // e a fronteira em si: 24 h - 1 ms ainda é recente; 24 h EXATAS não é
+      expect(achados.has(criados[1].id)).toBe(true);
+      expect(achados.has(criados[2].id)).toBe(false);
     });
 
     it("cota de 10 buscas por telefone por hora (STAFF) esgotada: busca SÓ de telefone leva 429; busca que cabe num CÓDIGO cai para código/nome; nome e OWNER seguem livres", async () => {
