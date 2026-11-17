@@ -153,23 +153,62 @@ describe("OrderDetailPanel: tipos de pedido e máscara do servidor (UI-D-04, CA-
     expect(screen.queryByRole("button", { name: "Copiar endereço" })).not.toBeInTheDocument();
   });
 
-  it("falha fechada do servidor (contactUnavailable): avisa, oferece repetir e MANTÉM o resto do pedido (API-54b)", async () => {
-    const get = vi
-      .fn()
-      .mockResolvedValueOnce(ok({ order: detail({ customerPhone: "*******5678", contactMasked: true, address: null, hasAddress: true, contactUnavailable: "AUDIT_UNAVAILABLE" }) }))
-      .mockResolvedValueOnce(ok({ order: detail() }));
-    setup(get);
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Contato indisponível agora. Tente de novo.");
+  const unavailable = () => detail({ customerPhone: "*******5678", contactMasked: true, address: null, hasAddress: true, contactUnavailable: "AUDIT_UNAVAILABLE" });
+  const banner = () => screen.getByText(/Contato indisponível agora\. Tente de novo\./).closest(".pedido-detalhe__alert") as HTMLElement;
+
+  it("UI-D-19 falha fechada (contactUnavailable): faixa em role=status, 'Endereço indisponível agora.', sem contato, e MANTÉM o resto do pedido", async () => {
+    setup(vi.fn().mockResolvedValue(ok({ order: unavailable() })));
+    await screen.findByText(/Contato indisponível agora\. Tente de novo\./);
+    expect(within(banner()).getByRole("button", { name: "Tentar de novo" })).toBeInTheDocument();
+    expect(banner()).toHaveAttribute("role", "status");
+    expect(screen.getByText("Endereço indisponível agora.")).toBeInTheDocument();
     // o resto do pedido segue na tela
     expect(within(section("Itens")).getByText("2× Calabresa")).toBeInTheDocument();
     expect(within(section("Pagamento")).getByText("Cobrar R$ 95,30 em dinheiro")).toBeInTheDocument();
-    // não confunde com "peça ao dono": não é questão de papel
-    expect(screen.queryByText(/Peça ao dono/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Marcar pronto" })).toBeInTheDocument();
+    // sem contato e sem "peça ao dono" (não é questão de papel); o código de erro nunca aparece
     expect(screen.queryByRole("link", { name: /Ligar|WhatsApp/ })).not.toBeInTheDocument();
-    await userEvent.click(within(alert).getByRole("button", { name: "Tentar de novo" }));
+    expect(screen.queryByRole("button", { name: /Copiar endereço/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /mapa/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Peça ao dono/)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/AUDIT_UNAVAILABLE/);
+  });
+
+  it("UI-D-20 'Tentar de novo' com sucesso: 'Tentando…' sem sair do botão, depois o contato aparece, o foco vai ao título Cliente e anuncia 'Contato carregado.'", async () => {
+    let release: (value: HttpResult<{ order: OrderDetail }>) => void = () => {};
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce(ok({ order: unavailable() }))
+      .mockReturnValueOnce(new Promise((resolve) => (release = resolve)));
+    setup(get);
+    await screen.findByText(/Contato indisponível agora\. Tente de novo\./);
+    const button = within(banner()).getByRole("button", { name: "Tentar de novo" });
+    button.focus();
+    await userEvent.click(button);
+    const trying = await screen.findByRole("button", { name: "Tentando…" });
+    expect(trying).toHaveAttribute("aria-disabled", "true");
+    expect(trying).toHaveFocus();
+    // tocar de novo enquanto busca não dispara outra busca
+    await userEvent.click(trying);
+    expect(get).toHaveBeenCalledTimes(2);
+    release(ok({ order: detail() }));
     expect(await screen.findByRole("link", { name: "Ligar para Ana Souza" })).toBeInTheDocument();
     expect(screen.queryByText(/Contato indisponível/)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("heading", { level: 3, name: "Cliente" })).toHaveFocus());
+    expect(screen.getByText("Contato carregado.")).toBeInTheDocument();
+  });
+
+  it("UI-D-21 falha repetida: a faixa permanece, o foco volta ao botão e não há laço automático", async () => {
+    const get = vi.fn().mockResolvedValue(ok({ order: unavailable() }));
+    setup(get);
+    await screen.findByText(/Contato indisponível agora\. Tente de novo\./);
+    await userEvent.click(within(banner()).getByRole("button", { name: "Tentar de novo" }));
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    const again = await screen.findByRole("button", { name: "Tentar de novo" });
+    await waitFor(() => expect(again).toHaveFocus());
+    expect(screen.getByText(/Contato indisponível agora\. Tente de novo\./)).toBeInTheDocument();
+    expect(screen.queryByText("Contato carregado.")).not.toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 300));
     expect(get).toHaveBeenCalledTimes(2);
   });
 

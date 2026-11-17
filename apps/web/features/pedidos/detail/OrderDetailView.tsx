@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { statusLabel, TYPE_LABELS } from "@/core/domain/orderLabels";
 import type { OrderDetail } from "@/core/domain/orderDetail";
 import type { Deliverer, Order } from "@/core/domain/orders";
@@ -28,6 +28,8 @@ type Props = {
   order: OrderDetail;
   // Busca o pedido de novo (o aviso "contato indisponível" tem "Tentar de novo")
   onRetryContact: () => void;
+  // A busca do "Tentar de novo" está em andamento
+  retryingContact?: boolean;
   deliverers: Deliverer[];
   nowMs: number;
   busy: boolean;
@@ -36,8 +38,12 @@ type Props = {
 
 // Conteúdo do detalhe (spec 11 §3), na ordem fixa: cliente, entrega, observação, itens, valores, pagamento, entregador,
 // impressão, cancelamento. O servidor decide o que cada papel recebe; aqui só se mostra o que chegou.
-export function OrderDetailView({ order, deliverers, nowMs, busy, canRetryRefund, onRetryContact, ...handlers }: Props) {
+export function OrderDetailView({ order, deliverers, nowMs, busy, canRetryRefund, onRetryContact, retryingContact = false, ...handlers }: Props) {
   const [copied, setCopied] = useState(false);
+  const [contactLoaded, setContactLoaded] = useState(false);
+  const retryButton = useRef<HTMLButtonElement>(null);
+  const clientTitle = useRef<HTMLHeadingElement>(null);
+  const wasRetrying = useRef(false);
   const minutes = orderAgeMinutes(order, nowMs);
   const age = ageText(minutes);
   const badges = paymentBadges(order);
@@ -46,6 +52,19 @@ export function OrderDetailView({ order, deliverers, nowMs, busy, canRetryRefund
   const isDelivery = order.type === "DELIVERY";
   const contact = canContact(order);
   const contactUnavailable = order.contactUnavailable === "AUDIT_UNAVAILABLE";
+
+  // Depois de "Tentar de novo" (spec 11 §12): sucesso leva o foco ao título do bloco Cliente e anuncia "Contato
+  // carregado."; falha repetida mantém a faixa e devolve o foco ao botão. Nunca há nova tentativa automática.
+  useEffect(() => {
+    if (wasRetrying.current && !retryingContact) {
+      if (contactUnavailable) retryButton.current?.focus();
+      else {
+        clientTitle.current?.focus();
+        setContactLoaded(true);
+      }
+    }
+    wasRetrying.current = retryingContact;
+  }, [retryingContact, contactUnavailable]);
 
   async function copyAddress() {
     if (!order.address) return;
@@ -72,7 +91,9 @@ export function OrderDetailView({ order, deliverers, nowMs, busy, canRetryRefund
       </div>
 
       <section aria-labelledby="det-cliente">
-        <h3 id="det-cliente">Cliente</h3>
+        <h3 id="det-cliente" ref={clientTitle} tabIndex={-1}>
+          Cliente
+        </h3>
         <p className="pedido-detalhe__strong">{order.customerName ?? "Cliente não informado"}</p>
         {order.hasPhone && (
           <p className="pedido-detalhe__phone">{order.customerPhone}</p>
@@ -89,15 +110,28 @@ export function OrderDetailView({ order, deliverers, nowMs, busy, canRetryRefund
           </div>
         )}
         {contactUnavailable && (
-          // Falha fechada do servidor (API-54b): não foi possível registrar o acesso, então o contato não veio. O resto do
-          // pedido segue na tela; repetir busca de novo.
-          <div role="alert" className="pedido-detalhe__alert">
-            <span>Contato indisponível agora. Tente de novo.</span>
-            <button type="button" className="pedido-detalhe__action" onClick={onRetryContact}>
-              Tentar de novo
+          // Falha fechada do servidor (API-54b): não foi possível registrar o acesso, então o contato não veio. Não é
+          // erro de papel nem falha geral: é um bloqueio temporário. O resto do pedido segue na tela.
+          <div role="status" className="pedido-detalhe__alert">
+            <span>
+              <span aria-hidden="true">🔒 </span>Contato indisponível agora. Tente de novo.
+            </span>
+            <button
+              ref={retryButton}
+              type="button"
+              className="pedido-detalhe__action"
+              aria-disabled={retryingContact || undefined}
+              onClick={() => {
+                if (!retryingContact) onRetryContact();
+              }}
+            >
+              {retryingContact ? "Tentando…" : "Tentar de novo"}
             </button>
           </div>
         )}
+        <p role="status" className="pedido-detalhe__visually-hidden">
+          {contactLoaded ? "Contato carregado." : ""}
+        </p>
         {!contactUnavailable && order.hasPhone && order.contactMasked && <p className="pedido-detalhe__help">Contato protegido. Peça ao dono para ver o número.</p>}
       </section>
 

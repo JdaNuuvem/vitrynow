@@ -23,7 +23,7 @@ type Props = {
 
 // Detalhe do pedido (spec 11 §2). Abrir nunca muda o pedido; as ações vêm do servidor (allowedTransitions/blocked).
 export function OrderDetailPanel({ orderId, listOrder, refreshKey, deliverers, nowMs, busy, canRetryRefund, desktop, onClose, ...handlers }: Props) {
-  const { state, retry } = useOrderDetail(orderId, refreshKey);
+  const { state, retry, refreshing } = useOrderDetail(orderId, refreshKey);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const detail = state.status === "ready" ? state.order : state.status === "error" ? state.order : null;
   const code = detail?.code ?? listOrder?.code ?? null;
@@ -80,7 +80,7 @@ export function OrderDetailPanel({ orderId, listOrder, refreshKey, deliverers, n
       )}
 
       {detail && (
-        <OrderDetailView order={detail} deliverers={deliverers} nowMs={nowMs} busy={busy} canRetryRefund={canRetryRefund} onRetryContact={retry} {...handlers} />
+        <OrderDetailView order={detail} deliverers={deliverers} nowMs={nowMs} busy={busy} canRetryRefund={canRetryRefund} onRetryContact={retry} retryingContact={refreshing} {...handlers} />
       )}
     </>
   );

@@ -20,6 +20,8 @@ export function useOrderDetail(orderId: string | null, refreshKey: string) {
   const { orders } = usePanelServices();
   const [state, setState] = useState<DetailState>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
+  // Nova busca pedida pelo botão "Tentar de novo": o pedido continua na tela e o botão mostra "Tentando…".
+  const [refreshing, setRefreshing] = useState(false);
 
   // Pedido novo (outro id): volta ao "carregando" em vez de mostrar o anterior por um instante.
   useEffect(() => {
@@ -31,6 +33,7 @@ export function useOrderDetail(orderId: string | null, refreshKey: string) {
     let active = true;
     orders.get(orderId).then((result) => {
       if (!active) return;
+      setRefreshing(false);
       if (result.ok) return setState({ status: "ready", order: result.data.order });
       if (result.status === 401) return router.push("/login");
       if (result.status === 404) return setState({ status: "notfound" });
@@ -41,6 +44,9 @@ export function useOrderDetail(orderId: string | null, refreshKey: string) {
     };
   }, [orderId, refreshKey, attempt, orders, router]);
 
-  const retry = useCallback(() => setAttempt((count) => count + 1), []);
-  return { state, retry };
+  const retry = useCallback(() => {
+    setRefreshing(true);
+    setAttempt((count) => count + 1);
+  }, []);
+  return { state, retry, refreshing };
 }
