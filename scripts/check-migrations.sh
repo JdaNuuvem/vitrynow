@@ -82,16 +82,23 @@ apply() { # db nome... -> aplica o conjunto de migrações via prisma migrate de
       pnpm --filter @meucardapio/db exec prisma migrate deploy --schema "$(cygpath -m "$s")/schema.prisma" ) > "$TMP/last.log" 2>&1
 }
 newdb() { local d="chk_$1_$RANDOM"; "${PSQL[@]}" -d postgres -c "create database \"$d\"" >/dev/null; DBS+=("$d"); echo "$d"; }
-schema_hash() { docker exec -e PGPASSWORD=meucardapio "$CT" pg_dump -U meucardapio -s --no-owner --no-acl "$1" | grep -vE '^(--|\\restrict|\\unrestrict)' | sha256sum | cut -c1-16; }
-verify() { # db rótulo
-  local out; out="$("${PSQL[@]}" -d "$1" -A -t -F '|' < "$HERE/verify.sql" 2>&1)" || { bad "$2: verify.sql falhou: $out"; return; }
-  while IFS='|' read -r name okv det; do
-    [ -z "$name" ] && continue
-    case "$okv" in t) ok "$2 · $name";; f) bad "$2 · $name — $det";; *) echo "  [n/a]   $2 · $name";; esac
-  done <<< "$out"
+verify() { # db rótulo -> verify.sql genérico + verify-<N>.sql de cada migração NOVA que tenha o arquivo
+  local d="$1" rot="$2" f out name okv det
+  for f in "$HERE/verify.sql" $(for n in "${NEW[@]}"; do [ -f "$HERE/verify-$n.sql" ] && echo "$HERE/verify-$n.sql"; done); do
+    out="$("${PSQL[@]}" -d "$d" -A -t -F '|' < "$f" 2>&1)" || { bad "$rot: $(basename "$f") falhou: $out"; continue; }
+    while IFS='|' read -r name okv det; do
+      [ -z "$name" ] && continue
+      case "$okv" in t) ok "$rot · $name";; f) bad "$rot · $name — $det";; *) echo "  [n/a]   $rot · $name";; esac
+    done <<< "$out"
+  done
 }
-HASHES=()
-note_hash() { HASHES+=("$2 $(schema_hash "$1")"); }
+HASHES=(); SORTED=(); FILES=()
+norm() { sed 's/,$//' "$1" | sort; }   # conjunto de linhas, sem a vírgula final (que depende de qual coluna é a última)
+note_hash() { # db rótulo -> guarda o dump (sem comentários) e os dois hashes (literal e por linhas ordenadas)
+  local f="$TMP/dump_${#FILES[@]}.sql"
+  docker exec -e PGPASSWORD=meucardapio "$CT" pg_dump -U meucardapio -s --no-owner --no-acl "$1" | grep -vE '^(--|\\restrict|\\unrestrict)' > "$f"
+  HASHES+=("$2 $(sha256sum < "$f" | cut -c1-16)"); SORTED+=("$2 $(norm "$f" | sha256sum | cut -c1-16)"); FILES+=("$f")
+}
 
 # ---------- S1 / S3: banco novo ----------
 echo "== S1 banco NOVO: base + todas as novas"
@@ -160,10 +167,26 @@ for N in "${NEW[@]}"; do
 done
 
 # ---------- S5: schema final igual em todos os cenários ----------
+# Dois níveis: (1) o CONJUNTO de objetos (linhas do pg_dump -s ordenadas) tem de ser idêntico: se não for,
+# é divergência real; (2) o dump literal idêntico = mesma ordem física de colunas. Migração fora da ordem
+# cronológica (carimbo anterior a uma já aplicada) muda só (2): inofensivo ao Prisma, mas é um sinal.
 echo "== S5 schema final idêntico em todos os cenários"
-UNIQ="$(printf '%s\n' "${HASHES[@]}" | awk '{print $2}' | sort -u | wc -l | tr -d ' ')"
-if [ "$UNIQ" = 1 ] && [ ${#HASHES[@]} -gt 0 ]; then ok "${#HASHES[@]} bancos terminaram com o mesmo schema ($(printf '%s\n' "${HASHES[@]}" | awk '{print $2}' | sort -u))"
-else bad "schemas divergentes entre cenários:"; printf '     %s\n' "${HASHES[@]}"; fi
+U_SORT="$(printf '%s\n' "${SORTED[@]}" | awk '{print $NF}' | sort -u | wc -l | tr -d ' ')"
+U_RAW="$(printf '%s\n' "${HASHES[@]}" | awk '{print $NF}' | sort -u | wc -l | tr -d ' ')"
+if [ ${#HASHES[@]} -eq 0 ]; then bad "nenhum cenário gerou hash de schema"
+elif [ "$U_SORT" != 1 ]; then
+  bad "schemas DIVERGENTES (conjunto de objetos difere):"; printf '     %s\n' "${SORTED[@]}"
+  ref="${FILES[0]}"; for i in "${!FILES[@]}"; do
+    if ! diff <(norm "$ref") <(norm "${FILES[$i]}") >/dev/null; then
+      echo "  diferença de linhas entre [${HASHES[0]%% *}] e [${HASHES[$i]%% [0-9a-f]*}]:"; diff <(norm "$ref") <(norm "${FILES[$i]}") | head -20 | sed 's/^/     /'; break
+    fi
+  done
+elif [ "$U_RAW" = 1 ]; then ok "${#HASHES[@]} bancos terminaram com o mesmo schema ($(printf '%s\n' "${HASHES[@]}" | awk '{print $NF}' | sort -u))"
+else
+  ok "${#HASHES[@]} bancos com o MESMO conjunto de objetos (hash $(printf '%s\n' "${SORTED[@]}" | awk '{print $NF}' | sort -u))"
+  echo "  [aviso] a ORDEM FÍSICA DAS COLUNAS difere entre cenários (banco novo x incremental). Inofensivo para o Prisma, mas indica migração fora da ordem cronológica. Diferença:"
+  ref="${FILES[0]}"; for f in "${FILES[@]}"; do if ! cmp -s "$ref" "$f"; then diff "$ref" "$f" | head -12 | sed 's/^/     /'; break; fi; done
+fi
 
 echo; echo "RESULTADO: $PASS ok, $FAILS falhas"
 [ "$FAILS" -eq 0 ]
