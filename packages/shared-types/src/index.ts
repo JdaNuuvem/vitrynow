@@ -341,6 +341,8 @@ export const anonymizeCustomerSchema = z
     reason: z.enum(ANONYMIZE_REASONS),
     // A confirmação REPETE o efeito: quantos pedidos o dono viu na prévia. Se o número mudou, nada é feito (409).
     expectedOrders: z.number().int().min(1).max(10_000),
+    // Reautenticação SEM MFA ativa (com MFA vale o código no header x-mfa-challenge). Nunca é registrada.
+    currentPassword: z.string().min(1).max(200).optional(),
   })
   .refine((v) => Boolean(v.phone) !== Boolean(v.orderCode), { message: "Informe o telefone OU o código do pedido." });
 export type AnonymizeCustomerInput = z.infer<typeof anonymizeCustomerSchema>;

@@ -107,7 +107,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
   // Encadear depois de requirePanelAuth: `{ preHandler: [app.requirePanelAuth, app.requireOwner] }`.
   app.decorate("requireOwner", async (request: FastifyRequest, reply: FastifyReply) => {
     if (request.user.role !== "OWNER") {
-      reply.code(403).send({ error: "ação restrita ao dono da loja" });
+      reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
     }
   });
 
