@@ -22,6 +22,7 @@ import { useOrderFlow } from "./hooks/useOrderFlow";
 import { useOrderHistory } from "./hooks/useOrderHistory";
 import { scrollBehavior } from "@/lib/motion";
 import "./loja.css";
+import "./motion.css";
 
 // Orquestra as telas da loja pública: decide qual aparece e liga carrinho e pedido.
 // Desenho, regras do carrinho, ciclo do pedido e HTTP vivem em arquivos próprios.
