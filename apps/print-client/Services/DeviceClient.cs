@@ -226,9 +226,9 @@ namespace MeuCardapio.PrintClient.Services
                 if (_mode == ModeQueue) return;
             }
 
-            // 2) modo legado. Nunca junto com o modo fila: job em impressao ou com aviso PRINTED pendente ainda "possui" o pedido
-            // no servidor, e a lista legada o ofereceria de novo.
-            if (_ledger.AnyJobInFlight() || _ledger.AnyJobAckPending()) return;
+            // 2) modo legado. Pedido que um job DESTE PC esta imprimindo ou ja imprimiu e pulado em LegacyCycleAsync (IsOrderHeldByJob),
+            // com o aviso do job pendente ou nao: nada precisa ficar bloqueado esperando aviso. (Nao ha como chegar aqui com job em
+            // impressao: o modo so vira LEGACY por um claim, e o claim nao roda enquanto ha job em impressao.)
             try { await LegacyCycleAsync(token); }
             catch (ModeQueueException)
             {
@@ -255,6 +255,7 @@ namespace MeuCardapio.PrintClient.Services
             foreach (var reference in pending.Orders)
             {
                 token.ThrowIfCancellationRequested();
+                if (_ledger.IsOrderHeldByJob(reference.Id)) continue; // um job deste PC já imprimiu (ou imprime) o pedido: não duplica
                 if (!_ledger.TryBeginPrint(reference.Id)) continue; // já impresso, em impressão ou em recuo
 
                 PrintableOrder printable = null;
@@ -296,8 +297,9 @@ namespace MeuCardapio.PrintClient.Services
             {
                 token.ThrowIfCancellationRequested();
                 if (_ledger.AnyJobInFlight() || _ledger.AnyJobInBackoff()) return;
-                // Troca LEGACY -> QUEUE: pedido ainda em impressao (ou com aviso pendente) pelo legado nao pode ser reclamado como job.
-                if (_ledger.AnyLegacyInFlight() || _ledger.AnyLegacyAckPending()) return;
+                // Troca LEGACY -> QUEUE: pedido ainda em impressao pelo legado nao pode ser reclamado como job (aviso pendente nao bloqueia:
+                // o cinto em HandleJobAsync cuida do pedido ja impresso).
+                if (_ledger.AnyLegacyInFlight()) return;
                 var job = await ClaimNextAsync(token);
                 if (job == null) return; // fila vazia
                 if (!await HandleJobAsync(job, token)) return;
@@ -315,7 +317,9 @@ namespace MeuCardapio.PrintClient.Services
             if (_ledger.IsPrinted(key))
             {
                 await TryAckAsync(key, token);
-                return true;
+                // O servidor devolve o MESMO job ao mesmo dono enquanto a lease vale (ADR-0004 §8): pedir de novo agora so repetiria o
+                // aviso em laco (ate 20 vezes por ciclo se o aviso estiver sendo recusado). Para o ciclo; o proximo reenvia.
+                return false;
             }
 
             string kind = (job.Kind ?? "").Trim().ToUpperInvariant();
@@ -345,7 +349,7 @@ namespace MeuCardapio.PrintClient.Services
                 StatusChanged?.Invoke("O pedido já foi impresso aqui pelo modo anterior: não vou imprimir de novo, só avisar o servidor.");
                 if (_ledger.TryBeginPrint(key)) _ledger.MarkPrinted(key);
                 await TryAckAsync(key, token);
-                return true;
+                return !_ledger.PendingAcks().Contains(key);   // aviso aceito: segue para o proximo job; senao para o ciclo
             }
 
             // Aviso de cancelamento: o tipo do job manda, não a bandeira do tíquete. Sem ela o papel sairia como um pedido novo completo.
@@ -354,6 +358,7 @@ namespace MeuCardapio.PrintClient.Services
             // Em recuo depois de falha (ou já em impressão): não imprime agora; o servidor re-oferece depois.
             if (!_ledger.TryBeginPrint(key)) return false;
 
+            if (kind == PrintJobDto.KindKitchen) _ledger.SetOrderRef(key, ticket.OrderId); // o legado pula este pedido enquanto/depois que o job o imprime
             ticket.OrderId = key; // a chave do ledger/ack é o JOB (original e 2ª via do mesmo pedido são jobs diferentes)
             if (kind == PrintJobDto.KindKitchen && _ledger.ShouldAlert(key)) OrderPending?.Invoke();
             TicketReady?.Invoke(ticket);
@@ -423,6 +428,12 @@ namespace MeuCardapio.PrintClient.Services
                         return true;
                     }
                     if (code == 404) return true;
+                    // Recusa permanente (400, 422...): repetir nunca vai adiantar. Encerra e avisa (408 e 429 sao transitorios e repetem).
+                    if (code >= 400 && code < 500 && code != 408 && code != 429)
+                    {
+                        StatusChanged?.Invoke("O servidor recusou de vez o aviso do job (" + code + "): não vou repetir.");
+                        return true;
+                    }
                     StatusChanged?.Invoke("API recusou o aviso do job (" + code + ")");
                     return false;
                 }
@@ -525,7 +536,18 @@ namespace MeuCardapio.PrintClient.Services
 
         static async Task<bool> IsModeQueueAsync(HttpResponseMessage response)
         {
-            try { return ((await response.Content.ReadAsStringAsync()) ?? "").IndexOf("MODE_QUEUE", StringComparison.Ordinal) >= 0; }
+            // Le o campo "code" do JSON com igualdade (nao procura a palavra no texto) e no maximo 4 KB do corpo (parecer Nightingale R-1).
+            try
+            {
+                using (var stream = await response.Content.ReadAsStreamAsync())
+                {
+                    var buffer = new byte[4096]; int n = 0, r;
+                    while (n < buffer.Length && (r = await stream.ReadAsync(buffer, n, buffer.Length - n)) > 0) n += r;
+                    var json = Newtonsoft.Json.Linq.JObject.Parse(Encoding.UTF8.GetString(buffer, 0, n));
+                    var code = json["code"];
+                    return code != null && code.Type == Newtonsoft.Json.Linq.JTokenType.String && string.Equals((string)code, "MODE_QUEUE", StringComparison.Ordinal);
+                }
+            }
             catch { return false; }
         }
 

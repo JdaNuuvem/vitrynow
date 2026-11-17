@@ -59,6 +59,8 @@ namespace MeuCardapio.PrintClient
         // Modo de impressao da loja decidido pelo servidor (ADR-0004 §8 itens 12-13): null = API antiga (sem "mode"); "LEGACY" = claim
         // devolve {job:null, mode:"LEGACY"} e o endpoint legado funciona; "QUEUE" = claim normal com mode e o legado responde 409 MODE_QUEUE.
         public volatile string PrintMode;
+        public string Legacy409Body;                                  // corpo do 409 do legado em QUEUE (padrao: code MODE_QUEUE)
+        public volatile bool LegacyAck500;                             // /printed responde 500 SEMPRE (mesmo em QUEUE): aviso legado preso
         public int LegacyCalls { get { lock (Lock) return _legacyCalls; } }
         int _legacyCalls;
         public int ClaimStatus = 200;                                 // 401/403/500 para simular falha do claim
@@ -222,10 +224,11 @@ namespace MeuCardapio.PrintClient
                 Reply(c, reply, "{}");
                 return;
             }
+            if (LegacyAck500 && path.StartsWith("/api/device/orders/") && path.EndsWith("/printed")) { lock (Lock) _legacyCalls++; Reply(c, 500, "{}"); return; }
             if (path.StartsWith("/api/device/orders/") && PrintMode == "QUEUE")
             {
                 lock (Lock) _legacyCalls++;
-                Reply(c, 409, "{\"error\":\"A loja usa a fila de impressao.\",\"code\":\"MODE_QUEUE\"}");
+                Reply(c, 409, Legacy409Body ?? "{\"error\":\"A loja usa a fila de impressao.\",\"code\":\"MODE_QUEUE\"}");
                 return;
             }
             if (path.StartsWith("/api/device/orders/")) lock (Lock) _legacyCalls++;

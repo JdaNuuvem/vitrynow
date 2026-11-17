@@ -853,7 +853,7 @@ namespace MeuCardapio.PrintClient
                         int legacyWhilePrinting = api.LegacyCalls;
                         bool done = WaitFor(() => api.JobState("m5") == "PRINTED" && Paper(printer, "5105") >= 1, 30000);
                         Thread.Sleep(800);
-                        Check("virada no meio de um job: o legado nao roda enquanto o job esta em impressao", started && legacyWhilePrinting == 0);
+                        Check("virada no meio de um job: o modo so vira LEGACY depois do job (nenhuma chamada legada durante a impressao)", started && legacyWhilePrinting == 0);
                         Check("virada no meio de um job: o pedido sai 1 vez (o legado nao o pega depois)", done && Paper(printer, "5105") == 1 && api.Count("/printable") == 0);
                         Check("virada no meio de um job: depois do job fechado o cliente segue o servidor (LEGACY)", rig.Device.CurrentMode == DeviceClient.ModeLegacy);
                     }
@@ -912,7 +912,7 @@ namespace MeuCardapio.PrintClient
             finally { Clean(dir); }
 
             // M9: o job foi impresso mas o aviso PRINTED esta falhando (servidor 500); o servidor vira para LEGACY e ainda lista o
-            // pedido (printedAt so e gravado quando o ack do job chega). O legado NAO pode rodar antes do ack do job: reimprimiria.
+            // pedido (printedAt so e gravado quando o ack do job chega). O legado NAO pode reimprimir: o ledger sabe que o job imprimiu.
             dir = Tmp();
             try
             {
@@ -930,8 +930,80 @@ namespace MeuCardapio.PrintClient
                         api.PrintMode = "LEGACY";                        // virou depois de imprimir, com o aviso ainda pendente
                         bool done = WaitFor(() => api.JobState("m9") == "PRINTED", 30000);
                         Thread.Sleep(800);
-                        Check("aviso do job falhando + servidor vira LEGACY: o pedido sai 1 vez so (o legado espera o ack do job)", printed && done && Paper(printer, "5109") == 1);
+                        Check("aviso do job falhando + servidor vira LEGACY: o pedido sai 1 vez so (o legado pula o pedido que o job imprimiu)", printed && done && Paper(printer, "5109") == 1);
                         Check("aviso do job falhando + servidor vira LEGACY: o legado nunca buscou o tiquete desse pedido", api.Count("/printable") == 0);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+
+            // M10: aviso do job recusado de forma PERMANENTE (400): encerra, nao repete e nao trava nada (parecer Nightingale a).
+            dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.PrintMode = "QUEUE";
+                    var o = Order("M10", "5110"); api.AddJob("m10", o);
+                    api.JobAckStatus = 400;   // sempre
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: true))
+                    {
+                        rig.Start();
+                        bool printed = WaitFor(() => Paper(printer, "5110") == 1 && api.AcksOf("m10", "PRINTED") >= 1, 20000);
+                        Thread.Sleep(1500);
+                        int acksSoon = api.AcksOf("m10", "PRINTED"); Thread.Sleep(1500); int acksLater = api.AcksOf("m10", "PRINTED");
+                        Check("ack do job recusado de vez (400): sem laco quente (avisos: " + acksSoon + " e depois " + acksLater + " em 1,5 s; 25 ciclos) e nada fica pendente", printed && acksLater - acksSoon <= 40 && rig.Ledger.PendingAcks().Count == 0);
+                        Check("ack do job recusado de vez (400): avisa na tela que nao vai repetir", rig.HasMessage("recusou de vez"));
+                    }
+                }
+            }
+            finally { Clean(dir); }
+
+            // M11: aviso LEGADO preso para sempre (500, ate em QUEUE) e a loja vira QUEUE: o job do pedido ja impresso NAO reimprime e a fila nao congela.
+            dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.PrintMode = "LEGACY"; api.LegacyAck500 = true;
+                    var o = Order("M11", "5111"); LegacyOrder(api, o); api.AddJob("m11", o);
+                    var o2 = Order("M11b", "5112"); api.AddJob("m11b", o2);   // outro pedido, so como job: tem de sair (a fila nao congela)
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: false))
+                    {
+                        rig.Start();
+                        bool legacyPrinted = WaitFor(() => Paper(printer, "5111") == 1, 20000);
+                        api.PrintMode = "QUEUE";
+                        bool jobs = WaitFor(() => api.JobState("m11") == "PRINTED" && api.JobState("m11b") == "PRINTED" && Paper(printer, "5112") == 1, 30000);
+                        Thread.Sleep(500);
+                        Check("aviso legado preso + loja vira QUEUE: o pedido ja impresso NAO reimprime e o outro job sai (fila nao congela)", legacyPrinted && jobs && Paper(printer, "5111") == 1);
+                        Check("aviso legado preso: continua pendente (nao foi descartado) e nao bloqueou ninguem", rig.Ledger.PendingAcks().Contains("M11") && rig.Device.CurrentMode == DeviceClient.ModeQueue);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+
+            // M12: o 409 do legado so vale com code == MODE_QUEUE no JSON (R-1): a palavra no texto ou outro code NAO trocam o modo.
+            dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.PrintMode = "QUEUE";
+                    api.Legacy409Body = "{\"error\":\"MODE_QUEUE na mensagem\",\"code\":\"OUTRO\"}";
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: false))
+                    {
+                        rig.Start();
+                        bool tried = WaitFor(() => api.LegacyCalls >= 3, 10000);
+                        Check("409 com a palavra MODE_QUEUE so no texto e code diferente: NAO troca para a fila", tried && rig.Device.CurrentMode == DeviceClient.ModeLegacy && api.ClaimCalls == 0);
+                        api.Legacy409Body = "[1,2,3]";    // JSON que nao e objeto
+                        int before = api.LegacyCalls; WaitFor(() => api.LegacyCalls >= before + 3, 10000);
+                        Check("409 com corpo que nao e um objeto JSON: NAO troca para a fila", rig.Device.CurrentMode == DeviceClient.ModeLegacy && api.ClaimCalls == 0);
+                        api.Legacy409Body = null;         // corpo padrao: code == MODE_QUEUE
+                        bool switched = WaitFor(() => rig.Device.CurrentMode == DeviceClient.ModeQueue, 10000);
+                        Check("409 com code == MODE_QUEUE: troca para a fila", switched);
                     }
                 }
             }
@@ -951,8 +1023,10 @@ namespace MeuCardapio.PrintClient
                         api.AddJob("f" + i, o);
                     }
                     var printer = new VirtualPrintTarget(Path.Combine(dir, "out")) { DelayMs = 120 };
+                    int switches = 0;
                     using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", usePrintJobs: false))
                     {
+                        rig.Device.ModeChanged += m => Interlocked.Increment(ref switches);
                         rig.Start();
                         var end = DateTime.UtcNow.AddSeconds(5);
                         bool queue = false;
@@ -961,6 +1035,7 @@ namespace MeuCardapio.PrintClient
                         bool all = WaitFor(() => Enumerable.Range(1, 6).All(i => Paper(printer, "52" + i.ToString("00")) >= 1), 40000);
                         Thread.Sleep(1500);
                         var counts = Enumerable.Range(1, 6).Select(i => Paper(printer, "52" + i.ToString("00"))).ToArray();
+                        Check("oscilacao do modo: o cliente trocou de modo varias vezes de verdade (" + Volatile.Read(ref switches) + " trocas)", Volatile.Read(ref switches) >= 4);
                         Check("oscilacao do modo: todos os 6 pedidos saem", all);
                         Check("oscilacao do modo: nenhum pedido sai 2 vezes (contagem por pedido: " + string.Join(",", counts) + ")", counts.All(c => c == 1));
                     }

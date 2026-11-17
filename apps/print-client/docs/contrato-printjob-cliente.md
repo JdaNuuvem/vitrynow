@@ -63,9 +63,11 @@ Quem decide como imprimir é o **servidor, por loja** (`Store.printMode`, padrã
 
 - **Ponto de partida:** `UsePrintJobs` do `settings.json` é só um interruptor de desenvolvimento (padrão `false` = começa no legado). Depois do primeiro ciclo quem manda é o servidor: o legado descobre a fila pelo `409 MODE_QUEUE`; a fila descobre o legado pelo `mode:"LEGACY"` do `claim`.
 - **Nunca mistura os dois modos** (a virada acontece com impressão em andamento):
-  - não pede job enquanto há pedido legado **em impressão ou com aviso `/printed` pendente**;
-  - não roda o legado enquanto há **job em impressão ou com aviso `PRINTED` pendente** (o servidor só grava `printedAt` quando o ack do job chega);
-  - ack legado respondido com `409 MODE_QUEUE` **encerra** (não repete) e muda para a fila; o registro de "impresso" fica.
-- **Cinto de segurança (R1b):** job `ORDER_KITCHEN` de um pedido que **este PC já imprimiu no legado** não reimprime: o cliente só envia `PRINTED`. Vale só para o tíquete original (2ª via e aviso de cancelamento sempre imprimem).
+  - não pede job enquanto há pedido legado **em impressão** (a impressão em andamento não pode ser reclamada como job);
+  - **aviso pendente nunca bloqueia o outro modo** (um aviso recusado para sempre congelaria a loja): a proteção é o registro de "impresso" dos dois lados, abaixo;
+  - ack legado respondido com `409 MODE_QUEUE` **encerra** (não repete) e muda para a fila; o registro de "impresso" fica;
+  - o `409` só vale com **`code == "MODE_QUEUE"` no JSON** (leitura de no máximo 4 KB): a palavra no texto, outro `code` ou corpo que não é objeto **não** trocam o modo.
+- **Cinto de segurança nos dois sentidos (R1b):** (1) job `ORDER_KITCHEN` de um pedido que **este PC já imprimiu no legado** não reimprime: o cliente só envia `PRINTED`; (2) o legado **pula o pedido que um job deste PC imprimiu ou está imprimindo** (o ledger guarda o `orderId` do job), mesmo com o aviso do job pendente. Vale só para o tíquete original (2ª via e aviso de cancelamento sempre imprimem).
+- **Aviso do job recusado de vez** (4xx exceto 408/429; 404 e 409 já encerravam): encerra, avisa na tela e não repete. Job já impresso que o servidor **reoferece** (o mesmo dono recebe o mesmo job enquanto a lease vale) reenvia o aviso **uma vez por ciclo** e para o laço (antes pedia o job de novo até 20 vezes por ciclo).
 - **Se um job chegar em `LEGACY`** (servidor fora do contrato), o cliente **não imprime** (o legado cuidaria do mesmo pedido).
-- Teste executável: `SelfTestJobs.ModeFollowsServer` (M1–M9) sobre o `FakeApi` com `PrintMode`; o plano de virada fica em `docs\plano-virada-printjobs.md`.
+- Teste executável: `SelfTestJobs.ModeFollowsServer` (M1–M12) sobre o `FakeApi` com `PrintMode`; o plano de virada fica em `docs\plano-virada-printjobs.md`.
