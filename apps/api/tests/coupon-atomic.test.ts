@@ -224,15 +224,51 @@ describe("FUNC-01/02 — cupom e total zero", () => {
     return (login.headers["set-cookie"] as string).split(";")[0];
   }
 
+  it("TETO DO STAFF: só até 50% ou R$ 50,00 e SEMPRE com limite de usos; acima disso (ou sem limite) ⇒ 403 FORBIDDEN_ROLE; o dono não tem teto", async () => {
+    const ctx = await setup();
+    const staff = await staffCookie(ctx);
+    const asStaff = (url: string, payload?: Record<string, unknown>) => app.inject({ method: "POST", url, headers: { cookie: staff }, payload });
+    const forbidden = async (payload: Record<string, unknown>) => {
+      const r = await asStaff("/api/coupons", payload);
+      expect([r.statusCode, json(r).code], JSON.stringify(payload)).toEqual([403, "FORBIDDEN_ROLE"]);
+    };
+    await forbidden({ code: "ENORME", discountType: "FIXED", discountValue: 999_900, maxUses: 5 }); // R$ 9.999
+    await forbidden({ code: "NOVENTA", discountType: "PERCENT", discountValue: 99 }); // 99% sem limite zera o pedido
+    await forbidden({ code: "CINQ1", discountType: "PERCENT", discountValue: 51, maxUses: 5 });
+    await forbidden({ code: "CINQUENTA1", discountType: "FIXED", discountValue: 5001, maxUses: 5 });
+    await forbidden({ code: "SEMLIM", discountType: "PERCENT", discountValue: 10 }); // dentro do teto, mas sem limite de usos
+    await forbidden({ code: "SEMLIMF", discountType: "FIXED", discountValue: 100 });
+    expect(await prisma.coupon.count({ where: { storeId: ctx.storeId } })).toBe(0);
+    // no teto, com limite: pode
+    expect((await asStaff("/api/coupons", { code: "METADE", discountType: "PERCENT", discountValue: 50, maxUses: 3 })).statusCode).toBe(201);
+    expect((await asStaff("/api/coupons", { code: "CINQUENTA", discountType: "FIXED", discountValue: 5000, maxUses: 3 })).statusCode).toBe(201);
+    // o dono cria acima do teto e sem limite (99%); o STAFF não consegue editá-lo (nem para baixar o valor sem declarar limite)
+    const dono = await coupon(ctx, { code: "DONO99", discountType: "PERCENT", discountValue: 99 });
+    expect(dono.statusCode, dono.body).toBe(201);
+    const donoId = json(dono).coupon.id as string;
+    for (const payload of [{ discountValue: 10 }, { active: false }, { maxUses: 2 }, { discountValue: 10, maxUses: 2 }]) {
+      const r = await asStaff(`/api/coupons/${donoId}`, payload);
+      expect([r.statusCode, json(r).code], JSON.stringify(payload)).toEqual([403, "FORBIDDEN_ROLE"]);
+    }
+    // o STAFF não consegue ESTOURAR o teto editando um cupom dele
+    const meu = json(await asStaff("/api/coupons", { code: "MEU", discountType: "PERCENT", discountValue: 10, maxUses: 4 })).coupon.id as string;
+    expect((await asStaff(`/api/coupons/${meu}`, { discountValue: 51 })).statusCode).toBe(403);
+    expect((await asStaff(`/api/coupons/${meu}`, { discountType: "FIXED", discountValue: 9000 })).statusCode).toBe(403);
+    expect((await asStaff(`/api/coupons/${meu}`, { discountValue: 40 })).statusCode).toBe(200);
+    // o dono mexe em tudo
+    expect((await app.inject({ method: "POST", url: `/api/coupons/${donoId}`, headers: { cookie: ctx.owner }, payload: { discountValue: 10 } })).statusCode).toBe(200);
+    expect((await coupon(ctx, { code: "DONOFIXO", discountType: "FIXED", discountValue: 999_900 })).statusCode).toBe(201);
+  });
+
   it("CA-CP-16: STAFF cria/edita cupom abaixo de 100% e fixo, mas NÃO cria 100%, NÃO mexe em 100% (nem reativa/define limite) e NÃO exclui nada ⇒ 403 FORBIDDEN_ROLE; OWNER pode e fica na auditoria", async () => {
     const ctx = await setup();
     const staff = await staffCookie(ctx);
     const asStaff = (url: string, payload?: Record<string, unknown>) => app.inject({ method: "POST", url, headers: { cookie: staff }, payload });
 
-    const normal = await asStaff("/api/coupons", { code: "NORMAL", discountType: "PERCENT", discountValue: 20 });
+    const normal = await asStaff("/api/coupons", { code: "NORMAL", discountType: "PERCENT", discountValue: 20, maxUses: 10 });
     expect(normal.statusCode, normal.body).toBe(201);
     const normalId = json(normal).coupon.id as string;
-    expect((await asStaff("/api/coupons", { code: "FIXOX", discountType: "FIXED", discountValue: 500 })).statusCode).toBe(201);
+    expect((await asStaff("/api/coupons", { code: "FIXOX", discountType: "FIXED", discountValue: 500, maxUses: 10 })).statusCode).toBe(201);
     expect((await asStaff(`/api/coupons/${normalId}`, { discountValue: 30 })).statusCode).toBe(200);
 
     const free = await asStaff("/api/coupons", { code: "GRATIS", discountType: "PERCENT", discountValue: 100, maxUses: 5 });
