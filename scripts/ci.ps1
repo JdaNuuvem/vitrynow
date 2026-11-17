@@ -113,7 +113,11 @@ function Get-CargaConhecida {  # devolve @{ Cpu=<int|-1>; Outras=<n suítes vite
   $vals = @(); for ($i = 0; $i -lt 3; $i++) { try { $vals += [int](Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average } catch { }; Start-Sleep -Seconds 1 }
   $cpu = if ($vals.Count) { [int](($vals | Measure-Object -Average).Average) } else { -1 }
   $outras = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'vitest' -and $_.CommandLine -notmatch 'reset-email-confirmation' }).Count
-  [pscustomobject]@{ Cpu = $cpu; Outras = $outras; Alta = (($cpu -ge 60) -or ($outras -gt 0)) }
+  # LIMIAR CALIBRADO POR MEDIÇÃO em 17/11/2026 (INF-20-calibracao-carga.log): com CPU 33 a 39% e 3 suítes vitest de OUTROS agentes rodando, o teste passou 5 de 5;
+  # com 12 laços saturando a CPU em 100%, passou 2 de 5 (diferenças 56, 299 e 990 ms nas falhas). Por isso SÓ a CPU decide: >= 60% = carga conhecida. 'Outras suítes'
+  # NÃO entra no critério: numa máquina compartilhada é quase sempre > 0 e, sozinha, não derrubou o teste. LIMITES: 5 rodadas por condição; nada medido entre 40% e 99%
+  # (o 60% é conservador, não demonstrado); outros agentes mudam a carga sem aviso. Reavalie se o estágio falhar com CPU < 60% ou passar com folga acima de 60%.
+  [pscustomobject]@{ Cpu = $cpu; Outras = $outras; Alta = ($cpu -ge 60) }
 }
 function Invoke-TimingTest {  # roda SÓ o teste de tempo; devolve @{ Ok; Valor }
   Push-Location (Join-Path $repo 'apps/api')
@@ -132,7 +136,7 @@ function Invoke-TimingTest {  # roda SÓ o teste de tempo; devolve @{ Ok; Valor 
 if ($continue -and -not $SkipTests) {
   $continue = Step 'teste de tempo (SEGURANÇA), isolado, antes da suíte' {
     $carga = Get-CargaConhecida
-    Write-Host "   carga antes: CPU $($carga.Cpu)%, outras suítes vitest: $($carga.Outras) => $(if ($carga.Alta) { 'CARGA CONHECIDA' } else { 'repouso' })"
+    Write-Host "   carga antes: CPU $($carga.Cpu)%, outras suítes vitest: $($carga.Outras) => $(if ($carga.Alta) { 'CARGA CONHECIDA (CPU >= 60%)' } else { 'repouso (CPU < 60%)' })"
     $r1 = Invoke-TimingTest
     if ($r1.Ok) { Write-Host '   passou de primeira'; $global:LASTEXITCODE = 0; return }
     Write-Host "   1ª tentativa FALHOU (diferença medida: $($r1.Valor) ms; limite 35). Repetindo automaticamente 1 vez."
