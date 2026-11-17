@@ -3,12 +3,13 @@ import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
 import { prisma } from "@meucardapio/db";
 import { loginSchema, registerStoreSchema, forgotPasswordSchema, resetPasswordSchema } from "@meucardapio/shared-types";
-import { sendLoginAlertEmail, sendPasswordResetEmail } from "../lib/email";
+import { maskEmail, sendLoginAlertEmail, sendPasswordResetEmail } from "../lib/email";
 import { newTrialEndsAt } from "../lib/subscription";
 import { SESSION_COOKIE, revokeSession, sessionCookieOptions, signSession } from "../lib/session";
 import { disconnectSession, disconnectUser } from "../realtime/hub";
 import { hashToken } from "../lib/tokenHash";
 import { LoginThrottle } from "../lib/loginThrottle";
+import { issueResetToken, padToMinimum } from "../lib/passwordReset";
 
 // Hash de uma senha que ninguém conhece, no mesmo custo dos hashes reais: login com e-mail inexistente
 // gasta o mesmo tempo do login com senha errada (ST-05, sem enumeração de contas por tempo).
@@ -141,20 +142,23 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     "/auth/forgot-password",
     { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
     async (request, reply) => {
+      const startedAt = performance.now();
       const parsed = forgotPasswordSchema.safeParse(request.body);
       if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
 
-      const user = await prisma.user.findUnique({ where: { email: parsed.data.email } });
-      if (user) {
-        const token = nanoid(32);
-        await prisma.passwordResetToken.create({
-          data: { userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + 60 * 60 * 1000) },
-        });
+      // SEC-28: a emissão do token (por conta: 3/hora, 60 s entre pedidos, um só token ativo) fica em `issueResetToken`; o envio NÃO é
+      // esperado (ST-57: esperar o provedor de e-mail revelaria por tempo se a conta existe) e o piso de duração iguala os três caminhos
+      // (existente, inexistente, limitado). A resposta é sempre a mesma.
+      const issued = await issueResetToken(parsed.data.email);
+      if (issued) {
         // O token vai no FRAGMENTO (#), que o navegador nunca envia ao servidor: não aparece em log de acesso, de erro do proxy,
         // nem no Referer. A página lê, apaga da barra de endereço e manda no corpo do POST.
-        const resetUrl = `${process.env.WEB_ORIGIN ?? "http://localhost:3000"}/reset-senha#token=${token}`;
-        await sendPasswordResetEmail({ to: user.email, resetUrl });
+        const resetUrl = `${process.env.WEB_ORIGIN ?? "http://localhost:3000"}/reset-senha#token=${issued.token}`;
+        void sendPasswordResetEmail({ to: issued.to, resetUrl }).catch((error: unknown) => {
+          console.error(`[email] falha ao enviar recuperação de senha para ${maskEmail(issued.to)}: ${error instanceof Error ? error.name : "erro"}`);
+        });
       }
+      await padToMinimum(startedAt);
 
       return { ok: true };
     },
