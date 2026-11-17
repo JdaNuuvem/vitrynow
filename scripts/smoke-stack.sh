@@ -41,7 +41,9 @@ mkdir -p "$ROOT/infra/backups"
 
 echo "== validando e subindo a stack ($PROJ)"
 "${DC[@]}" config -q || { echo "compose inválido"; exit 1; }
-"${DC[@]}" up -d --build 2>&1 | tail -5
+out="$("${DC[@]}" up -d --build 2>&1)"; rc=$?
+echo "$out" | tail -25
+[ "$rc" -eq 0 ] || { echo "FALHA: 'compose up --build' saiu com $rc (build ou subida); o smoke para aqui: o resto só geraria falhas em cascata"; exit 1; }
 docker run -d --name "$PROJ-xffecho" --network "${PROJ}_default" --network-alias xffecho node:20-alpine node -e \
   "require('http').createServer((q,s)=>s.end(JSON.stringify({xff:q.headers['x-forwarded-for']||null,ip:q.socket.remoteAddress,secret:q.headers['x-internal-service-secret']||null,visitor:q.headers['x-visitor-ip']||null}))).listen(8080)" >/dev/null
 

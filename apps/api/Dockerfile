@@ -1,6 +1,9 @@
 FROM node:20-alpine AS build
 WORKDIR /repo
 RUN corepack enable
+# openssl TAMBÉM no build: com ele o Prisma baixa (na instalação) os engines do OpenSSL 3.0, os mesmos que a imagem final usa.
+# Sem isso o `prisma migrate deploy` baixava o engine na PRIMEIRA execução, o que falha na rede `data` (internal: sem internet).
+RUN apk add --no-cache openssl
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
 COPY packages/db/package.json packages/db/package.json
 COPY packages/shared-types/package.json packages/shared-types/package.json

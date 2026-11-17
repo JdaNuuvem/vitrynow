@@ -208,6 +208,11 @@ networks:
   # data: só Postgres, migrate, backup e API. internal: true = sem saída à internet nem acesso do Caddy/web ao banco.
   data:
     internal: true
+    ipam:
+      config:
+        # Faixa FIXA também aqui: sem ela o Docker sorteia um /16 do pool (ex.: 172.29.0.0/16) que pode ENGLOBAR a faixa
+        # fixa da rede de borda e a criação falha com "Pool overlaps" (visto no smoke de 17/11, com 172.28 já ocupada).
+        - subnet: ${DATA_SUBNET:-172.29.251.0/24}
   # default = rede de borda (Caddy, web, API); sub-rede e IP do Caddy fixos (a API só confia no X-Forwarded-For dele).
   default:
     ipam:
