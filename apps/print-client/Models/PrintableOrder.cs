@@ -22,6 +22,8 @@ namespace MeuCardapio.PrintClient.Models
     public class PrintableOrder
     {
         [JsonProperty("orderId")] public string OrderId { get; set; }
+        // Id REAL do pedido (o OrderId vira a chave "job:<id>" no modo fila). So o alerta central usa; nunca vai ao servidor no corpo do tiquete.
+        [JsonIgnore] public string SourceOrderId { get; set; }
         [JsonProperty("code")] public string Code { get; set; }
         [JsonProperty("type")] public string Type { get; set; }
         [JsonProperty("storeName")] public string StoreName { get; set; }

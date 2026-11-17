@@ -12,6 +12,18 @@ using MeuCardapio.PrintClient.Models;
 
 namespace MeuCardapio.PrintClient.Services
 {
+    // PC-24 (cliente): codigos da lista FECHADA que o servidor aceita em POST /api/device/alerts. QUEUE_WITHOUT_PRINTER e so do detector do SERVIDOR e nunca sai daqui.
+    public static class DeviceAlertCode
+    {
+        public const string NothingToChargeConflict = "NOTHING_TO_CHARGE_CONFLICT";
+        public const string NothingToChargeInvalid = "NOTHING_TO_CHARGE_INVALID";
+        public const string EmptyZeroTicket = "EMPTY_ZERO_TICKET";
+        public const string ModeUnconfirmed = "MODE_UNCONFIRMED";
+        public const string ModeRecovered = "MODE_RECOVERED";
+        public static readonly string[] All = { NothingToChargeConflict, NothingToChargeInvalid, EmptyZeroTicket, ModeUnconfirmed, ModeRecovered };
+        public static bool IsKnown(string code) { return code != null && Array.IndexOf(All, code) >= 0; }
+    }
+
     // 409 MODE_QUEUE do endpoint legado: a loja passou para a fila de impressao (ADR-0004 §8 item 12).
     public class ModeQueueException : Exception
     {
@@ -80,6 +92,92 @@ namespace MeuCardapio.PrintClient.Services
         int _configFailures;
         volatile bool _modeUnconfirmed;
         public bool ModeUnconfirmed { get { return _modeUnconfirmed; } }
+
+        // ---- Alerta central (PC-24, desenho aprovado por Atlas/Nightingale/Turing) ----
+        // Os avisos do cliente (so no log e na tela) tambem vao ao servidor: POST /api/device/alerts, Bearer da impressora, corpo ESTRITO {code, orderId?, clientVersion}.
+        // Lista fechada de code, SEM texto livre e SEM dado de pedido/cliente; orderId so se casar com o formato de cuid; hora e loja vem do servidor.
+        // Telemetria nao confiavel: NUNCA muda de modo nem decide cobranca. Fire-and-forget com timeout curto: jamais atrasa impressao nem ack; falha de rede e DESCARTADA.
+        public TimeSpan AlertDedupeWindow = TimeSpan.FromMinutes(10);
+        public TimeSpan AlertTimeout = TimeSpan.FromSeconds(3);
+        public TimeSpan AlertSuppression = TimeSpan.FromMinutes(10);   // 404 (API sem a rota): para de tentar por um prazo
+        const int MaxAlertsInFlight = 5;
+        static readonly System.Text.RegularExpressions.Regex OrderIdFormat = new System.Text.RegularExpressions.Regex(@"^c[a-z0-9]{24}$");
+        static readonly System.Text.RegularExpressions.Regex VersionFormat = new System.Text.RegularExpressions.Regex(@"^[0-9A-Za-z._-]{1,20}$");
+        readonly object _alertLock = new object();
+        readonly Dictionary<string, DateTime> _alertSent = new Dictionary<string, DateTime>();
+        bool _unconfirmedAlertSent;
+        int _alertsInFlight;
+        long _alertSuppressedUntilTicks;
+
+        public static string ClientVersion
+        {
+            get
+            {
+                var v = typeof(DeviceClient).Assembly.GetName().Version;
+                var text = v == null ? "0.0.0" : v.Major + "." + v.Minor + "." + Math.Max(0, v.Build);
+                return VersionFormat.IsMatch(text) ? text : "0.0.0";
+            }
+        }
+
+        // true = enviado (ou na fila de envio). false = descartado (codigo fora da lista, repetido na janela, API sem a rota, chave pausada, muitos em voo).
+        // NUNCA lanca: e chamado de dentro do try de impressao e de ciclos; qualquer erro aqui vira "descartado".
+        public bool ReportAlert(string code, string orderId = null)
+        {
+            try { return ReportAlertCore(code, orderId); }
+            catch { return false; }
+        }
+
+        bool ReportAlertCore(string code, string orderId)
+        {
+            if (!DeviceAlertCode.IsKnown(code)) return false;
+            if (_revoked) return false;
+            if (DateTime.UtcNow.Ticks < Interlocked.Read(ref _alertSuppressedUntilTicks)) return false;
+            string oid = orderId != null && orderId.Length <= 30 && OrderIdFormat.IsMatch(orderId) ? orderId : null;
+            lock (_alertLock)
+            {
+                // MODE_UNCONFIRMED so uma vez ate recuperar; MODE_RECOVERED so depois de um MODE_UNCONFIRMED enviado.
+                if (code == DeviceAlertCode.ModeRecovered) { if (!_unconfirmedAlertSent) return false; }
+                else if (code == DeviceAlertCode.ModeUnconfirmed) { if (_unconfirmedAlertSent) return false; }
+                var now = DateTime.UtcNow;
+                var key = code + "|" + (oid ?? "");
+                if (code != DeviceAlertCode.ModeRecovered && code != DeviceAlertCode.ModeUnconfirmed)
+                {
+                    DateTime last;
+                    if (_alertSent.TryGetValue(key, out last) && now - last < AlertDedupeWindow) return false;
+                }
+                if (Volatile.Read(ref _alertsInFlight) >= MaxAlertsInFlight) return false;
+                if (_alertSent.Count > 200) { foreach (var old in _alertSent.Where(kv => now - kv.Value >= AlertDedupeWindow).Select(kv => kv.Key).ToList()) _alertSent.Remove(old); }
+                _alertSent[key] = now;
+                if (code == DeviceAlertCode.ModeUnconfirmed) _unconfirmedAlertSent = true;
+                else if (code == DeviceAlertCode.ModeRecovered) _unconfirmedAlertSent = false;
+                Interlocked.Increment(ref _alertsInFlight);
+            }
+            var body = new Newtonsoft.Json.Linq.JObject { { "code", code } };
+            if (oid != null) body["orderId"] = oid;
+            body["clientVersion"] = ClientVersion;
+            var json = body.ToString(Formatting.None);
+            Task.Run(() => SendAlertAsync(json));
+            return true;
+        }
+
+        async Task SendAlertAsync(string json)
+        {
+            try
+            {
+                using (var cts = new CancellationTokenSource(AlertTimeout))
+                using (var content = new StringContent(json, Encoding.UTF8, "application/json"))
+                using (var request = NewRequest(HttpMethod.Post, "/api/device/alerts", content))
+                using (var response = await _http.SendAsync(request, cts.Token))
+                {
+                    int code = (int)response.StatusCode;
+                    if (code == 401 || code == 403) { NoteAuthFailure(code, false); return; }
+                    if (code == 404) Interlocked.Exchange(ref _alertSuppressedUntilTicks, (DateTime.UtcNow + AlertSuppression).Ticks);
+                    // 2xx, 429, 5xx e o resto: descartado. O corpo da resposta NUNCA e lido.
+                }
+            }
+            catch { /* melhor esforco: alerta perdido nao atrapalha nada */ }
+            finally { Interlocked.Decrement(ref _alertsInFlight); }
+        }
         public string CurrentMode { get { return _mode; } }
         public event Action<string> ModeChanged;
 
@@ -291,7 +389,7 @@ namespace MeuCardapio.PrintClient.Services
         void ConfigAnswered()
         {
             Interlocked.Exchange(ref _configFailures, 0);
-            if (_modeUnconfirmed) { _modeUnconfirmed = false; StatusChanged?.Invoke("Modo de impressão da loja confirmado novamente."); }
+            if (_modeUnconfirmed) { _modeUnconfirmed = false; StatusChanged?.Invoke("Modo de impressão da loja confirmado novamente."); ReportAlert(DeviceAlertCode.ModeRecovered); }
         }
 
         void ConfigFailed()
@@ -300,6 +398,7 @@ namespace MeuCardapio.PrintClient.Services
             if (n >= ConfigFailuresBeforeWarning && !_modeUnconfirmed)
             {
                 _modeUnconfirmed = true;
+                ReportAlert(DeviceAlertCode.ModeUnconfirmed);
                 StatusChanged?.Invoke("Não consigo confirmar o modo de impressão da loja (a configuração não responde). Continuo no modo atual; se a loja mudou de modo, os pedidos podem não sair: avise o suporte.");
             }
         }
@@ -430,6 +529,7 @@ namespace MeuCardapio.PrintClient.Services
             if (!_ledger.TryBeginPrint(key)) return false;
 
             if (kind == PrintJobDto.KindKitchen) _ledger.SetOrderRef(key, ticket.OrderId); // o legado pula este pedido enquanto/depois que o job o imprime
+            ticket.SourceOrderId = ticket.OrderId; // id real do pedido (so para o alerta central)
             ticket.OrderId = key; // a chave do ledger/ack é o JOB (original e 2ª via do mesmo pedido são jobs diferentes)
             if (kind == PrintJobDto.KindKitchen && _ledger.ShouldAlert(key)) OrderPending?.Invoke();
             TicketReady?.Invoke(ticket);

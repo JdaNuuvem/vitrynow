@@ -218,6 +218,10 @@ desenvolvimento (padrão `false` = começa no legado). Contrato conferido contra
 - Teste: `SelfTestJobs.cs` roda o `DeviceClient` real contra uma API falsa que implementa lease, ack idempotente, 409 e attempts (feliz, fila vazia, offline, 2ª via/cancelamento/teste, tipo desconhecido,
   lease vencida, re-oferta, ack com falha + reinício, duas impressoras, chave recusada, recuo sem laço quente, impressora com defeito não segura o job, padrão legado intacto).
 
+## Alerta central (PC-24)
+
+Os avisos do cliente (`nothingToCharge` incoerente, tíquete sem itens e total zero, modo da loja que não consigo confirmar) também vão ao servidor: `POST /api/device/alerts` com **só** `code` (lista fechada de 5), `orderId` opcional (cuid) e `clientVersion`; sem texto livre e sem dado do cliente. É melhor esforço e nunca atrasa impressão nem ack (segundo plano, 3 s, no máximo 5 em voo, dedupe de 10 min, falha descartada). Detalhes e testes em `docs\contrato-printjob-cliente.md`.
+
 ## Confiabilidade e segredos (PC-02)
 
 - **Dedupe e ack persistido** (`Services/PrintLedger.cs`, arquivo `%LOCALAPPDATA%\MeuCardapioPrintClient\printed.json`): polling e WS passam pelo mesmo portão, um pedido nunca é impresso duas vezes, e se o aviso à API falhar o ack é repetido sem reimprimir. Falha de impressão volta com recuo (15 s até 5 min) e sem novo alerta sonoro.
