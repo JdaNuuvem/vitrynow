@@ -47,6 +47,42 @@ beforeEach(() => {
   runProtected.mockClear();
 });
 
+describe("usePedidos: estado de carregamento", () => {
+  it("começa 'loading' e vira 'ready' com a 1ª resposta", async () => {
+    const { result } = setup();
+    expect(result.current.loadState).toBe("loading");
+    await waitFor(() => expect(result.current.loadState).toBe("ready"));
+  });
+
+  it("falha na 1ª carga vira 'error' e a lista continua vazia", async () => {
+    const { result } = setup({ list: vi.fn().mockResolvedValue(fail(500, "x")) });
+    await waitFor(() => expect(result.current.loadState).toBe("error"));
+    expect(result.current.orders).toEqual([]);
+  });
+
+  it("'Tentar de novo' volta a 'loading' e, com sucesso, a 'ready'", async () => {
+    const list = vi.fn().mockResolvedValueOnce(fail(500, "x")).mockResolvedValue(ok({ orders: [order()] }));
+    const { result } = setup({ list });
+    await waitFor(() => expect(result.current.loadState).toBe("error"));
+    act(() => result.current.retryLoad());
+    await waitFor(() => expect(result.current.loadState).toBe("ready"));
+    expect(result.current.orders).toHaveLength(1);
+  });
+
+  it("falha DEPOIS de já mostrar pedidos mantém a lista e o estado 'ready'", async () => {
+    const list = vi.fn().mockResolvedValueOnce(ok({ orders: [order()] })).mockResolvedValue(fail(500, "x"));
+    // A ação falha com um código que manda recarregar; a recarga também falha.
+    const { result } = setup({ list, transition: vi.fn().mockResolvedValue(fail(409, "x", "ORDER_STATE_CHANGED")) });
+    await waitFor(() => expect(result.current.loadState).toBe("ready"));
+    await act(async () => {
+      await result.current.transition(order(), action());
+    });
+    expect(list.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(result.current.loadState).toBe("ready");
+    expect(result.current.orders).toHaveLength(1);
+  });
+});
+
 describe("usePedidos: avançar pela aresta do servidor", () => {
   it("chama /transition com o estado de destino da ação e recarrega a lista", async () => {
     const { result, orders } = setup({ transition: vi.fn().mockResolvedValue(ok({ order: order({ canUndo: true }) })) });

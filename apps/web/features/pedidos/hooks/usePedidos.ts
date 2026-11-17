@@ -11,6 +11,8 @@ import { buildCancelBody, type CancelDraft } from "../cancelReasons";
 import { explainOrderError } from "../orderErrors";
 import type { CardAction } from "../orderActions";
 
+export type LoadState = "loading" | "ready" | "error";
+
 // Oferta de "Desfazer" depois de avançar um pedido (spec 02 §4). Um por vez.
 export type UndoOffer = { orderId: string; text: string };
 
@@ -32,13 +34,19 @@ export function usePedidos() {
   const [undoOffer, setUndoOffer] = useState<UndoOffer | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
+  // Carregando é diferente de vazio: antes da 1ª resposta a tela NÃO pode dizer "Nenhum pedido aqui".
+  const [loadState, setLoadState] = useState<LoadState>("loading");
+
   const reload = useCallback(async () => {
     const result = await ordersGateway.list();
     if (!result.ok) {
       if (result.status === 401) router.push("/login");
+      // Falha depois de já ter mostrado pedidos: mantém a última lista; só a 1ª carga vira erro.
+      else setLoadState((current) => (current === "ready" ? current : "error"));
       return;
     }
     setOrders(result.data.orders);
+    setLoadState("ready");
   }, [ordersGateway, router]);
 
   useEffect(() => {
@@ -123,6 +131,11 @@ export function usePedidos() {
 
   return {
     orders,
+    loadState,
+    retryLoad: () => {
+      setLoadState("loading");
+      void reload();
+    },
     deliverers,
     notice,
     undoOffer,

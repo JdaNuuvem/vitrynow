@@ -55,6 +55,23 @@ export function PedidosPage() {
         </div>
       )}
 
+      {/* 1ª carga: nem abas nem colunas, para "carregando" nunca parecer "nenhum pedido". */}
+      {p.loadState === "loading" && (
+        <div role="status" className="pedidos__loading">
+          <span className="pedidos__spinner" aria-hidden="true" />
+          Carregando pedidos…
+        </div>
+      )}
+      {p.loadState === "error" && (
+        <div role="alert" className="pedidos__notice">
+          <span>Não foi possível carregar os pedidos. Verifique sua internet.</span>
+          <button type="button" className="pedidos__retry" onClick={p.retryLoad}>
+            Tentar de novo
+          </button>
+        </div>
+      )}
+
+      {p.loadState === "ready" && (
       <div className="pedidos__tabs" role="group" aria-label="Etapas do pedido">
         {KANBAN_COLUMNS.map((status) => (
           <button key={status} type="button" aria-pressed={tab === status} className={tab === status ? "is-active" : undefined} onClick={() => setTab(status)}>
@@ -62,7 +79,9 @@ export function PedidosPage() {
           </button>
         ))}
       </div>
+      )}
 
+      {p.loadState === "ready" && (
       <div className="pedidos__board">
         {KANBAN_COLUMNS.map((status) => (
           <section key={status} className={`pedidos__column${tab === status ? " is-active" : ""}`} aria-label={statusLabel(status)}>
@@ -84,6 +103,7 @@ export function PedidosPage() {
           </section>
         )}
       </div>
+      )}
 
       {p.undoOffer && <UndoToast text={p.undoOffer.text} onUndo={() => p.undo(p.undoOffer!.orderId)} onDismiss={p.dismissUndo} />}
 

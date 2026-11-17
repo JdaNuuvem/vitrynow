@@ -6,10 +6,11 @@ import { PedidosPage } from "./PedidosPage";
 
 type HookState = {
   orders: Order[];
+  loadState: "loading" | "ready" | "error";
   notice: string | null;
   undoOffer: { orderId: string; text: string } | null;
 };
-const state: HookState = { orders: [], notice: null, undoOffer: null };
+const state: HookState = { orders: [], loadState: "ready", notice: null, undoOffer: null };
 const fns = {
   transition: vi.fn(),
   undo: vi.fn(),
@@ -18,6 +19,7 @@ const fns = {
   assignDeliverer: vi.fn(),
   dismissNotice: vi.fn(),
   dismissUndo: vi.fn(),
+  retryLoad: vi.fn(),
 };
 vi.mock("./hooks/usePedidos", () => ({
   usePedidos: () => ({ ...state, deliverers: [], busyId: null, ...fns }),
@@ -33,6 +35,7 @@ const column = (name: string) => screen.getByRole("region", { name }) as HTMLEle
 
 beforeEach(() => {
   state.orders = [];
+  state.loadState = "ready";
   state.notice = null;
   state.undoOffer = null;
   Object.values(fns).forEach((fn) => fn.mockReset());
@@ -93,6 +96,33 @@ describe("PedidosPage: cabeçalhos, contadores e estados vazios", () => {
     render(<PedidosPage />);
     expect(screen.queryByText("EM_PREPARO")).not.toBeInTheDocument();
     expect(screen.queryByText("PENDENTE")).not.toBeInTheDocument();
+  });
+});
+
+describe("PedidosPage: carregando não é vazio (revisão da Da Vinci, B1)", () => {
+  it("na 1ª carga mostra 'Carregando pedidos…' e NÃO diz 'Nenhum pedido aqui', nem mostra colunas ou abas", () => {
+    state.loadState = "loading";
+    render(<PedidosPage />);
+    expect(screen.getByRole("status")).toHaveTextContent("Carregando pedidos…");
+    expect(screen.queryByText("Nenhum pedido aqui.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Etapas do pedido" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Pendente" })).not.toBeInTheDocument();
+  });
+
+  it("falha na 1ª carga: alerta com 'Tentar de novo', sem fingir que não há pedidos", async () => {
+    state.loadState = "error";
+    render(<PedidosPage />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Não foi possível carregar os pedidos.");
+    expect(screen.queryByText("Nenhum pedido aqui.")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Tentar de novo" }));
+    expect(fns.retryLoad).toHaveBeenCalledTimes(1);
+  });
+
+  it("pronto e sem pedidos: aí sim 'Nenhum pedido aqui.'", () => {
+    state.loadState = "ready";
+    render(<PedidosPage />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(within(column("Pendente")).getByText("Nenhum pedido aqui.")).toBeInTheDocument();
   });
 });
 
