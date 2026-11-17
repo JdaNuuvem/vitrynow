@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Category } from "@/core/domain/storefront";
+import { scrollBehavior } from "@/lib/motion";
 import { SearchIcon } from "../icons";
 
 export function CategorySectionHeading({ category }: { category: { name: string; icon: string | null } }) {
@@ -34,14 +35,16 @@ export function CategoryChips({
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
 
-  // Traz o chip ativo para dentro da linha rolável (instantâneo: o movimento suave é da fatia 2). Só mexe na rolagem
+  // Traz o chip ativo para dentro da linha rolável. Só mexe na rolagem
   // horizontal da própria linha: nunca na da página, e nunca no foco.
   useEffect(() => {
     const row = rowRef.current;
     const chip = row?.querySelector<HTMLElement>('[aria-current="true"]');
     if (!row || !chip) return;
-    const target = chip.offsetLeft - (row.clientWidth - chip.offsetWidth) / 2;
-    row.scrollLeft = Math.max(0, target);
+    const target = Math.max(0, chip.offsetLeft - (row.clientWidth - chip.offsetWidth) / 2);
+    // Suave (M-03), exceto para quem pediu menos movimento (scrollBehavior devolve "auto").
+    if (typeof row.scrollTo === "function") row.scrollTo({ left: target, behavior: scrollBehavior() });
+    else row.scrollLeft = target;
   }, [activeCategoryId]);
 
   if (categories.length <= 1) return null;

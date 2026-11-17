@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Category } from "@/core/domain/storefront";
 import { CategoryChips, StickyBar } from "./CategoryNav";
 
@@ -61,6 +61,34 @@ describe("CategoryChips (spec 12 §2.1, §9)", () => {
     Object.defineProperty(chip, "offsetWidth", { value: 100, configurable: true });
     rerender(<CategoryChips categories={categories} activeCategoryId="c3" stuck={false} identity={identity} onSelect={vi.fn()} onOpenSearch={vi.fn()} />);
     expect(row.scrollLeft).toBe(400); // 500 − (300 − 100) / 2
+  });
+
+  describe("chip ativo centralizado com rolagem suave (M-03)", () => {
+    const base = { categories, stuck: false, identity, onSelect: vi.fn(), onOpenSearch: vi.fn() };
+    const motion = (reduced: boolean) => vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: reduced, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    afterEach(() => vi.unstubAllGlobals());
+
+    function swap(reduced: boolean) {
+      motion(reduced);
+      const { rerender } = render(<CategoryChips {...base} activeCategoryId="c1" />);
+      const row = document.querySelector(".loja__chips") as HTMLElement;
+      const scrollTo = vi.fn();
+      row.scrollTo = scrollTo as unknown as typeof row.scrollTo;
+      Object.defineProperty(row, "clientWidth", { value: 300, configurable: true });
+      const chip = screen.getByRole("button", { name: "Sobremesas" });
+      Object.defineProperty(chip, "offsetLeft", { value: 500, configurable: true });
+      Object.defineProperty(chip, "offsetWidth", { value: 100, configurable: true });
+      rerender(<CategoryChips {...base} activeCategoryId="c3" />);
+      return scrollTo;
+    }
+
+    it("rola suave até centralizar o chip", () => {
+      expect(swap(false)).toHaveBeenCalledWith({ left: 400, behavior: "smooth" });
+    });
+
+    it("menos movimento: rolagem sem suavidade", () => {
+      expect(swap(true)).toHaveBeenCalledWith({ left: 400, behavior: "auto" });
+    });
   });
 
   it("com uma categoria só (ou nenhuma) a barra não aparece", () => {

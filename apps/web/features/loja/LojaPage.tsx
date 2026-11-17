@@ -18,12 +18,13 @@ import { buildOrderSummary, type CheckoutForm, type CheckoutTotals } from "./che
 import { restoreReturnPoint, type ReturnPoint } from "./focusReturn";
 import { useCart } from "./hooks/useCart";
 import { useInView } from "./hooks/useInView";
+import { useRevealOnEnter } from "./hooks/useRevealOnEnter";
 import { useScrolledPast } from "./hooks/useScrolledPast";
 import { useScrollSpy } from "./hooks/useScrollSpy";
 import { useMenu } from "./hooks/useMenu";
 import { useOrderFlow } from "./hooks/useOrderFlow";
 import { useOrderHistory } from "./hooks/useOrderHistory";
-import { scrollBehavior } from "@/lib/motion";
+import { prefersReducedMotion, scrollBehavior } from "@/lib/motion";
 import { storeInitials } from "@/lib/storeInitials";
 import { useMediaQuery } from "@/lib/useMediaQuery";
 import { lojaTitleFont } from "./fonts";
@@ -73,7 +74,26 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
   useEffect(() => {
     if (!atEnd) setPinnedId(null);
   }, [atEnd]);
+  useRevealOnEnter(itemsScreenShown);
   const spyId = useScrollSpy(sectionIds, { topOffsetPx: wide ? 72 : 120, enabled: itemsScreenShown });
+
+  // M-07: a pílula do carrinho pulsa (1 → 1,06 → 1, 300 ms) quando entra item ou o total muda, com a pílula já na tela.
+  // Web Animations API (só `transform`), sem classe nem remontagem: o foco do botão não se perde. A 1ª aparição tem
+  // animação própria (CSS) e não pulsa; quem pediu menos movimento não recebe pulso.
+  const cartBarRef = useRef<HTMLButtonElement>(null);
+  const lastCart = useRef({ count: 0, total: 0 });
+  useEffect(() => {
+    const before = lastCart.current;
+    lastCart.current = { count: cart.itemCount, total: cart.totalCents };
+    const bar = cartBarRef.current;
+    if (!bar || before.count === 0 || cart.itemCount === 0) return;
+    if (before.count === cart.itemCount && before.total === cart.totalCents) return;
+    if (prefersReducedMotion() || typeof bar.animate !== "function") return;
+    bar.animate(
+      [{ transform: "translateX(-50%) scale(1)" }, { transform: "translateX(-50%) scale(1.06)" }, { transform: "translateX(-50%) scale(1)" }],
+      { duration: 300, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" },
+    );
+  }, [cart.itemCount, cart.totalCents]);
 
   // Se o servidor recusou por loja fechada, rebusca o cardápio: o banner e o bloqueio passam a vir do estado real.
   useEffect(() => {
@@ -250,6 +270,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
 
         {cart.itemCount > 0 && !checkoutOpen && (
           <button
+            ref={cartBarRef}
             type="button"
             onClick={() => setCartOpen(true)}
             className="loja__cart-bar"
@@ -261,8 +282,11 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
               </span>
               <span aria-hidden="true">Ver carrinho</span>
             </span>
+            {/* M-07: o total "rola" (sai por cima, entra por baixo) quando muda: o `key` refaz só este trecho */}
             <span className="loja__cart-bar-total" aria-hidden="true">
-              {formatCents(cart.totalCents)}
+              <span key={cart.totalCents} className="loja__roll">
+                {formatCents(cart.totalCents)}
+              </span>
             </span>
           </button>
         )}
