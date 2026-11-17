@@ -56,5 +56,12 @@ Sintoma: suítes falham em massa com `Can't reach database server`/503; `docker 
 3. Só rode suítes depois (no máximo 2 completas ao mesmo tempo, regra do BOARD §0).
 Histórico e contexto medido: BOARD §3 (5 saídas em 17/11; causa **não provada**).
 
-## 10. Ainda NÃO documentado (sem prova)
+## 10. Modo de impressão por loja, LEGACY ou QUEUE (API-12b, ADR-0004 §8.12)
+**O que eu verifiquei:** só a migração `20261117160000_store_print_mode` (21 ok / 0 falhas; junto com a API-07, 37 ok / 0 falhas; `hopper\evidencias\INF-07-api12b-160000.log`): aditiva, as lojas existentes viram LEGACY. **O que é relato do Turing/Atlas e eu NÃO executei:** o comportamento da virada abaixo.
+- **Trocar o modo:** `PUT /api/store/print-mode`, só o OWNER. Faça **fora do horário de pico**. A resposta traz as **3 consultas de conferência**: depois da virada devem dar **0**. Repetir a troca é seguro (idempotente: não muda nada nem grava nova auditoria). Se as consultas não zerarem, **pare e avise o Turing/Atlas**: não force.
+- **QUEUE para LEGACY (recuo de emergência):** é recusado com 409 `PRINT_IN_PROGRESS` enquanto houver job em impressão com lease vigente (lease de 120 s). O painel diz "há impressão em andamento, tente em instantes": espere **até 2 min** e repita.
+- **Auditoria:** cada troca grava `print.mode_change` na mesma transação (se não grava, o modo não muda); STAFF recebe 403 e a tentativa fica registrada.
+- **Voltar o app para uma versão sem esta migração:** o app antigo ignora a coluna. Desfazer o banco só **depois** de voltar o app: `ALTER TABLE "Store" DROP COLUMN "printMode"; DROP TYPE "PrintMode";`. Isso **perde o modo escolhido por loja** (volta tudo para o comportamento LEGACY). Não executado por mim.
+
+## 11. Ainda NÃO documentado (sem prova)
 Suspensão/reativação de loja (depende de API-09), restauração em servidor de produção, observabilidade/alertas (INF-08), `deploy.sh` com backup obrigatório antes de migrar (rascunho em `hopper/inf11/deploy.sh.rascunho`, nunca executado).
