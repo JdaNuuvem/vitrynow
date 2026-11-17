@@ -103,6 +103,12 @@ export type WsServerMessage = z.infer<typeof wsServerMessageSchema>;
 export const orderPaymentMethodSchema = z.enum(["DINHEIRO", "PIX", "CREDITO", "DEBITO", "VR", "VA"]);
 export type OrderPaymentMethod = z.infer<typeof orderPaymentMethodSchema>;
 
+// Contrato do tíquete (ADR-0004 §6/§7). `PAGO` é a ÚNICA prova de "NÃO COBRAR": só a API emite, e só com pagamento
+// aprovado e verificado (webhook com valor/referência conferidos). Nenhum token, QR, e-mail nem id do provedor aqui.
+export const ticketPaymentStatusSchema = z.enum(["PAGO", "A_COBRAR", "ESTORNADO"]);
+export type TicketPaymentStatus = z.infer<typeof ticketPaymentStatusSchema>;
+export const TICKET_SCHEMA_VERSION = 2; // 1 = contrato anterior (sem os campos do B4); o print-client antigo ignora o que não conhece
+
 export const printableOrderSchema = z.object({
   orderId: z.string(),
   code: z.string(),
@@ -117,6 +123,17 @@ export const printableOrderSchema = z.object({
   tipCents: z.number().int(),
   paymentMethod: orderPaymentMethodSchema.nullable(),
   createdAt: z.string(),
+  // ---- B4 (API-14) ----
+  ticketSchemaVersion: z.number().int().optional(),
+  paymentStatus: ticketPaymentStatusSchema.optional(),
+  tableLabel: z.string().nullable().optional(), // "Mesa 12" (API-22; null até existir mesa)
+  subtotalCents: z.number().int().optional(),
+  discountCents: z.number().int().optional(),
+  couponCode: z.string().nullable().optional(),
+  changeForCents: z.number().int().nullable().optional(),
+  reprintCount: z.number().int().nonnegative().optional(),
+  printedAtOriginal: z.string().nullable().optional(), // ISO UTC, só na 2ª via
+  cancelNotice: z.boolean().optional(), // true = imprime o aviso de cancelamento (sem itens/valores/endereço)
   items: z.array(
     z.object({
       productName: z.string(),
