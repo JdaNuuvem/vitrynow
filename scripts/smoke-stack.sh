@@ -6,6 +6,8 @@
 #   3 api/web/postgres sem porta publicada           7 backup verificado gerado e saudável (B05)
 #   4 api/web rodam sem root
 # Sem TLS/DNS/e-mail/serviços externos. Porta do Caddy: SMOKE_PORT (padrão 55443, faixa da Hopper).
+# ARMADILHA (achada em 17/11): com pipefail, `printf "$var" | grep -q X` dá FALSO NEGATIVO quando o grep -q sai no 1º acerto e o printf leva SIGPIPE (log grande com
+# vários acertos). Num detector de vazamento isso esconde o vazamento. Para testar "contém" numa variável use `[[ "$var" == *"X"* ]]` ou `grep -c` (lê tudo).
 set -uo pipefail
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -156,14 +158,14 @@ if docker image inspect "$img" 2>/dev/null | grep -qF "$SECRET"; then check fail
 html="$(curl -s "http://127.0.0.1:$PORT/")"; leak=0; n=0
 chunks="$(printf '%s' "$html" | grep -oE '/_next/static/[^"'"'"' )]+\.(js|css)' | sort -u | head -40)"
 for u in $chunks; do n=$((n+1)); if curl -s "http://127.0.0.1:$PORT$u" | grep -qF "$SECRET"; then leak=1; echo "   VAZOU em $u"; fi; done
-if printf '%s' "$html" | grep -qF "$SECRET"; then leak=1; echo "   VAZOU no HTML da home"; fi
+if [[ "$html" == *"$SECRET"* ]]; then leak=1; echo "   VAZOU no HTML da home"; fi
 if [ "$n" -ge 3 ] && [ "$leak" = 0 ]; then check ok "segredo ausente do HTML e de $n arquivos estáticos que o navegador baixa"; else check fail "vazamento ($leak) ou poucos arquivos conferidos ($n)"; fi
 # SSR de ponta a ponta: cadastra uma loja de teste e abre o cardápio dela; o nome só vem no HTML se o servidor do web alcançou a API
 slug="smoke-ssr-$RANDOM"
 smokeEmail="smoke$RANDOM@exemplo.invalid"; smokePass="SenhaLonga-12345"
 rc="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "{\"storeName\":\"Loja Smoke SSR\",\"slug\":\"$slug\",\"code\":\"SM$RANDOM\",\"email\":\"$smokeEmail\",\"password\":\"$smokePass\"}" "http://127.0.0.1:$PORT/auth/register")"
 page="$(curl -s -w '|%{http_code}' "http://127.0.0.1:$PORT/loja/$slug")"
-if [ "$rc" = 201 ] && [ "${page##*|}" = 200 ] && printf '%s' "$page" | grep -q "Loja Smoke SSR"; then check ok "SSR: /loja/$slug traz o nome da loja no HTML (o servidor do web alcançou a API por http://api:3001)"
+if [ "$rc" = 201 ] && [ "${page##*|}" = 200 ] && [[ "$page" == *"Loja Smoke SSR"* ]]; then check ok "SSR: /loja/$slug traz o nome da loja no HTML (o servidor do web alcançou a API por http://api:3001)"
 else check fail "SSR não trouxe a loja (cadastro=$rc, página=${page##*|}); o web pode estar caindo no plano B do navegador"; fi
 # LOGIN BEM-SUCEDIDO + ROTAS DO PAINEL que leem várias tabelas, com o cookie da sessão (INF-22): é o que um `--filter` que deixasse de fora um pacote de que a API precisa em
 # tempo de execução (db/Prisma client, shared-types, bcrypt) quebraria. O limite do /auth/login (8/min por IP) pode ainda estar valendo por causa da seção 6b: espera o Retry-After.
@@ -399,7 +401,7 @@ elif [ "$KNOWN_RED_ST70" = 1 ]; then KRED=$((KRED+1)); echo "  [VERMELHO CONHECI
 else check fail "C1 [api]: o orderId no CAMINHO (V4) aparece $nv4 vez(es) no log da API (ST-70)"; fi
 # --- CONTROLES POSITIVOS, um por serviço (provam que o log do serviço existe e que a ausência dos valores é significativa)
 nerr="$(printf '%s' "$LOGC" | grep -c '"logger":"http.log.error".*"status":502')"
-faltou=""; nred=0; for f in '/reset-senha/REDACTED' '/loja/REDACTED' '/stores/REDACTED'; do if printf '%s' "$LOGC" | grep -q "\"uri\":\"$f\""; then nred=$((nred+1)); else faltou="$faltou $f"; fi; done
+faltou=""; nred=0; for f in '/reset-senha/REDACTED' '/loja/REDACTED' '/stores/REDACTED'; do if [[ "$LOGC" == *"\"uri\":\"$f\""* ]]; then nred=$((nred+1)); else faltou="$faltou $f"; fi; done
 { [ "$nerr" -ge 3 ] && [ "$nred" = 3 ]; } && check ok "controle [caddy]: o log de ERRO existe ($nerr linhas http.log.error 502) e o filtro agiu nas 3 rotas (uri reduzido; cabeçalhos removidos)" || { check fail "controle [caddy]: $nerr linha(s) de erro 502 e $nred/3 uri filtrados; FALTOU:$faltou (o filtro virou 'sem log' ou não agiu nessa rota)"; echo "   --- linhas http.log.error (já filtradas, seguras de mostrar):"; printf '%s' "$LOGC" | grep '"logger":"http.log.error"' | cut -c1-360 | head -6 | sed 's/^/   /'; }
 napi="$(printf '%s' "$LOGA" | grep -c 'payment-status')"
 [ "$napi" -ge 1 ] && check ok "controle [api]: o log da API registra a requisição ($napi linha(s) com a rota payment-status): a ausência dos valores de query/cabeçalho é significativa" || check fail "controle [api]: nenhuma linha de log da requisição à API (o teste não distingue 'redigido' de 'sem log')"
