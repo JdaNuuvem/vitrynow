@@ -4,7 +4,7 @@ import { Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
 import { Prisma, prisma } from "@meucardapio/db";
 import { buildApp } from "../src/app";
-import { LOG_CLIENT_TEXT_MAX, LOG_HOSTNAME_MAX, loggerOptions, safeError } from "../src/lib/logging";
+import { LOG_CLIENT_TEXT_MAX, LOG_HOSTNAME_MAX, LOG_MAX_DEPTH, LOG_MAX_STRING, loggerOptions, safeError, sanitizeLogObject, scrubText } from "../src/lib/logging";
 
 // SEC-31 (ST-71, ST-72, ST-74): o log não pode levar (a) cabeçalho de autorização / campo OAuth de erro de biblioteca HTTP ou de objeto do provedor,
 // (b) a mensagem do Prisma, que renderiza os VALORES da chamada (dado pessoal), nem (c) texto do cliente sem teto de tamanho.
@@ -29,9 +29,11 @@ function httpLibError() {
   error.code = "ERR_BAD_REQUEST";
   error.config = { url: "https://api.provedor.example/pagamentos", headers: { Authorization: "Bearer TOKEN-DO-PROVEDOR-9f8e7d", "x-api-key": "CHAVE-DE-API-1a2b3c" } };
   error.response = { status: 401, data: { access_token: "AT-NA-RESPOSTA-777", client_secret: "CS-NA-RESPOSTA-888" }, config: { headers: { Authorization: "Bearer OUTRO-TOKEN-5544" } } };
+  error.config = { ...(error.config as object), data: '{"client_secret":"CS-NO-DATA-4455","grant":"client_credentials"}' }; // corpo da requisição em TEXTO
+  error.request = { _header: "POST /oauth/token HTTP/1.1" + String.fromCharCode(13, 10) + "Authorization: Bearer HEADER-TEXT-9988" + String.fromCharCode(13, 10) }; // cabeçalho cru em TEXTO
   return error;
 }
-const HTTP_SECRETS = ["TOKEN-DO-PROVEDOR-9f8e7d", "CHAVE-DE-API-1a2b3c", "AT-NA-RESPOSTA-777", "CS-NA-RESPOSTA-888", "OUTRO-TOKEN-5544"];
+const HTTP_SECRETS = ["TOKEN-DO-PROVEDOR-9f8e7d", "CHAVE-DE-API-1a2b3c", "AT-NA-RESPOSTA-777", "CS-NA-RESPOSTA-888", "OUTRO-TOKEN-5544", "CS-NO-DATA-4455", "HEADER-TEXT-9988"];
 
 describe("ST-72: erro de biblioteca HTTP e campos do OAuth não vão para o log", () => {
   it("`app.log.error(error)` bruto, `{ err }` e erro aninhado: nenhum segredo sai; CONTROLE POSITIVO: as linhas existem e trazem o tipo e a mensagem", async () => {
@@ -42,11 +44,7 @@ describe("ST-72: erro de biblioteca HTTP e campos do OAuth não vão para o log"
     app.log.error({ detalhe: { err: httpLibError() } }, "erro aninhado"); // `err` fora do nível raiz: quem protege é o `redact`/serializador não alcança
     await app.close();
     const all = lines.join("\n");
-    for (const secret of HTTP_SECRETS) {
-      // o aninhado (`detalhe.err`) não passa pelo serializador `err`; a redação por caminho cobre `*.*.headers.*`, e o resto do conteúdo é do erro
-      if (secret === "AT-NA-RESPOSTA-777" || secret === "CS-NA-RESPOSTA-888") continue;
-      expect(all, secret).not.toContain(secret);
-    }
+    for (const secret of HTTP_SECRETS) expect(all, secret).not.toContain(secret); // inclusive o erro ANINHADO (SEC-31c)
     const bruta = parsed().find((l) => l.msg === "Request failed with status code 401")!; // `app.log.error(error)`: a mensagem do erro vira o texto da linha
     const comErr = parsed().find((l) => l.msg === "falha ao falar com o provedor")!;
     expect(bruta.err.type).toBe("AxiosError");
@@ -246,6 +244,96 @@ describe("ST-76: o id da requisição devolvido ao cliente não é um contador n
     const errorIds = parsed().filter((l) => l.level === 50).map((l) => l.reqId);
     expect(errorIds).toEqual(ids);
     expect(JSON.stringify(parsed())).not.toContain("ATACANTE");
+  });
+});
+
+describe("SEC-31c: o log é percorrido recursivamente (erro dentro de contexto, campo OAuth fundo, segredo dentro de texto)", () => {
+  it("LOG-c (Sun Tzu): erro de biblioteca HTTP DENTRO de um objeto de contexto ⇒ nenhum dos 7 segredos sai (config.data e request._header em texto incluídos); CONTROLE POSITIVO: a linha traz o tipo e a mensagem", async () => {
+    const { app, lines, parsed } = capture();
+    await app.ready();
+    app.log.error({ ctx: { cause: httpLibError(), tentativa: 2 }, motivo: "pagamento recusado" }, "falha no provedor de pagamento");
+    app.log.error({ lista: [httpLibError()] }, "erro em lista");
+    await app.close();
+    const all = lines.join("\n");
+    for (const secret of HTTP_SECRETS) expect(all, secret).not.toContain(secret);
+    const line = parsed().find((l) => l.msg === "falha no provedor de pagamento")!;
+    expect(line.ctx.cause.type).toBe("AxiosError");
+    expect(line.ctx.cause.message).toBe("Request failed with status code 401");
+    expect(line.ctx.cause.config).toBeUndefined();
+    expect(line.ctx.tentativa).toBe(2); // o que não é segredo continua legível
+    expect(line.motivo).toBe("pagamento recusado");
+    expect(parsed().find((l) => l.msg === "erro em lista")!.lista[0].type).toBe("AxiosError");
+  });
+
+  it("LOG-d (Sun Tzu): campo OAuth a 3, 4 e 5 níveis é redigido em qualquer profundidade e sem diferenciar caixa; o texto comum fica; além da profundidade máxima nada é impresso", async () => {
+    const { app, lines, parsed } = capture();
+    await app.ready();
+    let fundo: Record<string, unknown> = { Client_Secret: "CS-NIVEL-FUNDO-0" };
+    for (let i = 0; i < LOG_MAX_DEPTH + 2; i += 1) fundo = { filho: fundo };
+    app.log.info(
+      {
+        dados: { prov: { client_secret: "CS-3-NIVEIS", RefreshToken: "RT-3", nivel4: { nivel5: { access_token: "AT-5", "X-Api-Key": "KEY-5" } } }, nome: "Loja do Zé" },
+        fundo,
+        visivel: "texto-comum-que-fica",
+      },
+      "oauth fundo",
+    );
+    await app.close();
+    const all = lines.join("\n");
+    for (const secret of ["CS-3-NIVEIS", "RT-3", "AT-5", "KEY-5", "CS-NIVEL-FUNDO-0"]) expect(all, secret).not.toContain(secret);
+    const line = parsed().find((l) => l.msg === "oauth fundo")!;
+    expect(line.visivel).toBe("texto-comum-que-fica");
+    expect(line.dados.nome).toBe("Loja do Zé");
+    expect(line.dados.prov.client_secret).toBe("[redigido]");
+    expect(line.dados.prov.nivel4.nivel5.access_token).toBe("[redigido]");
+    expect(JSON.stringify(line.fundo)).toContain("[profundo demais]");
+  });
+
+  it("segredo dentro de TEXTO (cabeçalho cru, corpo serializado, query string) é apagado; o resto do texto fica", () => {
+    const crlf = String.fromCharCode(13, 10);
+    const header = scrubText("POST /x" + crlf + "Authorization: Bearer ABCDEF123456");
+    expect(header).toContain("[redigido]");
+    expect(header).not.toContain("ABCDEF123456");
+    expect(scrubText('{"access_token":"AT-TEXTO-1","expires_in":3600}')).toBe('{"access_token":"[redigido]","expires_in":3600}');
+    expect(scrubText("password=SENHA-TEXTO-4&pagina=2&client_secret=CS-TEXTO-5")).toBe("password=[redigido]&pagina=2&client_secret=[redigido]");
+    expect(scrubText("Basic dXN1YXJpbzpzZW5oYQ==")).not.toContain("dXN1YXJpbzpzZW5oYQ==");
+    expect(scrubText("pedido 123 entregue em 12 minutos")).toBe("pedido 123 entregue em 12 minutos"); // não redige texto comum
+  });
+
+  it("limites e robustez: string longa é cortada, array e chaves têm teto, referência circular e Buffer não derrubam o log, o mesmo objeto em dois ramos é logado nos dois", () => {
+    const circular: Record<string, unknown> = { nome: "ciclo" };
+    circular.eu = circular;
+    const compartilhado = { valor: 1 };
+    const out = sanitizeLogObject({
+      longa: "x".repeat(LOG_MAX_STRING * 3),
+      lista: Array.from({ length: 200 }, (_, i) => i),
+      circular,
+      binario: Buffer.from("segredo-binario"),
+      a: compartilhado,
+      b: compartilhado,
+      quando: new Date("2026-11-17T12:00:00Z"),
+      funcao: () => 1,
+    }) as Record<string, any>;
+    expect(out.longa.length).toBeLessThan(LOG_MAX_STRING + 40);
+    expect(out.longa).toContain("[cortado]");
+    expect(out.lista).toHaveLength(50);
+    expect(out.circular.eu).toBe("[circular]");
+    expect(out.binario).toBe("[binário]");
+    expect(out.a).toEqual({ valor: 1 });
+    expect(out.b).toEqual({ valor: 1 });
+    expect(out.quando).toBeInstanceOf(Date);
+    expect(out.funcao).toBeUndefined();
+    const many = Object.fromEntries(Array.from({ length: 300 }, (_, i) => [`k${i}`, i]));
+    expect(Object.keys((sanitizeLogObject({ many }) as Record<string, any>).many).length).toBeLessThanOrEqual(101);
+  });
+
+  it("NÃO redige a mais: os logs de jobs e de requisição seguem legíveis; `req`, `res` e `err` passam intactos para os serializadores", () => {
+    const req = { method: "GET", url: "/x" };
+    const err = new Error("boom");
+    const out = sanitizeLogObject({ job: "tech.cleanup", durationMs: 12, lagMs: 3, processed: 40, error: "mensagem do job", req, res: { statusCode: 200 }, err }) as Record<string, unknown>;
+    expect(out).toMatchObject({ job: "tech.cleanup", durationMs: 12, lagMs: 3, processed: 40, error: "mensagem do job" });
+    expect(out.req).toBe(req); // mesma referência: o serializador `req` decide o que loga
+    expect(out.err).toBe(err); // o Error de `err` chega ao serializador `err` (que aplica o `safeError`)
   });
 });
 

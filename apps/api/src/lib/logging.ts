@@ -155,9 +155,72 @@ export function safeError(error: unknown): Record<string, unknown> {
   };
 }
 
+// SEC-31c (ST-72, defesa em profundidade): o `redact` do pino casa caminhos fixos e o serializador `err` só age na chave `err`. Um erro de
+// biblioteca HTTP DENTRO de um objeto de contexto (`{ ctx: { cause: err } }`) ou um campo OAuth a 3+ níveis escapavam. Este formatador percorre o
+// objeto logado RECURSIVAMENTE (até LOG_MAX_DEPTH níveis) e: (a) troca todo Error por `safeError`; (b) redige o valor de toda chave com nome de
+// segredo, em qualquer profundidade e sem diferenciar caixa; (c) apaga o segredo de dentro de TEXTO (cabeçalho `Authorization: Bearer …`,
+// `"access_token":"…"` em corpo serializado); (d) corta string longa e limita o número de chaves. É seguro por padrão: o que não passa fica de fora.
+export const LOG_MAX_DEPTH = 8;
+export const LOG_MAX_STRING = 2000;
+const LOG_MAX_KEYS = 100;
+const LOG_MAX_ITEMS = 50;
+const SECRET_KEY = /token|secret|passw|passwd|authoriz|cookie|api[-_]?key|bearer|credential|signature|jwt|session/i;
+// segredo dentro de texto: `Bearer abc`, `Authorization: abc`, `"access_token":"abc"`, `password=abc`, `client_secret=abc`
+const SECRET_IN_TEXT = /\b(bearer|basic)\s+[A-Za-z0-9._~+\/=-]{6,}|((?:access_token|refresh_token|client_secret|id_token|api[-_]?key|password|passwd|authorization|x-order-token|x-mfa-challenge|x-admin-token)["']?\s*[:=]\s*["']?)(?:(?:bearer|basic)\s+)?[^"'&\s,}]+/gi;
+// chaves tratadas por serializador do pino (cada uma sabe o que loga): req/res/err e o `errorKey`; o formatador as deixa passar
+const SERIALIZED_KEYS = new Set(["req", "res", "err"]);
+
+export function scrubText(text: string): string {
+  const cut = text.length > LOG_MAX_STRING ? `${text.slice(0, LOG_MAX_STRING)}…[cortado]` : text;
+  return cut.replace(SECRET_IN_TEXT, (_match, scheme: string | undefined, assignment: string | undefined) => (scheme ? `${scheme} [redigido]` : `${assignment}[redigido]`));
+}
+
+function sanitize(value: unknown, depth: number, seen: WeakSet<object>): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string") return scrubText(value);
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") return value;
+  if (typeof value === "function" || typeof value === "symbol") return undefined;
+  if (value instanceof Error) return safeError(value);
+  if (value instanceof Date) return value;
+  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return "[binário]";
+  if (depth >= LOG_MAX_DEPTH) return "[profundo demais]";
+  const object = value as Record<string, unknown>;
+  if (seen.has(object)) return "[circular]";
+  seen.add(object);
+  try {
+    if (Array.isArray(value)) return value.slice(0, LOG_MAX_ITEMS).map((item) => sanitize(item, depth + 1, seen));
+    const out: Record<string, unknown> = {};
+    let count = 0;
+    for (const key of Object.keys(object)) {
+      if (count >= LOG_MAX_KEYS) {
+        out["[…]"] = "chaves omitidas";
+        break;
+      }
+      count += 1;
+      out[key] = SECRET_KEY.test(key) ? "[redigido]" : sanitize(object[key], depth + 1, seen);
+    }
+    return out;
+  } finally {
+    seen.delete(object); // só ciclo de verdade é "circular": o mesmo objeto em dois ramos irmãos é logado nos dois
+  }
+}
+
+export function sanitizeLogObject(obj: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const seen = new WeakSet<object>();
+  for (const key of Object.keys(obj)) {
+    const value = obj[key];
+    if (SERIALIZED_KEYS.has(key)) out[key] = value; // o serializador da chave (req/res/err) cuida; não percorrer o objeto da requisição
+    else out[key] = SECRET_KEY.test(key) ? "[redigido]" : sanitize(value, 0, seen);
+  }
+  return out;
+}
+
 export function loggerOptions() {
   return {
     redact: { paths: REDACT_PATHS, censor: "[redigido]" },
+    // roda ANTES dos serializadores (pino): por isso deixa `req`/`res`/`err` intocados e limpa o resto
+    formatters: { log: sanitizeLogObject },
     serializers: {
       // mesmo formato do serializador padrão do Fastify (método, URL, host, IP), com o MODELO da rota e a query sem segredos
       req(request: { method?: string; url?: string; routeOptions?: { url?: string }; hostname?: string; ip?: string; socket?: { remotePort?: number } }) {
