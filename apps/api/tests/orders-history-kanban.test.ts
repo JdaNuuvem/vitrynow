@@ -533,16 +533,81 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
       expect(gravado.normalize("NFD")).not.toBe(gravado); // o nome tem acento: só a forma mudou
     });
 
-    it("status ABERTO: tudo que o kanban considera em andamento (fora PIX não pago, concluídos e cancelados), no período escolhido", async () => {
+    it("status ABERTO: tudo que o kanban considera em andamento (fora PIX não pago, concluídos e cancelados), de QUALQUER data", async () => {
       const ctx = await setup();
       const pendente = await mk(ctx, { status: "PENDENTE" });
       const preparo = await mk(ctx, { ago: 20 * DAY, status: "EM_PREPARO" });
+      const esquecido = await mk(ctx, { ago: 120 * DAY, status: "PRONTO" }); // mais velho que a janela máxima de 90 dias
       await mk(ctx, { status: "CONCLUIDO" });
+      await mk(ctx, { ago: 120 * DAY, status: "CONCLUIDO" });
       await mk(ctx, { status: "CANCELADO" });
       await mk(ctx, { status: "PENDENTE", awaiting: true });
       const ids = async (qs: string) => (json(await hist(ctx.owner, qs)).rows.map((r: { id: string }) => r.id) as string[]).sort();
-      expect(await ids("?status=ABERTO&period=30d")).toEqual([pendente, preparo].sort());
-      expect(await ids("?status=ABERTO")).toEqual([pendente]); // 7 dias: o de 20 dias fica de fora
+      expect(await ids("?status=ABERTO")).toEqual([pendente, preparo, esquecido].sort()); // sem período: o de 120 dias aparece
+      expect(await ids("?status=ABERTO&period=today")).toEqual([pendente, preparo, esquecido].sort()); // período, from e to são IGNORADOS
+      expect(await ids("?status=ABERTO&period=custom&from=2026-11-01&to=2026-11-02")).toEqual([pendente, preparo, esquecido].sort());
+      expect(await ids("?status=ABERTO&period=custom&from=lixo&to=lixo")).toEqual([pendente, preparo, esquecido].sort()); // nem é validado
+      // os outros status mantêm a janela: o de 120 dias NÃO aparece no padrão de 7 dias nem no ALL
+      expect(await ids("")).not.toContain(esquecido);
+      expect(await ids("?status=ALL")).not.toContain(esquecido);
+      expect(await ids("?period=30d")).not.toContain(esquecido);
+      expect(await ids("?period=30d")).toContain(preparo);
+      const body = json(await hist(ctx.owner, "?status=ABERTO"));
+      expect(body).toMatchObject({ total: 3, period: null, timezone: TZ });
+      expect(json(await hist(ctx.owner, "")).period).toMatchObject({ from: expect.any(String), to: expect.any(String) }); // os demais seguem com período
+    });
+
+    it("ABERTO: cursor percorre TODOS os abertos (mais recente primeiro) sem repetir nem perder; a contagem é a de TODOS", async () => {
+      const ctx = await setup();
+      const criados: string[] = [];
+      for (const dias of [0, 1, 40, 100, 200]) criados.push(await mk(ctx, { ago: dias * DAY + 1000, status: "EM_PREPARO" }));
+      const vistos: string[] = [];
+      let cursor: string | null = null;
+      let paginas = 0;
+      do {
+        const res = await hist(ctx.owner, `?status=ABERTO&limit=2${cursor ? `&cursor=${cursor}` : ""}`);
+        expect(res.statusCode, res.body).toBe(200);
+        const corpo = json(res);
+        expect(corpo.total).toBe(5);
+        vistos.push(...corpo.rows.map((r: { id: string }) => r.id));
+        cursor = corpo.nextCursor;
+        paginas += 1;
+      } while (cursor);
+      expect(paginas).toBe(3);
+      expect(vistos).toEqual(criados); // do mais novo ao mais antigo
+    });
+
+    it("ABERTO é isolado por loja e o STAFF vê o telefone mascarado; a busca por telefone do STAFF acha o pedido aberto de qualquer idade", async () => {
+      const a = await setup();
+      const b = await setup();
+      const antigo = await mk(a, { ago: 150 * DAY, status: "CONFIRMADO", phone: "11987654321", name: "Esquecido" });
+      await mk(a, { ago: 150 * DAY, status: "CONCLUIDO", phone: "11987654321", name: "Fechado", history: [{ status: "CONCLUIDO", ago: 149 * DAY }] }); // encerrado: fora do ABERTO
+      const deB = await mk(b, { ago: 150 * DAY, status: "CONFIRMADO" });
+      for (const cookie of [a.owner, a.staff]) {
+        const rows = json(await hist(cookie, "?status=ABERTO")).rows as { id: string; customerPhone: string }[];
+        expect(rows.map((r) => r.id)).toEqual([antigo]);
+        expect(rows[0].customerPhone).toBe("*******4321");
+      }
+      expect(JSON.stringify(json(await hist(a.owner, "?status=ABERTO")))).not.toContain(deB);
+      // STAFF: telefone completo acha o aberto antigo (o aberto está dentro da regra do contato)
+      const achados = (json(await hist(a.staff, `?status=ABERTO&q=${encodeURIComponent("11987654321")}`)).rows as { id: string }[]).map((r) => r.id);
+      expect(achados).toEqual([antigo]);
+    });
+
+    it("a contagem do ABERTO é IGUAL aos abertos do kanban (exibidos + openHidden), com o teto estourado", async () => {
+      const ctx = await setup();
+      const base = Date.now() - 3 * DAY;
+      await prisma.order.createMany({
+        data: Array.from({ length: 502 }, (_, i) => ({
+          storeId: ctx.storeId, code: `W${String(i).padStart(4, "0")}`, type: "BALCAO" as const, status: i % 2 ? ("PRONTO" as const) : ("PENDENTE" as const), customerName: "Antigo",
+          totalCents: 1000, awaitingPayment: false, createdAt: new Date(base + i * 1000), updatedAt: new Date(base + i * 1000),
+        })),
+      });
+      await mk(ctx, { ago: 60_000 });
+      await mk(ctx, { ago: 30_000, awaiting: true }); // PIX não pago: fora dos dois
+      const kb = await kanban(ctx.owner);
+      expect(kb).toMatchObject({ openCapped: true, openHidden: 2 });
+      expect(json(await hist(ctx.owner, "?status=ABERTO&limit=1")).total).toBe(kb.openCount + kb.openHidden); // 503 + 2 = 505
     });
 
     it("a busca não vaza pedidos de outra loja (nem por código, nome ou telefone)", async () => {
