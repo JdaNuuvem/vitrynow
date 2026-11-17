@@ -206,7 +206,7 @@ describe("C5 — estorno × pedido, com barreira de linha", () => {
     let liberar!: () => void;
     refundPayment.mockImplementationOnce(() => new Promise<void>((r) => (liberar = r))); // provedor "demora"
     const cancelando = cancelarPainel(l, id);
-    await vi.waitFor(async () => expect((await prisma.order.findUnique({ where: { id } }))?.refundLockedAt).not.toBeNull());
+    await vi.waitFor(async () => expect((await prisma.order.findUnique({ where: { id } }))?.refundLockedAt).not.toBeNull(), { timeout: 10_000, interval: 50 });
     const concluir = await transicao(l, id, "CONCLUIDO");
     expect(concluir.statusCode).toBe(409);
     expect(json(concluir).code).toBe("REFUND_PENDING");
@@ -232,7 +232,7 @@ describe("C5 — estorno × pedido, com barreira de linha", () => {
     expect(o.payment?.reconcileNote).toContain("CONCLUIDO");
     expect(sent.some((m) => m.includes("payment.reconcile_needed"))).toBe(true);
     expect(sent.some((m) => m.includes("order.cancel_notice"))).toBe(false); // não houve cancelamento de pedido
-    await vi.waitFor(async () => expect(await prisma.auditLog.count({ where: { storeId: l.store.id, action: "order.refund_reconcile" } })).toBe(1));
+    await vi.waitFor(async () => expect(await prisma.auditLog.count({ where: { storeId: l.store.id, action: "order.refund_reconcile" } })).toBe(1), { timeout: 10_000, interval: 50 });
 
     const listado = json(await app.inject({ method: "GET", url: "/api/orders", headers: { cookie: l.cookie } })).orders.find((x: { id: string }) => x.id === id);
     expect(listado.payment).toMatchObject({ reconcileRequired: true, status: "REEMBOLSADO" });

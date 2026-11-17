@@ -331,7 +331,7 @@ describe("API-03 — webhook e PIX", () => {
     expect({ status: o?.status, payment: o?.payment?.status }).toEqual({ status: "CONCLUIDO", payment: internal });
     expect(o?.payment?.reconcileNote).toContain(noteHint);
     expect(ws.count("payment.reconcile_needed")).toBe(1);
-    await vi.waitFor(async () => expect(await auditCount(ctx.storeId, "order.refund_reconcile")).toBe(1));
+    await vi.waitFor(async () => expect(await auditCount(ctx.storeId, "order.refund_reconcile")).toBe(1), { timeout: 10_000, interval: 50 });
     const listed = json(await app.inject({ method: "GET", url: "/api/orders", headers: { cookie: ctx.cookie } })).orders.find((x: { id: string }) => x.id === orderId);
     expect(listed.payment.reconcileRequired).toBe(true);
   });

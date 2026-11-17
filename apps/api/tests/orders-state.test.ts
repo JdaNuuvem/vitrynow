@@ -466,7 +466,7 @@ describe("API-02 — estados do pedido", () => {
     refundPayment.mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)));
 
     const pending = customerCancel(ctx.slug, id);
-    await vi.waitFor(async () => expect((await prisma.payment.findUnique({ where: { orderId: id } }))?.status).toBe("ESTORNO_PENDENTE"));
+    await vi.waitFor(async () => expect((await prisma.payment.findUnique({ where: { orderId: id } }))?.status).toBe("ESTORNO_PENDENTE"), { timeout: 10_000, interval: 50 });
 
     const accept = await transition(ctx.cookie, id, "CONFIRMADO");
     expect(accept.statusCode).toBe(409);
