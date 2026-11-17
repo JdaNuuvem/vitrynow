@@ -2,7 +2,7 @@ import { Prisma, type prisma as prismaClient } from "@meucardapio/db";
 import { HISTORY_PERIODS, HISTORY_STATUS_FILTERS } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
 import { parseLocalDate, safeTimeZone, startOfStoreDay } from "../../lib/storeTime";
-import { maskPhone } from "./orders.view";
+import { maskPhone, RECENT_WINDOW_MS } from "./orders.view";
 import type { Role } from "../../lib/orderStateMachine";
 
 type Db = typeof prismaClient;
@@ -15,6 +15,8 @@ export const HISTORY_MAX_PAGE_SIZE = 100;
 export const HISTORY_MAX_DAYS = 90;
 export const HISTORY_PHONE_MIN_DIGITS = 4;
 export const HISTORY_STAFF_FULL_PHONE_DIGITS = 10;
+/** Status "em andamento" (mesma lista do kanban e do contato completo do STAFF). */
+export const OPEN_ORDER_STATUSES = ["PENDENTE", "CONFIRMADO", "EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA"] as const;
 
 export type HistoryStatusFilter = (typeof HISTORY_STATUS_FILTERS)[number];
 export type HistoryPeriod = (typeof HISTORY_PERIODS)[number];
@@ -81,18 +83,21 @@ export function parseSearch(raw: string | undefined, role: Role = "OWNER"): { co
   const digits = q.replace(/\D/g, "");
   const codeLike = /^#?\d+$/.test(q);
   const phoneLike = digits.length >= HISTORY_PHONE_MIN_DIGITS && /^[\d\s()+\-#.]+$/.test(q);
-  const staffAllowed = digits.length === HISTORY_PHONE_MIN_DIGITS || digits.length >= HISTORY_STAFF_FULL_PHONE_DIGITS;
+  // Código do país (RN-HP-01): termo de 12 ou 13 dígitos que começa em "55" perde o "55" (só do lado do termo; a busca é por
+  // trecho). Até 11 dígitos não mudam: "55991234567" é DDD 55. A regra do STAFF abaixo vale para o termo JÁ normalizado.
+  const phoneDigits = (digits.length === 12 || digits.length === 13) && digits.startsWith("55") ? digits.slice(2) : digits;
+  const staffAllowed = phoneDigits.length === HISTORY_PHONE_MIN_DIGITS || phoneDigits.length >= HISTORY_STAFF_FULL_PHONE_DIGITS;
   return {
     code: codeLike ? digits : null,
     name: /\p{L}/u.test(q) ? foldText(q) : null,
-    phone: phoneLike && (role === "OWNER" || staffAllowed) ? digits : null,
+    phone: phoneLike && (role === "OWNER" || staffAllowed) ? phoneDigits : null,
     phoneMatch: role === "OWNER" ? "contains" : "suffix",
   };
 }
 
 type Cursor = { t: string; id: string };
-const encodeCursor = (row: { createdAt: Date; id: string }) => Buffer.from(JSON.stringify({ t: row.createdAt.toISOString(), id: row.id } satisfies Cursor)).toString("base64url");
-function decodeCursor(raw: string): Cursor {
+export const encodeCursor = (row: { createdAt: Date; id: string }) => Buffer.from(JSON.stringify({ t: row.createdAt.toISOString(), id: row.id } satisfies Cursor)).toString("base64url");
+export function decodeCursor(raw: string): Cursor {
   try {
     const value = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as Partial<Cursor>;
     if (typeof value.t === "string" && typeof value.id === "string" && !Number.isNaN(Date.parse(value.t))) return { t: value.t, id: value.id };
@@ -127,15 +132,19 @@ export async function searchOrderHistory(
   now: Date,
   query: HistoryQuery,
   role: Role = "OWNER",
-): Promise<{ rows: HistoryRow[]; total: number; nextCursor: string | null; period: { from: string; to: string }; timezone: string; phoneCriterion: boolean }> {
+  opts: { skipPhone?: boolean } = {},
+): Promise<{ rows: HistoryRow[]; total: number; nextCursor: string | null; period: { from: string; to: string }; timezone: string }> {
   const tz = safeTimeZone(timeZone);
   const { start, end } = resolvePeriod(query, now, tz);
   const search = parseSearch(query.q, role);
+  if (opts.skipPhone && search) search.phone = null; // cota do telefone esgotada: só código e nome (o serviço decide)
   const limit = Math.min(Math.max(Math.trunc(query.limit ?? HISTORY_PAGE_SIZE) || HISTORY_PAGE_SIZE, 1), HISTORY_MAX_PAGE_SIZE);
   const status = query.status ?? "ALL";
   if (!HISTORY_STATUS_FILTERS.includes(status)) throw bad("FILTER_INVALID", "Filtro de status inválido.");
 
   const where: Prisma.Sql[] = [Prisma.sql`o."storeId" = ${storeId}`, Prisma.sql`o."createdAt" >= ${start}`, Prisma.sql`o."createdAt" < ${end}`];
+  // ABERTO = o que o kanban considera em andamento (fora o PIX não pago): é por onde o dono acha os pedidos antigos escondidos pelo teto.
+  if (status === "ABERTO") where.push(Prisma.sql`o."awaitingPayment" = false AND o."status"::text IN (${Prisma.join([...OPEN_ORDER_STATUSES])})`);
   if (status === "CONCLUIDO") where.push(Prisma.sql`o."status" = 'CONCLUIDO'`);
   if (status === "CANCELADO") where.push(Prisma.sql`o."status" = 'CANCELADO' AND COALESCE(p."status"::text, '') <> 'EXPIRADO'`);
   if (status === "AGUARDANDO_PAGAMENTO") where.push(Prisma.sql`o."awaitingPayment" = true AND o."status" <> 'CANCELADO'`);
@@ -152,10 +161,16 @@ export async function searchOrderHistory(
       if (trimmed) any.push(Prisma.sql`ltrim(o."code", '0') LIKE ${`%${trimmed}%`}`);
     }
     if (search.name) {
-      any.push(Prisma.sql`lower(translate(coalesce(o."customerName", ''), ${ACCENT_FROM}, ${ACCENT_TO})) LIKE ${`%${escapeLike(search.name)}%`} ESCAPE '\\'`);
+      any.push(Prisma.sql`lower(translate(normalize(coalesce(o."customerName", ''), NFC), ${ACCENT_FROM}, ${ACCENT_TO})) LIKE ${`%${escapeLike(search.name)}%`} ESCAPE '\\'`);
     }
     if (search.phone) {
-      any.push(Prisma.sql`regexp_replace(coalesce(o."customerPhone", ''), '\\D', '', 'g') LIKE ${search.phoneMatch === "suffix" ? `%${search.phone}` : `%${search.phone}%`}`);
+      const phoneLike = Prisma.sql`regexp_replace(coalesce(o."customerPhone", ''), '\\D', '', 'g') LIKE ${search.phoneMatch === "suffix" ? `%${search.phone}` : `%${search.phone}%`}`;
+      if (role === "OWNER") any.push(phoneLike);
+      else {
+        // STAFF: mesma janela do contato completo (aberto, ou última mudança de estado há menos de 24 h). Pedido antigo não é achado por telefone.
+        const cutoff = new Date(now.getTime() - RECENT_WINDOW_MS);
+        any.push(Prisma.sql`(${phoneLike} AND (o."status"::text IN (${Prisma.join([...OPEN_ORDER_STATUSES])}) OR (SELECT max(h."createdAt") FROM "OrderStatusHistory" h WHERE h."orderId" = o."id") >= ${cutoff}))`);
+      }
     }
     where.push(any.length ? Prisma.sql`(${Prisma.join(any, " OR ")})` : Prisma.sql`false`);
   }
@@ -213,7 +228,6 @@ export async function searchOrderHistory(
     nextCursor: last ? encodeCursor(last) : null,
     period: { from: start.toISOString(), to: end.toISOString() },
     timezone: tz,
-    phoneCriterion: !!search?.phone, // só para a auditoria de contagem; o serviço não devolve ao cliente
   };
 }
 
@@ -233,4 +247,36 @@ export function assertHistoryRate(userId: string, now: number = Date.now(), limi
   hits.set(userId, recent);
   if (hits.size > 5000) for (const [key, list] of hits) if (list.every((t) => now - t >= WINDOW_MS)) hits.delete(key);
 }
-export const resetHistoryRate = () => hits.clear();
+export const resetHistoryRate = () => {
+  hits.clear();
+  phoneHits.clear();
+  phoneRefusals.clear();
+};
+
+// Recusas por limite: a auditoria grava a 1ª de cada janela de 1 h por usuário e depois só nas marcas 10, 100 e 1000, com a
+// contagem (no máximo 4 linhas por hora em vez de até 3.600). Em memória por instância, como os limites acima.
+const phoneRefusals = new Map<string, { since: number; count: number }>();
+/** Registra uma recusa e devolve a contagem a gravar na auditoria, ou null quando esta recusa não gera linha. */
+export function recordPhoneRefusal(userId: string, now: number = Date.now()): number | null {
+  const current = phoneRefusals.get(userId);
+  const entry = current && now - current.since < PHONE_WINDOW_MS ? current : { since: now, count: 0 };
+  entry.count += 1;
+  phoneRefusals.set(userId, entry);
+  if (phoneRefusals.size > 5000) for (const [key, value] of phoneRefusals) if (now - value.since >= PHONE_WINDOW_MS) phoneRefusals.delete(key);
+  return entry.count === 1 || entry.count === 10 || entry.count === 100 || entry.count === 1000 ? entry.count : null;
+}
+
+// Busca por telefone do STAFF: 10 por hora por usuário (H6, decisão do Atlas): o telefone completo é o dado mais sensível da lista.
+export const HISTORY_PHONE_RATE_LIMIT = 10;
+const PHONE_WINDOW_MS = 60 * 60_000;
+const phoneHits = new Map<string, number[]>();
+export function assertPhoneSearchRate(userId: string, now: number = Date.now(), limit = HISTORY_PHONE_RATE_LIMIT): void {
+  const recent = (phoneHits.get(userId) ?? []).filter((t) => now - t < PHONE_WINDOW_MS);
+  if (recent.length >= limit) {
+    phoneHits.set(userId, recent);
+    throw new CodedError(429, "RATE_LIMITED", "Muitas buscas por telefone. Tente de novo em alguns minutos ou busque pelo código ou pelo nome.");
+  }
+  recent.push(now);
+  phoneHits.set(userId, recent);
+  if (phoneHits.size > 5000) for (const [key, list] of phoneHits) if (list.every((t) => now - t >= PHONE_WINDOW_MS)) phoneHits.delete(key);
+}

@@ -203,7 +203,7 @@ export type UpdateProductInput = z.infer<typeof updateProductSchema>;
 
 // ---- Histórico de pedidos e observação interna (API-54) ----
 export const HISTORY_PERIODS = ["today", "yesterday", "7d", "30d", "custom"] as const;
-export const HISTORY_STATUS_FILTERS = ["ALL", "CONCLUIDO", "CANCELADO", "AGUARDANDO_PAGAMENTO", "PAGAMENTO_EXPIRADO"] as const;
+export const HISTORY_STATUS_FILTERS = ["ALL", "ABERTO", "CONCLUIDO", "CANCELADO", "AGUARDANDO_PAGAMENTO", "PAGAMENTO_EXPIRADO"] as const;
 export const orderHistoryQuerySchema = z.object({
   q: z.string().max(100).optional(),
   period: z.enum(HISTORY_PERIODS).optional(),

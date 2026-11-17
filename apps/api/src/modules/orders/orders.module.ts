@@ -46,7 +46,14 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.code(400).send({ error: "Filtro inválido.", code: "FILTER_INVALID" });
     assertHistoryRate(request.user.userId); // RN-HP-07: anti-abuso por usuário (429 RATE_LIMITED)
     const { refundPending, ...rest } = parsed.data;
-    return orderService.history(actorOf(request), { ...rest, refundPending: refundPending === "true" });
+    try {
+      return await orderService.history(actorOf(request), { ...rest, refundPending: refundPending === "true" });
+    } catch (error) {
+      // Falha ao gravar o rastro da busca por telefone: o serviço não devolve dado; aqui o motivo vai ao log SEM o erro bruto.
+      const cause = (error as { code?: string; cause?: unknown }).code === "AUDIT_UNAVAILABLE" ? (error as { cause?: unknown }).cause : undefined;
+      if (cause) request.log.error({ err: cause }, "busca por telefone NÃO liberada: falha ao registrar o acesso");
+      throw error;
+    }
   });
 
   // Observação interna (API-54): a equipe anota; o cliente e o tíquete nunca a veem. `null` ou texto vazio apaga.
