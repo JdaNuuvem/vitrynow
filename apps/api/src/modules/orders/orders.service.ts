@@ -294,7 +294,8 @@ export class OrderService {
   private async cancelOrder(order: OrderWithPayment, origin: CancelOrigin): Promise<RefundOutcome> {
     if (holdsMoney(order.payment)) return this.refundSaga(order, origin);
 
-    const completed = await this.runTx((tx) => this.applyCancel(tx, order, origin, { expected: order.status, noMoney: true }));
+    const sink = { noticeQueued: false };
+    const completed = await this.runTx((tx) => this.applyCancel(tx, order, origin, { expected: order.status, noMoney: true, sink }));
     if (!completed) {
       // Perdeu a corrida: ou o pagamento foi aprovado agora (vira saga) ou o status mudou (outro chegou antes).
       const fresh = await this.load(order.storeId, order.id);
@@ -303,7 +304,7 @@ export class OrderService {
       if (origin.actor === "CUSTOMER") throw err(409, "ORDER_ALREADY_ACCEPTED", "A loja já aceitou o pedido. Fale com ela.");
       throw STATE_CHANGED();
     }
-    await this.afterCancelCommitted(order, origin);
+    await this.afterCancelCommitted(order, origin, sink.noticeQueued);
 
     // Cobrança que nunca chegou a existir no provedor (falha ao criar o PIX): só fechar o registro local.
     if (order.payment?.status === "PENDENTE" && !order.payment.providerPaymentId) {
@@ -327,7 +328,8 @@ export class OrderService {
     tx: Tx,
     order: Pick<Order, "id" | "storeId" | "couponId">,
     origin: CancelOrigin,
-    opts: { expected: OrderStatus | "ANY_ACTIVE"; noMoney?: boolean },
+    // `sink.noticeQueued` avisa quem chamou que um aviso de cancelamento foi criado (publicar print.available DEPOIS do commit).
+    opts: { expected: OrderStatus | "ANY_ACTIVE"; noMoney?: boolean; sink?: { noticeQueued: boolean } },
   ): Promise<boolean> {
     const now = this.now();
     const moved = await tx.order.updateMany({
@@ -354,6 +356,10 @@ export class OrderService {
     });
     // Tíquete que ainda não começou a imprimir não deve sair: a cozinha não recebe pedido cancelado.
     await cancelPendingTickets(tx, { id: order.id, storeId: order.storeId });
+    // Se algum tíquete já saiu (ou está saindo), a cozinha precisa do AVISO de cancelamento: criado NA MESMA transação,
+    // de modo que ou o pedido cancela COM o aviso ou nada muda (antes ele era criado depois do commit com erro engolido:
+    // pedido cancelado, papel na cozinha e nenhum aviso — achado C1 do Deming).
+    if (await enqueueCancelNoticeIfPrinted(tx, { id: order.id, storeId: order.storeId }) && opts.sink) opts.sink.noticeQueued = true;
     if (order.couponId) {
       const released = await tx.order.updateMany({ where: { id: order.id, couponReleasedAt: null }, data: { couponReleasedAt: now } });
       if (released.count === 1) {
@@ -363,12 +369,9 @@ export class OrderService {
     return true;
   }
 
-  private async afterCancelCommitted(order: Pick<Order, "id" | "storeId" | "printedAt">, origin: CancelOrigin) {
+  private async afterCancelCommitted(order: Pick<Order, "id" | "storeId" | "printedAt">, origin: CancelOrigin, noticeQueued = false) {
     this.publish(order.storeId, { type: "order.updated", orderId: order.id });
-    // Se algum tíquete já saiu (ou está saindo), a cozinha recebe o AVISO de cancelamento (job idempotente).
-    if (await enqueueCancelNoticeIfPrinted(this.db, { id: order.id, storeId: order.storeId }).catch(() => false)) {
-      this.publish(order.storeId, { type: "print.available" });
-    }
+    if (noticeQueued) this.publish(order.storeId, { type: "print.available" }); // o aviso já está gravado (mesma transação)
     if (order.printedAt) this.publish(order.storeId, { type: "order.cancel_notice", orderId: order.id });
     this.audit.log({
       storeId: order.storeId,
@@ -439,6 +442,7 @@ export class OrderService {
     // (retry manual + job) terminam todas em "DONE", mas os efeitos rodam uma única vez.
     // Se o pedido NÃO pôde ser cancelado e não está cancelado (ex.: já concluído), o dinheiro voltou mesmo assim:
     // fica marcado para conciliação manual, com alerta — nunca REEMBOLSADO em silêncio.
+    const sink = { noticeQueued: false };
     const concluded = await this.runTx(async (tx) => {
       // Ordem de locks ÚNICA no sistema: Pedido → Pagamento (a Tx 1 da saga também começa pelo pedido). Travar o
       // pagamento primeiro aqui criava a ordem inversa e permitia deadlock quando duas tentativas se sobrepõem.
@@ -448,7 +452,7 @@ export class OrderService {
         data: { status: "REEMBOLSADO", refundLastError: null },
       });
       if (flipped.count !== 1) return null;
-      const orderCancelled = await this.applyCancel(tx, order, origin, { expected: "ANY_ACTIVE" });
+      const orderCancelled = await this.applyCancel(tx, order, origin, { expected: "ANY_ACTIVE", sink });
       let reconcile = false;
       if (!orderCancelled) {
         const current = await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { status: true } });
@@ -463,7 +467,7 @@ export class OrderService {
       return { orderCancelled, reconcile };
     });
     if (concluded) {
-      if (concluded.orderCancelled) await this.afterCancelCommitted(order, origin);
+      if (concluded.orderCancelled) await this.afterCancelCommitted(order, origin, sink.noticeQueued);
       this.publish(order.storeId, { type: "payment.refund_done", orderId: order.id });
       if (concluded.reconcile) {
         this.publish(order.storeId, { type: "payment.reconcile_needed", orderId: order.id });
