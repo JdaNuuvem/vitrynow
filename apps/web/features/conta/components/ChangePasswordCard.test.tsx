@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { PASSWORD_HELP, PASSWORD_TOO_SHORT_MESSAGE } from "@/shared/auth/passwordPolicy";
+import { CHANGE_PASSWORD_CARD_TITLE, PASSWORD_HELP, PASSWORD_HELP_STAFF, PASSWORD_TOO_SHORT_MESSAGE } from "@/shared/auth/passwordPolicy";
 import { ChangePasswordCard } from "./ChangePasswordCard";
 
 function setup(result: string | null = null) {
@@ -15,6 +15,12 @@ const fill = async (current: string, next: string) => {
 };
 
 describe("ChangePasswordCard: senha mínima de 10 (SEC-29)", () => {
+  it("o título do card é a MESMA constante que a ajuda do convite cita (a frase 'em Minha senha' nunca diverge do card)", () => {
+    setup();
+    expect(screen.getByRole("heading", { name: CHANGE_PASSWORD_CARD_TITLE })).toBeInTheDocument();
+    expect(PASSWORD_HELP_STAFF).toContain(`em ${CHANGE_PASSWORD_CARD_TITLE}.`);
+  });
+
   it("a ajuda é fixa e fica ligada ao campo da nova senha", () => {
     setup();
     const input = screen.getByLabelText("Nova senha");

@@ -129,6 +129,15 @@
   color: #92400e;
   text-align: left;
 }
+.auth__alert-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.auth__alert-icon {
+  flex: none;
+  margin-top: 1px;
+}
 .auth__alert .auth__text {
   color: inherit; /* o texto do alerta usa o âmbar escuro do bloco (6,8:1), não o cinza do texto comum (4,9:1) */
 }

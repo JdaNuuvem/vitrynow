@@ -251,6 +251,16 @@ describe("ResetPasswordPage: conferência da conta antes da senha (SEC-29 / ST-6
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
   });
 
+  it("a faixa de falha tem ícone de atenção decorativo (aria-hidden) à esquerda do texto", async () => {
+    setup("/reset-senha#token=abc123", { inspect: { ok: false, status: 503, error: "sem rede" } });
+    const alert = await screen.findByRole("alert");
+    const icon = alert.querySelector("svg");
+    expect(icon).not.toBeNull();
+    expect(icon).toHaveAttribute("aria-hidden", "true");
+    const text = screen.getByText("Não foi possível confirmar a conta deste link. Tente de novo.");
+    expect(icon!.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("'Tentar de novo' refaz SÓ a conferência e, se deu certo, libera o formulário", async () => {
     const { inspectResetToken, resetPassword } = setup("/reset-senha#token=abc123", { inspect: { ok: false, status: 429, error: "limite" } });
     await screen.findByRole("alert");

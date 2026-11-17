@@ -84,7 +84,15 @@ function ResetFlow({ token }: { token: string }) {
     return (
       <AuthCard title="Nova senha" backToLogin>
         <div role="alert" className="auth__alert">
-          <p className="auth__text">Não foi possível confirmar a conta deste link. Tente de novo.</p>
+          <div className="auth__alert-head">
+            {/* ícone de atenção de linha (padrão das faixas de atenção); decorativo, o texto já diz tudo */}
+            <svg className="auth__alert-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+            <p className="auth__text">Não foi possível confirmar a conta deste link. Tente de novo.</p>
+          </div>
           <button type="button" className="auth__button" onClick={retry}>
             Tentar de novo
           </button>

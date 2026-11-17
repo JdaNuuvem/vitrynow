@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CHANGE_PASSWORD_CARD_TITLE,
   isPasswordLongEnough,
   isPasswordRuleError,
   PASSWORD_HELP,
@@ -16,9 +17,11 @@ describe("política de senha (SEC-29)", () => {
     expect(PASSWORD_HELP_STAFF).toContain("Pelo menos 10 caracteres.");
   });
 
-  it("a ajuda do convite NÃO promete 'Alterar senha' enquanto o card da conta se chamar 'Minha senha'", () => {
+  it("a ajuda do convite diz onde o funcionário troca a senha, com o NOME REAL do card (uma constante só)", () => {
+    expect(CHANGE_PASSWORD_CARD_TITLE).toBe("Minha senha");
+    expect(PASSWORD_HELP_STAFF).toBe("Pelo menos 10 caracteres. Combine com o funcionário como ele vai receber a senha. Ele pode trocá-la depois em Minha senha.");
+    expect(PASSWORD_HELP_STAFF).toContain(CHANGE_PASSWORD_CARD_TITLE);
     expect(PASSWORD_HELP_STAFF).not.toMatch(/Alterar senha/);
-    expect(PASSWORD_HELP_STAFF).toBe("Pelo menos 10 caracteres. Combine com o funcionário como ele vai receber a senha.");
   });
 
   it("9 não basta, 10 basta, sem exigir composição", () => {

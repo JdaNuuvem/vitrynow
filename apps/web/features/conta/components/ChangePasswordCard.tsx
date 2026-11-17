@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { isPasswordRuleError, PASSWORD_HELP } from "@/shared/auth/passwordPolicy";
+import { CHANGE_PASSWORD_CARD_TITLE, isPasswordRuleError, PASSWORD_HELP } from "@/shared/auth/passwordPolicy";
 import { usePasswordRule } from "@/shared/auth/usePasswordRule";
 import { PasswordField } from "@/shared/ui/PasswordField";
 import { Field } from "./Field";
@@ -36,7 +36,7 @@ export function ChangePasswordCard({
 
   return (
     <div className="conta__card conta__card--spaced">
-      <h2>Minha senha</h2>
+      <h2>{CHANGE_PASSWORD_CARD_TITLE}</h2>
       {/* "Senha atual" não tem regra de tamanho: contas antigas podem ter senha curta */}
       <Field type="password" placeholder="Senha atual" value={currentPassword} onChange={setCurrentPassword} />
       <PasswordField

@@ -7,10 +7,11 @@ export const PASSWORD_MIN_LENGTH = 10;
 export const PASSWORD_TOO_SHORT_MESSAGE = `A senha precisa ter pelo menos ${PASSWORD_MIN_LENGTH} caracteres.`;
 // Textos aprovados pelo Ogilvy (17/11).
 export const PASSWORD_HELP = `Pelo menos ${PASSWORD_MIN_LENGTH} caracteres. Dica: junte três palavras sem relação entre si.`;
-// Convite de equipe: quem digita não é quem vai usar a senha. A frase "Ele pode trocá-la depois em Alterar senha." (aprovada pelo Ogilvy,
-// com condição da Da Vinci) FICOU DE FORA: hoje o card da conta se chama "Minha senha", não "Alterar senha". Para voltar a ela, o card
-// precisa ter exatamente esse título e a troca estar testada.
-export const PASSWORD_HELP_STAFF = `Pelo menos ${PASSWORD_MIN_LENGTH} caracteres. Combine com o funcionário como ele vai receber a senha.`;
+// Nome do card de troca de senha na conta. UMA constante: o título do card e a frase do convite leem daqui e não divergem (Ogilvy).
+export const CHANGE_PASSWORD_CARD_TITLE = "Minha senha";
+
+// Convite de equipe: quem digita não é quem vai usar a senha, e o funcionário troca a própria senha depois nesse card (Leonardo).
+export const PASSWORD_HELP_STAFF = `Pelo menos ${PASSWORD_MIN_LENGTH} caracteres. Combine com o funcionário como ele vai receber a senha. Ele pode trocá-la depois em ${CHANGE_PASSWORD_CARD_TITLE}.`;
 
 // Mesmo critério do servidor (Zod .min conta unidades de texto, como `length`).
 export const isPasswordLongEnough = (password: string) => password.length >= PASSWORD_MIN_LENGTH;
