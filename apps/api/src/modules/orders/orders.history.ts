@@ -3,6 +3,7 @@ import { HISTORY_PERIODS, HISTORY_STATUS_FILTERS } from "@meucardapio/shared-typ
 import { CodedError } from "../../shared/errors";
 import { parseLocalDate, safeTimeZone, startOfStoreDay } from "../../lib/storeTime";
 import { maskPhone, RECENT_WINDOW_MS } from "./orders.view";
+import { utc } from "../../lib/sqlTime";
 import type { Role } from "../../lib/orderStateMachine";
 
 type Db = typeof prismaClient;
@@ -147,7 +148,7 @@ export async function searchOrderHistory(
   const limit = Math.min(Math.max(Math.trunc(query.limit ?? HISTORY_PAGE_SIZE) || HISTORY_PAGE_SIZE, 1), HISTORY_MAX_PAGE_SIZE);
 
   const where: Prisma.Sql[] = [Prisma.sql`o."storeId" = ${storeId}`];
-  if (period) where.push(Prisma.sql`o."createdAt" >= ${period.start}`, Prisma.sql`o."createdAt" < ${period.end}`);
+  if (period) where.push(Prisma.sql`o."createdAt" >= ${utc(period.start)}`, Prisma.sql`o."createdAt" < ${utc(period.end)}`);
   // ABERTO = o que o kanban considera em andamento (fora o PIX não pago): é por onde o dono acha os pedidos antigos escondidos pelo teto.
   if (status === "ABERTO") where.push(Prisma.sql`o."awaitingPayment" = false AND o."status" IN (${OPEN_SQL})`);
   if (status === "CONCLUIDO") where.push(Prisma.sql`o."status" = 'CONCLUIDO'`);
@@ -174,7 +175,7 @@ export async function searchOrderHistory(
       else {
         // STAFF: mesma janela do contato completo (aberto, ou última mudança de estado há menos de 24 h). Pedido antigo não é achado por telefone.
         const cutoff = new Date(now.getTime() - RECENT_WINDOW_MS);
-        any.push(Prisma.sql`(${phoneLike} AND (o."status" IN (${OPEN_SQL}) OR (SELECT max(h."createdAt") FROM "OrderStatusHistory" h WHERE h."orderId" = o."id") >= ${cutoff}))`);
+        any.push(Prisma.sql`(${phoneLike} AND (o."status" IN (${OPEN_SQL}) OR (SELECT max(h."createdAt") FROM "OrderStatusHistory" h WHERE h."orderId" = o."id") >= ${utc(cutoff)}))`);
       }
     }
     where.push(any.length ? Prisma.sql`(${Prisma.join(any, " OR ")})` : Prisma.sql`false`);
@@ -184,7 +185,7 @@ export async function searchOrderHistory(
   const keyset = query.cursor
     ? (() => {
         const c = decodeCursor(query.cursor);
-        return Prisma.sql` AND (o."createdAt", o."id") < (${new Date(c.t)}, ${c.id})`;
+        return Prisma.sql` AND (o."createdAt", o."id") < (${utc(new Date(c.t))}, ${c.id})`;
       })()
     : Prisma.empty;
 
