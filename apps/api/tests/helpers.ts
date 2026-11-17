@@ -1,5 +1,6 @@
 import { prisma } from "@meucardapio/db";
 import { buildApp } from "../src/app";
+import { assertSafeToReset } from "./dbGuard";
 
 export function makeApp() {
   return buildApp();
@@ -8,6 +9,10 @@ export function makeApp() {
 // Limpa todas as tabelas entre testes (ordem respeita FKs). Só roda contra meucardapio_test
 // (ver vitest.config.ts) — nunca o banco de dev/produção.
 export async function resetDb() {
+  // INF-16: antes do primeiro DELETE, confere a URL e pergunta ao servidor em que banco ele está (recusa se não for _test).
+  await assertSafeToReset({
+    currentDatabase: async () => (await prisma.$queryRaw<{ db: string }[]>`select current_database() as db`)[0].db,
+  });
   await prisma.$transaction([
     prisma.orderStatusHistory.deleteMany(),
     prisma.orderItemAdditional.deleteMany(),
