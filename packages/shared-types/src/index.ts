@@ -115,6 +115,8 @@ export const wsServerMessageSchema = z.discriminatedUnion("type", [
   // Fila de impressão (ADR-0004): só "acorde e peça job"; nenhum dado de pedido ou cliente no canal.
   z.object({ type: z.literal("print.available") }),
   z.object({ type: z.literal("print.job_failed"), jobId: z.string() }),
+  // Caixa (CA-CX-28): o STAFF fechou com diferença ACIMA da tolerância. Só o id do caixa, o papel e o valor em centavos; nunca o texto do motivo.
+  z.object({ type: z.literal("cashier.difference_over_tolerance"), sessionId: z.string() }),
   z.object({ type: z.literal("ping") }),
 ]);
 export type WsServerMessage = z.infer<typeof wsServerMessageSchema>;
@@ -221,24 +223,32 @@ export const orderInternalNoteSchema = z.object({ note: z.string().max(500).null
 // ---- Caixa (painel) ----
 
 export const openCashSessionSchema = z.object({
-  openingBalanceCents: z.number().int().nonnegative(),
+  openingBalanceCents: z.number().int().nonnegative().max(100_000_000), // teto da RN-CX-12 (R$ 1.000.000,00)
   notes: z.string().trim().max(300).optional(),
 });
 export type OpenCashSessionInput = z.infer<typeof openCashSessionSchema>;
 
+// `closingBalanceCents` ausente/nulo NUNCA vira 0 por omissão: o servidor responde 400 CASH_COUNTED_REQUIRED (zero digitado de propósito vale).
+// `reason`/`reasonText` são validados pelo servidor contra a lista fechada (CASH_REASON_REQUIRED / CASH_REASON_INVALID).
 export const closeCashSessionSchema = z.object({
-  closingBalanceCents: z.number().int().nonnegative(),
+  closingBalanceCents: z.number().int().nonnegative().max(100_000_000).nullable().optional(),
   notes: z.string().trim().max(300).optional(),
+  reason: z.string().max(40).nullable().optional(),
+  reasonText: z.string().max(400).nullable().optional(),
 });
 export type CloseCashSessionInput = z.infer<typeof closeCashSessionSchema>;
 
 export const cashMovementTypeSchema = z.enum(["SUPRIMENTO", "SANGRIA"]);
 
+// Motivo OBRIGATÓRIO em toda movimentação (RN-CX-07): o servidor valida `reason` contra a lista do TIPO; `notes` NÃO substitui `reason`.
 export const createCashMovementSchema = z.object({
   type: cashMovementTypeSchema,
   amountCents: z.number().int().positive().max(100_000_000),
   notes: z.string().max(300).optional(),
+  reason: z.string().max(40).nullable().optional(),
+  reasonText: z.string().max(400).nullable().optional(),
 });
+export const setCashStaffLimitSchema = z.object({ limitCents: z.number().int().nonnegative().max(100_000_000) });
 export type CreateCashMovementInput = z.infer<typeof createCashMovementSchema>;
 
 // ---- Cupons (painel + storefront) ----

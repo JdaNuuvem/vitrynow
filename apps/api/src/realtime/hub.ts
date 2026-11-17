@@ -76,7 +76,20 @@ export function disconnectUser(userId: string): void {
   for (const socket of [...set]) socket.close(WS_CLOSE_SESSION_REVOKED, "sessão encerrada");
 }
 
-export function subscribe(storeId: string, socket: WebSocket): void {
+// Quem está do outro lado do socket: o painel entra com o papel da SESSÃO JÁ VERIFICADA (OWNER/STAFF, vindo do banco, nunca do cliente) e o
+// print-client entra como DEVICE. O papel é OBRIGATÓRIO ao se inscrever e o padrão é FECHADO: só `OWNER` recebe mensagem de dono; papel
+// ausente ou desconhecido, STAFF e DEVICE nunca recebem. Não existe rota que troque o papel de um usuário; se alguém criar uma, ela TEM de
+// chamar `disconnectUser` (o socket aberto guarda o papel de quando conectou).
+export type SocketRole = "OWNER" | "STAFF" | "DEVICE";
+const socketRoles = new WeakMap<WebSocket, SocketRole>();
+
+// Mensagens que só o OWNER pode receber (RN-CX-22): sinalizam dado que o STAFF não vê. A restrição vive AQUI, por tipo, e não em quem publica:
+// nenhum chamador consegue esquecê-la. Regra do canal da loja: evento novo não leva valor monetário, dado pessoal nem segredo; o detalhe vem
+// por rota autenticada com o papel certo.
+const OWNER_ONLY_TYPES: ReadonlySet<WsServerMessage["type"]> = new Set(["cashier.difference_over_tolerance"]);
+
+export function subscribe(storeId: string, socket: WebSocket, role: SocketRole): void {
+  socketRoles.set(socket, role);
   let set = channels.get(storeId);
   if (!set) {
     set = new Set();
@@ -90,11 +103,22 @@ export function subscribe(storeId: string, socket: WebSocket): void {
   });
 }
 
-export function publishToStore(storeId: string, message: WsServerMessage): void {
+function deliver(storeId: string, message: WsServerMessage, ownersOnly: boolean): void {
   const set = channels.get(storeId);
   if (!set) return;
   const payload = JSON.stringify(message);
   for (const socket of set) {
+    if (ownersOnly && socketRoles.get(socket) !== "OWNER") continue;
     if (socket.readyState === socket.OPEN) socket.send(payload);
   }
+}
+
+/** Todos da loja: painel (OWNER e STAFF) e print-client. Os tipos de dono (`OWNER_ONLY_TYPES`) são entregues SÓ ao OWNER mesmo por aqui. */
+export function publishToStore(storeId: string, message: WsServerMessage): void {
+  deliver(storeId, message, OWNER_ONLY_TYPES.has(message.type));
+}
+
+/** Só as conexões de OWNER da loja (STAFF e impressoras não recebem). */
+export function publishToOwners(storeId: string, message: WsServerMessage): void {
+  deliver(storeId, message, true);
 }

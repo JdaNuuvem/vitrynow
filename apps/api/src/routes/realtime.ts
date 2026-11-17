@@ -29,9 +29,9 @@ const realtimeRoutes: FastifyPluginAsync = async (app) => {
       ],
     },
     (socket, request) => {
-      const { userId, storeId, sid } = request.user;
+      const { userId, storeId, sid, role } = request.user;
       const ws = socket as unknown as WebSocket;
-      subscribe(storeId, ws);
+      subscribe(storeId, ws, role);
       trackUserSocket(userId, ws);
       if (sid) trackSessionSocket(sid, ws);
 
@@ -74,7 +74,7 @@ const realtimeRoutes: FastifyPluginAsync = async (app) => {
     (socket, request) => {
       const ws = socket as unknown as WebSocket;
       const deviceTokenId = request.deviceTokenId!;
-      subscribe(request.deviceStoreId!, ws);
+      subscribe(request.deviceStoreId!, ws, "DEVICE");
       trackDeviceSocket(deviceTokenId, ws);
 
       // Revalida a chave enquanto o socket está aberto (cobre outra instância da API ou falha de entrega).

@@ -2,7 +2,7 @@ import type { OrderPaymentMethod, OrderType } from "@meucardapio/db";
 
 export type CashSessionInput = {
   openingBalanceCents: number;
-  movements: { type: "SUPRIMENTO" | "SANGRIA"; amountCents: number }[];
+  movements: { type: "SUPRIMENTO" | "SANGRIA" | "DEVOLUCAO"; amountCents: number }[];
 };
 
 export type CashOrderInput = {
@@ -40,7 +40,8 @@ const emptyBucket = () => ({ count: 0, revenueCents: 0 });
 // canceladas não entram em nenhum total (só são contadas à parte).
 export function computeCashSummary(session: CashSessionInput, orders: CashOrderInput[]): CashSummary {
   const entriesCents = session.movements.filter((m) => m.type === "SUPRIMENTO").reduce((sum, m) => sum + m.amountCents, 0);
-  const exitsCents = session.movements.filter((m) => m.type === "SANGRIA").reduce((sum, m) => sum + m.amountCents, 0);
+  // DEVOLUCAO (ao cliente, de pedido de caixa já fechado; só o sistema cria) reduz o esperado como uma saída (RN-CX-14).
+  const exitsCents = session.movements.filter((m) => m.type === "SANGRIA" || m.type === "DEVOLUCAO").reduce((sum, m) => sum + m.amountCents, 0);
 
   const byType: CashSummary["sales"]["byType"] = { MESA: emptyBucket(), DELIVERY: emptyBucket(), BALCAO: emptyBucket() };
   const byPaymentMethod: CashSummary["byPaymentMethod"] = {};

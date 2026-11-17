@@ -1,13 +1,9 @@
-// QA-05 (parte de API) — regras do caixa que HOJE falham (especificacao-caixa.md; ADR-0012 §7; bugs B22/B23).
-// Convenção: bug(...) = it.fails (verde enquanto o bug existe; vermelho quando o fix entrar → trocar por it).
-// Modo estrito para verificar um fix sem editar: QA_STRICT=1 vitest run tests/qa/qa-caixa.test.ts
-// Os payloads incluem `notes`, `reason` e `reasonText` por segurança: o API-27 vai tornar o motivo obrigatório e o
-// nome exato do campo ainda não está no contrato. Ajuste só o objeto `motivo` abaixo se o contrato for outro.
+// QA-05 (parte de API) — regras do caixa (especificacao-caixa.md; ADR-0012 §7; bugs B22/B23). Sondas do Deming; todas it() porque a API-27 as cumpre.
+// O motivo da movimentação é `reason` (código da lista do tipo) + `reasonText` (só no OUTRO), como no contrato final da API-27.
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { makeApp, registerStore, resetDb } from "../helpers";
 
-const bug = process.env.QA_STRICT ? it : it.fails;
 const motivo = { notes: "teste QA", reason: "OUTRO", reasonText: "teste QA" };
 
 describe("QA caixa (API)", () => {
@@ -39,21 +35,21 @@ describe("QA caixa (API)", () => {
     expect((await mover(cookie, "SANGRIA", 10000)).statusCode).toBe(201);
   });
 
-  bug("D28 (CA-CX-05) sangria MAIOR que o dinheiro em caixa ⇒ 409 CASH_WITHDRAWAL_EXCEEDS_BALANCE", async () => {
+  it("D28 (CA-CX-05) sangria MAIOR que o dinheiro em caixa ⇒ 409 CASH_WITHDRAWAL_EXCEEDS_BALANCE", async () => {
     const cookie = await loja();
     const res = await mover(cookie, "SANGRIA", 20000);
     expect(res.statusCode).toBe(409);
     expect(JSON.parse(res.body).code).toBe("CASH_WITHDRAWAL_EXCEEDS_BALANCE");
   });
 
-  bug("D28c (CA-CX-05) depois de um suprimento o limite sobe: 100 + 20 aceita sangria de 120, recusa 120,01", async () => {
+  it("D28c (CA-CX-05) depois de um suprimento o limite sobe: 100 + 20 aceita sangria de 120, recusa 120,01", async () => {
     const cookie = await loja();
     expect((await mover(cookie, "SUPRIMENTO", 2000)).statusCode).toBe(201);
     expect((await mover(cookie, "SANGRIA", 12001)).statusCode).toBe(409);
     expect((await mover(cookie, "SANGRIA", 12000)).statusCode).toBe(201);
   });
 
-  bug("D29 (RN-CX-18 / CA-CX-09) dois fechamentos simultâneos ⇒ um 200 e um 409 CASH_ALREADY_CLOSED", async () => {
+  it("D29 (RN-CX-18 / CA-CX-09) dois fechamentos simultâneos ⇒ um 200 e um 409 CASH_ALREADY_CLOSED", async () => {
     const cookie = await loja();
     const [a, b] = await Promise.all([
       app.inject({ method: "POST", url: "/api/cashier/close", headers: { cookie }, payload: { closingBalanceCents: 10000 } }),
@@ -65,13 +61,13 @@ describe("QA caixa (API)", () => {
     expect(await prisma.cashSession.count({ where: { closedAt: { not: null } } })).toBe(1);
   });
 
-  bug("D30 (RN-CX-07 / CA-CX-06) movimentação SEM motivo ⇒ 400", async () => {
+  it("D30 (RN-CX-07 / CA-CX-06) movimentação SEM motivo ⇒ 400", async () => {
     const cookie = await loja();
     const res = await mover(cookie, "SANGRIA", 1000, {});
     expect(res.statusCode).toBe(400);
   });
 
-  bug("D31 (RN-CX-19 / CA-CX-13) caixa fechado não reabre: fechar de novo é recusado e movimentar sem caixa aberto dá 409 CASH_REQUIRED", async () => {
+  it("D31 (RN-CX-19 / CA-CX-13) caixa fechado não reabre: fechar de novo é recusado e movimentar sem caixa aberto dá 409 CASH_REQUIRED", async () => {
     const cookie = await loja();
     expect((await app.inject({ method: "POST", url: "/api/cashier/close", headers: { cookie }, payload: { closingBalanceCents: 10000 } })).statusCode).toBe(200);
     const again = await app.inject({ method: "POST", url: "/api/cashier/close", headers: { cookie }, payload: { closingBalanceCents: 10000 } });

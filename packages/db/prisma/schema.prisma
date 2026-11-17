@@ -35,6 +35,7 @@ enum OrderStatus {
 enum CashMovementType {
   SUPRIMENTO // reforço de caixa (entrada de dinheiro fora de venda)
   SANGRIA // retirada de dinheiro do caixa
+  DEVOLUCAO // devolução ao cliente de pedido em dinheiro de caixa já fechado (só o sistema cria; RN-CX-14)
 }
 
 enum CouponDiscountType {
@@ -117,6 +118,7 @@ model Store {
   counter      StoreCounter?
   printJobs    PrintJob[]
   printMode    PrintMode @default(LEGACY) // modo de impressão decidido pelo SERVIDOR por loja (ADR-0004 §8.12)
+  cashStaffWithdrawalLimitCents Int @default(0) // limite de sangria do STAFF por lançamento (RN-CX-09); 0 = toda sangria exige o dono
 }
 
 // Contador atômico por loja (hoje: sequência do código do pedido). Incrementado com
@@ -327,6 +329,10 @@ model CashSession {
   closedByUserId     String?
   expectedClosingCents Int? // saldo esperado calculado no momento do fechamento
   differenceCents    Int? // closingBalanceCents - expectedClosingCents
+  closeReason        String? // código do motivo da diferença (lista fechada; obrigatório só acima da tolerância)
+  closeReasonText    String? // texto livre SÓ quando o código é OUTRO (1 a 200); nunca vai para a auditoria
+  closedByRole       String? // papel de quem fechou (OWNER/STAFF); nunca o e-mail
+  summarySnapshot    Json? // retrato CONGELADO do resumo no instante do fechamento (RN-CX-15)
 
   movements CashMovement[]
 
@@ -340,6 +346,10 @@ model CashMovement {
   type          CashMovementType
   amountCents   Int
   notes         String?
+  reason        String? // código do motivo (lista fechada por tipo; RN-CX-07)
+  reasonText    String? // texto livre SÓ quando o código é OUTRO (1 a 200); nunca vai para a auditoria
+  createdByUserId String? // sem FK de propósito: o registro sobrevive ao usuário; a API devolve só o PAPEL, nunca o e-mail
+  createdByRole String? // OWNER/STAFF no instante do lançamento
   createdAt     DateTime         @default(now())
 
   @@index([cashSessionId])

@@ -12,7 +12,7 @@ export type AuditInput = {
   metadata?: Record<string, unknown>;
 };
 
-function toRow(input: AuditInput) {
+export function toRow(input: AuditInput) {
   return {
     storeId: input.storeId,
     userId: input.userId ?? null,
