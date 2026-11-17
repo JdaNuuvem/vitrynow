@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { createOrderSchema } from "@meucardapio/shared-types";
@@ -197,6 +198,9 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         changeForCents: input.changeForCents,
         couponId: coupon?.id,
         awaitingPayment: usePix,
+        // PIX: o registro do pagamento nasce na MESMA transação do pedido, com a chave de idempotência, ANTES de
+        // falar com o provedor — se algo cair no meio, a cobrança é encontrada (e a conciliação resolve), nunca órfã.
+        ...(usePix ? { payment: { create: { amountCents: totalCents, idempotencyKey: randomUUID() } } } : {}),
         statusHistory: { create: { status: "PENDENTE" } },
         items: {
           create: itemsData.map((item) => ({
@@ -223,18 +227,19 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(201).send({ orderId: order.id, code: order.code });
     }
 
+    const payment = await prisma.payment.findUniqueOrThrow({ where: { orderId: order.id } });
     try {
       const pix = await createPixPayment({
         orderId: order.id,
         amountCents: totalCents,
         description: `Pedido #${order.code} — ${store.name}`,
         payerEmail: `cliente-${order.id}@checkout.meucardapio.local`,
+        idempotencyKey: payment.idempotencyKey ?? undefined,
       });
-      await prisma.payment.create({
+      await prisma.payment.update({
+        where: { id: payment.id },
         data: {
-          orderId: order.id,
           providerPaymentId: pix.providerPaymentId,
-          amountCents: totalCents,
           pixQrCode: pix.pixQrCode,
           pixQrCodeBase64: pix.pixQrCodeBase64,
           expiresAt: pix.expiresAt,
@@ -247,8 +252,9 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       });
     } catch (error) {
       app.log.error(error);
-      await prisma.order.delete({ where: { id: order.id } });
-      if (coupon) await prisma.coupon.update({ where: { id: coupon.id }, data: { usedCount: { decrement: 1 } } });
+      // O pedido NÃO é apagado (auditoria): vira CANCELADO com motivo e o cupom volta pelo fluxo de cancelamento.
+      // Se o provedor chegou a criar a cobrança, o webhook/conciliação a encontra pela referência e estorna.
+      await orderService.cancelBySystem(store.id, order.id, "PAGAMENTO_NAO_APROVADO", "SYSTEM").catch((cancelError) => app.log.error(cancelError));
       return reply.code(502).send({ error: "não foi possível gerar o pagamento PIX, tente novamente" });
     }
     },

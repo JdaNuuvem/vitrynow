@@ -89,17 +89,21 @@ export async function getStoreSubscription(storeId: string): Promise<Subscriptio
   });
 }
 
-export async function activateSubscription(input: { subscriptionId: string; planCode: string; now?: Date }) {
+// `db` permite ativar DENTRO da transação que marcou o pagamento como aprovado (sem janela entre os dois).
+export async function activateSubscription(
+  input: { subscriptionId: string; planCode: string; now?: Date },
+  db: Pick<typeof prisma, "plan" | "subscription"> = prisma,
+) {
   const now = input.now ?? new Date();
-  const plan = await prisma.plan.findUniqueOrThrow({ where: { code: input.planCode } });
-  const subscription = await prisma.subscription.findUniqueOrThrow({ where: { id: input.subscriptionId } });
+  const plan = await db.plan.findUniqueOrThrow({ where: { code: input.planCode } });
+  const subscription = await db.subscription.findUniqueOrThrow({ where: { id: input.subscriptionId } });
 
   const renewsFrom =
     subscription.status === "ACTIVE" && subscription.currentPeriodEnd && subscription.currentPeriodEnd > now
       ? subscription.currentPeriodEnd
       : now;
 
-  return prisma.subscription.update({
+  return db.subscription.update({
     where: { id: subscription.id },
     data: {
       status: "ACTIVE",

@@ -99,6 +99,19 @@ describe("QA probes — API", () => {
     return { orderId: JSON.parse(res.body).orderId as string, providerPaymentId: pix.providerPaymentId };
   }
 
+  // Visão completa do pagamento no provedor (valor, moeda e referência batem com o que gravamos).
+  async function remoteFor(providerPaymentId: string, status: string) {
+    const order = await prisma.payment.findUnique({ where: { providerPaymentId } });
+    const sub = order ? null : await prisma.subscriptionPayment.findUnique({ where: { providerPaymentId } });
+    return {
+      providerPaymentId,
+      status,
+      externalReference: order?.orderId ?? sub?.id ?? null,
+      amountCents: order?.amountCents ?? sub?.amountCents ?? null,
+      currency: "BRL",
+    };
+  }
+
   const webhook = (dataId: string) => {
     const { headers, payload } = signedWebhook(dataId);
     return app.inject({ method: "POST", url: "/api/payments/webhook", headers, payload });
@@ -200,28 +213,28 @@ describe("QA probes — API", () => {
   });
 
   // ───────────── Pagamento / PIX ─────────────
-  bug("D08 mapMpStatus não trata refunded/charged_back/in_process como PENDENTE", () => {
+  it("D08 mapMpStatus não trata refunded/charged_back/in_process como PENDENTE", () => {
     expect(mapMpStatus("refunded")).not.toBe("PENDENTE");
     expect(mapMpStatus("charged_back")).not.toBe("PENDENTE");
   });
 
-  bug("D09 webhook 'refunded' não ressuscita pagamento já REEMBOLSADO para PENDENTE", async () => {
+  it("D09 webhook 'refunded' não ressuscita pagamento já REEMBOLSADO para PENDENTE", async () => {
     const ctx = await setupStore();
     const { orderId, providerPaymentId } = await pixOrder(ctx);
     await prisma.payment.update({ where: { orderId }, data: { status: "REEMBOLSADO" } });
-    getPayment.mockResolvedValue({ providerPaymentId, status: "refunded" });
+    getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "refunded"));
     const res = await webhook(providerPaymentId);
     expect(res.statusCode).toBe(200);
     const payment = await prisma.payment.findUnique({ where: { orderId } });
     expect(payment?.status).toBe("REEMBOLSADO");
   });
 
-  bug("D10 webhook repetido do mesmo pagamento aprovado publica/imprime UMA vez só", async () => {
+  it("D10 webhook repetido do mesmo pagamento aprovado publica/imprime UMA vez só", async () => {
     const ctx = await setupStore();
     const { providerPaymentId } = await pixOrder(ctx);
     const socket = { readyState: 1, OPEN: 1, send: vi.fn(), on: vi.fn() };
     subscribe(ctx.storeId, socket as never);
-    getPayment.mockResolvedValue({ providerPaymentId, status: "approved" });
+    getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "approved"));
     await webhook(providerPaymentId);
     await webhook(providerPaymentId);
     await Promise.all([webhook(providerPaymentId), webhook(providerPaymentId)]);
@@ -229,11 +242,11 @@ describe("QA probes — API", () => {
     expect(created).toBe(1);
   });
 
-  bug("D11 PIX rejeitado/expirado devolve o uso do cupom e registra no histórico do pedido", async () => {
+  it("D11 PIX rejeitado/expirado devolve o uso do cupom e registra no histórico do pedido", async () => {
     const ctx = await setupStore();
     await app.inject({ method: "POST", url: "/api/coupons", headers: { cookie: ctx.cookie }, payload: { code: "pix10", discountType: "FIXED", discountValue: 100, maxUses: 1 } });
     const { orderId, providerPaymentId } = await pixOrder(ctx, { couponCode: "pix10" });
-    getPayment.mockResolvedValue({ providerPaymentId, status: "expired" });
+    getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "expired"));
     await webhook(providerPaymentId);
     const coupon = await prisma.coupon.findFirst({ where: { storeId: ctx.storeId } });
     const history = await prisma.orderStatusHistory.findMany({ where: { orderId, status: "CANCELADO" } });
@@ -243,7 +256,7 @@ describe("QA probes — API", () => {
   it("D12 cliente NÃO cancela (sem estorno) um pedido cujo PIX já foi APROVADO", async () => {
     const ctx = await setupStore();
     const { orderId, providerPaymentId } = await pixOrder(ctx);
-    getPayment.mockResolvedValue({ providerPaymentId, status: "approved" });
+    getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "approved"));
     await webhook(providerPaymentId);
     const res = await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${orderId}/cancel` });
     const after = await prisma.order.findUnique({ where: { id: orderId } });
@@ -252,13 +265,13 @@ describe("QA probes — API", () => {
     expect({ status: res.statusCode, orderStatus: after?.status, refunds: refundPayment.mock.calls.length, ok }).toMatchObject({ ok: true });
   });
 
-  bug("D13 pagamento aprovado DEPOIS de o cliente cancelar não reaparece como pedido novo (e deve gerar estorno)", async () => {
+  it("D13 pagamento aprovado DEPOIS de o cliente cancelar não reaparece como pedido novo (e deve gerar estorno)", async () => {
     const ctx = await setupStore();
     const { orderId, providerPaymentId } = await pixOrder(ctx);
     const socket = { readyState: 1, OPEN: 1, send: vi.fn(), on: vi.fn() };
     subscribe(ctx.storeId, socket as never);
     await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${orderId}/cancel` });
-    getPayment.mockResolvedValue({ providerPaymentId, status: "approved" });
+    getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "approved"));
     await webhook(providerPaymentId);
     const announced = socket.send.mock.calls.filter(([m]) => String(m).includes("order.created")).length;
     expect({ announced, refunds: refundPayment.mock.calls.length }).toEqual({ announced: 0, refunds: 1 });
@@ -267,7 +280,7 @@ describe("QA probes — API", () => {
   it("D21 webhook com assinatura inválida é 401 e não altera nada", async () => {
     const ctx = await setupStore();
     const { orderId, providerPaymentId } = await pixOrder(ctx);
-    getPayment.mockResolvedValue({ providerPaymentId, status: "approved" });
+    getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "approved"));
     const res = await app.inject({
       method: "POST",
       url: "/api/payments/webhook",
@@ -278,13 +291,13 @@ describe("QA probes — API", () => {
     expect((await prisma.order.findUnique({ where: { id: orderId } }))?.awaitingPayment).toBe(true);
   });
 
-  flakyBug("D22 webhook de assinatura em paralelo ativa o plano UMA vez (30 dias, não 60)", async () => {
+  it("D22 webhook de assinatura em paralelo ativa o plano UMA vez (30 dias, não 60)", async () => {
     const ctx = await setupStore();
     const pix = fakePix();
     createPix.mockResolvedValueOnce(pix);
     const checkout = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: ctx.cookie }, payload: { planCode: "PRO" } });
     expect(checkout.statusCode).toBe(201);
-    getPayment.mockResolvedValue({ providerPaymentId: pix.providerPaymentId, status: "approved" });
+    getPayment.mockResolvedValue(await remoteFor(pix.providerPaymentId, "approved"));
     await Promise.all([webhook(pix.providerPaymentId), webhook(pix.providerPaymentId), webhook(pix.providerPaymentId)]);
     const sub = await prisma.subscription.findUnique({ where: { storeId: ctx.storeId } });
     const days = (sub!.currentPeriodEnd!.getTime() - Date.now()) / 86_400_000;
@@ -304,7 +317,7 @@ describe("QA probes — API", () => {
   it("D14b painel não cancela manualmente pedido PIX já pago sem estornar", async () => {
     const ctx = await setupStore();
     const { orderId, providerPaymentId } = await pixOrder(ctx);
-    getPayment.mockResolvedValue({ providerPaymentId, status: "approved" });
+    getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "approved"));
     await webhook(providerPaymentId);
     const res = await app.inject({ method: "POST", url: `/api/orders/${orderId}/status`, headers: { cookie: ctx.cookie }, payload: { status: "CANCELADO" } });
     expect(res.statusCode).toBeGreaterThanOrEqual(400);

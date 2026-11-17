@@ -360,6 +360,7 @@ model Payment {
   order             Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
   provider          String        @default("mercadopago")
   providerPaymentId String?       @unique
+  idempotencyKey    String?       @unique // gerada ANTES de chamar o provedor (cobrança sem órfã; ADR-0007 §6.2)
   status            PaymentStatus @default(PENDENTE)
   amountCents       Int
   pixQrCode         String? // payload "copia e cola"
