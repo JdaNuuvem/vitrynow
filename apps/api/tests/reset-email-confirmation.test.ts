@@ -111,6 +111,8 @@ describe("redefinição de senha exige o e-mail da conta do token (SEC-29, ST-67
       }
       return [...ms].sort((x, y) => x - y)[Math.floor(ms.length / 2)];
     };
+    // aquecimento (conexões do pool, JIT): sem ele a 1ª amostra paga a reconexão depois de um arquivo que desconectou o Prisma e o teste vira ruído de CPU
+    for (let i = 0; i < 3; i += 1) await reset({ token: "w".repeat(32), email: a.credentials.email, newPassword: "senha-nova-da-vitima" });
     const wrongEmail = await sample({ token: a.token, email: "errado@exemplo.com", newPassword: "senha-nova-da-vitima" }, 3); // só 3: 5 invalidam o token
     const noToken = await sample({ token: "y".repeat(32), email: a.credentials.email, newPassword: "senha-nova-da-vitima" });
     const empty = await sample({ token: "z", email: a.credentials.email, newPassword: "senha-nova-da-vitima" });

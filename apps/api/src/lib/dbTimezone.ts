@@ -3,7 +3,9 @@
 // (token de redefinição que nasce vencido, janela do histórico errada). Em PRODUÇÃO a API recusa subir; em desenvolvimento e teste só avisa.
 // NODE_ENV ausente conta como produção (mesma regra da SEC-22): só "development" e "test" seguem adiante com o aviso.
 
-const UTC_NAMES = /^(utc|etc\/utc|etc\/uct|uct|zulu|etc\/zulu)$/i;
+// SEC-33: `GMT` e os apelidos de deslocamento ZERO também são UTC (o Postgres de serviços gerenciados costuma devolver `GMT`/`Etc/GMT`); `Etc/GMT+3` e
+// `GMT+3` NÃO entram (deslocamento diferente de zero).
+const UTC_NAMES = /^(utc|etc\/utc|etc\/uct|uct|zulu|etc\/zulu|gmt|etc\/gmt|etc\/gmt[+-]?0|gmt0|greenwich|etc\/greenwich)$/i;
 
 export type TimezoneDb = { $queryRaw: <T = unknown>(query: TemplateStringsArray, ...values: unknown[]) => Promise<T> };
 export type TimezoneLog = { error: (obj: unknown, msg?: string) => void };
