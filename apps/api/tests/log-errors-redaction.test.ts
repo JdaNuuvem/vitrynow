@@ -337,6 +337,73 @@ describe("SEC-31c: o log é percorrido recursivamente (erro dentro de contexto, 
   });
 });
 
+describe("SEC-33 (ST-78): o formatador nunca lança e cobre os formatos que passavam", () => {
+  const crlf = String.fromCharCode(13, 10);
+
+  it("getter que lança, Proxy hostil e `message` que lança NÃO derrubam quem loga; o nome da chave fica e o valor vira marcador; o resto da linha sai", async () => {
+    const { app, parsed } = capture();
+    await app.ready();
+    const hostil = { visivel: "ok-visivel" } as Record<string, unknown>;
+    Object.defineProperty(hostil, "boom", { enumerable: true, get() { throw new Error("getter hostil"); } });
+    const topo: Record<string, unknown> = { depois: "continua" };
+    Object.defineProperty(topo, "bomba", { enumerable: true, get() { throw new Error("getter no topo"); } });
+    const proxy = new Proxy({}, { ownKeys() { throw new Error("proxy hostil"); } });
+    const erroRuim = new Error("x");
+    Object.defineProperty(erroRuim, "message", { get() { throw new Error("message hostil"); } });
+    expect(() => app.log.info({ ctx: hostil, proxy, cause: erroRuim }, "aninhado")).not.toThrow();
+    expect(() => app.log.info(topo, "topo")).not.toThrow();
+    expect(() => app.log.error({ err: erroRuim }, "err hostil")).not.toThrow();
+    await app.close();
+    const nested = parsed().find((l) => l.msg === "aninhado")!;
+    expect(nested.ctx.visivel).toBe("ok-visivel"); // controle positivo: a linha existe e o legível sai
+    expect(nested.ctx.boom).toBe("[ilegível]");
+    expect(nested.proxy).toBe("[ilegível]");
+    expect(parsed().find((l) => l.msg === "topo")!.depois).toBe("continua");
+    expect(parsed().find((l) => l.msg === "topo")!.bomba).toBe("[ilegível]");
+    expect(parsed().find((l) => l.msg === "err hostil")).toBeDefined();
+  });
+
+  it("texto: Cookie/Set-Cookie, Authorization Digest, senha entre aspas com espaço e JWT puro são apagados; o resto do texto fica", () => {
+    const req = "GET /x" + crlf + "Cookie: sid=COOKIE-SEGREDO-1; tema=escuro" + crlf + "Host: loja.exemplo";
+    const out = scrubText(req);
+    expect(out).not.toContain("COOKIE-SEGREDO-1");
+    expect(out).toContain("Host: loja.exemplo"); // só a linha do cookie some
+    expect(scrubText("Set-Cookie: sid=SC-SEGREDO-2; Path=/; HttpOnly")).not.toContain("SC-SEGREDO-2");
+    const digest = scrubText('Authorization: Digest username="u", realm="r", response="DIGEST-RESP-3"');
+    expect(digest).not.toContain("DIGEST-RESP-3");
+    expect(digest).toContain("Authorization:");
+    expect(scrubText('password="minha senha com espaco" e depois texto')).toBe('password="[redigido]" e depois texto');
+    expect(scrubText("senha='abc def ghi'")).toBe("senha='[redigido]'");
+    expect(scrubText("pwd=SENHA-CURTA-4&a=1")).toBe("pwd=[redigido]&a=1");
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.c2lnbmF0dXJlLWRvLXRva2Vu";
+    expect(scrubText("token puro " + jwt + " fim")).toBe("token puro [redigido] fim");
+    expect(scrubText("GET /cb?code=OAUTHCODE-5&state=ESTADO-6&pagina=2")).toBe("GET /cb?code=[redigido]&state=[redigido]&pagina=2");
+    expect(scrubText("pedido 0042 entregue; senhor João chamou")).toBe("pedido 0042 entregue; senhor João chamou"); // sem falso positivo
+  });
+
+  it("chaves: auth/pwd/senha/otp/pin e `code`/`state` com cara de credencial são redigidos; `code` do pedido e do erro, `author` e `spin` seguem legíveis", () => {
+    const out = sanitizeLogObject({
+      auth: "A-1",
+      pwd: "P-2",
+      senha: "S-3",
+      novaSenha: "S-4",
+      otp: "123456",
+      pin: "9876",
+      aninhado: { code: "TG-5f3aAbCdEf1234567", state: "xYz-AbCdEf1234567890", otp: "654321" },
+      code: "0042",
+      erro: { code: "P2002", state: "aberto" },
+      author: "Maria",
+      spin: 3,
+    }) as Record<string, any>;
+    for (const key of ["auth", "pwd", "senha", "novaSenha", "otp", "pin"]) expect(out[key], key).toBe("[redigido]");
+    expect(out.aninhado).toEqual({ code: "[redigido]", state: "[redigido]", otp: "[redigido]" });
+    expect(out.code).toBe("0042");
+    expect(out.erro).toEqual({ code: "P2002", state: "aberto" });
+    expect(out.author).toBe("Maria");
+    expect(out.spin).toBe(3);
+  });
+});
+
 describe("ST-74: texto digitado pelo cliente tem teto no log", () => {
   it("404 com 1º segmento de 8 KB e Host de 8 KB: a linha leva no máximo 32 caracteres do segmento e 255 do Host; CONTROLE POSITIVO: a linha existe", async () => {
     const { app, lines, parsed } = capture();
