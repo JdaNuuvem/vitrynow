@@ -26,7 +26,8 @@ const SYSTEM_MESSAGES: Record<string, string> = {
   PAGAMENTO_NAO_APROVADO: "O pagamento não foi aprovado e o pedido foi cancelado.",
   PAGAMENTO_APOS_CANCELAMENTO: "O pagamento chegou depois do cancelamento do pedido.",
   LOJA_INDISPONIVEL: "A loja ficou indisponível e o pedido foi cancelado.",
-  // Motivo criado na API-03 e ainda SEM texto aprovado pelo catálogo (Leonardo/Ogilvy): frase provisória, neutra.
+  // Motivo criado na API-03; frase APROVADA (Leonardo + Ogilvy, CA-MC-15): só depois de o provedor CONFIRMAR o estorno, e a
+  // linha de dinheiro é sempre a de "estornado" (nunca a de "em andamento").
   PAGAMENTO_ESTORNADO_NO_PROVEDOR: "O pagamento foi estornado e o pedido foi cancelado.",
 };
 

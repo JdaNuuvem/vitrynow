@@ -2,7 +2,7 @@ import { Prisma, type prisma as prismaClient, type PrintJob, type PrintKind, typ
 import type { PrintableOrder, WsServerMessage } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
 import type { AuditLogger } from "../../shared/audit";
-import { contactAccessFor } from "../orders/orders.view";
+import { authorizeContactView } from "../orders/contactAccess";
 import { buildPrintableOrder, buildTestTicket } from "../../lib/printable";
 import {
   BACKOFF_SECONDS,
@@ -182,18 +182,30 @@ export class PrintJobService {
 
   // ───────────── Painel ─────────────
   async reprint(actor: { storeId: string; userId: string; role: "OWNER" | "STAFF" }, orderId: string) {
+    // A 2ª via sai com telefone e endereço COMPLETOS: é uma DIVULGAÇÃO de contato e segue a regra única do detalhe
+    // (authorizeContactView): papel e idade (STAFF só pedido aberto ou encerrado há < 24 h), rastro `order.view_contact`
+    // gravado de forma ESTRITA antes de o tíquete existir e falha fechada se o rastro não puder ser gravado.
+    const found = await this.db.order.findFirst({
+      where: { id: orderId, storeId: actor.storeId },
+      select: { id: true, status: true, awaitingPayment: true, customerPhone: true, address: true },
+    });
+    if (!found) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
+    // Recusas por estado ANTES do rastro de contato: não se registra acesso a contato que nem vai ser entregue (R-1, Nightingale).
+    if (found.status === "CANCELADO") throw err(409, "ORDER_CANCELED", "Pedido cancelado: não há o que reimprimir.");
+    if (found.awaitingPayment) throw err(409, "ORDER_AWAITING_PAYMENT", "Pedido aguardando pagamento: ainda não foi para a cozinha.");
+    const closing = await this.db.orderStatusHistory.findFirst({ where: { orderId }, orderBy: { seq: "desc" }, select: { createdAt: true } });
+    const decision = await authorizeContactView({ db: this.db, audit: this.audit, now: this.now }, actor, found, closing?.createdAt ?? null);
+    if (decision.unavailable) {
+      throw err(503, "CONTACT_AUDIT_UNAVAILABLE", "Não foi possível registrar o acesso ao contato do cliente. Tente de novo.");
+    }
+    if (decision.access === "MASKED") throw err(403, "FORBIDDEN_ROLE", "Só o dono pode reimprimir um pedido antigo.");
+
     const created = await this.db.$transaction(
       async (tx) => {
         // Trava a linha do pedido: dois cliques simultâneos numeram 2ª via 1 e 2, nunca duas "1".
         await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId} AND "storeId" = ${actor.storeId} FOR UPDATE`;
         const order = await tx.order.findFirst({ where: { id: orderId, storeId: actor.storeId }, select: { id: true, status: true, awaitingPayment: true } });
         if (!order) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
-        // A 2ª via sai com telefone e endereço COMPLETOS: reimprimir não pode burlar a máscara do PRD-15. STAFF só reimprime
-        // pedido aberto ou encerrado há < 24 h (mesma regra do detalhe, `contactAccessFor`); OWNER sem limite.
-        const closing = await tx.orderStatusHistory.findFirst({ where: { orderId }, orderBy: { seq: "desc" }, select: { createdAt: true } });
-        if (contactAccessFor(actor.role, order, closing?.createdAt ?? null, this.now()) === "MASKED") {
-          throw err(403, "FORBIDDEN_ROLE", "Só o dono pode reimprimir um pedido antigo.");
-        }
         if (order.status === "CANCELADO") throw err(409, "ORDER_CANCELED", "Pedido cancelado: não há o que reimprimir.");
         if (order.awaitingPayment) throw err(409, "ORDER_AWAITING_PAYMENT", "Pedido aguardando pagamento: ainda não foi para a cozinha.");
         const count = await tx.printJob.count({ where: { storeId: actor.storeId, orderId, kind: "ORDER_REPRINT" } });

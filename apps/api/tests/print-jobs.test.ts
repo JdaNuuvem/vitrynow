@@ -13,6 +13,14 @@ vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   return { ...original, createPixPayment: vi.fn(), getPayment: vi.fn(), cancelPayment: vi.fn(), refundPayment: vi.fn() };
 });
 import * as mp from "../src/lib/mercadopago";
+import * as queue from "../src/modules/printJobs/printJobs.queue";
+import { PrintJobService } from "../src/modules/printJobs/printJobs.service";
+
+// O aviso de cancelamento precisa nascer NA transação do cancelamento: aqui o gravador do aviso pode ser feito falhar uma vez.
+vi.mock("../src/modules/printJobs/printJobs.queue", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/modules/printJobs/printJobs.queue")>();
+  return { ...original, enqueueCancelNoticeIfPrinted: vi.fn(original.enqueueCancelNoticeIfPrinted) };
+});
 
 // ───────────── Puros ─────────────
 describe("regras puras da fila", () => {
@@ -427,6 +435,67 @@ describe("API-12 — PrintJob", () => {
     for (const proibido of ["Ana Secreta", "11987654321", "sem cebola"]) expect(dump, proibido).not.toContain(proibido);
   });
 
+  it("C-1 (Nightingale): aviso falha DENTRO da saga de estorno ⇒ pagamento e pedido intactos (PENDENTE, nada dobrado); 'Tentar estorno' conclui com 1 aviso e o provedor é chamado UMA só vez", async () => {
+    const ctx = await setup();
+    const token = await ctx.mkToken("PC");
+    const id = await order(ctx);
+    const kitchen = json(await claim(token)).job;
+    await ack(token, kitchen.id, { status: "PRINTED" }); // o tíquete já saiu: cancelar exige o aviso
+    await prisma.order.update({ where: { id }, data: { paymentMethod: "PIX", awaitingPayment: false } });
+    await prisma.payment.create({ data: { orderId: id, providerPaymentId: `mp-c1-${id}`, amountCents: 1000, status: "APROVADO" } });
+    vi.mocked(mp.refundPayment).mockResolvedValue(undefined);
+    vi.mocked(mp.refundPayment).mockClear();
+
+    vi.mocked(queue.enqueueCancelNoticeIfPrinted).mockRejectedValueOnce(new Error("banco falhou ao gravar o aviso"));
+    const cancel = await app.inject({ method: "POST", url: `/api/orders/${id}/cancel`, headers: { cookie: ctx.owner }, payload: { reason: { code: "ITEM_EM_FALTA" } } });
+    expect([cancel.statusCode, json(cancel).refund]).toEqual([202, "PENDING"]); // pendente e VISÍVEL, não 500 mudo
+    const meio = await prisma.order.findUniqueOrThrow({ where: { id }, include: { payment: true } });
+    expect({ status: meio.status, payment: meio.payment?.status, attempts: meio.payment?.refundAttempts }).toEqual({ status: "PENDENTE", payment: "ESTORNO_PENDENTE", attempts: 1 });
+    expect(meio.payment?.refundLastError).toContain("falta concluir o cancelamento");
+    expect((await jobsOf(id)).filter((j) => j.kind === "ORDER_CANCEL_NOTICE")).toHaveLength(0);
+    expect(await prisma.orderStatusHistory.count({ where: { orderId: id, kind: "CANCEL" } })).toBe(0);
+    expect(vi.mocked(mp.refundPayment)).toHaveBeenCalledTimes(1);
+
+    const retry = await app.inject({ method: "POST", url: `/api/orders/${id}/refund/retry`, headers: { cookie: ctx.owner } });
+    expect([retry.statusCode, json(retry).refund]).toEqual([200, "DONE"]);
+    const fim = await prisma.order.findUniqueOrThrow({ where: { id }, include: { payment: true } });
+    expect({ status: fim.status, payment: fim.payment?.status }).toEqual({ status: "CANCELADO", payment: "REEMBOLSADO" });
+    expect((await jobsOf(id)).filter((j) => j.kind === "ORDER_CANCEL_NOTICE")).toHaveLength(1);
+    expect(await prisma.orderStatusHistory.count({ where: { orderId: id, kind: "CANCEL" } })).toBe(1);
+    expect(vi.mocked(mp.refundPayment)).toHaveBeenCalledTimes(1); // o dinheiro foi devolvido UMA vez: a retentativa só refez a Tx 2
+  });
+
+  it("R-1: 2ª via de pedido cancelado ou aguardando pagamento é recusada ANTES de gravar rastro de contato", async () => {
+    const ctx = await setup();
+    const id = await order(ctx, { type: "DELIVERY", customerPhone: "11987654321", address: "Rua Sigilosa, 77", customerName: "Ana" });
+    await app.inject({ method: "POST", url: `/api/orders/${id}/cancel`, headers: { cookie: ctx.owner }, payload: { reason: { code: "ITEM_EM_FALTA" } } });
+    const r = await app.inject({ method: "POST", url: `/api/orders/${id}/reprint`, headers: { cookie: ctx.owner } });
+    expect([r.statusCode, json(r).code]).toEqual([409, "ORDER_CANCELED"]);
+    expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "order.view_contact", targetId: id } })).toBe(0);
+  });
+
+  it("C1 (Deming): se o aviso de cancelamento não puder ser gravado, o cancelamento NÃO acontece (mesma transação); repetido, cancela COM o aviso", async () => {
+    const ctx = await setup();
+    const token = await ctx.mkToken("PC");
+    const id = await order(ctx);
+    const printed = json(await claim(token)).job;
+    await ack(token, printed.id, { status: "PRINTED" });
+
+    vi.mocked(queue.enqueueCancelNoticeIfPrinted).mockRejectedValueOnce(new Error("banco falhou ao gravar o aviso"));
+    const cancel = () => app.inject({ method: "POST", url: `/api/orders/${id}/cancel`, headers: { cookie: ctx.owner }, payload: { reason: { code: "ITEM_EM_FALTA" } } });
+    const falhou = await cancel();
+    expect(falhou.statusCode).toBeGreaterThanOrEqual(500); // falha ALTA e visível, não silenciosa
+    const aposFalha = await prisma.order.findUniqueOrThrow({ where: { id } });
+    expect(aposFalha.status).not.toBe("CANCELADO"); // nada pela metade: o pedido não ficou cancelado sem aviso
+    expect((await jobsOf(id)).filter((j) => j.kind === "ORDER_CANCEL_NOTICE")).toHaveLength(0);
+    expect(await prisma.orderStatusHistory.count({ where: { orderId: id, kind: "CANCEL" } })).toBe(0);
+
+    const ok = await cancel();
+    expect(ok.statusCode).toBe(200);
+    expect((await prisma.order.findUniqueOrThrow({ where: { id } })).status).toBe("CANCELADO");
+    expect((await jobsOf(id)).filter((j) => j.kind === "ORDER_CANCEL_NOTICE")).toHaveLength(1); // cancelou COM o aviso
+  });
+
   // ───────────── Reimpressão e teste ─────────────
   it("reimpressão: job ORDER_REPRINT com contador 1, 2, 3…; a 2ª via leva reprintCount e a hora da 1ª impressão; auditado com o usuário", async () => {
     const ctx = await setup();
@@ -492,6 +561,39 @@ describe("API-12 — PrintJob", () => {
     expect([negado.statusCode, json(negado).code]).toEqual([403, "FORBIDDEN_ROLE"]);
     expect(await prisma.printJob.count({ where: { orderId: id, kind: "ORDER_REPRINT" } })).toBe(antes); // nada criado
     expect((await reprint(ctx.owner, id)).statusCode).toBe(201); // o dono não tem limite de idade
+  });
+
+  it("API-54b: a 2ª via é divulgação de contato — grava order.view_contact ANTES de criar o job (OWNER e STAFF), com dedupe de 10 min", async () => {
+    const ctx = await setup();
+    const id = await order(ctx, { type: "DELIVERY", customerPhone: "11987654321", address: "Rua Sigilosa, 77", customerName: "Ana" });
+    const reprint = () => app.inject({ method: "POST", url: `/api/orders/${id}/reprint`, headers: { cookie: ctx.owner } });
+    const views = () => prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "order.view_contact", targetId: id } });
+    expect((await reprint()).statusCode).toBe(201);
+    expect(await views()).toBe(1); // sem vi.waitFor: o rastro é parte da resposta
+    expect((await reprint()).statusCode).toBe(201);
+    expect(await views()).toBe(1); // dedupe de 10 min
+    const log = await prisma.auditLog.findFirstOrThrow({ where: { storeId: ctx.storeId, action: "order.view_contact" } });
+    expect(JSON.stringify(log)).not.toMatch(/11987654321|Sigilosa|Ana/);
+  });
+
+  it("API-54b: se o rastro do contato não puder ser gravado, a 2ª via é RECUSADA (503) e NENHUM job é criado — falha fechada", async () => {
+    const ctx = await setup();
+    const id = await order(ctx, { type: "DELIVERY", customerPhone: "11987654321", address: "Rua Sigilosa, 77", customerName: "Ana" });
+    const user = await prisma.user.findFirstOrThrow({ where: { storeId: ctx.storeId } });
+    const quebrado = { log: () => {}, logStrict: async () => { throw new Error("banco indisponível"); } };
+    const svc = new PrintJobService(prisma, quebrado, () => {});
+    await expect(svc.reprint({ storeId: ctx.storeId, userId: user.id, role: "OWNER" }, id)).rejects.toMatchObject({ statusCode: 503, code: "CONTACT_AUDIT_UNAVAILABLE" });
+    expect(await prisma.printJob.count({ where: { orderId: id, kind: "ORDER_REPRINT" } })).toBe(0);
+  });
+
+  it("API-54b: pedido sem contato (retirada sem telefone) reimprime sem pedir rastro de contato", async () => {
+    const ctx = await setup();
+    const id = await order(ctx); // BALCAO sem telefone nem endereço
+    const user = await prisma.user.findFirstOrThrow({ where: { storeId: ctx.storeId } });
+    const strict = vi.fn(async () => {});
+    const svc = new PrintJobService(prisma, { log: () => {}, logStrict: strict }, () => {});
+    await svc.reprint({ storeId: ctx.storeId, userId: user.id, role: "OWNER" }, id);
+    expect(strict).not.toHaveBeenCalled();
   });
 
   it("job de TESTE: só o dono cria; o claim traz ticket FICTÍCIO (nenhum dado de loja/cliente); fecha com PRINTED", async () => {
