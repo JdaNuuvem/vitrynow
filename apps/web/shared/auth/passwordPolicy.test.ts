@@ -52,6 +52,26 @@ describe("política de senha (SEC-29)", () => {
 });
 
 
+// Contrato com a API da parte 2 (feat/SEC-29-2-email-obrigatorio, 37d6cbf), lido no código dela: toda recusa por e-mail que não bate, token
+// inválido/usado/vencido ou pedido SEM e-mail é `400 { error: "token inválido ou expirado" }`; senha curta é o erro de validação do Zod,
+// que o cliente HTTP monta como "newPassword: <frase>" com a MESMA frase da constante. Se a API mudar um desses textos, estes testes avisam.
+describe("contrato com a API da parte 2 (textos reais)", () => {
+  it("o texto da API para senha curta é o mesmo da tela e a tela o reconhece", () => {
+    const apiMessage = "A senha precisa ter pelo menos 10 caracteres."; // PASSWORD_TOO_SHORT_MESSAGE de shared-types
+    expect(PASSWORD_TOO_SHORT_MESSAGE).toBe(apiMessage);
+    expect(classifyResetFailure(400, `newPassword: ${apiMessage}`)).toBe("rule");
+  });
+
+  it("a recusa genérica da API ('token inválido ou expirado', 400) vira a frase única, e não a da senha", () => {
+    expect(isPasswordRuleError("token inválido ou expirado")).toBe(false);
+    expect(classifyResetFailure(400, "token inválido ou expirado")).toBe("refused");
+  });
+
+  it("o 429 do limite de tentativas (10 por minuto) vira a mensagem de espera", () => {
+    expect(classifyResetFailure(429, "Too Many Requests")).toBe("rate");
+  });
+});
+
 describe("confirmação do e-mail na redefinição (ST-67)", () => {
   it("as frases são as aprovadas pelo Ogilvy", () => {
     expect(CONFIRM_EMAIL_LABEL).toBe("Confirme o e-mail desta conta");
