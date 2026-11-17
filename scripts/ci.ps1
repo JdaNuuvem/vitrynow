@@ -126,12 +126,17 @@ function Invoke-TimingTest {  # roda SÓ o teste de tempo; devolve @{ Ok; Valor 
     $out = node node_modules/vitest/vitest.mjs run $timingFile -t $timingPattern 2>&1 | ForEach-Object { $_ -replace "\x1b\[[0-9;]*m", '' }
     $rc = $LASTEXITCODE
   } finally { Pop-Location }
-  $m = $out | Select-String -Pattern 'expected ([0-9.]+) to be less than' | Select-Object -First 1
+  # Dois jeitos de falhar COM valor medido: diferença acima do limite ("less than 35") ou tempo ABAIXO do piso ("greater than or equal to <piso>"). Sem nenhum dos
+  # dois o teste nem chegou a medir (banco desatualizado, erro de setup): Valor fica vazio e a mensagem final NÃO acusa defeito de segurança.
+  $m = $out | Select-String -Pattern 'expected ([0-9.]+) to be (less than|greater than or equal to)' | Select-Object -First 1
   $valor = if ($m) { $m.Matches[0].Groups[1].Value } else { '' }
+  $tipo = if ($m -and $m.Matches[0].Groups[2].Value -like 'greater*') { 'piso' } else { 'limite' }
   # "nenhum teste casou" NÃO pode contar como passou: exige 1 teste passado
   $passou = ($rc -eq 0) -and [bool]($out | Select-String -Pattern 'Tests\s+1 passed' -Quiet)
   if (-not $passou -and -not $valor) { $out | Select-Object -Last 12 | ForEach-Object { Write-Host "   $_" } }
-  [pscustomobject]@{ Ok = $passou; Valor = $valor }
+  # Texto = como mostrar o valor: "diferença X ms (limite 35)", "tempo X ms ABAIXO do piso" ou "não medido".
+  $texto = if (-not $valor) { 'não medido' } elseif ($tipo -eq 'piso') { "tempo $valor ms ABAIXO do piso" } else { "diferença $valor ms (limite 35)" }
+  [pscustomobject]@{ Ok = $passou; Valor = $valor; Tipo = $tipo; Texto = $texto }
 }
 if ($continue -and -not $SkipTests) {
   $continue = Step 'teste de tempo (SEGURANÇA), isolado, antes da suíte' {
@@ -139,15 +144,17 @@ if ($continue -and -not $SkipTests) {
     Write-Host "   carga antes: CPU $($carga.Cpu)%, outras suítes vitest: $($carga.Outras) => $(if ($carga.Alta) { 'CARGA CONHECIDA (CPU >= 60%)' } else { 'repouso (CPU < 60%)' })"
     $r1 = Invoke-TimingTest
     if ($r1.Ok) { Write-Host '   passou de primeira'; $global:LASTEXITCODE = 0; return }
-    Write-Host "   1ª tentativa FALHOU (diferença medida: $($r1.Valor) ms; limite 35). Repetindo automaticamente 1 vez."
+    Write-Host "   1ª tentativa FALHOU ($($r1.Texto)). Repetindo automaticamente 1 vez."
     $r2 = Invoke-TimingTest
-    if ($r2.Ok) { Write-Host "   AVISO: falhou na 1ª ($($r1.Valor) ms) e passou na repetição: confira a carga da máquina."; $global:LASTEXITCODE = 0; return }
-    Write-Host "   a repetição também FALHOU (diferença medida: $($r2.Valor) ms)."
-    if (-not $carga.Alta) { throw "teste de tempo falhou 2 vezes EM REPOUSO ($($r1.Valor) e $($r2.Valor) ms; limite 35): é defeito (SEGURANÇA, o tempo de resposta distingue contas); não afrouxe o limite" }
+    if ($r2.Ok) { Write-Host "   AVISO: falhou na 1ª ($($r1.Texto)) e passou na repetição: confira a carga da máquina."; $global:LASTEXITCODE = 0; return }
+    Write-Host "   a repetição também FALHOU ($($r2.Texto))."
+    # Sem valor nas DUAS falhas = o teste nem mediu (banco de teste desatualizado, migração faltando, erro de setup). Isso não prova defeito de segurança: diga a causa provável.
+    if (-not $r1.Valor -and -not $r2.Valor) { throw "teste de tempo falhou 2 vezes SEM valor medido: banco de teste desatualizado ou erro de setup. Rode as migrações (.\scripts\test-db.ps1 -Agent <agente> -Port <porta>) e leia a saída do teste acima; isto NÃO é, por si só, defeito de segurança" }
+    if (-not $carga.Alta) { throw "teste de tempo falhou 2 vezes EM REPOUSO ($($r1.Texto) e $($r2.Texto)): é defeito (SEGURANÇA, o tempo de resposta distingue contas); não afrouxe o limite nem o piso" }
     Write-Host '   carga conhecida: esperando 20 s e repetindo 3 vezes; só 3 de 3 libera.'
     Start-Sleep -Seconds 20
-    $vals = @(); for ($i = 0; $i -lt 3; $i++) { $r = Invoke-TimingTest; $vals += $(if ($r.Ok) { 'ok' } else { "falhou($($r.Valor) ms)" }) }
-    if (($vals | Where-Object { $_ -eq 'ok' }).Count -eq 3) { Write-Host "   AVISO: falhas sob carga ($($r1.Valor) e $($r2.Valor) ms), mas 3 de 3 passaram depois: não bloqueia. Rode o CI com a máquina em repouso." ; $global:LASTEXITCODE = 0; return }
+    $vals = @(); for ($i = 0; $i -lt 3; $i++) { $r = Invoke-TimingTest; $vals += $(if ($r.Ok) { 'ok' } else { "falhou($($r.Texto))" }) }
+    if (($vals | Where-Object { $_ -eq 'ok' }).Count -eq 3) { Write-Host "   AVISO: falhas sob carga ($($r1.Texto) e $($r2.Texto)), mas 3 de 3 passaram depois: não bloqueia. Rode o CI com a máquina em repouso." ; $global:LASTEXITCODE = 0; return }
     throw "teste de tempo falhou sob carga E não passou 3 de 3 depois ($($vals -join ', ')): trate como defeito"
   }
 }
