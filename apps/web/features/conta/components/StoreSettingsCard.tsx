@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { StoreSettings } from "@/core/domain/store";
+import { validateImageUrl } from "@/shared/format/imageUrl";
 import { MoneyInput } from "@/shared/ui/MoneyInput";
 import { Switch } from "@/shared/ui/Switch";
 import { toForm, type ContaForm } from "../contaForm";
@@ -17,6 +18,8 @@ export function StoreSettingsCard({
 }) {
   const [form, setForm] = useState<ContaForm>(() => toForm(store));
   const [message, setMessage] = useState<SaveMessage | null>(null);
+  const [imageErrors, setImageErrors] = useState<{ logoUrl: string | null; coverImageUrl: string | null }>({ logoUrl: null, coverImageUrl: null });
+  const imageInputs = useRef<{ logoUrl: HTMLInputElement | null; coverImageUrl: HTMLInputElement | null }>({ logoUrl: null, coverImageUrl: null });
 
   const bind = (key: Exclude<keyof ContaForm, "deliveryEnabled" | "pickupEnabled">) => ({
     value: form[key],
@@ -25,6 +28,11 @@ export function StoreSettingsCard({
 
   async function save() {
     setMessage(null);
+    // Logo e capa só em https (SEC-14/ST-17): avisa no campo, antes de gastar uma ida ao servidor.
+    const errors = { logoUrl: validateImageUrl(form.logoUrl), coverImageUrl: validateImageUrl(form.coverImageUrl) };
+    setImageErrors(errors);
+    const firstInvalid = errors.logoUrl ? "logoUrl" : errors.coverImageUrl ? "coverImageUrl" : null;
+    if (firstInvalid) return imageInputs.current[firstInvalid]?.focus();
     setMessage(await onSave(form));
   }
 
@@ -35,14 +43,26 @@ export function StoreSettingsCard({
       </p>
 
       <Field label="Nome da loja" {...bind("name")} />
-      <Field label="URL do logo (opcional)" placeholder="https://..." {...bind("logoUrl")} />
+      <Field
+        label="URL do logo (opcional)"
+        placeholder="https://..."
+        error={imageErrors.logoUrl}
+        inputRef={(element) => (imageInputs.current.logoUrl = element)}
+        {...bind("logoUrl")}
+      />
       <Field
         label="Cor principal (opcional)"
         placeholder="#16a34a"
         adornment={form.primaryColor && <span className="conta__swatch" style={{ backgroundColor: form.primaryColor }} />}
         {...bind("primaryColor")}
       />
-      <Field label="URL da capa do cardápio (opcional)" placeholder="https://..." {...bind("coverImageUrl")} />
+      <Field
+        label="URL da capa do cardápio (opcional)"
+        placeholder="https://..."
+        error={imageErrors.coverImageUrl}
+        inputRef={(element) => (imageInputs.current.coverImageUrl = element)}
+        {...bind("coverImageUrl")}
+      />
       <Field label="Endereço (exibido no cardápio público)" placeholder="Rua Exemplo, 123, Centro, Cidade - UF" {...bind("address")} />
       <Field label="WhatsApp (só números com DDI, ex. 5521999999999)" placeholder="5521999999999" {...bind("whatsapp")} />
       <Field label="Horário de funcionamento (texto livre)" placeholder="Seg a sáb, 09:00 às 17:00" {...bind("openingHours")} />

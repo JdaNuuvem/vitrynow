@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Product } from "@/core/domain/storefront";
 import { formatCents } from "@/shared/format/money";
 import { STORE_CLOSED_MESSAGE } from "../checkoutForm";
@@ -23,6 +23,24 @@ export function ProductDetailScreen({
   const [quantity, setQuantity] = useState(1);
   const [additionalIds, setAdditionalIds] = useState<string[]>([]);
   const [notes, setNotes] = useState("");
+  const titleRef = useRef<HTMLHeadingElement>(null);
+
+  // Tela nova: o foco entra no título (o leitor de tela anuncia o produto) em vez de ficar no body.
+  useEffect(() => {
+    titleRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  // Esc volta ao cardápio, exceto no meio de uma observação já escrita (não perde o texto sem querer).
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      const target = event.target;
+      if (target instanceof HTMLTextAreaElement && target.value.trim() !== "") return;
+      onClose();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
 
   const additionalsCents = additionalIds.reduce(
     (sum, id) => sum + (product.additionals.find((a) => a.id === id)?.priceCents ?? 0),
@@ -49,7 +67,9 @@ export function ProductDetailScreen({
         </div>
 
         <div className="loja__detail-content">
-          <h1 className="loja__detail-title">{product.name}</h1>
+          <h1 ref={titleRef} tabIndex={-1} className="loja__detail-title">
+            {product.name}
+          </h1>
           {product.description && <p className="loja__detail-desc">{product.description}</p>}
 
           {product.additionals.length > 0 && (
