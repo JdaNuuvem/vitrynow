@@ -1,3 +1,5 @@
+import type { Order } from "@/core/domain/orders";
+
 // "Há N min" do card e a cor de atraso (spec 02 §2, parecer R4 do Deming).
 //
 // A hora de referência é a do SERVIDOR: a API devolve `now`; a tela guarda
@@ -39,4 +41,12 @@ export function ageText(minutes: number | null): string {
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
   return rest === 0 ? `há ${hours} h` : `há ${hours} h ${rest} min`;
+}
+
+// Minutos no estado atual do pedido. Usa statusChangedAt (quando a API mandar); sem ele, só o pedido NOVO
+// tem tempo conhecido (createdAt = quando entrou em PENDENTE). Nos outros estados não inventa: null.
+// `skewMs`: hoje a API não manda a hora do servidor, então o desvio é 0 até o Turing expor `now`.
+export function orderAgeMinutes(order: Pick<Order, "status" | "statusChangedAt" | "createdAt">, browserNowMs: number, skewMs = 0): number | null {
+  const reference = order.statusChangedAt ?? (order.status === "PENDENTE" ? order.createdAt : undefined);
+  return minutesInState(reference, browserNowMs, skewMs);
 }

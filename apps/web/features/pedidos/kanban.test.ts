@@ -1,27 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { ORDER_STATUSES, type Order } from "@/core/domain/orders";
 import { STATUS_LABELS, UNKNOWN_STATUS_LABEL, statusLabel } from "@/core/domain/orderLabels";
-import { KANBAN_COLUMNS, OFF_BOARD_STATUSES, groupOrders, nextStatus, ordersByStatus } from "./kanban";
+import { KANBAN_COLUMNS, OFF_BOARD_STATUSES, groupOrders, ordersByStatus } from "./kanban";
 
 const order = (id: string, status: string): Order =>
   ({ id, code: id, type: "BALCAO", status, customerName: null, totalCents: 1000, items: [], delivererId: null, payment: null }) as Order;
 
-describe("kanban: avanço do clique de hoje (rota legada)", () => {
-  it("avança na ordem do fluxo que a API atual aceita", () => {
-    expect(nextStatus("PENDENTE")).toBe("CONFIRMADO");
-    expect(nextStatus("PRONTO")).toBe("CONCLUIDO");
-  });
-
-  it("NÃO leva a SAIU_PARA_ENTREGA: a API atual recusaria (a coluna existe, o clique não vai para lá)", () => {
-    expect(nextStatus("PRONTO")).not.toBe("SAIU_PARA_ENTREGA");
-  });
-
-  it("depois de CONCLUIDO, em SAIU_PARA_ENTREGA e a partir de CANCELADO não avança", () => {
-    expect(nextStatus("CONCLUIDO")).toBeNull();
-    expect(nextStatus("SAIU_PARA_ENTREGA")).toBeNull();
-    expect(nextStatus("CANCELADO")).toBeNull();
-  });
-
+describe("kanban: filtro por status", () => {
   it("filtra pedidos por status", () => {
     const list = [order("1", "PENDENTE"), order("2", "PRONTO"), order("3", "PENDENTE")];
     expect(ordersByStatus(list, "PENDENTE").map((o) => o.id)).toEqual(["1", "3"]);

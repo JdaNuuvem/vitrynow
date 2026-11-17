@@ -59,7 +59,9 @@ export type Order = {
   // Desfazer: o dono (OWNER) não tem prazo (`undoUntil` null e `canUndo` true); a equipe tem 2 min.
   canUndo?: boolean;
   undoUntil?: string | null;
-  // Quando o pedido entrou no estado atual (ISO, relógio do servidor): base do "há N min".
+  createdAt?: string;
+  // Quando o pedido entrou no estado atual (ISO). A API de hoje NÃO manda este campo: sem ele a tela só
+  // calcula o tempo de pedido NOVO, a partir de createdAt (lacuna registrada para o Turing).
   statusChangedAt?: string;
 };
 

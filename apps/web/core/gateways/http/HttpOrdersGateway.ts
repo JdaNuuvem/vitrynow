@@ -1,5 +1,5 @@
 import type { HttpClient, RequestOptions } from "../../http/HttpClient";
-import type { DeliverersGateway, OrdersGateway } from "../OrdersGateway";
+import type { CancelBody, CancelResult, DeliverersGateway, OrdersGateway } from "../OrdersGateway";
 import type { Deliverer, Order, OrderStatus } from "../../domain/orders";
 
 export class HttpOrdersGateway implements OrdersGateway {
@@ -9,17 +9,26 @@ export class HttpOrdersGateway implements OrdersGateway {
     return this.http.get<{ orders: Order[] }>("/api/orders");
   }
 
-  setStatus(orderId: string, status: OrderStatus) {
-    return this.http.post(`/api/orders/${orderId}/status`, { status });
+  transition(orderId: string, to: OrderStatus) {
+    return this.http.post<{ order: Order }>(`/api/orders/${orderId}/transition`, { to });
+  }
+
+  cancel(orderId: string, body: CancelBody, options?: RequestOptions) {
+    return this.http.post<CancelResult>(`/api/orders/${orderId}/cancel`, body, options);
+  }
+
+  undo(orderId: string) {
+    return this.http.post<{ order: Order }>(`/api/orders/${orderId}/undo`);
+  }
+
+  retryRefund(orderId: string, options?: RequestOptions) {
+    return this.http.post<CancelResult>(`/api/orders/${orderId}/refund/retry`, undefined, options);
   }
 
   assignDeliverer(orderId: string, delivererId: string | null) {
     return this.http.post(`/api/orders/${orderId}/deliverer`, { delivererId });
   }
 
-  refund(orderId: string, options?: RequestOptions) {
-    return this.http.post(`/api/orders/${orderId}/refund`, undefined, options);
-  }
 }
 
 export class HttpDeliverersGateway implements DeliverersGateway {

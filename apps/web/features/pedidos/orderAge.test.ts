@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ageLevel, ageText, clockSkewMs, minutesInState } from "./orderAge";
+import { ageLevel, ageText, clockSkewMs, minutesInState, orderAgeMinutes } from "./orderAge";
 
 const MIN = 60_000;
 const T0 = Date.parse("2026-11-16T20:00:00.000Z");
@@ -58,6 +58,28 @@ describe("ageLevel: cor de atraso só em pedido novo", () => {
 
   it("sem tempo conhecido: ok", () => {
     expect(ageLevel(null, "PENDENTE")).toBe("ok");
+  });
+});
+
+describe("orderAgeMinutes: só afirma o tempo que a API permite saber", () => {
+  const pending = (over = {}) => ({ status: "PENDENTE" as const, ...over });
+
+  it("pedido novo sem statusChangedAt usa createdAt (a API de hoje não manda statusChangedAt)", () => {
+    expect(orderAgeMinutes(pending({ createdAt: at(7) }), T0)).toBe(7);
+  });
+
+  it("statusChangedAt tem prioridade quando a API o mandar", () => {
+    expect(orderAgeMinutes(pending({ createdAt: at(30), statusChangedAt: at(2) }), T0)).toBe(2);
+  });
+
+  it("fora de PENDENTE, sem statusChangedAt, NÃO inventa o tempo a partir de createdAt", () => {
+    for (const status of ["CONFIRMADO", "EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA"] as const) {
+      expect(orderAgeMinutes({ status, createdAt: at(90) }, T0)).toBeNull();
+    }
+  });
+
+  it("fora de PENDENTE, com statusChangedAt, usa o campo", () => {
+    expect(orderAgeMinutes({ status: "EM_PREPARO", statusChangedAt: at(15) }, T0)).toBe(15);
   });
 });
 
