@@ -234,7 +234,8 @@ namespace MeuCardapio.PrintClient.Printing
         // com total diferente de 0 ou ausente => regra normal e AVISO no log (IsNothingToChargeConflict). AUSENTE (API antiga) => a aritmetica abaixo.
         static bool IsNothingToCharge(PrintableOrder o)
         {
-            if (o.NothingToCharge == false) return false;
+            // Campo PRESENTE e nao booleano = dado corrompido: o lado seguro e COBRAR (a aritmetica local so vale para campo AUSENTE ou null).
+            if (o.NothingToCharge == false || o.NothingToChargeInvalid) return false;
             if (!o.HasTotalCents || o.TotalCents != 0) return false;
             if (o.NothingToCharge == true) return true;
             long items = ItemsValue(o);
@@ -253,6 +254,12 @@ namespace MeuCardapio.PrintClient.Printing
                 total += ((long)item.UnitPriceCents + extras) * item.Quantity;
             }
             return total;
+        }
+
+        // O campo chegou com valor que nao e booleano: o papel cobra (regra normal) e o chamador registra um AVISO no log.
+        public static bool IsNothingToChargeInvalid(PrintableOrder o)
+        {
+            return o != null && !o.IsTest && o.CancelNotice != true && o.NothingToChargeInvalid;
         }
 
         // O servidor disse "nada a cobrar" mas o total nao chegou PRESENTE e igual a 0: incoerente (versao desencontrada ou bug). O papel segue a

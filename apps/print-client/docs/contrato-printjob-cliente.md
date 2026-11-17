@@ -80,4 +80,5 @@ O servidor diz se **não há nada a cobrar** (`totalCents == 0` E nenhuma cobran
 | `false` | qualquer | **regra normal (cobra)**, mesmo com a aritmética local dando zero (há pagamento vivo) |
 | `true` | PRESENTE e 0 | "SEM COBRANÇA: NADA A COBRAR" |
 | `true` | ≠ 0 ou AUSENTE | **regra normal (cobra)** + AVISO no log (servidor incoerente) |
+| PRESENTE e **não booleano** (`1`, `0`, `"true"`, `"false"`, `"lixo"`, lista, objeto) | qualquer | **regra normal (cobra)** + AVISO no log ("o campo nothingToCharge chegou com valor que nao e booleano"); dado corrompido, não é campo ausente: a aritmética NÃO decide; o valor não é coagido nem derruba a leitura do tíquete |
 | ausente/`null` (API antiga) | — | aritmética do PC-19: total PRESENTE e 0, desconto = itens, sem taxa/gorjeta, subtotal batendo |

@@ -601,6 +601,18 @@ namespace MeuCardapio.PrintClient
             var rtNone = fromJson(Newtonsoft.Json.JsonConvert.SerializeObject(new PrintableOrder { OrderId = "r", Code = "1", Type = "BALCAO", TotalCents = 0 }));
             Check("ida e volta pelo JSON: true continua true e nao informado continua ausente", rtField.NothingToCharge == true && rtNone.NothingToCharge == null);
 
+            // campo PRESENTE e nao booleano com total 0 e a aritmetica FECHANDO (parecer Nightingale): dado corrompido, o lado seguro e COBRAR + aviso;
+            // so campo AUSENTE ou null deixa a aritmetica decidir
+            foreach (var weird in new[] { "0", "1", "\"false\"", "\"true\"", "\"lixo\"", "[false]", "{\"v\":true}" })
+            {
+                var wc = fromJson("{\"orderId\":\"w\",\"code\":\"1\",\"type\":\"BALCAO\",\"nothingToCharge\":" + weird + ",\"totalCents\":0,\"subtotalCents\":5000,\"discountCents\":5000,\"items\":[{\"productName\":\"A\",\"quantity\":2,\"unitPriceCents\":2500}]}");
+                Check("nothingToCharge corrompido (" + weird + ") com total 0 e aritmetica FECHANDO: COBRA (NAO diz 'SEM COBRANÇA') e pede aviso", !pay(wc).Contains("SEM COBRANÇA") && TicketBuilder.IsNothingToChargeInvalid(wc));
+            }
+            var okNull = fromJson("{\"orderId\":\"w\",\"code\":\"1\",\"type\":\"BALCAO\",\"nothingToCharge\":null,\"totalCents\":0,\"subtotalCents\":5000,\"discountCents\":5000,\"items\":[{\"productName\":\"A\",\"quantity\":2,\"unitPriceCents\":2500}]}");
+            var okMissing = fromJson("{\"orderId\":\"w\",\"code\":\"1\",\"type\":\"BALCAO\",\"totalCents\":0,\"subtotalCents\":5000,\"discountCents\":5000,\"items\":[{\"productName\":\"A\",\"quantity\":2,\"unitPriceCents\":2500}]}");
+            Check("campo null ou AUSENTE com a aritmetica fechando: a aritmetica decide ('SEM COBRANÇA') e nao e valor corrompido", pay(okNull) == Z && pay(okMissing) == Z && !TicketBuilder.IsNothingToChargeInvalid(okNull) && !TicketBuilder.IsNothingToChargeInvalid(okMissing));
+            Check("booleano de verdade (true/false) nunca e 'corrompido'; aviso de cancelamento e teste tambem nao", !TicketBuilder.IsNothingToChargeInvalid(yes) && !TicketBuilder.IsNothingToChargeInvalid(no) && !TicketBuilder.IsNothingToChargeInvalid(CancelFromApi()) && !TicketBuilder.IsNothingToChargeInvalid(TestFromClient()));
+
             // aviso de cancelamento e teste nunca usam o campo (layout proprio, sem linha de pagamento)
             var cancel = CancelFromApi(); cancel.NothingToCharge = true;
             var test = TestFromClient(); test.NothingToCharge = true;

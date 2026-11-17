@@ -55,6 +55,12 @@ namespace MeuCardapio.PrintClient.Models
         // API-66 (schema 3): o SERVIDOR diz se nao ha nada a cobrar (fonte unica: total 0 E nenhuma cobranca possivel). Ausente (API antiga) = null.
         // So um BOOLEANO de verdade vale (parecer Nightingale): 1, "true", "lixo" ou lista NAO sao coagidos e NAO derrubam a leitura do tiquete; viram AUSENTE.
         [JsonProperty("nothingToCharge")] public Newtonsoft.Json.Linq.JToken NothingToChargeRaw { get; set; }
+        // O servidor mandou o campo, mas com um valor que NAO e booleano (1, "false", "lixo", lista...): dado corrompido, diferente de campo AUSENTE (API antiga).
+        [JsonIgnore]
+        public bool NothingToChargeInvalid
+        {
+            get { var t = NothingToChargeRaw; return t != null && t.Type != Newtonsoft.Json.Linq.JTokenType.Null && t.Type != Newtonsoft.Json.Linq.JTokenType.Boolean; }
+        }
         [JsonIgnore]
         public bool? NothingToCharge
         {
