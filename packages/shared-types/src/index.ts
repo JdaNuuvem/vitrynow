@@ -187,6 +187,23 @@ export type CreateProductInput = z.infer<typeof createProductSchema>;
 export const updateProductSchema = createProductSchema.partial();
 export type UpdateProductInput = z.infer<typeof updateProductSchema>;
 
+// ---- Histórico de pedidos e observação interna (API-54) ----
+export const HISTORY_PERIODS = ["today", "yesterday", "7d", "30d", "custom"] as const;
+export const HISTORY_STATUS_FILTERS = ["ALL", "CONCLUIDO", "CANCELADO", "AGUARDANDO_PAGAMENTO", "PAGAMENTO_EXPIRADO"] as const;
+export const orderHistoryQuerySchema = z.object({
+  q: z.string().max(100).optional(),
+  period: z.enum(HISTORY_PERIODS).optional(),
+  from: z.string().max(10).optional(), // AAAA-MM-DD no fuso da loja (period=custom)
+  to: z.string().max(10).optional(),
+  status: z.enum(HISTORY_STATUS_FILTERS).optional(),
+  type: orderTypeSchema.optional(),
+  paymentMethod: z.string().max(20).optional(),
+  refundPending: z.enum(["true", "false"]).optional(),
+  cursor: z.string().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+});
+export const orderInternalNoteSchema = z.object({ note: z.string().max(2000).nullable() });
+
 // ---- Caixa (painel) ----
 
 export const openCashSessionSchema = z.object({

@@ -32,6 +32,10 @@ export type PanelOrderSource = Order & {
 };
 
 export type PanelOrderExtras = {
+  /** Quando o pedido entrou no status atual (última linha do histórico; sem histórico, a criação). */
+  statusChangedAt: Date;
+  /** Hora do SERVIDOR no momento da resposta: o card mede "há N min" por ela, não pelo relógio do navegador (API-62). */
+  serverNow: Date;
   allowedTransitions: unknown;
   blocked: unknown;
   canUndo: boolean;
@@ -63,6 +67,8 @@ export function toPanelOrder(
     // Só no detalhe, e só quando o contato foi negado por não poder registrar o acesso (falha fechada, API-54b).
     ...(opts.contactUnavailable ? { contactUnavailable: opts.contactUnavailable } : {}),
     notes: order.notes, // alergia/restrição aparece inteira (PRD-15)
+    // Observação INTERNA (API-54): só no detalhe do painel; nunca na lista, no tíquete nem para o cliente.
+    ...(opts.detail ? { internalNote: order.internalNote } : {}),
     subtotalCents: order.subtotalCents,
     discountCents: order.discountCents,
     deliveryFeeCents: order.deliveryFeeCents,
@@ -74,6 +80,8 @@ export function toPanelOrder(
     deliverer: order.deliverer ? { id: order.deliverer.id, name: order.deliverer.name } : null,
     printedAt: order.printedAt,
     createdAt: order.createdAt,
+    statusChangedAt: extras.statusChangedAt,
+    serverNow: extras.serverNow,
     updatedAt: order.updatedAt,
     canceledAt: order.canceledAt,
     items: order.items.map((item) => ({

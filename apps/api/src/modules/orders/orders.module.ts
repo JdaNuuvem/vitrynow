@@ -1,11 +1,12 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "@meucardapio/db";
-import { orderStatusSchema } from "@meucardapio/shared-types";
+import { orderHistoryQuerySchema, orderInternalNoteSchema, orderStatusSchema } from "@meucardapio/shared-types";
 import { prismaAuditLogger } from "../../shared/audit";
 import { CodedError, useDomainErrors } from "../../shared/errors";
 import { publishToStore } from "../../realtime/hub";
 import { mfaProofAccepted, requireMfa } from "../../lib/mfaGate";
 import { OrderService, type CancelReason, type PanelActor } from "./orders.service";
+import { assertHistoryRate } from "./orders.history";
 
 export const orderService = new OrderService(prisma, prismaAuditLogger, publishToStore);
 
@@ -37,6 +38,23 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
   app.get("/api/orders", auth, async (request) => {
     const query = request.query as { cursor?: string; limit?: string };
     return orderService.list(actorOf(request), { cursor: query.cursor, limit: Number(query.limit) || undefined });
+  });
+
+  // Histórico (RN-HP): busca única + filtros + período (máx. 90 dias) + cursor. Rota estática: vence `/api/orders/:id`.
+  app.get("/api/orders/history", auth, async (request, reply) => {
+    const parsed = orderHistoryQuerySchema.safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: "Filtro inválido.", code: "FILTER_INVALID" });
+    assertHistoryRate(request.user.userId); // RN-HP-07: anti-abuso por usuário (429 RATE_LIMITED)
+    const { refundPending, ...rest } = parsed.data;
+    return orderService.history(actorOf(request), { ...rest, refundPending: refundPending === "true" });
+  });
+
+  // Observação interna (API-54): a equipe anota; o cliente e o tíquete nunca a veem. `null` ou texto vazio apaga.
+  app.post("/api/orders/:id/internal-note", auth, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsed = orderInternalNoteSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Observação inválida.", code: "VALIDATION_ERROR" });
+    return orderService.setInternalNote(actorOf(request), id, parsed.data.note);
   });
 
   app.get("/api/orders/:id", auth, async (request) => {
