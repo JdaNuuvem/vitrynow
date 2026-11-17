@@ -100,6 +100,29 @@ if ($continue) {
     }
   }
 }
+# 3b) TYPECHECK DOS TESTES DA API (INF-23): o tsconfig.json da API só inclui `src`, então os testes NUNCA eram checados pelo tipo (8 chamadas de `subscribe` com a assinatura
+# antiga passaram assim). tsconfig.test.json inclui `tests`. O estágio falha por erro NOVO; os erros antigos ficam em apps/api/tsconfig.test.baseline.txt (uma linha por erro,
+# SEM linha/coluna, que mudam a cada edição) e só podem DIMINUIR: corrigiu um? remova a linha do baseline (o estágio avisa). Regerar: $env:UPDATE_TSC_BASELINE = '1'; .\scripts\ci.ps1 ...
+if ($continue -and -not $SkipTests) {
+  $continue = Step 'typecheck dos TESTES da API (nenhum erro de tipo NOVO; baseline de erros antigos)' {
+    Push-Location (Join-Path $repo 'apps/api')
+    try { $saida = node node_modules/typescript/bin/tsc -p tsconfig.test.json --noEmit 2>&1 | ForEach-Object { "$_" }; $rc = $LASTEXITCODE } finally { Pop-Location }
+    $erros = @($saida | Where-Object { $_ -match ' error TS\d+:' })
+    if ($rc -ne 0 -and -not $erros.Count) { $saida | Select-Object -First 15 | ForEach-Object { Write-Host "   $_" }; throw 'tsc dos testes falhou sem listar erro de tipo (configuração?)' }
+    $norm = @($erros | ForEach-Object { $l = ($_ -replace '\(\d+,\d+\)', '') -replace '\s+', ' '; if ($l.Length -gt 220) { $l.Substring(0, 220) } else { $l } })
+    $baseFile = Join-Path $repo 'apps/api/tsconfig.test.baseline.txt'
+    if ($env:UPDATE_TSC_BASELINE -eq '1') { [IO.File]::WriteAllLines($baseFile, [string[]]($norm | Sort-Object), (New-Object Text.UTF8Encoding($false))); Write-Host "   baseline REGERADO com $($norm.Count) erro(s): $baseFile"; $global:LASTEXITCODE = 0; return }
+    $base = if (Test-Path $baseFile) { @(Get-Content $baseFile -Encoding UTF8 | Where-Object { $_ }) } else { @() }
+    $cn = @{}; foreach ($l in $norm) { $cn[$l] = 1 + [int]$cn[$l] }
+    $cb = @{}; foreach ($l in $base) { $cb[$l] = 1 + [int]$cb[$l] }
+    $novos = @(); foreach ($k in $cn.Keys) { $extra = $cn[$k] - [int]$cb[$k]; if ($extra -gt 0) { $novos += "$extra x $k" } }
+    $sumiram = 0; foreach ($k in $cb.Keys) { $falta = $cb[$k] - [int]$cn[$k]; if ($falta -gt 0) { $sumiram += $falta } }
+    Write-Host "   erros de tipo nos testes: $($norm.Count) (baseline: $($base.Count); novos: $($novos.Count); corrigidos desde o baseline: $sumiram)"
+    if ($sumiram -gt 0) { Write-Host "   AVISO: $sumiram erro(s) do baseline já não ocorrem: remova-os de apps/api/tsconfig.test.baseline.txt (regerar: `$env:UPDATE_TSC_BASELINE='1')." -ForegroundColor Yellow }
+    if ($novos.Count) { $novos | ForEach-Object { Write-Host "   NOVO: $_" -ForegroundColor Red }; throw "$($novos.Count) erro(s) de tipo NOVO(S) nos testes da API (veja NOVO: acima); corrija o teste ou a assinatura" }
+    $global:LASTEXITCODE = 0
+  }
+}
 # 4b) TESTE DE TEMPO (SEGURANÇA; decisão do Atlas, 17/11): reset-email-confirmation > "MESMO tempo nas três recusas" (diferença entre medianas < 35 ms e todas
 # no piso). É teste de SEGURANÇA: não se silencia nem se afrouxa. Mede tempo ABSOLUTO e por isso falha com a máquina ocupada (medido: em repouso 0 de 5; com 12 laços
 # de CPU 1 de 4, diferença de 484 ms; no CI de 1023 s, 143 ms). Roda SOZINHO, ANTES da suíte, e a suíte principal o PULA (-t negativo), para não ser medido em paralelo.
