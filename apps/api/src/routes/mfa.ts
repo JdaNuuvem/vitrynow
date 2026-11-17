@@ -8,6 +8,8 @@ const PURPOSE_LABELS: Record<MfaPurpose, string> = {
   refund: "estorno de pagamento",
   change_password: "troca de senha",
   delete_user: "remoção de usuário",
+  connect_payment: "conexão da conta do Mercado Pago",
+  disconnect_payment: "desconexão da conta do Mercado Pago",
 };
 
 const mfaRoutes: FastifyPluginAsync = async (app) => {
