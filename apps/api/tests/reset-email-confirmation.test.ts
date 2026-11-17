@@ -2,7 +2,7 @@ import bcrypt from "bcryptjs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import * as emailLib from "../src/lib/email";
-import { RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES } from "../src/lib/passwordReset";
+import { RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, resetHooks } from "../src/lib/passwordReset";
 import { hashToken } from "../src/lib/tokenHash";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
@@ -147,24 +147,44 @@ describe("redefinição de senha exige o e-mail da conta do token (SEC-29, ST-67
   // tomada com a leitura velha (antes do UPDATE), o certo passaria mesmo com 5 falhas já gravadas.
   it("ST-68: rajada de 30 e-mails errados + o CERTO por último (lendo o token antes de as falhas serem gravadas) ⇒ o certo é RECUSADO", async () => {
     const a = await accountWithToken("rajada@exemplo.com");
-    const original = bcrypt.hash.bind(bcrypt);
-    const delayed = vi.spyOn(bcrypt, "hash").mockImplementation((async (...args: unknown[]) => {
-      await new Promise((resolve) => setTimeout(resolve, 600)); // o certo lê o token vivo e ESPERA aqui
-      return (original as (...a: unknown[]) => unknown)(...args);
-    }) as never);
-
-    const wrong = Array.from({ length: 30 }, (_, i) => reset({ token: a.token, email: `chute${i}@exemplo.com`, newPassword: "senha-nova-da-vitima" }));
-    await new Promise((resolve) => setTimeout(resolve, 30)); // os errados já leram o token; o certo chega logo depois e também lê "vivo"
-    const right = reset({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
-    const [rightRes] = await Promise.all([right, ...wrong]);
-    delayed.mockRestore();
-
-    expect(rightRes.statusCode).toBe(400); // vulnerável (antes do conserto): 200
+    // o pedido CERTO lê o token "vivo" e o e-mail certo e ESPERA aqui; enquanto isso os 30 errados gravam as falhas e o token morre na 5ª
+    resetHooks.beforeClaim = async ({ email }) => {
+      if (email === a.credentials.email) await new Promise((resolve) => setTimeout(resolve, 800));
+    };
+    try {
+      const wrong = Array.from({ length: 30 }, (_, i) => reset({ token: a.token, email: `chute${i}@exemplo.com`, newPassword: "senha-nova-da-vitima" }));
+      await new Promise((resolve) => setTimeout(resolve, 30)); // os errados já leram o token; o certo chega logo depois e também lê "vivo"
+      const right = reset({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
+      const [rightRes] = await Promise.all([right, ...wrong]);
+      expect(rightRes.statusCode).toBe(400); // vulnerável (antes do conserto): 200
+    } finally {
+      resetHooks.beforeClaim = undefined;
+    }
     const row = await prisma.passwordResetToken.findFirstOrThrow({ where: { tokenHash: hashToken(a.token) } });
     expect(row.usedAt).toBeNull();
     expect(row.emailFailures).toBe(RESET_MAX_EMAIL_FAILURES); // o contador parou na 5ª: o resto nem o toca
     const login = await app.inject({ method: "POST", url: "/auth/login", remoteAddress: ip(), payload: { email: a.credentials.email, password: a.credentials.password } });
     expect(login.statusCode).toBe(200); // a senha NÃO mudou
+  }, 120000);
+
+  it("tempo: e-mail CERTO contra token já MORTO tem a mesma duração das outras recusas (a recusa nunca paga o bcrypt)", async () => {
+    const a = await accountWithToken("morto@exemplo.com");
+    await prisma.passwordResetToken.updateMany({ where: { tokenHash: hashToken(a.token) }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    const hashSpy = vi.spyOn(bcrypt, "hash");
+    const sample = async (payload: Record<string, unknown>) => {
+      const ms: number[] = [];
+      for (let i = 0; i < 5; i += 1) {
+        const t0 = performance.now();
+        await reset(payload);
+        ms.push(performance.now() - t0);
+      }
+      return [...ms].sort((x, y) => x - y)[2];
+    };
+    const rightEmailDeadToken = await sample({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
+    const wrongEmailDeadToken = await sample({ token: a.token, email: "outro@exemplo.com", newPassword: "senha-nova-do-dono" });
+    expect(hashSpy).not.toHaveBeenCalled(); // nenhuma recusa chegou ao bcrypt
+    hashSpy.mockRestore();
+    expect(Math.abs(rightEmailDeadToken - wrongEmailDeadToken)).toBeLessThan(35);
   }, 120000);
 
   it("ST-68: dois pedidos CERTOS ao mesmo tempo ⇒ exatamente UM redefine (o token não é usado 2×) e a senha muda uma vez só", async () => {

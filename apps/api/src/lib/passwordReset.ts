@@ -60,3 +60,7 @@ export function constantTimeEqual(a: string, b: string): boolean {
 
 // Relógio do BANCO em UTC (mesma convenção do claim e da troca de modo: colunas TIMESTAMP sem fuso, gravadas em UTC).
 export const NOW = Prisma.raw("(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')");
+
+// Gancho de TESTE (nunca definido em produção): atrasar um pedido entre a leitura do token e o UPDATE que decide, para reproduzir a rajada
+// do ST-68 sem depender de sorte. Mesmo estilo dos outros pontos de injeção do repositório (setOAuthProvider, setGatewayMaker).
+export const resetHooks: { beforeClaim?: (info: { email: string }) => Promise<void> } = {};

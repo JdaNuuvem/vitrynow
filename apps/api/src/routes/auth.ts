@@ -10,7 +10,7 @@ import { SESSION_COOKIE, revokeSession, sessionCookieOptions, signSession } from
 import { disconnectSession, disconnectUser } from "../realtime/hub";
 import { hashToken } from "../lib/tokenHash";
 import { LoginThrottle } from "../lib/loginThrottle";
-import { NOW, RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, constantTimeEqual, issueResetToken, padToMinimum } from "../lib/passwordReset";
+import { NOW, RESET_FAIL_MIN_DURATION_MS, resetHooks, RESET_MAX_EMAIL_FAILURES, constantTimeEqual, issueResetToken, padToMinimum } from "../lib/passwordReset";
 
 // Hash de uma senha que ninguém conhece, no mesmo custo dos hashes reais: login com e-mail inexistente
 // gasta o mesmo tempo do login com senha errada (ST-05, sem enumeração de contas por tempo).
@@ -208,9 +208,9 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       const resetToken = await prisma.passwordResetToken.findUnique({ where: { tokenHash: hashToken(parsed.data.token) } });
       const owner = await prisma.user.findUnique({ where: { id: resetToken?.userId ?? "-" }, select: { email: true } });
       const sameEmail = constantTimeEqual(parsed.data.email, owner?.email ?? "");
-      // Só calcula o hash da senha se a leitura de cima ACHA que vale (token, conta e e-mail); quem decide de verdade é o UPDATE abaixo.
-      // Recusas nunca pagam o bcrypt (o piso de tempo as iguala às demais).
-      const passwordHash = resetToken && sameEmail ? await bcrypt.hash(parsed.data.newPassword, 10) : null;
+      // Gancho só de TESTE (indefinido em produção): deixa um teste atrasar o pedido entre a leitura de cima e o UPDATE, para provar que a
+      // decisão não depende da leitura velha.
+      await resetHooks.beforeClaim?.({ email: parsed.data.email });
 
       // ST-68: a DECISÃO sai NO BANCO, numa instrução só, com o relógio do banco. Lê-la antes (live/sameEmail em memória) deixava uma rajada
       // paralela ver o token "vivo" antes de qualquer falha ser gravada: um palpite certo passava mesmo depois de 5 falhas, e duas
@@ -225,7 +225,11 @@ const authRoutes: FastifyPluginAsync = async (app) => {
                  "expiresAt" = CASE WHEN NOT ${sameEmail}::boolean AND "emailFailures" + 1 >= ${RESET_MAX_EMAIL_FAILURES} THEN ${NOW} ELSE "expiresAt" END
            WHERE "id" = ${resetToken?.id ?? "-"} AND "usedAt" IS NULL AND "expiresAt" >= ${NOW} AND "emailFailures" < ${RESET_MAX_EMAIL_FAILURES}
           RETURNING "id"`;
-        if (claimed.length !== 1 || !sameEmail || !resetToken || !passwordHash) return null;
+        if (claimed.length !== 1 || !sameEmail || !resetToken) return null;
+        // O bcrypt só roda DEPOIS de o banco ter dado o token a este pedido: nenhuma recusa o paga, então o tempo de uma recusa não revela
+        // que o e-mail estava certo (token morto + e-mail certo seria mais lento que as outras). Dentro da transação: a troca de senha e o
+        // consumo do token continuam atômicos, e quem esperava a linha só segue depois do COMMIT.
+        const passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
         // Na MESMA transação do consumo do token: se a troca da senha falhar, o token volta a valer (nada de token queimado sem senha nova).
         // tokenVersion+1: redefinir a senha derruba todas as sessões abertas (token roubado inclusive).
         await tx.user.update({ where: { id: resetToken.userId }, data: { passwordHash, tokenVersion: { increment: 1 } } });
