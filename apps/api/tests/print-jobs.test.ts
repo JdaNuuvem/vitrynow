@@ -138,7 +138,7 @@ describe("API-12 — PrintJob", () => {
     expect(job).toMatchObject({ kind: "ORDER_KITCHEN", attempt: 1 });
     expect(Number.isInteger(job.leaseSeconds) && job.leaseSeconds >= 1 && job.leaseSeconds <= 120).toBe(true);
     expect(printableOrderSchema.safeParse(job.ticket).success).toBe(true);
-    expect(job.ticket).toMatchObject({ orderId: id, ticketSchemaVersion: 2, paymentStatus: "A_COBRAR", cancelNotice: false, reprintCount: 0 });
+    expect(job.ticket).toMatchObject({ orderId: id, ticketSchemaVersion: 3, paymentStatus: "A_COBRAR", cancelNotice: false, reprintCount: 0 });
     const row = (await jobsOf(id))[0];
     expect(row).toMatchObject({ status: "CLAIMED", attempts: 1 });
     expect(row.leaseUntil!.getTime()).toBeGreaterThan(Date.now() - 2000); // lease pelo relógio do banco

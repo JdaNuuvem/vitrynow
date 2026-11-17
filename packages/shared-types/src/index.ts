@@ -114,7 +114,7 @@ export type OrderPaymentMethod = z.infer<typeof orderPaymentMethodSchema>;
 // aprovado e verificado (webhook com valor/referência conferidos). Nenhum token, QR, e-mail nem id do provedor aqui.
 export const ticketPaymentStatusSchema = z.enum(["PAGO", "A_COBRAR", "ESTORNADO"]);
 export type TicketPaymentStatus = z.infer<typeof ticketPaymentStatusSchema>;
-export const TICKET_SCHEMA_VERSION = 2; // 1 = contrato anterior (sem os campos do B4); o print-client antigo ignora o que não conhece
+export const TICKET_SCHEMA_VERSION = 3; // 1 = contrato anterior (sem os campos do B4); 2 = B4; 3 = `nothingToCharge` (API-66). O print-client antigo ignora o que não conhece
 
 export const printableOrderSchema = z.object({
   orderId: z.string(),
@@ -141,6 +141,9 @@ export const printableOrderSchema = z.object({
   reprintCount: z.number().int().nonnegative().optional(),
   printedAtOriginal: z.string().nullable().optional(), // ISO UTC, só na 2ª via
   cancelNotice: z.boolean().optional(), // true = imprime o aviso de cancelamento (sem itens/valores/endereço)
+  // API-66: o SERVIDOR diz se não há nada a cobrar (fonte única; o cliente não decide sozinho). true só com total = 0 E nenhuma cobrança possível
+  // (sem pagamento aprovado, pendente ou estornado). Em pedido real nunca sai ausente; no aviso de cancelamento e no teste é false.
+  nothingToCharge: z.boolean().optional(),
   items: z.array(
     z.object({
       productName: z.string(),
