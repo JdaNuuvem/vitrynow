@@ -1,32 +1,47 @@
 import type { HttpClient, RequestOptions } from "../../http/HttpClient";
-import type { CancelBody, CancelResult, DeliverersGateway, OrdersGateway } from "../OrdersGateway";
+import type { CancelBody, CancelResult, DeliverersGateway, OrdersGateway, OrdersListResponse } from "../OrdersGateway";
 import type { Deliverer, Order, OrderStatus } from "../../domain/orders";
+import type { HistoryQuery, HistoryResponse } from "../../domain/orderHistory";
+import type { OrderDetail } from "../../domain/orderDetail";
 
 export class HttpOrdersGateway implements OrdersGateway {
   constructor(private readonly http: HttpClient) {}
 
   list() {
-    return this.http.get<{ orders: Order[] }>("/api/orders");
+    return this.http.get<OrdersListResponse>("/api/orders");
+  }
+
+  history(query: HistoryQuery) {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== "") params.set(key, String(value));
+    }
+    const text = params.toString();
+    return this.http.get<HistoryResponse>(`/api/orders/history${text ? `?${text}` : ""}`);
+  }
+
+  get(orderId: string) {
+    return this.http.get<{ order: OrderDetail }>(`/api/orders/${encodeURIComponent(orderId)}`);
   }
 
   transition(orderId: string, to: OrderStatus) {
-    return this.http.post<{ order: Order }>(`/api/orders/${orderId}/transition`, { to });
+    return this.http.post<{ order: Order }>(`/api/orders/${encodeURIComponent(orderId)}/transition`, { to });
   }
 
   cancel(orderId: string, body: CancelBody, options?: RequestOptions) {
-    return this.http.post<CancelResult>(`/api/orders/${orderId}/cancel`, body, options);
+    return this.http.post<CancelResult>(`/api/orders/${encodeURIComponent(orderId)}/cancel`, body, options);
   }
 
   undo(orderId: string) {
-    return this.http.post<{ order: Order }>(`/api/orders/${orderId}/undo`);
+    return this.http.post<{ order: Order }>(`/api/orders/${encodeURIComponent(orderId)}/undo`);
   }
 
   retryRefund(orderId: string, options?: RequestOptions) {
-    return this.http.post<CancelResult>(`/api/orders/${orderId}/refund/retry`, undefined, options);
+    return this.http.post<CancelResult>(`/api/orders/${encodeURIComponent(orderId)}/refund/retry`, undefined, options);
   }
 
   assignDeliverer(orderId: string, delivererId: string | null) {
-    return this.http.post(`/api/orders/${orderId}/deliverer`, { delivererId });
+    return this.http.post(`/api/orders/${encodeURIComponent(orderId)}/deliverer`, { delivererId });
   }
 
 }
@@ -43,10 +58,10 @@ export class HttpDeliverersGateway implements DeliverersGateway {
   }
 
   setActive(id: string, active: boolean) {
-    return this.http.post(`/api/deliverers/${id}`, { active });
+    return this.http.post(`/api/deliverers/${encodeURIComponent(id)}`, { active });
   }
 
   remove(id: string) {
-    return this.http.post(`/api/deliverers/${id}/delete`);
+    return this.http.post(`/api/deliverers/${encodeURIComponent(id)}/delete`);
   }
 }

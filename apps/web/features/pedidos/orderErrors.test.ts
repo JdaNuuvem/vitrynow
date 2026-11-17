@@ -31,6 +31,11 @@ describe("explainOrderError (contrato B3 §5)", () => {
     expect(explainOrderError({ status: 500, error: "INTERNAL_SERVER_ERROR" }).message).toBe("Não foi possível concluir esta ação. Tente de novo.");
   });
 
+  it.each([500, 502, 504])("erro do servidor (%i): SEMPRE a frase fixa, nunca o texto que veio (parecer R3)", (status) => {
+    expect(explainOrderError({ status, error: "PrismaClientKnownRequestError: relation Order at db-internal:5432" }).message).toBe("Não foi possível concluir esta ação. Tente de novo.");
+    expect(explainOrderError({ status, error: "frase em português do servidor" }).message).toBe("Não foi possível concluir esta ação. Tente de novo.");
+  });
+
   it("falha de rede (503 sintético) mantém o texto de conexão", () => {
     expect(explainOrderError({ status: 503, error: "Não foi possível conectar ao servidor. Verifique sua internet e tente de novo." }).message).toContain("conectar");
   });

@@ -6,11 +6,12 @@ import { PedidosPage } from "./PedidosPage";
 
 type HookState = {
   orders: Order[];
+  openHidden: number;
   loadState: "loading" | "ready" | "error";
   notice: string | null;
   undoOffer: { orderId: string; text: string } | null;
 };
-const state: HookState = { orders: [], loadState: "ready", notice: null, undoOffer: null };
+const state: HookState = { orders: [], openHidden: 0, loadState: "ready", notice: null, undoOffer: null };
 const fns = {
   transition: vi.fn(),
   undo: vi.fn(),
@@ -23,6 +24,14 @@ const fns = {
 };
 vi.mock("./hooks/usePedidos", () => ({
   usePedidos: () => ({ ...state, deliverers: [], busyId: null, ...fns }),
+}));
+
+// Roteador e parâmetros: objetos ESTÁVEIS (um novo a cada render refaria os efeitos em laço).
+const router = { push: vi.fn(), replace: vi.fn(), back: vi.fn() };
+let query = "";
+vi.mock("next/navigation", () => ({ useRouter: () => router, useSearchParams: () => new URLSearchParams(query) }));
+vi.mock("./detail/OrderDetailPanel", () => ({
+  OrderDetailPanel: (props: { orderId: string; desktop: boolean }) => <div data-testid="detalhe" data-order={props.orderId} data-desktop={String(props.desktop)} />,
 }));
 
 let role: "OWNER" | "STAFF" | null = "OWNER";
@@ -38,10 +47,13 @@ const column = (name: string) => screen.getByRole("region", { name }) as HTMLEle
 
 beforeEach(() => {
   state.orders = [];
+  state.openHidden = 0;
   state.loadState = "ready";
   state.notice = null;
   state.undoOffer = null;
   role = "OWNER";
+  query = "";
+  Object.values(router).forEach((fn) => fn.mockReset());
   Object.values(fns).forEach((fn) => fn.mockReset());
 });
 
@@ -58,7 +70,9 @@ describe("PedidosPage: quadro tolerante a status novo (WEB-21)", () => {
     const others = column("Outros");
     expect(within(others).getByText("#0099")).toBeInTheDocument();
     expect(within(others).getByText(/ainda não conhece/)).toBeInTheDocument();
-    expect(within(others).queryByRole("button")).not.toBeInTheDocument();
+    // sem ações (avançar, recusar, entregador); só abrir o detalhe, que é leitura (spec 11 §2)
+    expect(within(others).getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual(["Abrir pedido 0099"]);
+    expect(within(others).queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.queryByText("ESTADO_DO_FUTURO")).not.toBeInTheDocument();
   });
 
@@ -257,5 +271,105 @@ describe("PedidosPage: tentar o estorno de novo depois de fechar a folha (Deming
     render(<PedidosPage />);
     await userEvent.click(screen.getByText("⋯"));
     expect(screen.queryByRole("button", { name: "Tentar estorno" })).not.toBeInTheDocument();
+  });
+});
+
+describe("PedidosPage: abrir o detalhe do pedido (WEB-26, UI-D-01)", () => {
+  it("tocar no número do pedido abre o detalhe pela URL e NÃO avança o pedido", async () => {
+    state.orders = [order("7", "PENDENTE", "0042", { allowedTransitions: [accept as never] })];
+    render(<PedidosPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Abrir pedido 0042" }));
+    expect(router.push).toHaveBeenCalledWith("/dashboard/pedidos?pedido=7");
+    expect(fns.transition).not.toHaveBeenCalled();
+    expect(fns.cancel).not.toHaveBeenCalled();
+  });
+
+  it("pedido no coletor 'Outros' também abre o detalhe", async () => {
+    state.orders = [order("9", "ESTADO_DO_FUTURO", "0099")];
+    render(<PedidosPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Abrir pedido 0099" }));
+    expect(router.push).toHaveBeenCalledWith("/dashboard/pedidos?pedido=9");
+  });
+
+  it("sem ?pedido= não há detalhe; com ?pedido= o painel recebe o id", () => {
+    state.orders = [order("7", "PENDENTE", "0042")];
+    const { unmount } = render(<PedidosPage />);
+    expect(screen.queryByTestId("detalhe")).not.toBeInTheDocument();
+    unmount();
+    query = "pedido=7";
+    render(<PedidosPage />);
+    expect(screen.getByTestId("detalhe")).toHaveAttribute("data-order", "7");
+  });
+
+  it("o botão 'Aceitar' do cartão continua avançando (abrir e avançar são toques diferentes)", async () => {
+    state.orders = [order("7", "PENDENTE", "0042", { allowedTransitions: [accept as never] })];
+    fns.transition.mockResolvedValue(undefined);
+    render(<PedidosPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Aceitar" }));
+    expect(fns.transition).toHaveBeenCalledTimes(1);
+    expect(router.push).not.toHaveBeenCalled();
+  });
+});
+
+describe("PedidosPage: faixa dos abertos escondidos pelo teto (API-70, WEB-37)", () => {
+  const banner = () => screen.queryByText(/em aberto não aparece/);
+
+  it("com abertos de fora mostra a faixa com o número e o caminho, como aviso (role=status, não alerta)", () => {
+    state.openHidden = 7;
+    render(<PedidosPage />);
+    const region = screen.getByRole("status");
+    expect(region).toHaveTextContent("7 pedidos antigos em aberto não aparecem aqui. Veja em Histórico › Em aberto.");
+    expect(region.textContent?.replace(/\s+/g, " ").trim()).toBe("7 pedidos antigos em aberto não aparecem aqui. Veja em Histórico › Em aberto.");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    // o caminho da frase é um LINK para a tela que ela promete (WEB-44): a faixa nunca aponta para o vazio
+    expect(screen.getByRole("link", { name: "Histórico › Em aberto" })).toHaveAttribute("href", "/dashboard/pedidos/historico?status=ABERTO");
+  });
+
+  it("um só: singular", () => {
+    state.openHidden = 1;
+    render(<PedidosPage />);
+    expect(screen.getByRole("status")).toHaveTextContent("1 pedido antigo em aberto não aparece aqui. Veja em Histórico › Em aberto.");
+  });
+
+  it("o cabeçalho de Pedidos tem o botão 'Histórico' para a tela nova, com alvo de 44 px", () => {
+    render(<PedidosPage />);
+    const link = screen.getByRole("link", { name: "Histórico" });
+    expect(link).toHaveAttribute("href", "/dashboard/pedidos/historico");
+    expect(link).toHaveClass("pedidos__history-link");
+  });
+
+  it("sem nenhum escondido, nada de faixa", () => {
+    state.openHidden = 0;
+    render(<PedidosPage />);
+    expect(banner()).not.toBeInTheDocument();
+  });
+
+  it("não aparece enquanto carrega nem na falha da 1ª carga (nunca um aviso sobre dados que ainda não vieram)", () => {
+    state.openHidden = 4;
+    state.loadState = "loading";
+    const { unmount } = render(<PedidosPage />);
+    expect(banner()).not.toBeInTheDocument();
+    unmount();
+    state.loadState = "error";
+    render(<PedidosPage />);
+    expect(banner()).not.toBeInTheDocument();
+  });
+
+  it("tem ícone de atenção decorativo (aria-hidden) antes do texto", () => {
+    state.openHidden = 2;
+    render(<PedidosPage />);
+    const region = screen.getByText(/pedidos antigos em aberto/).closest("[role=status]") as HTMLElement;
+    const icon = region.querySelector("svg") as SVGElement;
+    expect(icon).toHaveAttribute("aria-hidden", "true");
+    expect(icon).not.toHaveAttribute("hidden"); // decorativo para o leitor de tela, mas VISÍVEL na tela
+    expect(icon).toBeVisible();
+    expect(region.firstElementChild).toBe(icon);
+  });
+
+  it("os pedidos que a API devolveu continuam todos no quadro (a faixa não esconde nada)", () => {
+    state.openHidden = 3;
+    state.orders = [order("1", "PENDENTE", "0001")];
+    render(<PedidosPage />);
+    expect(within(column("Pendente")).getByText("#0001")).toBeInTheDocument();
   });
 });

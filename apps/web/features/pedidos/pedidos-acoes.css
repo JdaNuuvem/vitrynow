@@ -14,6 +14,60 @@
   font-size: 14px;
   line-height: 20px;
 }
+/* WEB-37: faixa fixa do teto de abertos (aviso, não erro). `.pedidos .pedidos__capped p`: o reset `.panel-root p` zera o padding de 1 classe. */
+.pedidos__capped {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid #b45309;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #92400e; /* 6,8:1 sobre o fundo */
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+.pedidos__capped-icon {
+  flex: none;
+  margin-top: 1px;
+}
+.pedidos__titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.pedidos .pedidos__titlebar h1 {
+  margin: 0;
+}
+/* Botão secundário "Histórico" ao lado do título (spec 10 §1); alvo de toque de 44 px */
+.pedidos__history-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--ink-soft);
+  border-radius: 12px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.pedidos__history-link:hover {
+  background: var(--surface-soft);
+}
+/* O caminho da frase da faixa vira link, sublinhado e na cor do texto (contraste mantido) */
+.pedidos__capped-link {
+  color: inherit;
+  text-decoration: underline;
+}
+.pedidos .pedidos__capped p {
+  margin: 0;
+  padding: 0;
+}
 .pedidos__notice {
   display: flex;
   align-items: center;

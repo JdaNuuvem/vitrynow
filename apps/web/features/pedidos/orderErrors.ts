@@ -32,6 +32,8 @@ export function explainOrderError(failure: OrderFailure): OrderError {
   if (failure.code && BY_CODE[failure.code]) return BY_CODE[failure.code];
   // Falha de rede vem como 503 sintético (lib/api.ts): o texto já é o certo.
   if (failure.status === 503) return { message: failure.error || NETWORK, reload: false };
+  // Erro do servidor (5xx): SEMPRE a frase fixa, para um texto interno futuro nunca virar tela.
+  if (failure.status >= 500) return { message: "Não foi possível concluir esta ação. Tente de novo.", reload: false };
   // Código desconhecido: o texto da API, que já é pt-BR; nunca o código. Sem texto, uma frase segura.
   const text = failure.error?.trim();
   return { message: text && !/^[A-Z_]{4,}$/.test(text) ? text : "Não foi possível concluir esta ação. Tente de novo.", reload: false };
