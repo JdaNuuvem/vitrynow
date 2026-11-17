@@ -210,7 +210,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         storeId: store.id,
         code,
         type: input.type,
-        customerName: input.customerName,
+        customerName: input.customerName?.normalize("NFC"), // NFC na gravação: nome vindo de Apple (NFD) é achado pela busca (QA-28 H3)
         customerPhone: input.customerPhone,
         address: input.address,
         notes: input.notes,

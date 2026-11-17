@@ -22,15 +22,15 @@ import {
 } from "../../lib/orderStateMachine";
 import { toPanelOrder, type ContactAccess } from "./orders.view";
 import { authorizeContactView } from "./contactAccess";
-import { searchOrderHistory, type HistoryQuery } from "./orders.history";
+import { assertPhoneSearchRate, OPEN_ORDER_STATUSES, parseSearch, searchOrderHistory, type HistoryQuery } from "./orders.history";
+import { closedTodayIds, KANBAN_OLD_OPEN_CAP, KANBAN_TODAY_OPEN_HARD_CAP } from "./orders.kanban";
 import { safeTimeZone, startOfStoreDay } from "../../lib/storeTime";
 
 type Db = typeof prismaClient;
 type Tx = Prisma.TransactionClient;
 
 // Kanban (RN-KB-01): pedidos em andamento; teto de segurança para não devolver a loja inteira se algo ficar preso.
-const OPEN_STATUSES: OrderStatus[] = ["PENDENTE", "CONFIRMADO", "EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA"];
-export const KANBAN_OPEN_CAP = 500;
+const OPEN_STATUSES: OrderStatus[] = [...OPEN_ORDER_STATUSES];
 export const INTERNAL_NOTE_MAX = 500;
 
 export type PanelActor = { storeId: string; userId: string; role: Role };
@@ -97,9 +97,10 @@ export class OrderService {
   }
 
   // ───────────── Leitura (kanban) ─────────────
-  // RN-KB-01..05: TODO pedido em aberto, de qualquer data, mais os concluídos/cancelados DO DIA (fuso da loja). Os abertos vêm
-  // inteiros (o mais antigo primeiro) e só os encerrados do dia são paginados por cursor (mais recente primeiro): "os 100
-  // últimos" escondia pedido aberto antigo. PIX ainda não pago fica de fora (RN-KB-07; aparece no histórico).
+  // RN-KB-01..05: pedidos em aberto, de qualquer data, mais os concluídos/cancelados DO DIA (fuso da loja). Todo aberto de HOJE
+  // entra sempre; os abertos de dias anteriores têm teto (KANBAN_OLD_OPEN_CAP, os mais antigos primeiro) e o que passar dele
+  // vem em `openHidden` com `openCapped` (o painel avisa e leva ao Histórico › Em aberto). Só os encerrados do dia são
+  // paginados, por cursor (instante do encerramento, mais recente primeiro). PIX ainda não pago fica de fora (RN-KB-07).
   async list(actor: PanelActor, query: { cursor?: string; limit?: number }) {
     const limit = Math.min(Math.max(query.limit || 100, 1), 200);
     const store = await this.db.store.findUnique({ where: { id: actor.storeId }, select: { timezone: true } });
@@ -107,32 +108,22 @@ export class OrderService {
     const now = this.now();
     const todayStart = startOfStoreDay(now, timezone, 0);
     const include = { items: true, deliverer: true, payment: true, statusHistory: { orderBy: { seq: "desc" as const }, take: 3 } };
+    const openWhere = { storeId: actor.storeId, awaitingPayment: false, status: { in: OPEN_STATUSES } };
 
-    const open = query.cursor
-      ? []
-      : await this.db.order.findMany({
-          where: { storeId: actor.storeId, awaitingPayment: false, status: { in: OPEN_STATUSES } },
-          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-          include,
-          take: KANBAN_OPEN_CAP,
-        });
-    const closedToday = {
-      storeId: actor.storeId,
-      awaitingPayment: false,
-      status: { in: [...FINAL_STATUSES] },
-      OR: [
-        // encerrado hoje pelo histórico (a verdade); sem registro de encerramento, vale a última alteração
-        { statusHistory: { some: { status: { in: [...FINAL_STATUSES] }, createdAt: { gte: todayStart } } } },
-        { updatedAt: { gte: todayStart }, statusHistory: { none: { status: { in: [...FINAL_STATUSES] } } } },
-      ],
-    };
-    const closed = await this.db.order.findMany({
-      where: closedToday,
-      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-      include,
-      take: limit,
-      ...(query.cursor ? { skip: 1, cursor: { id: query.cursor } } : {}),
-    });
+    const [older, today] = await Promise.all([
+      query.cursor ? [] : this.db.order.findMany({ where: { ...openWhere, createdAt: { lt: todayStart } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], include, take: KANBAN_OLD_OPEN_CAP }),
+      query.cursor ? [] : this.db.order.findMany({ where: { ...openWhere, createdAt: { gte: todayStart } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], include, take: KANBAN_TODAY_OPEN_HARD_CAP }),
+    ]);
+    // Só conta no banco quando bateu no teto (o caso comum não paga a consulta extra).
+    let openHidden = 0;
+    if (older.length >= KANBAN_OLD_OPEN_CAP) openHidden += Math.max(0, (await this.db.order.count({ where: { ...openWhere, createdAt: { lt: todayStart } } })) - older.length);
+    if (today.length >= KANBAN_TODAY_OPEN_HARD_CAP) openHidden += Math.max(0, (await this.db.order.count({ where: { ...openWhere, createdAt: { gte: todayStart } } })) - today.length);
+    const open = [...older, ...today];
+
+    const page = await closedTodayIds(this.db, actor.storeId, todayStart, limit, query.cursor);
+    const found = page.ids.length ? await this.db.order.findMany({ where: { id: { in: page.ids }, storeId: actor.storeId }, include }) : [];
+    const byId = new Map(found.map((o) => [o.id, o]));
+    const closed = page.ids.map((id) => byId.get(id)).filter((o): o is NonNullable<typeof o> => !!o);
 
     const orders = [...open, ...closed];
     const roles = await this.rolesOf(orders.flatMap((o) => o.statusHistory.map((h) => h.userId)));
@@ -142,33 +133,50 @@ export class OrderService {
     decoratedOpen.sort((a, b) => a.statusChangedAt.getTime() - b.statusChangedAt.getTime());
     return {
       orders: [...decoratedOpen, ...closed.map(decorate)],
-      nextCursor: closed.length === limit ? closed[closed.length - 1].id : null,
+      nextCursor: page.nextCursor,
       serverNow: now,
       timezone,
       // Início do "hoje" da loja: pedido aberto criado ANTES disto leva o selo "de ontem" (RN-KB-03).
       todayStartsAt: todayStart,
       openCount: open.length,
       staleOpenCount: open.filter((o) => o.createdAt < todayStart).length,
-      openCapped: open.length >= KANBAN_OPEN_CAP,
+      openCapped: openHidden > 0,
+      openHidden,
     };
   }
 
   // Histórico (RN-HP): busca e filtros por período; só linhas de lista (telefone mascarado, sem endereço).
   async history(actor: PanelActor, query: HistoryQuery) {
     const store = await this.db.store.findUnique({ where: { id: actor.storeId }, select: { timezone: true } });
-    const { phoneCriterion, ...result } = await searchOrderHistory(this.db, actor.storeId, store?.timezone ?? "America/Sao_Paulo", this.now(), query, actor.role);
-    // Busca por telefone do STAFF deixa rastro de CONTAGEM (nunca os dígitos): é um "este número é cliente?" e precisa ser auditável.
-    if (phoneCriterion && actor.role !== "OWNER") this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "order.history_phone_search", targetType: "Store", targetId: actor.storeId, metadata: { results: result.total } });
-    return result;
+    // Busca por telefone do STAFF é um "este número é cliente?": 10 por hora e rastro ESTRITO (gravado antes de responder; se
+    // não gravar, não responde: falha fechada como o contato completo). Nunca os dígitos, só o tamanho do termo.
+    const search = parseSearch(query.q, actor.role);
+    if (search?.phone && actor.role !== "OWNER") {
+      try {
+        assertPhoneSearchRate(actor.userId, this.now().getTime());
+      } catch (error) {
+        // Recusa por limite também deixa rastro (só contagem, nunca os dígitos): o dono vê o padrão de tentativa.
+        this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "order.history_phone_search_blocked", targetType: "Store", targetId: actor.storeId, metadata: { termLength: search.phone.length } });
+        throw error;
+      }
+      try {
+        await this.audit.logStrict({ storeId: actor.storeId, userId: actor.userId, action: "order.history_phone_search", targetType: "Store", targetId: actor.storeId, metadata: { termLength: search.phone.length } });
+      } catch (error) {
+        console.error("[audit] busca por telefone NÃO liberada: falha ao registrar o acesso:", error);
+        throw err(503, "AUDIT_UNAVAILABLE", "Busca por telefone indisponível agora. Busque pelo código ou pelo nome, ou tente de novo em instantes.");
+      }
+    }
+    return searchOrderHistory(this.db, actor.storeId, store?.timezone ?? "America/Sao_Paulo", this.now(), query, actor.role);
   }
 
   // Observação interna do pedido (API-54): texto livre da equipe, nunca ao cliente nem ao tíquete. A auditoria registra
-  // QUE mudou e o tamanho, nunca o texto (pode ter dado pessoal).
+  // QUE mudou e o tamanho, nunca o texto (pode ter dado pessoal). SQL direto de propósito: anotar não é atividade do pedido e
+  // não pode mexer em `updatedAt` (que o kanban e os relatórios leem; QA-28 H1).
   async setInternalNote(actor: PanelActor, orderId: string, note: string | null) {
     const text = note === null ? null : note.trim() || null;
     if (text && text.length > INTERNAL_NOTE_MAX) throw err(400, "NOTE_TOO_LONG", `A observação pode ter até ${INTERNAL_NOTE_MAX} caracteres.`);
-    const updated = await this.db.order.updateMany({ where: { id: orderId, storeId: actor.storeId }, data: { internalNote: text } });
-    if (updated.count !== 1) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
+    const updated = await this.db.$executeRaw`UPDATE "Order" SET "internalNote" = ${text} WHERE "id" = ${orderId} AND "storeId" = ${actor.storeId}`;
+    if (updated !== 1) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
     this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "order.internal_note", targetType: "Order", targetId: orderId, metadata: { length: text?.length ?? 0 } });
     return { internalNote: text };
   }

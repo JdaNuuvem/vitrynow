@@ -1,7 +1,9 @@
 // API-54 / API-62 — kanban (RN-KB), histórico (RN-HP), observação interna e statusChangedAt/serverNow.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { HISTORY_RATE_LIMIT, assertHistoryRate, foldText, parseSearch, resetHistoryRate, resolvePeriod } from "../src/modules/orders/orders.history";
+import { HISTORY_PHONE_RATE_LIMIT, HISTORY_RATE_LIMIT, assertHistoryRate, assertPhoneSearchRate, foldText, parseSearch, resetHistoryRate, resolvePeriod } from "../src/modules/orders/orders.history";
+import { OrderService } from "../src/modules/orders/orders.service";
+import type { AuditLogger } from "../src/shared/audit";
 import { startOfStoreDay } from "../src/lib/storeTime";
 import { buildPrintableOrder } from "../src/lib/printable";
 import { login, makeApp, orderTokenHeader, registerStore, resetDb } from "./helpers";
@@ -58,6 +60,28 @@ describe("puros: período, busca e limite", () => {
     }
     expect(parseSearch("1234", "STAFF")?.phoneMatch).toBe("suffix");
     expect(parseSearch("1234", "OWNER")?.phoneMatch).toBe("contains");
+  });
+
+  it('código do país: 12/13 dígitos com "55" perdem o "55"; até 11 dígitos não mudam (DDD 55); o STAFF usa o termo já normalizado', () => {
+    expect(parseSearch("5511912345678", "OWNER")?.phone).toBe("11912345678");
+    expect(parseSearch("551191234567", "OWNER")?.phone).toBe("1191234567"); // 12 dígitos (fixo com DDD)
+    expect(parseSearch("+55 (11) 91234-5678", "OWNER")?.phone).toBe("11912345678");
+    expect(parseSearch("55991234567", "OWNER")?.phone).toBe("55991234567"); // 11 dígitos: DDD 55, intacto
+    expect(parseSearch("5591234567", "OWNER")?.phone).toBe("5591234567"); // 10 dígitos: intacto
+    expect(parseSearch("4455912345678", "OWNER")?.phone).toBe("4455912345678"); // não começa em 55: intacto
+    expect(parseSearch("5511912345678", "STAFF")?.phone).toBe("11912345678"); // 13 -> 11 dígitos: vale (>= 10, ancorado no final)
+    expect(parseSearch("5512345", "STAFF")?.phone).toBeNull(); // 7 dígitos: continua fora para o STAFF
+    expect(parseSearch("551234", "STAFF")?.phone).toBeNull(); // 6 dígitos
+  });
+
+  it("limite de telefone do STAFF: 10 por hora por usuário; a janela de 1 h anda; outro usuário não é afetado", () => {
+    resetHistoryRate();
+    const t0 = 5_000_000;
+    for (let i = 0; i < HISTORY_PHONE_RATE_LIMIT; i++) assertPhoneSearchRate("u1", t0 + i);
+    expect(() => assertPhoneSearchRate("u1", t0 + 60_000)).toThrow(expect.objectContaining({ statusCode: 429, code: "RATE_LIMITED" }));
+    expect(() => assertPhoneSearchRate("u2", t0 + 60_000)).not.toThrow();
+    expect(() => assertPhoneSearchRate("u1", t0 + 3_600_001 + HISTORY_PHONE_RATE_LIMIT)).not.toThrow(); // passou 1 h
+    resetHistoryRate();
   });
 
   it("limite de buscas: 60 por minuto por usuário; a janela anda", () => {
@@ -185,6 +209,47 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
       }
       expect([...seen].sort()).toEqual([...created].sort());
       expect(new Set(seen).size).toBe(5);
+    });
+
+    it("encerrados do dia ordenados pelo INSTANTE DO ENCERRAMENTO: gravar observação não reordena nem traz de volta pedido antigo (H1)", async () => {
+      const ctx = await setup();
+      const a = await mk(ctx, { ago: HOUR, status: "CONCLUIDO", history: [{ status: "CONCLUIDO", ago: 10 * 60_000 }] });
+      const b = await mk(ctx, { ago: 2 * HOUR, status: "CONCLUIDO", history: [{ status: "CONCLUIDO", ago: 20 * 60_000 }] });
+      const c = await mk(ctx, { ago: 3 * HOUR, status: "CANCELADO", history: [{ status: "CANCELADO", ago: 30 * 60_000 }] });
+      const velho = await mk(ctx, { ago: 3 * DAY, status: "CONCLUIDO" }); // legado, sem registro de encerramento
+      const ordem = async () => (await kanban(ctx.owner)).orders.map((o: { id: string }) => o.id);
+      expect(await ordem()).toEqual([a, b, c]);
+      for (const id of [c, velho]) expect((await app.inject({ method: "POST", url: `/api/orders/${id}/internal-note`, headers: { cookie: ctx.owner }, payload: { note: "anotei" } })).statusCode).toBe(200);
+      expect(await ordem()).toEqual([a, b, c]); // `c` não subiu para o topo e o legado não voltou
+    });
+
+    it("teto de abertos: 501 de dias anteriores + 3 de hoje ⇒ os 3 de hoje e os 500 mais ANTIGOS aparecem; openHidden=1, openCapped=true", async () => {
+      const ctx = await setup();
+      const base = Date.now() - 3 * DAY;
+      await prisma.order.createMany({
+        data: Array.from({ length: 501 }, (_, i) => ({
+          storeId: ctx.storeId, code: `V${String(i).padStart(4, "0")}`, type: "BALCAO" as const, status: "PENDENTE" as const, customerName: "Antigo",
+          totalCents: 1000, awaitingPayment: false, createdAt: new Date(base + i * 1000), updatedAt: new Date(base + i * 1000),
+        })),
+      });
+      const hoje = [await mk(ctx, { ago: 3 * 60_000 }), await mk(ctx, { ago: 2 * 60_000 }), await mk(ctx, { ago: 60_000 })];
+      const body = await kanban(ctx.owner);
+      const codes = new Set(body.orders.map((o: { code: string }) => o.code));
+      expect(body).toMatchObject({ openCapped: true, openHidden: 1, openCount: 503, staleOpenCount: 500 });
+      for (const id of hoje) expect(body.orders.map((o: { id: string }) => o.id)).toContain(id); // o que acabou de chegar NUNCA some
+      expect(codes.has("V0000")).toBe(true);
+      expect(codes.has("V0499")).toBe(true);
+      expect(codes.has("V0500"), "o mais novo dos antigos é o que fica de fora").toBe(false);
+      // o escondido aparece no histórico por ABERTO (período de até 90 dias)
+      const aberto = json(await hist(ctx.owner, "?status=ABERTO&period=7d&limit=100"));
+      expect(aberto.total).toBe(504); // 501 antigos + 3 de hoje
+    });
+
+    it("sem estourar o teto: openCapped=false e openHidden=0", async () => {
+      const ctx = await setup();
+      await mk(ctx, { ago: 2 * DAY, status: "PENDENTE" });
+      await mk(ctx, { status: "PENDENTE" });
+      expect(await kanban(ctx.owner)).toMatchObject({ openCapped: false, openHidden: 0, openCount: 2 });
     });
 
     it("API-62: cada pedido leva statusChangedAt (última mudança, ou a criação) e a resposta leva serverNow", async () => {
@@ -318,8 +383,115 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
         const rows = await prisma.auditLog.findMany({ where: { storeId: ctx.storeId, action: "order.history_phone_search" } });
         expect(rows).toHaveLength(1);
         expect(JSON.stringify(rows[0])).not.toContain("4321");
-        expect(rows[0].metadata).toEqual({ results: 1 });
+        expect(rows[0].metadata).toEqual({ termLength: 4 });
       });
+    });
+
+    it("telefone do STAFF vale só em pedido ABERTO ou encerrado há < 24 h, NA CONSULTA (total e linhas); o OWNER acha todos", async () => {
+      const ctx = await setup();
+      const aberto = await mk(ctx, { ago: 5 * DAY, status: "EM_PREPARO", phone: "11911112222", name: "Aberto", history: [{ status: "PENDENTE", ago: 5 * DAY }] });
+      const recente = await mk(ctx, { ago: 2 * DAY, status: "CONCLUIDO", phone: "11911112222", name: "Recente", history: [{ status: "CONCLUIDO", ago: 2 * HOUR }] });
+      const antigo = await mk(ctx, { ago: 3 * DAY, status: "CONCLUIDO", phone: "11911112222", name: "Antigo", history: [{ status: "CONCLUIDO", ago: 30 * HOUR }] });
+      const cancelado = await mk(ctx, { ago: 3 * DAY, status: "CANCELADO", phone: "11911112222", name: "Cancelado", history: [{ status: "CANCELADO", ago: 26 * HOUR }] });
+      const semHistorico = await mk(ctx, { ago: 3 * DAY, status: "CONCLUIDO", phone: "11911112222", name: "Legado" }); // sem registro de encerramento: o mais restritivo
+      const busca = async (cookie: string, q: string) => json(await hist(cookie, `?period=7d&q=${encodeURIComponent(q)}`));
+
+      for (const q of ["2222", "11911112222"]) {
+        const staff = await busca(ctx.staff, q);
+        expect((staff.rows.map((r: { id: string }) => r.id) as string[]).sort(), q).toEqual([aberto, recente].sort());
+        expect(staff.total, `total ${q}`).toBe(2); // a contagem nunca inclui pedido fora da regra
+        const owner = await busca(ctx.owner, q);
+        expect((owner.rows.map((r: { id: string }) => r.id) as string[]).sort(), `owner ${q}`).toEqual([aberto, recente, antigo, cancelado, semHistorico].sort());
+      }
+      // o STAFF continua achando o pedido antigo pelo NOME e pelo CÓDIGO (só o telefone tem a janela)
+      expect((await busca(ctx.staff, "antigo")).rows.map((r: { id: string }) => r.id)).toEqual([antigo]);
+    });
+
+    it("limite de 10 buscas por telefone por hora (STAFF): a 11ª é 429 e deixa auditoria só de contagem; nome e OWNER seguem livres", async () => {
+      const ctx = await setup();
+      await mk(ctx, { phone: "11987654321", name: "Zeca" });
+      for (let i = 0; i < HISTORY_PHONE_RATE_LIMIT; i++) expect((await hist(ctx.staff, "?q=4321")).statusCode, String(i)).toBe(200);
+      const barrada = await hist(ctx.staff, "?q=4321");
+      expect(barrada.statusCode).toBe(429);
+      expect(json(barrada).code).toBe("RATE_LIMITED");
+      expect((await hist(ctx.staff, "?q=zeca")).statusCode).toBe(200);
+      expect((await hist(ctx.owner, "?q=4321")).statusCode).toBe(200);
+      await vi.waitFor(async () => {
+        const rows = await prisma.auditLog.findMany({ where: { storeId: ctx.storeId, action: "order.history_phone_search_blocked" } });
+        expect(rows).toHaveLength(1);
+        expect(JSON.stringify(rows[0])).not.toContain("4321");
+        expect(rows[0].metadata).toEqual({ termLength: 4 });
+      });
+      expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "order.history_phone_search" } })).toBe(HISTORY_PHONE_RATE_LIMIT); // as 10 liberadas
+    });
+
+    it("auditoria ESTRITA da busca por telefone: se o rastro não grava, a resposta é 503 AUDIT_UNAVAILABLE e NENHUM dado sai (falha fechada)", async () => {
+      const ctx = await setup();
+      await mk(ctx, { phone: "11987654321", name: "Zeca" });
+      const falha = vi.fn(async () => {
+        throw new Error("banco indisponível");
+      });
+      const audit: AuditLogger = { log: () => {}, logStrict: falha };
+      const service = new OrderService(prisma, audit, () => {});
+      const staff = { storeId: ctx.storeId, userId: "u-staff", role: "STAFF" as const };
+      const erro = await service.history(staff, { q: "4321" }).then(() => null, (e: unknown) => e as { statusCode: number; code: string });
+      expect(erro).toMatchObject({ statusCode: 503, code: "AUDIT_UNAVAILABLE" });
+      expect(falha).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(falha.mock.calls[0])).not.toContain("4321");
+      // nome e OWNER não dependem desse rastro
+      expect((await service.history(staff, { q: "zeca" })).rows).toHaveLength(1);
+      expect((await service.history({ ...staff, role: "OWNER" }, { q: "4321" })).rows).toHaveLength(1);
+      expect(falha).toHaveBeenCalledTimes(1);
+    });
+
+    it('código do país: "5511912345678" e "11912345678" acham o mesmo pedido, guardado com ou sem 55; "55991234567" (DDD 55) fica intacto', async () => {
+      const ctx = await setup();
+      const sem = await mk(ctx, { phone: "11912345678", name: "Sem" });
+      const com = await mk(ctx, { phone: "5511912345678", name: "Com" });
+      const ddd55 = await mk(ctx, { phone: "55991234567", name: "Gaucho" });
+      const ids = async (cookie: string, q: string) => (json(await hist(cookie, `?q=${encodeURIComponent(q)}`)).rows.map((r: { id: string }) => r.id) as string[]).sort();
+      for (const cookie of [ctx.owner, ctx.staff]) {
+        expect(await ids(cookie, "5511912345678"), "13 dígitos").toEqual([sem, com].sort());
+        expect(await ids(cookie, "11912345678"), "11 dígitos").toEqual([sem, com].sort());
+        expect(await ids(cookie, "+55 (11) 91234-5678"), "formatado").toEqual([sem, com].sort());
+        expect(await ids(cookie, "55991234567"), "DDD 55").toEqual([ddd55]);
+      }
+      // o STAFF continua sem achar com 5 a 9 dígitos
+      expect(await ids(ctx.staff, "912345678")).toEqual([]);
+      expect(await ids(ctx.staff, "12345678")).toEqual([]);
+    });
+
+    it("nome em Unicode DECOMPOSTO (NFD) já gravado é achado por 'conceicao'; e o checkout grava o nome em NFC", async () => {
+      const ctx = await setup();
+      const nfd = await mk(ctx, { name: "Conceição Álvares".normalize("NFD") });
+      expect(json(await hist(ctx.owner, "?q=conceicao")).rows.map((r: { id: string }) => r.id)).toEqual([nfd]);
+      expect(json(await hist(ctx.owner, `?q=${encodeURIComponent("Álvares".normalize("NFD"))}`)).rows.map((r: { id: string }) => r.id)).toEqual([nfd]);
+
+      const { cookie, response } = await registerStore(app);
+      const { slug } = json(response).store;
+      const cat = json(await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie: cookie! }, payload: { name: "X" } })).category.id;
+      const productId = json(await app.inject({ method: "POST", url: "/api/catalog/products", headers: { cookie: cookie! }, payload: { categoryId: cat, name: "P", priceCents: 1000 } })).product.id as string;
+      const created = await app.inject({
+        method: "POST",
+        url: `/stores/${slug}/orders`,
+        payload: { type: "DELIVERY", customerName: "João da Conceição".normalize("NFD"), customerPhone: "11987654321", address: "Rua A, 1", paymentMethod: "DINHEIRO", items: [{ productId, quantity: 1 }] },
+      });
+      expect(created.statusCode, created.body).toBe(201);
+      const gravado = (await prisma.order.findUniqueOrThrow({ where: { id: json(created).orderId } })).customerName!;
+      expect(gravado).toBe("João da Conceição".normalize("NFC"));
+      expect(gravado.normalize("NFD")).not.toBe(gravado); // o nome tem acento: só a forma mudou
+    });
+
+    it("status ABERTO: tudo que o kanban considera em andamento (fora PIX não pago, concluídos e cancelados), no período escolhido", async () => {
+      const ctx = await setup();
+      const pendente = await mk(ctx, { status: "PENDENTE" });
+      const preparo = await mk(ctx, { ago: 20 * DAY, status: "EM_PREPARO" });
+      await mk(ctx, { status: "CONCLUIDO" });
+      await mk(ctx, { status: "CANCELADO" });
+      await mk(ctx, { status: "PENDENTE", awaiting: true });
+      const ids = async (qs: string) => (json(await hist(ctx.owner, qs)).rows.map((r: { id: string }) => r.id) as string[]).sort();
+      expect(await ids("?status=ABERTO&period=30d")).toEqual([pendente, preparo].sort());
+      expect(await ids("?status=ABERTO")).toEqual([pendente]); // 7 dias: o de 20 dias fica de fora
     });
 
     it("a busca não vaza pedidos de outra loja (nem por código, nome ou telefone)", async () => {
@@ -493,6 +665,14 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
         expect(body).not.toContain(SEGREDO);
         expect(body).not.toContain("internalNote");
       }
+    });
+
+    it("anotar NÃO conta como atividade do pedido: `updatedAt` não muda", async () => {
+      const ctx = await setup();
+      const id = await mk(ctx, { ago: 3 * HOUR, status: "CONCLUIDO", history: [{ status: "CONCLUIDO", ago: 2 * HOUR }] });
+      const antes = (await prisma.order.findUniqueOrThrow({ where: { id } })).updatedAt;
+      expect((await note(ctx.owner, id, { note: "uma nota" })).statusCode).toBe(200);
+      expect((await prisma.order.findUniqueOrThrow({ where: { id } })).updatedAt.getTime()).toBe(antes.getTime());
     });
 
     it("a auditoria registra QUE mudou e o tamanho, nunca o texto", async () => {
