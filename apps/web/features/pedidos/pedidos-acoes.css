@@ -234,14 +234,21 @@
 }
 /* API-67: aviso (não erro) de que a impressora não avisa a cozinha. 2 classes: o reset `.panel-root p` zera o padding de 1. */
 .cancel-dialog .cancel-dialog__kitchen {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   padding: 10px 12px;
-  border: 1px solid #f59e0b;
+  border: 1px solid #b45309; /* contraste de borda ≥ 3:1 sobre o fundo; texto #92400e sobre #fffbeb = 6,8:1 */
   border-radius: 8px;
   background: #fffbeb;
   color: #92400e;
   font-size: 14px;
   line-height: 20px;
   font-weight: 600;
+}
+.cancel-dialog__kitchen-icon {
+  flex: none;
+  margin-top: 1px;
 }
 .cancel-dialog__alert {
   padding: 12px;

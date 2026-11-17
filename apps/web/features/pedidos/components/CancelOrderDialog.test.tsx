@@ -219,7 +219,7 @@ describe("CancelOrderDialog: o foco não se perde enquanto roda (Deming, A2)", (
 
 // API-67: faixa só para LEGACY com pedido já impresso
 describe("CancelOrderDialog: faixa 'a cozinha não será avisada' (API-67)", () => {
-  const BANNER = "A cozinha não será avisada pela impressora. Avise a cozinha.";
+  const BANNER = "Este pedido já foi impresso e a impressora não avisa o cancelamento. Avise a cozinha.";
   const banner = () => screen.queryByText(BANNER);
 
   it("LEGACY com o pedido já impresso: mostra a faixa, como aviso (não como erro)", () => {
@@ -227,6 +227,23 @@ describe("CancelOrderDialog: faixa 'a cozinha não será avisada' (API-67)", () 
     expect(banner()).toBeInTheDocument();
     expect(screen.getByRole("note")).toHaveTextContent(BANNER);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("o texto começa pelo fato (já foi impresso) e depois diz o que fazer, sem repetir 'cozinha' na abertura", () => {
+    setup({ order: order({ status: "EM_PREPARO", printMode: "LEGACY", printedAt: "2026-11-17T12:00:00Z" }) });
+    const text = screen.getByRole("note").textContent ?? "";
+    expect(text.startsWith("Este pedido já foi impresso")).toBe(true);
+    expect(text.endsWith("Avise a cozinha.")).toBe(true);
+  });
+
+  it("tem ícone de atenção decorativo (aria-hidden) à esquerda do texto, que não entra no nome acessível", () => {
+    setup({ order: order({ status: "EM_PREPARO", printMode: "LEGACY", printedAt: "2026-11-17T12:00:00Z" }) });
+    const note = screen.getByRole("note");
+    const icon = note.querySelector("svg");
+    expect(icon).not.toBeNull();
+    expect(icon).toHaveAttribute("aria-hidden", "true");
+    expect(note.firstElementChild).toBe(icon);
+    expect(note).toHaveTextContent(BANNER);
   });
 
   it("vale também ao RECUSAR um pedido pendente já impresso", () => {

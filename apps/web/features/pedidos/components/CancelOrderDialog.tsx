@@ -8,8 +8,8 @@ import { CANCEL_REASONS, customerPhraseFor, validateCancel, type CancelDraft } f
 import { confirmCancelLabel, isRefundPending, kitchenNotWarned } from "../orderActions";
 import type { CancelOutcome } from "../hooks/usePedidos";
 
-// Texto provisório: o Ogilvy valida.
-export const KITCHEN_NOT_WARNED_MESSAGE = "A cozinha não será avisada pela impressora. Avise a cozinha.";
+// Texto validado pelo Ogilvy (17/11): primeiro o fato, depois o que fazer.
+export const KITCHEN_NOT_WARNED_MESSAGE = "Este pedido já foi impresso e a impressora não avisa o cancelamento. Avise a cozinha.";
 
 type Props = {
   order: Order;
@@ -71,7 +71,13 @@ export function CancelOrderDialog({ order, refund, onConfirm, onRetryRefund, onC
         {/* API-67 (Leonardo): em LEGACY a impressora não avisa a cozinha; o dono é quem avisa. Nunca em QUEUE. */}
         {kitchenNotWarned(order) && (
           <p role="note" className="cancel-dialog__kitchen">
-            {KITCHEN_NOT_WARNED_MESSAGE}
+            {/* ícone de atenção de linha (padrão das faixas de atenção); decorativo, o texto já diz tudo */}
+            <svg className="cancel-dialog__kitchen-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+            <span>{KITCHEN_NOT_WARNED_MESSAGE}</span>
           </p>
         )}
 
