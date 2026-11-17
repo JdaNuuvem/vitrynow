@@ -119,5 +119,5 @@ export class CouponsService {
 }
 
 function codeTaken() {
-  return new CodedError(409, "COUPON_CODE_TAKEN", "Já existe um cupom com este código.");
+  return new CodedError(409, "COUPON_CODE_TAKEN", "Já existe um cupom com esse código.");
 }
