@@ -1,9 +1,9 @@
 // API-54 / API-62 — kanban (RN-KB), histórico (RN-HP), observação interna e statusChangedAt/serverNow.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { HISTORY_PHONE_RATE_LIMIT, HISTORY_RATE_LIMIT, assertHistoryRate, assertPhoneSearchRate, foldText, parseSearch, resetHistoryRate, resolvePeriod } from "../src/modules/orders/orders.history";
+import { HISTORY_PHONE_RATE_LIMIT, HISTORY_RATE_LIMIT, assertHistoryRate, assertPhoneSearchRate, foldText, parseSearch, recordPhoneRefusal, resetHistoryRate, resolvePeriod } from "../src/modules/orders/orders.history";
 import { OrderService } from "../src/modules/orders/orders.service";
-import type { AuditLogger } from "../src/shared/audit";
+import { prismaAuditLogger, type AuditLogger } from "../src/shared/audit";
 import { startOfStoreDay } from "../src/lib/storeTime";
 import { buildPrintableOrder } from "../src/lib/printable";
 import { login, makeApp, orderTokenHeader, registerStore, resetDb } from "./helpers";
@@ -407,22 +407,73 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
       expect((await busca(ctx.staff, "antigo")).rows.map((r: { id: string }) => r.id)).toEqual([antigo]);
     });
 
-    it("limite de 10 buscas por telefone por hora (STAFF): a 11ª é 429 e deixa auditoria só de contagem; nome e OWNER seguem livres", async () => {
+    it("cota de 10 buscas por telefone por hora (STAFF) esgotada: busca SÓ de telefone leva 429; busca que cabe num CÓDIGO cai para código/nome; nome e OWNER seguem livres", async () => {
       const ctx = await setup();
-      await mk(ctx, { phone: "11987654321", name: "Zeca" });
+      const pedido = await mk(ctx, { phone: "11987654321", name: "Zeca", code: "1234" });
       for (let i = 0; i < HISTORY_PHONE_RATE_LIMIT; i++) expect((await hist(ctx.staff, "?q=4321")).statusCode, String(i)).toBe(200);
-      const barrada = await hist(ctx.staff, "?q=4321");
-      expect(barrada.statusCode).toBe(429);
-      expect(json(barrada).code).toBe("RATE_LIMITED");
-      expect((await hist(ctx.staff, "?q=zeca")).statusCode).toBe(200);
+
+      // 4 dígitos sem match de código: não é 429 (poderia ser um código), mas também NÃO usa o telefone: nenhuma linha, sem oráculo
+      const queda = await hist(ctx.staff, "?q=4321");
+      expect(queda.statusCode).toBe(200);
+      expect(json(queda).rows).toEqual([]);
+      // com a cota gasta o STAFF ainda acha pelo CÓDIGO e pelo nome
+      expect(json(await hist(ctx.staff, "?q=1234")).rows.map((r: { id: string }) => r.id)).toEqual([pedido]);
+      expect(json(await hist(ctx.staff, "?q=%231234")).rows.map((r: { id: string }) => r.id)).toEqual([pedido]);
+      expect(json(await hist(ctx.staff, "?q=zeca")).rows.map((r: { id: string }) => r.id)).toEqual([pedido]);
+
+      // busca que seria SÓ de telefone: 429 (10+ dígitos ou com formatação)
+      for (const q of ["11987654321", "(11) 98765-4321", "+55 11 98765-4321"]) {
+        const barrada = await hist(ctx.staff, `?q=${encodeURIComponent(q)}`);
+        expect(barrada.statusCode, q).toBe(429);
+        expect(json(barrada).code).toBe("RATE_LIMITED");
+      }
       expect((await hist(ctx.owner, "?q=4321")).statusCode).toBe(200);
+      expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "order.history_phone_search" } })).toBe(HISTORY_PHONE_RATE_LIMIT); // só as 10 liberadas
+
+      // rastro das recusas: a 1ª da hora grava (com a contagem); as seguintes não geram linha
       await vi.waitFor(async () => {
         const rows = await prisma.auditLog.findMany({ where: { storeId: ctx.storeId, action: "order.history_phone_search_blocked" } });
         expect(rows).toHaveLength(1);
         expect(JSON.stringify(rows[0])).not.toContain("4321");
-        expect(rows[0].metadata).toEqual({ termLength: 4 });
+        expect(rows[0].metadata).toEqual({ termLength: 4, refusals: 1 }); // a queda para código/nome foi a 1ª recusa
       });
-      expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "order.history_phone_search" } })).toBe(HISTORY_PHONE_RATE_LIMIT); // as 10 liberadas
+      await new Promise((r) => setTimeout(r, 300));
+      expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "order.history_phone_search_blocked" } })).toBe(1);
+    });
+
+    it("recusas por limite: a auditoria grava a 1ª da hora e as marcas 10, 100 e 1000 (contagem), nunca as demais; a hora seguinte recomeça", () => {
+      resetHistoryRate();
+      const t0 = 9_000_000;
+      const gravadas: number[] = [];
+      for (let i = 1; i <= 1000; i++) {
+        const n = recordPhoneRefusal("u1", t0 + i);
+        if (n !== null) gravadas.push(n);
+      }
+      expect(gravadas).toEqual([1, 10, 100, 1000]); // 4 linhas, não 1.000
+      expect(recordPhoneRefusal("u2", t0)).toBe(1); // outro usuário tem a própria contagem
+      expect(recordPhoneRefusal("u1", t0 + 3_600_000 + 5_000)).toBe(1); // passou a hora: recomeça
+      resetHistoryRate();
+    });
+
+    it("falha ao gravar o rastro: a ROTA devolve 503 AUDIT_UNAVAILABLE sem dado e sem o erro bruto, e nada vai para console.error (o motivo vai pelo log estruturado)", async () => {
+      const ctx = await setup();
+      await mk(ctx, { phone: "11987654321", name: "Zeca" });
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      const quebra = vi.spyOn(prismaAuditLogger, "logStrict").mockRejectedValue(new Error("auditoria fora do ar"));
+      let res: Awaited<ReturnType<typeof hist>>;
+      let doConsole: unknown[][];
+      try {
+        res = await hist(ctx.staff, "?q=4321");
+        doConsole = consoleError.mock.calls.filter((c) => String(c[0]).includes("busca por telefone"));
+      } finally {
+        quebra.mockRestore();
+        consoleError.mockRestore();
+      }
+      expect(res.statusCode).toBe(503);
+      expect(json(res)).toMatchObject({ code: "AUDIT_UNAVAILABLE" });
+      expect(res.body).not.toContain("auditoria fora do ar");
+      expect(res.body).not.toContain("11987654321");
+      expect(doConsole).toEqual([]);
     });
 
     it("auditoria ESTRITA da busca por telefone: se o rastro não grava, a resposta é 503 AUDIT_UNAVAILABLE e NENHUM dado sai (falha fechada)", async () => {

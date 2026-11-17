@@ -22,7 +22,7 @@ import {
 } from "../../lib/orderStateMachine";
 import { toPanelOrder, type ContactAccess } from "./orders.view";
 import { authorizeContactView } from "./contactAccess";
-import { assertPhoneSearchRate, OPEN_ORDER_STATUSES, parseSearch, searchOrderHistory, type HistoryQuery } from "./orders.history";
+import { assertPhoneSearchRate, HISTORY_STAFF_FULL_PHONE_DIGITS, OPEN_ORDER_STATUSES, parseSearch, recordPhoneRefusal, searchOrderHistory, type HistoryQuery } from "./orders.history";
 import { closedTodayIds, KANBAN_OLD_OPEN_CAP, KANBAN_TODAY_OPEN_HARD_CAP } from "./orders.kanban";
 import { safeTimeZone, startOfStoreDay } from "../../lib/storeTime";
 
@@ -151,22 +151,28 @@ export class OrderService {
     // Busca por telefone do STAFF é um "este número é cliente?": 10 por hora e rastro ESTRITO (gravado antes de responder; se
     // não gravar, não responde: falha fechada como o contato completo). Nunca os dígitos, só o tamanho do termo.
     const search = parseSearch(query.q, actor.role);
+    let skipPhone = false;
     if (search?.phone && actor.role !== "OWNER") {
       try {
         assertPhoneSearchRate(actor.userId, this.now().getTime());
       } catch (error) {
-        // Recusa por limite também deixa rastro (só contagem, nunca os dígitos): o dono vê o padrão de tentativa.
-        this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "order.history_phone_search_blocked", targetType: "Store", targetId: actor.storeId, metadata: { termLength: search.phone.length } });
-        throw error;
+        // A recusa deixa rastro (só contagem, nunca os dígitos), mas só a 1ª da hora e nas marcas 10/100/1000: o dono vê o padrão sem ruído.
+        const refusals = recordPhoneRefusal(actor.userId, this.now().getTime());
+        if (refusals !== null) this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "order.history_phone_search_blocked", targetType: "Store", targetId: actor.storeId, metadata: { termLength: search.phone.length, refusals } });
+        // Termo só de dígitos que cabe num CÓDIGO de pedido (< 10 dígitos): não leva 429, cai para código e nome (sem o telefone, sem oráculo).
+        if (search.code !== null && search.phone.length < HISTORY_STAFF_FULL_PHONE_DIGITS) skipPhone = true;
+        else throw error;
       }
-      try {
-        await this.audit.logStrict({ storeId: actor.storeId, userId: actor.userId, action: "order.history_phone_search", targetType: "Store", targetId: actor.storeId, metadata: { termLength: search.phone.length } });
-      } catch (error) {
-        console.error("[audit] busca por telefone NÃO liberada: falha ao registrar o acesso:", error);
-        throw err(503, "AUDIT_UNAVAILABLE", "Busca por telefone indisponível agora. Busque pelo código ou pelo nome, ou tente de novo em instantes.");
+      if (!skipPhone) {
+        try {
+          await this.audit.logStrict({ storeId: actor.storeId, userId: actor.userId, action: "order.history_phone_search", targetType: "Store", targetId: actor.storeId, metadata: { termLength: search.phone.length } });
+        } catch (error) {
+          // A causa vai em `cause` e a rota a registra pelo serializador seguro do log (nunca console.error com o erro bruto).
+          throw Object.assign(err(503, "AUDIT_UNAVAILABLE", "Busca por telefone indisponível agora. Busque pelo código ou pelo nome, ou tente de novo em instantes."), { cause: error });
+        }
       }
     }
-    return searchOrderHistory(this.db, actor.storeId, store?.timezone ?? "America/Sao_Paulo", this.now(), query, actor.role);
+    return searchOrderHistory(this.db, actor.storeId, store?.timezone ?? "America/Sao_Paulo", this.now(), query, actor.role, { skipPhone });
   }
 
   // Observação interna do pedido (API-54): texto livre da equipe, nunca ao cliente nem ao tíquete. A auditoria registra

@@ -132,10 +132,12 @@ export async function searchOrderHistory(
   now: Date,
   query: HistoryQuery,
   role: Role = "OWNER",
+  opts: { skipPhone?: boolean } = {},
 ): Promise<{ rows: HistoryRow[]; total: number; nextCursor: string | null; period: { from: string; to: string }; timezone: string }> {
   const tz = safeTimeZone(timeZone);
   const { start, end } = resolvePeriod(query, now, tz);
   const search = parseSearch(query.q, role);
+  if (opts.skipPhone && search) search.phone = null; // cota do telefone esgotada: só código e nome (o serviço decide)
   const limit = Math.min(Math.max(Math.trunc(query.limit ?? HISTORY_PAGE_SIZE) || HISTORY_PAGE_SIZE, 1), HISTORY_MAX_PAGE_SIZE);
   const status = query.status ?? "ALL";
   if (!HISTORY_STATUS_FILTERS.includes(status)) throw bad("FILTER_INVALID", "Filtro de status inválido.");
@@ -248,7 +250,21 @@ export function assertHistoryRate(userId: string, now: number = Date.now(), limi
 export const resetHistoryRate = () => {
   hits.clear();
   phoneHits.clear();
+  phoneRefusals.clear();
 };
+
+// Recusas por limite: a auditoria grava a 1ª de cada janela de 1 h por usuário e depois só nas marcas 10, 100 e 1000, com a
+// contagem (no máximo 4 linhas por hora em vez de até 3.600). Em memória por instância, como os limites acima.
+const phoneRefusals = new Map<string, { since: number; count: number }>();
+/** Registra uma recusa e devolve a contagem a gravar na auditoria, ou null quando esta recusa não gera linha. */
+export function recordPhoneRefusal(userId: string, now: number = Date.now()): number | null {
+  const current = phoneRefusals.get(userId);
+  const entry = current && now - current.since < PHONE_WINDOW_MS ? current : { since: now, count: 0 };
+  entry.count += 1;
+  phoneRefusals.set(userId, entry);
+  if (phoneRefusals.size > 5000) for (const [key, value] of phoneRefusals) if (now - value.since >= PHONE_WINDOW_MS) phoneRefusals.delete(key);
+  return entry.count === 1 || entry.count === 10 || entry.count === 100 || entry.count === 1000 ? entry.count : null;
+}
 
 // Busca por telefone do STAFF: 10 por hora por usuário (H6, decisão do Atlas): o telefone completo é o dado mais sensível da lista.
 export const HISTORY_PHONE_RATE_LIMIT = 10;
