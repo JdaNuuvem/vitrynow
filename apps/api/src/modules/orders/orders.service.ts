@@ -42,6 +42,20 @@ type CancelOrigin = {
   providerRefundedAt?: string;
 };
 
+// Teto de tentativas AUTOMÁTICAS de estorno (o job de conciliação da API-06 para aqui; o "Tentar estorno" manual do dono segue valendo).
+// Ao atingir o teto o alerta é emitido UMA vez (auditoria + log), para a loja e a operação resolverem com o Mercado Pago.
+export const MAX_REFUND_AUTO_ATTEMPTS = 5;
+export const refundAutoRetryable = (payment: { refundAttempts: number }) => payment.refundAttempts < MAX_REFUND_AUTO_ATTEMPTS;
+
+// Código do erro do provedor para o log (diagnóstico do CL-13 e da conciliação): SÓ status HTTP e código de causa, em lista
+// restrita de caracteres. Nunca a mensagem, a descrição nem o corpo (podem trazer dado do pagador ou do pedido).
+export function providerErrorCode(error: unknown): string {
+  const safe = (v: unknown) => (typeof v === "string" || typeof v === "number") && /^[A-Za-z0-9_.-]{1,30}$/.test(String(v)) ? String(v) : "?";
+  const e = (error ?? {}) as { status?: unknown; statusCode?: unknown; cause?: unknown };
+  const cause = Array.isArray(e.cause) ? (e.cause[0] as { code?: unknown } | undefined) : (e.cause as { code?: unknown } | undefined);
+  return `status=${safe(e.status ?? e.statusCode)} code=${safe(cause?.code)}`;
+}
+
 type OrderWithPayment = Order & { payment: Payment | null };
 type PanelOrderSource = import("./orders.view").PanelOrderSource;
 type HistoryRow = {
@@ -424,10 +438,7 @@ export class OrderService {
 
     if (!origin.providerRefundedAt) {
       if (!(await this.providerRefund(payment.id, payment.providerPaymentId))) {
-        await this.db.payment.updateMany({
-          where: { id: payment.id, status: "ESTORNO_PENDENTE" },
-          data: { refundAttempts: { increment: 1 }, refundLastError: "Não foi possível estornar no Mercado Pago. Tentaremos novamente." },
-        });
+        await this.noteRefundFailure(payment.id, order, origin, "Não foi possível estornar no Mercado Pago. Tentaremos novamente.");
         this.publish(order.storeId, { type: "payment.refund_pending", orderId: order.id });
         return "PENDING";
       }
@@ -475,10 +486,7 @@ export class OrderService {
       // por inteiro: o pagamento continua ESTORNO_PENDENTE e o pedido intacto. NUNCA 500 mudo: fica pendente e visível, e o
       // "Tentar estorno" (ou o job de conciliação) refaz SÓ a Tx 2.
       console.error("[estorno] provedor devolveu, mas a conclusão do cancelamento falhou:", error);
-      await this.db.payment.updateMany({
-        where: { id: payment.id, status: "ESTORNO_PENDENTE" },
-        data: { refundAttempts: { increment: 1 }, refundLastError: "O estorno foi feito, mas falta concluir o cancelamento. Tentaremos novamente." },
-      });
+      await this.noteRefundFailure(payment.id, order, origin, "O estorno foi feito, mas falta concluir o cancelamento. Tentaremos novamente.");
       this.publish(order.storeId, { type: "payment.refund_pending", orderId: order.id });
       return "PENDING";
     }
@@ -496,14 +504,36 @@ export class OrderService {
 
   // Pede o estorno ao provedor com chave idempotente. Se der erro, consulta o pagamento: "refunded" no
   // provedor significa que o dinheiro JÁ voltou (queda entre o aceite e a nossa gravação) ⇒ sucesso.
+  // Conta a tentativa que falhou e grava o texto curto (fixo, sem dado sensível). O UPDATE devolve o valor EXATO do contador,
+  // então só UMA tentativa vê "cruzou o teto" (duas simultâneas recebem valores diferentes): o alerta sai uma vez.
+  private async noteRefundFailure(paymentId: string, order: { id: string; storeId: string }, origin: CancelOrigin, message: string) {
+    const rows = await this.db.$queryRaw<{ refundAttempts: number }[]>`
+      UPDATE "Payment" SET "refundAttempts" = "refundAttempts" + 1, "refundLastError" = ${message}
+       WHERE "id" = ${paymentId} AND "status" = 'ESTORNO_PENDENTE'
+   RETURNING "refundAttempts"`;
+    if (rows[0]?.refundAttempts === MAX_REFUND_AUTO_ATTEMPTS) {
+      console.error(`[estorno] pagamento ${paymentId} atingiu ${MAX_REFUND_AUTO_ATTEMPTS} tentativas sem concluir: precisa de atenção`);
+      this.audit.log({
+        storeId: order.storeId,
+        userId: origin.userId,
+        action: "order.refund_stuck",
+        targetType: "Order",
+        targetId: order.id,
+        metadata: { attempts: MAX_REFUND_AUTO_ATTEMPTS },
+      });
+    }
+  }
+
   private async providerRefund(paymentId: string, providerPaymentId: string): Promise<boolean> {
     try {
       await refundPayment(providerPaymentId, `refund-${paymentId}`);
       return true;
-    } catch {
+    } catch (refundError) {
+      console.error(`[estorno] provedor recusou o estorno do pagamento ${paymentId}: ${providerErrorCode(refundError)}`);
       try {
         return (await getPayment(providerPaymentId)).status === "refunded";
-      } catch {
+      } catch (lookupError) {
+        console.error(`[estorno] não consegui consultar o pagamento ${paymentId} no provedor: ${providerErrorCode(lookupError)}`);
         return false;
       }
     }
