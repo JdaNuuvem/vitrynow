@@ -140,3 +140,99 @@ describe("useRevealOnEnter (M-01: cartão sobe e aparece na 1ª vez que entra na
     expect(observerOptions?.rootMargin).toBe("0px 0px -8% 0px");
   });
 });
+
+// Rede de segurança (condição de merge do Atlas, R1 da Da Vinci): o observador pode demorar (aba de fundo, aparelho
+// lento, salto grande). Cartão que já está na tela e continua escondido depois de 600 ms aparece SEM animação.
+describe("useRevealOnEnter: rede de segurança contra faixa em branco (R1)", () => {
+  const goOnScreen = (card: HTMLElement) => {
+    card.getBoundingClientRect = () => ({ top: 300, bottom: 430, left: 0, right: 0, width: 0, height: 130, x: 0, y: 300, toJSON: () => ({}) }) as DOMRect;
+  };
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("o observador NUNCA avisa, mas o cartão que está na tela aparece sem animação depois de 600 ms", () => {
+    const [card] = mountCards([900]);
+    renderHook(() => useRevealOnEnter(true));
+    expect(card).toHaveAttribute("data-reveal", "pre");
+    goOnScreen(card); // a pessoa rolou até ele; nenhum aviso do observador chega
+    act(() => {
+      vi.advanceTimersByTime(250); // 1ª vez que o relógio o vê na tela
+    });
+    act(() => {
+      vi.advanceTimersByTime(500); // 500 ms depois: ainda dentro do prazo
+    });
+    expect(card).toHaveAttribute("data-reveal", "pre");
+    act(() => {
+      vi.advanceTimersByTime(250);
+    });
+    expect(card).toHaveAttribute("data-reveal", "shown"); // sem animação (CSS: transition none)
+  });
+
+  it("cartão fora da tela continua escondido por mais tempo que passe (não gasta nem revela à toa)", () => {
+    const [card] = mountCards([900]);
+    renderHook(() => useRevealOnEnter(true));
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(card).toHaveAttribute("data-reveal", "pre");
+  });
+
+  it("se o observador chegou primeiro, o cartão fica 'in' (com animação) e o relógio não mexe mais nele", () => {
+    const [card] = mountCards([900]);
+    renderHook(() => useRevealOnEnter(true));
+    act(() => callback([{ isIntersecting: true, target: card }]));
+    goOnScreen(card);
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(card).toHaveAttribute("data-reveal", "in");
+  });
+
+  it("o prazo recomeça se o cartão sai da tela antes de completar 600 ms", () => {
+    const [card] = mountCards([900]);
+    const offScreen = card.getBoundingClientRect;
+    renderHook(() => useRevealOnEnter(true));
+    goOnScreen(card);
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    card.getBoundingClientRect = offScreen; // saiu da tela
+    act(() => {
+      vi.advanceTimersByTime(250);
+    });
+    goOnScreen(card); // voltou: contagem nova
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(card).toHaveAttribute("data-reveal", "pre");
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(card).toHaveAttribute("data-reveal", "shown");
+  });
+
+  it("o relógio para sozinho quando não resta cartão escondido, e ao desmontar", () => {
+    const [a] = mountCards([900]);
+    const { unmount } = renderHook(() => useRevealOnEnter(true));
+    expect(vi.getTimerCount()).toBe(1);
+    act(() => callback([{ isIntersecting: true, target: a }]));
+    expect(vi.getTimerCount()).toBe(0);
+    unmount();
+
+    const [b] = mountCards([900]);
+    const second = renderHook(() => useRevealOnEnter(true));
+    expect(b).toHaveAttribute("data-reveal", "pre");
+    expect(vi.getTimerCount()).toBe(1);
+    second.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("menos movimento: nem relógio nem marcação", () => {
+    reducedMotion(true);
+    mountCards([900]);
+    renderHook(() => useRevealOnEnter(true));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
