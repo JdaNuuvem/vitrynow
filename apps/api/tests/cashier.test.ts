@@ -103,7 +103,7 @@ describe("caixa com vendas em dinheiro (integração)", () => {
     const pixLike = await placeOrder("loja-caixa", productId, { paymentMethod: "DEBITO", type: "BALCAO" });
     expect(pixLike.statusCode).toBe(201);
 
-    await app.inject({ method: "POST", url: "/api/cashier/movements", headers: { cookie }, payload: { type: "SUPRIMENTO", amountCents: 1000, notes: "reforço" } });
+    await app.inject({ method: "POST", url: "/api/cashier/movements", headers: { cookie }, payload: { type: "SUPRIMENTO", amountCents: 1000, notes: "reforço", reason: "TROCO" } });
 
     const current = JSON.parse((await app.inject({ method: "GET", url: "/api/cashier/current", headers: { cookie } })).body);
     // 1500 (item) + 500 (taxa de entrega) + 200 (gorjeta) = 2200 em dinheiro

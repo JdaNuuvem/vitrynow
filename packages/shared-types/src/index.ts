@@ -226,19 +226,27 @@ export const openCashSessionSchema = z.object({
 });
 export type OpenCashSessionInput = z.infer<typeof openCashSessionSchema>;
 
+// `closingBalanceCents` ausente/nulo NUNCA vira 0 por omissão: o servidor responde 400 CASH_COUNTED_REQUIRED (zero digitado de propósito vale).
+// `reason`/`reasonText` são validados pelo servidor contra a lista fechada (CASH_REASON_REQUIRED / CASH_REASON_INVALID).
 export const closeCashSessionSchema = z.object({
-  closingBalanceCents: z.number().int().nonnegative(),
+  closingBalanceCents: z.number().int().nonnegative().nullable().optional(),
   notes: z.string().trim().max(300).optional(),
+  reason: z.string().max(40).nullable().optional(),
+  reasonText: z.string().max(400).nullable().optional(),
 });
 export type CloseCashSessionInput = z.infer<typeof closeCashSessionSchema>;
 
 export const cashMovementTypeSchema = z.enum(["SUPRIMENTO", "SANGRIA"]);
 
+// Motivo OBRIGATÓRIO em toda movimentação (RN-CX-07): o servidor valida `reason` contra a lista do TIPO; `notes` NÃO substitui `reason`.
 export const createCashMovementSchema = z.object({
   type: cashMovementTypeSchema,
   amountCents: z.number().int().positive().max(100_000_000),
   notes: z.string().max(300).optional(),
+  reason: z.string().max(40).nullable().optional(),
+  reasonText: z.string().max(400).nullable().optional(),
 });
+export const setCashStaffLimitSchema = z.object({ limitCents: z.number().int().nonnegative().max(100_000_000) });
 export type CreateCashMovementInput = z.infer<typeof createCashMovementSchema>;
 
 // ---- Cupons (painel + storefront) ----
