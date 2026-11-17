@@ -128,27 +128,27 @@ describe("QA probes — API", () => {
   });
 
   // ───────────── Regras do pedido público ─────────────
-  bug("D03 produto inativo (pausado) não pode ser pedido", async () => {
+  it("D03 produto inativo (pausado) não pode ser pedido", async () => {
     const ctx = await setupStore();
     await prisma.product.update({ where: { id: ctx.productId }, data: { active: false } });
     const res = await order(ctx.slug, { type: "BALCAO", items: [{ productId: ctx.productId, quantity: 1 }] });
     expect(res.statusCode).toBe(400);
   });
 
-  bug("D04a DELIVERY com entrega desabilitada na loja é recusado", async () => {
+  it("D04a DELIVERY com entrega desabilitada na loja é recusado", async () => {
     const ctx = await setupStore();
     await prisma.store.update({ where: { id: ctx.storeId }, data: { deliveryEnabled: false } });
     const res = await order(ctx.slug, { type: "DELIVERY", address: "Rua A, 1", items: [{ productId: ctx.productId, quantity: 1 }] });
     expect(res.statusCode).toBeGreaterThanOrEqual(400);
   });
 
-  bug("D04b DELIVERY sem endereço é recusado pelo servidor (hoje só o front valida)", async () => {
+  it("D04b DELIVERY sem endereço é recusado pelo servidor (hoje só o front valida)", async () => {
     const ctx = await setupStore();
     const res = await order(ctx.slug, { type: "DELIVERY", items: [{ productId: ctx.productId, quantity: 1 }] });
     expect(res.statusCode).toBe(400);
   });
 
-  bug("D04c retirada (BALCAO/MESA) com pickup desabilitado é recusada", async () => {
+  it("D04c retirada (BALCAO/MESA) com pickup desabilitado é recusada", async () => {
     const ctx = await setupStore();
     await prisma.store.update({ where: { id: ctx.storeId }, data: { pickupEnabled: false } });
     const res = await order(ctx.slug, { type: "BALCAO", items: [{ productId: ctx.productId, quantity: 1 }] });
@@ -409,7 +409,7 @@ describe("QA probes — API", () => {
   it("D17 relatório soma só pedidos não cancelados e fecha com a lista de pedidos", async () => {
     const ctx = await setupStore();
     const o1 = JSON.parse((await order(ctx.slug, { type: "BALCAO", paymentMethod: "DINHEIRO", items: [{ productId: ctx.productId, quantity: 2 }] })).body);
-    await order(ctx.slug, { type: "DELIVERY", address: "Rua B, 2", paymentMethod: "CREDITO", items: [{ productId: ctx.productId, quantity: 1 }] });
+    await order(ctx.slug, { type: "DELIVERY", address: "Rua B, 2", customerPhone: "11999999999", paymentMethod: "CREDITO", items: [{ productId: ctx.productId, quantity: 1 }] });
     const o3 = JSON.parse((await order(ctx.slug, { type: "BALCAO", items: [{ productId: ctx.productId, quantity: 1 }] })).body);
     await app.inject({ method: "POST", url: `/api/orders/${o3.orderId}/status`, headers: { cookie: ctx.cookie }, payload: { status: "CANCELADO" } });
     const res = await app.inject({ method: "GET", url: "/api/reports/summary", headers: { cookie: ctx.cookie } });
