@@ -5,6 +5,15 @@ import { MercadoPagoConfig, Payment as MpPayment, PaymentRefund } from "mercadop
 // (MP_ACCESS_TOKEN) só serve à cobrança da assinatura SaaS (`createPixPayment` e demais abaixo); o PIX dos pedidos usa o
 // token DA LOJA, obtido por `modules/storePayments/gateway.ts` (ADR-0001: nada do dinheiro das lojas passa pela plataforma).
 
+// Prazo do PIX (decisão do Atlas): CONSTANTE ÚNICA no servidor. Tela, provedor e o job que cancela pedido aguardando pagamento
+// usam ESTE número (nunca um valor solto). Pagamento aprovado depois do prazo continua valendo (o dinheiro entrou).
+export const PIX_EXPIRATION_MINUTES = 30;
+
+/** Menor entre o prazo pedido e o que o provedor devolveu; `null` só se nenhum dos dois existe (a tela não inventa hora). */
+export function effectiveExpiry(requested: Date, fromProvider: Date | null): Date {
+  return fromProvider && !Number.isNaN(fromProvider.getTime()) && fromProvider < requested ? fromProvider : requested;
+}
+
 export type PixChargeInput = {
   orderId: string;
   amountCents: number;
@@ -19,7 +28,8 @@ export type PixCharge = {
   status: string | null | undefined; // "pending" | "approved" | "rejected" | ...
   pixQrCode: string | null;
   pixQrCodeBase64: string | null;
-  expiresAt: Date | null;
+  /** SEMPRE presente em cobrança nova: o menor entre os 30 min fixados aqui e o prazo que o provedor devolver. */
+  expiresAt: Date;
 };
 
 // Visão do pagamento no provedor — única fonte da verdade (a notificação só traz o id).
@@ -50,6 +60,7 @@ export function mercadoPagoGateway(accessToken: string): PixGateway {
   return {
     async createPixPayment(input) {
       const payment = new MpPayment(client());
+      const requested = new Date(Date.now() + PIX_EXPIRATION_MINUTES * 60_000);
       const result = await payment.create({
         body: {
           transaction_amount: input.amountCents / 100,
@@ -57,6 +68,8 @@ export function mercadoPagoGateway(accessToken: string): PixGateway {
           payment_method_id: "pix",
           payer: { email: input.payerEmail },
           external_reference: input.orderId,
+          // NÃO VERIFICADO no sandbox (CL-13): formato e aceitação de date_of_expiration; o prazo efetivo abaixo vale de qualquer jeito.
+          date_of_expiration: requested.toISOString(),
         },
         ...(input.idempotencyKey ? { requestOptions: { idempotencyKey: input.idempotencyKey } } : {}),
       });
@@ -66,7 +79,7 @@ export function mercadoPagoGateway(accessToken: string): PixGateway {
         status: result.status,
         pixQrCode: txData?.qr_code ?? null,
         pixQrCodeBase64: txData?.qr_code_base64 ?? null,
-        expiresAt: result.date_of_expiration ? new Date(result.date_of_expiration) : null,
+        expiresAt: effectiveExpiry(requested, result.date_of_expiration ? new Date(result.date_of_expiration) : null),
       };
     },
     async getPayment(providerPaymentId) {
