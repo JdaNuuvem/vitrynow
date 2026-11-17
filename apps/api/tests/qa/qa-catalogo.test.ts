@@ -21,9 +21,9 @@ describe("QA catálogo: exclusão", () => {
     const productId = JSON.parse((await app.inject({ method: "POST", url: "/api/catalog/products", headers: { cookie: cookie! }, payload: { categoryId, name: "X-Burger", priceCents: 2800 } })).body).product.id as string;
     // equipe é recurso do PRO (D2/API-08): ativa o PRO só para montar o cenário de STAFF
     await activateSubscription({ subscriptionId: (await prisma.subscription.findFirstOrThrow()).id, planCode: "PRO" });
-    const invite = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: cookie! }, payload: { email: "staff-cat@teste.com", password: "senha123" } });
+    const invite = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: cookie! }, payload: { email: "staff-cat@teste.com", password: "senha12345" } });
     expect(invite.statusCode).toBe(201);
-    const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "staff-cat@teste.com", password: "senha123" } });
+    const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "staff-cat@teste.com", password: "senha12345" } });
     return { owner: cookie!, staff: (login.headers["set-cookie"] as string).split(";")[0], store, categoryId, productId };
   }
 

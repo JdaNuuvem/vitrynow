@@ -55,25 +55,35 @@ export const loginSchema = z.object({
 });
 export type LoginInput = z.infer<typeof loginSchema>;
 
+// SEC-29: senha nova com no mínimo 10 caracteres, SEM exigir composição (maiúscula, número, símbolo): comprimento vale mais que regra de
+// composição e a pessoa usa uma frase. Vale para cadastro, convite de equipe, troca e redefinição. O LOGIN não tem mínimo: contas antigas
+// (com 6 a 9 caracteres) continuam entrando, e a troca delas é voluntária.
+export const MIN_PASSWORD_LENGTH = 10;
+export const PASSWORD_TOO_SHORT_MESSAGE = "A senha precisa ter pelo menos 10 caracteres.";
+const newPasswordField = z.string().min(MIN_PASSWORD_LENGTH, PASSWORD_TOO_SHORT_MESSAGE).max(200);
+
 export const createStaffUserSchema = z.object({
   email: emailField,
-  password: z.string().min(6).max(200),
+  password: newPasswordField,
   role: z.enum(["OWNER", "STAFF"]).optional(),
 });
 export type CreateStaffUserInput = z.infer<typeof createStaffUserSchema>;
 
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1).max(200),
-  newPassword: z.string().min(6).max(200),
+  newPassword: newPasswordField,
 });
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
 
 export const forgotPasswordSchema = z.object({ email: emailField });
 export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
 
+// SEC-29 (ST-67): além do token, quem redefine DIGITA o e-mail da conta; o servidor o compara com o da conta do token. Sem isto, o link da
+// conta de um atacante, mandado à vítima, redefineria a conta DELE com a senha que a vítima reutiliza.
 export const resetPasswordSchema = z.object({
   token: z.string().min(1).max(200),
-  newPassword: z.string().min(6).max(200),
+  email: emailField,
+  newPassword: newPasswordField,
 });
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
 
@@ -90,7 +100,7 @@ export const registerStoreSchema = z.object({
     .regex(/^[a-z0-9-]+$/, "use apenas letras minúsculas, números e hífen"),
   code: z.string().min(1).max(30),
   email: emailField,
-  password: z.string().min(6).max(200),
+  password: newPasswordField,
 });
 export type RegisterStoreInput = z.infer<typeof registerStoreSchema>;
 

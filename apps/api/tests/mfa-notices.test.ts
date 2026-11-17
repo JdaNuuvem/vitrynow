@@ -31,7 +31,7 @@ describe("confirmação de segurança (MFA)", () => {
       method: "POST",
       url: "/auth/change-password",
       headers: { cookie, ...(challengeId ? { "x-mfa-challenge": challengeId } : {}) },
-      payload: { currentPassword: "senha123", newPassword: "novasenha456" },
+      payload: { currentPassword: "senha12345", newPassword: "novasenha456" },
     });
 
   async function requestChallenge(cookie: string) {

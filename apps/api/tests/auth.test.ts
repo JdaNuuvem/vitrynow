@@ -137,7 +137,7 @@ describe("auth", () => {
     const reset = await app.inject({
       method: "POST",
       url: "/auth/reset-password",
-      payload: { token: plainToken, newPassword: "outraSenha123" },
+      payload: { token: plainToken, email: credentials.email, newPassword: "outraSenha123" },
     });
     expect(reset.statusCode).toBe(200);
 
@@ -148,7 +148,7 @@ describe("auth", () => {
     const reuse = await app.inject({
       method: "POST",
       url: "/auth/reset-password",
-      payload: { token: plainToken, newPassword: "maisUmaSenha123" },
+      payload: { token: plainToken, email: credentials.email, newPassword: "maisUmaSenha123" },
     });
     expect(reuse.statusCode).toBe(400);
   });

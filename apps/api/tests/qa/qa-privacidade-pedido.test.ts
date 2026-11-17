@@ -54,9 +54,9 @@ describe("QA privacidade das respostas de pedido (API-54a)", () => {
     await prisma.order.update({ where: { id: orderId }, data: { awaitingPayment: false } });
     // equipe é recurso do PRO (D2/API-08): ativa só para montar o STAFF
     await activateSubscription({ subscriptionId: (await prisma.subscription.findFirstOrThrow()).id, planCode: "PRO" });
-    const invite = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: cookie! }, payload: { email: "staff-priv@teste.com", password: "senha123" } });
+    const invite = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: cookie! }, payload: { email: "staff-priv@teste.com", password: "senha12345" } });
     expect(invite.statusCode).toBe(201);
-    const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "staff-priv@teste.com", password: "senha123" } });
+    const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "staff-priv@teste.com", password: "senha12345" } });
     return { owner: cookie!, staff: (login.headers["set-cookie"] as string).split(";")[0], store, orderId };
   }
 

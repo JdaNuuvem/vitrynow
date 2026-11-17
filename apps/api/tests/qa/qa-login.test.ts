@@ -71,7 +71,7 @@ describe("QA login e cadastro (SEC-20)", () => {
 
   it("L3b (B21) 8 cadastros iguais em paralelo (IPs distintos, para não cair no limite de 5/min por IP): exatamente 1 vence e nenhum responde 500", async () => {
     const rs = await Promise.all(Array.from({ length: 8 }, (_, i) =>
-      app.inject({ method: "POST", url: "/auth/register", remoteAddress: `10.70.0.${i + 1}`, payload: { storeName: `Loja ${i}`, slug: `loja-par-${i}`, code: `P${i}`, email: "paralelo@teste.com", password: "senha123" } })));
+      app.inject({ method: "POST", url: "/auth/register", remoteAddress: `10.70.0.${i + 1}`, payload: { storeName: `Loja ${i}`, slug: `loja-par-${i}`, code: `P${i}`, email: "paralelo@teste.com", password: "senha12345" } })));
     expect(rs.filter((r) => r.statusCode >= 500).length, rs.map((r) => r.statusCode).join(",")).toBe(0);
     expect(rs.filter((r) => r.statusCode === 201).length).toBe(1);
     expect(await prisma.user.count({ where: { email: { equals: "paralelo@teste.com", mode: "insensitive" } } })).toBe(1);

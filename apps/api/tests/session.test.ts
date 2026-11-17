@@ -89,9 +89,9 @@ describe("sessão do painel (ADR-0008)", () => {
   it("usuário removido perde acesso na hora (D06)", async () => {
     const { cookie: ownerCookie, user: owner } = await ownerWithId();
     const staff = await prisma.user.create({
-      data: { storeId: owner.storeId, email: "func@teste.com", passwordHash: await bcrypt.hash("senha123", 4), role: "STAFF" },
+      data: { storeId: owner.storeId, email: "func@teste.com", passwordHash: await bcrypt.hash("senha12345", 4), role: "STAFF" },
     });
-    const { cookie: staffCookie } = await login(app, "func@teste.com", "senha123");
+    const { cookie: staffCookie } = await login(app, "func@teste.com", "senha12345");
     expect((await me(staffCookie!)).statusCode).toBe(200);
     const del = await app.inject({ method: "POST", url: `/api/users/${staff.id}/delete`, headers: { cookie: ownerCookie } });
     expect(del.statusCode).toBe(200);
@@ -121,7 +121,7 @@ describe("sessão do painel (ADR-0008)", () => {
     const { cookie, credentials, user } = await ownerWithId();
     const token = "t".repeat(32);
     await prisma.passwordResetToken.create({ data: { userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + 3600_000) } });
-    const reset = await app.inject({ method: "POST", url: "/auth/reset-password", payload: { token, newPassword: "outra-senha-123" } });
+    const reset = await app.inject({ method: "POST", url: "/auth/reset-password", payload: { token, email: credentials.email, newPassword: "outra-senha-123" } });
     expect(reset.statusCode).toBe(200);
     expect((await me(cookie)).statusCode).toBe(401);
     expect((await login(app, credentials.email, "outra-senha-123")).response.statusCode).toBe(200);

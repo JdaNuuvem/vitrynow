@@ -141,10 +141,10 @@ describe("módulos em camadas — contrato HTTP", () => {
     expect(wrong.statusCode).toBe(401);
     expect(json(wrong).error).toBe("senha atual incorreta");
 
-    const ok = await call("POST", "/auth/change-password", { currentPassword: "senha123", newPassword: "nova-senha1" });
+    const ok = await call("POST", "/auth/change-password", { currentPassword: "senha12345", newPassword: "nova-senha1" });
     expect(ok.statusCode).toBe(200);
 
-    const loginOld = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "dono1@teste.com", password: "senha123" } });
+    const loginOld = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "dono1@teste.com", password: "senha12345" } });
     expect(loginOld.statusCode).toBe(401);
   });
 

@@ -21,7 +21,10 @@ describe("POST /auth/reset-password/inspect (SEC-29)", () => {
     });
     await app.ready();
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await resetDb(); // o último teste do arquivo não pode deixar loja/usuário para o vizinho (409 EMAIL_IN_USE/STORE_IN_USE)
+  });
 
   const tokenOf = (url: string) => new URLSearchParams(new URL(url).hash.slice(1)).get("token")!;
   const inspect = (payload: unknown, ip = nextIp()) => app.inject({ method: "POST", url: "/auth/reset-password/inspect", remoteAddress: ip, payload: payload as never });
@@ -45,14 +48,14 @@ describe("POST /auth/reset-password/inspect (SEC-29)", () => {
     for (let i = 0; i < 3; i += 1) expect((await inspect({ token })).json().valid).toBe(true);
     expect(await prisma.passwordResetToken.count({ where: { usedAt: { not: null } } })).toBe(0);
 
-    const reset = await app.inject({ method: "POST", url: "/auth/reset-password", remoteAddress: nextIp(), payload: { token, newPassword: "outraSenha123" } });
+    const reset = await app.inject({ method: "POST", url: "/auth/reset-password", remoteAddress: nextIp(), payload: { token, email: "maria.silva@exemplo.com.br", newPassword: "outraSenha123" } });
     expect(reset.statusCode).toBe(200);
     expect(credentials.email).toBeTruthy();
   }, 60000);
 
   it("token inexistente, usado, expirado, vazio, enorme ou malformado: a MESMA resposta (nada de motivo), em qualquer caso", async () => {
     const { token } = await accountWithToken();
-    await app.inject({ method: "POST", url: "/auth/reset-password", remoteAddress: nextIp(), payload: { token, newPassword: "outraSenha123" } }); // gasta o token
+    await app.inject({ method: "POST", url: "/auth/reset-password", remoteAddress: nextIp(), payload: { token, email: "maria.silva@exemplo.com.br", newPassword: "outraSenha123" } }); // gasta o token
 
     const expired = await accountWithToken2();
     const bodies = new Set<string>();
