@@ -97,3 +97,30 @@ describe("ProductDetailScreen: loja fechada (B3 da revisão da Da Vinci)", () =>
     expect(screen.getByText("Pão, carne e queijo")).toBeInTheDocument();
   });
 });
+
+describe("ProductDetailScreen: foco e teclado (WEB-22, F2)", () => {
+  it("abre com o foco no título do produto, não no body", () => {
+    setup();
+    expect(screen.getByRole("heading", { level: 1, name: "Cheeseburguer" })).toHaveFocus();
+  });
+
+  it("Esc volta ao cardápio", async () => {
+    const { onClose } = setup();
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("Esc dentro da observação já escrita não joga o texto fora", async () => {
+    const { onClose } = setup();
+    await userEvent.type(screen.getByLabelText("Alguma observação?"), "sem cebola");
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("Esc na observação vazia ainda volta ao cardápio", async () => {
+    const { onClose } = setup();
+    screen.getByLabelText("Alguma observação?").focus();
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
