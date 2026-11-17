@@ -73,7 +73,14 @@ if ($continue -and -not $SkipMigrationCheck) {
     $bash = Join-Path $gitRoot 'bin\bash.exe'
     if (-not (Test-Path $bash)) { throw "bash do Git não encontrado em $bash" }
     $env:BASE = $MigrationBase; $env:AGENT = $Agent; $env:PORT = "$Port"
-    try { & $bash (Join-Path $repo 'scripts/check-migrations.sh') HEAD }
+    # A saída é capturada e reescrita com Write-Host: com `ci.ps1 *> log` a saída direta do bash.exe se perdia
+    # do log (o verificador rodava, mas não havia prova no arquivo). O código de saída do bash é preservado.
+    try {
+      $verOut = & $bash (Join-Path $repo 'scripts/check-migrations.sh') HEAD 2>&1
+      $verCode = $LASTEXITCODE
+      $verOut | ForEach-Object { Write-Host "$_" }
+      $global:LASTEXITCODE = $verCode
+    }
     finally { Remove-Item Env:\BASE, Env:\AGENT, Env:\PORT -ErrorAction SilentlyContinue }
   }
 }
