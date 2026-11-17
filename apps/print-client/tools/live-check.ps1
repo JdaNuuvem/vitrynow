@@ -2,7 +2,7 @@
 # Compila o nucleo do print-client + tools\LiveCheck.cs e executa em memoria (Smart App Control). Nao toca producao.
 # Passo a passo e resultados: docs\conferencia-cruzada-api12.md
 # TOKEN: prefira a variavel de ambiente PC_LIVE_TOKEN ou o prompt (sem eco); -Token na linha de comando fica no historico do shell:
-#   so aceitavel para chave de teste de banco DESCARTAVEL de DEV. Nunca use uma chave de loja real.
+#   so aceitavel para chave de teste de banco DESCARTAVEL de DEV. Nunca use uma chave de loja real (vale tambem para -AlertOrderIds).
 # Uso: .\live-check.ps1 [-Token mcd_...] -OutDir <pasta> -Ledger <printed.json> -Seconds 20 [-Fault offline|nopaper]
 param(
   [string]$Token = "",

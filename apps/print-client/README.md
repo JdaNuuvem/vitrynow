@@ -224,6 +224,8 @@ Os avisos do cliente (`nothingToCharge` incoerente, tíquete sem itens e total z
 
 **Alertas de modo que se perdem são reenviados (PC-24d).** `MODE_UNCONFIRMED` e `MODE_RECOVERED` descrevem um ESTADO: se o envio falhar (rede, timeout de 3 s, 5xx, 404, 401/403), o cliente desfaz a marca "já enviei" e tenta de novo na próxima falha/resposta da configuração, com intervalo mínimo de 60 s entre tentativas; depois de entregue (2xx) não repete. Os outros códigos (dinheiro, tíquete) seguem em melhor esforço, sem reenvio, com dedupe de 10 min.
 
+**(PC-24e) `live-check.ps1 -AlertOrderIds`** usa a chave de impressora passada em `-Token`, que fica na linha de comando e no histórico do shell: só chave de TESTE de banco descartável de DEV (prefira `PC_LIVE_TOKEN` ou o prompt). Resposta 400/422 do servidor é descarte definitivo (contrato desencontrado), não é reenviada. Suporte: o reenvio dos alertas de modo vive só na memória do app; se o app fechar com um `MODE_RECOVERED` ainda não entregue, o painel mantém o aviso "modo sem confirmar" até a janela do servidor vencer (não é defeito do PC da loja).
+
 ## Confiabilidade e segredos (PC-02)
 
 - **Dedupe e ack persistido** (`Services/PrintLedger.cs`, arquivo `%LOCALAPPDATA%\MeuCardapioPrintClient\printed.json`): polling e WS passam pelo mesmo portão, um pedido nunca é impresso duas vezes, e se o aviso à API falhar o ack é repetido sem reimprimir. Falha de impressão volta com recuo (15 s até 5 min) e sem novo alerta sonoro.

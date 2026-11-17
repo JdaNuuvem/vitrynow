@@ -188,7 +188,8 @@ namespace MeuCardapio.PrintClient.Services
                     int code = (int)response.StatusCode;
                     if (code == 401 || code == 403) { NoteAuthFailure(code, false); return; }
                     if (code == 404) Interlocked.Exchange(ref _alertSuppressedUntilTicks, (DateTime.UtcNow + AlertSuppression).Ticks);
-                    delivered = code >= 200 && code < 300;
+                    // 400/422: o servidor recusou o corpo (contrato desencontrado); repetir o mesmo corpo nunca resolve, entao e descarte DEFINITIVO (sem reenvio de 60 s para sempre).
+                    delivered = (code >= 200 && code < 300) || code == 400 || code == 422;
                     // O corpo da resposta NUNCA e lido. Alerta comum perdido e descartado; so os de modo (estado) sao reenviados.
                 }
             }
