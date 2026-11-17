@@ -18,6 +18,7 @@ printf '{\n\tadmin off\n}\n:8080 {\n\trate_limit {\n\t\tzone z {\n\t\t\tkey {htt
 docker network create "$NET" >/dev/null || exit 1
 docker run -d --name "$CT" --network "$NET" --memory "$MEM" -e "GOMEMLIMIT=$GOM" -v "$TW/Caddyfile:/etc/caddy/Caddyfile:ro" "$IMG" caddy run --config /etc/caddy/Caddyfile >/dev/null || exit 1
 sleep 4
+cg() { docker exec "$CT" sh -c 'cat /sys/fs/cgroup/memory.stat 2>/dev/null || cat /sys/fs/cgroup/memory/memory.stat' 2>/dev/null | tr -d '' | awk '$1=="anon"||$1=="total_rss"{a=$2} $1=="file"||$1=="total_cache"{c=$2} END{printf "anon=%d file=%d", a/1048576, c/1048576}'; }
 mem() { docker stats --no-stream --format '{{.MemUsage}}' "$CT" 2>/dev/null | awk '{v=$1; if (v ~ /GiB/) {sub(/GiB/,"",v); printf "%.0f", v*1024} else {sub(/MiB/,"",v); printf "%.0f", v}}'; }
 onda() { docker run --rm --network "$NET" node:20-alpine node -e "
   const http=require('http');const agent=new http.Agent({keepAlive:true,maxSockets:64});let sent=0,done=0,total=20000;
@@ -25,12 +26,12 @@ onda() { docker run --rm --network "$NET" node:20-alpine node -e "
   const one=()=>{ if(sent>=total) return; const i=sent++; http.get({host:'$CT',port:8080,path:'/',agent,headers:{'X-Mem-Key':'$1-'+i}},r=>{r.resume();r.on('end',fin)}).on('error',fin); };
   for(let k=0;k<64;k++) one();" 2>&1 | tail -1; }
 echo "# st50-levas: imagem=$IMG mem_limit=$MEM GOMEMLIMIT=$GOM levas=$W pausa=${PAUSA}s janela=10s varredura=10s events=120; início $(date '+%F %T')"
-echo "# leva | logo após (MB) | ${PAUSA}s depois da varredura (MB) | estado do container"
+echo "# leva | logo após (MB) | ${PAUSA}s depois da varredura (MB) | anon/file do cgroup (MB) | estado do container"
 m0="$(mem)"; echo "inicio: ${m0:-?} MB"
 for w in $(seq 1 "$W"); do
   r="$(onda "w$w")"; a="$(mem)"; sleep "$PAUSA"; b="$(mem)"
   st="$(docker inspect -f 'running={{.State.Running}} oom={{.State.OOMKilled}} reinicios={{.RestartCount}}' "$CT" 2>/dev/null)"
-  echo "leva $w | cliente=$r | ${a:-?} | ${b:-?} | $st"
+  echo "leva $w | cliente=$r | ${a:-?} | ${b:-?} | $(cg) | $st"
   case "$st" in *running=false*) echo "# o container PAROU na leva $w; encerrando"; break;; esac
 done
 echo "# fim $(date '+%F %T')"
