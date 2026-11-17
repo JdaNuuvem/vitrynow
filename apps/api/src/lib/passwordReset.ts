@@ -34,7 +34,11 @@ export async function issueResetToken(email: string, now: Date = new Date()): Pr
     // Conta inexistente: a instrução roda igual (mesma ida ao banco) com chave CONSTANTE (o e-mail digitado não entra no hashtext de 32 bits);
     // como o lock não espera, a chave não muda o resultado.
     const lockKey = user ? `pwreset:${user.id}` : "pwreset:none";
-    const [lock] = await tx.$queryRaw<{ ok: boolean }[]>`SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})) AS ok`;
+    // SEC-33c: o único trabalho que ainda difere entre os caminhos é o COMMIT com fsync de quem GRAVA o token (os outros fazem INSERT … WHERE false, que não
+    // espera o disco): com o disco disputado, a conta que emite respondia centenas de ms acima das demais (medido pelo Deming). `synchronous_commit = off`
+    // SÓ NESTA transação (`set_config(..., true)` = SET LOCAL, na mesma instrução do lock: nenhuma ida a mais ao banco) iguala os três. Custo aceito: se o
+    // servidor cair nos ~200 ms seguintes ao commit o token se perde e a pessoa pede de novo; nada além do token de redefinição usa isto.
+    const [lock] = await tx.$queryRaw<{ ok: boolean }[]>`SELECT set_config('synchronous_commit', 'off', true) AS sync, pg_try_advisory_xact_lock(hashtext(${lockKey})) AS ok`;
     const recent = await tx.passwordResetToken.findMany({
       where: { userId: subjectId, createdAt: { gte: new Date(now.getTime() - HOUR_MS) } },
       select: { createdAt: true, sendFailedAt: true },
