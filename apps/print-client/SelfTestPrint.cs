@@ -589,6 +589,18 @@ namespace MeuCardapio.PrintClient
             var jTrue = fromJson("{\"nothingToCharge\":true}"); var jFalse = fromJson("{\"nothingToCharge\":false}"); var jNull = fromJson("{\"nothingToCharge\":null}"); var jMiss = fromJson("{}");
             Check("JSON: nothingToCharge true/false/null/ausente => true/false/ausente/ausente", jTrue.NothingToCharge == true && jFalse.NothingToCharge == false && jNull.NothingToCharge == null && jMiss.NothingToCharge == null);
 
+            // tipo estranho no campo (parecer Nightingale): nao e coagido, nao derruba a leitura e vale como AUSENTE (o cinto do total e a aritmetica decidem)
+            foreach (var weird in new[] { "1", "\"true\"", "\"lixo\"", "[true]", "{\"a\":1}", "0" })
+            {
+                var w = fromJson("{\"orderId\":\"w\",\"code\":\"1\",\"type\":\"BALCAO\",\"nothingToCharge\":" + weird + ",\"totalCents\":5000,\"items\":[{\"productName\":\"A\",\"quantity\":2,\"unitPriceCents\":2500}]}");
+                Check("nothingToCharge com tipo estranho (" + weird + ") e total R$ 50: le sem erro, vale como AUSENTE, cobra e NAO gera conflito", w.NothingToCharge == null && !pay(w).Contains("SEM COBRANÇA") && !TicketBuilder.IsNothingToChargeConflict(w));
+            }
+            var weirdZero = fromJson("{\"orderId\":\"w\",\"code\":\"1\",\"type\":\"BALCAO\",\"nothingToCharge\":\"true\",\"totalCents\":0,\"subtotalCents\":5000,\"discountCents\":100,\"items\":[{\"productName\":\"A\",\"quantity\":2,\"unitPriceCents\":2500}]}");
+            Check("nothingToCharge \"true\" (texto) com total 0 e desconto R$ 1 em R$ 50: NAO e coagido para true (aritmetica nao fecha => cobra)", weirdZero.NothingToCharge == null && !pay(weirdZero).Contains("SEM COBRANÇA"));
+            var rtField = fromJson(Newtonsoft.Json.JsonConvert.SerializeObject(new PrintableOrder { OrderId = "r", Code = "1", Type = "BALCAO", NothingToCharge = true, TotalCents = 0 }));
+            var rtNone = fromJson(Newtonsoft.Json.JsonConvert.SerializeObject(new PrintableOrder { OrderId = "r", Code = "1", Type = "BALCAO", TotalCents = 0 }));
+            Check("ida e volta pelo JSON: true continua true e nao informado continua ausente", rtField.NothingToCharge == true && rtNone.NothingToCharge == null);
+
             // aviso de cancelamento e teste nunca usam o campo (layout proprio, sem linha de pagamento)
             var cancel = CancelFromApi(); cancel.NothingToCharge = true;
             var test = TestFromClient(); test.NothingToCharge = true;

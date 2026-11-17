@@ -53,7 +53,14 @@ namespace MeuCardapio.PrintClient.Models
         [JsonProperty("cancelNotice")] public bool? CancelNotice { get; set; }              // true = imprime o aviso de cancelamento
         [JsonProperty("ticketSchemaVersion")] public int? TicketSchemaVersion { get; set; }
         // API-66 (schema 3): o SERVIDOR diz se nao ha nada a cobrar (fonte unica: total 0 E nenhuma cobranca possivel). Ausente (API antiga) = null.
-        [JsonProperty("nothingToCharge")] public bool? NothingToCharge { get; set; }
+        // So um BOOLEANO de verdade vale (parecer Nightingale): 1, "true", "lixo" ou lista NAO sao coagidos e NAO derrubam a leitura do tiquete; viram AUSENTE.
+        [JsonProperty("nothingToCharge")] public Newtonsoft.Json.Linq.JToken NothingToChargeRaw { get; set; }
+        [JsonIgnore]
+        public bool? NothingToCharge
+        {
+            get { var t = NothingToChargeRaw; return t != null && t.Type == Newtonsoft.Json.Linq.JTokenType.Boolean ? (bool?)t.ToObject<bool>() : null; }
+            set { NothingToChargeRaw = value.HasValue ? new Newtonsoft.Json.Linq.JValue(value.Value) : null; }
+        }
         [JsonProperty("tableLabel")] public string TableLabel { get; set; }
         // Job TEST sem tíquete do servidor: o cliente imprime o tíquete de teste próprio (não vem da API).
         [JsonIgnore] public bool IsTest { get; set; }
