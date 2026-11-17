@@ -3,6 +3,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { MAX_REFUND_AUTO_ATTEMPTS, providerErrorCode, refundAutoRetryable } from "../src/modules/orders/orders.service";
+import { orderService } from "../src/modules/orders/orders.module";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
@@ -40,7 +41,8 @@ describe("API-06a — estorno travado", () => {
     const orderId = json(res).orderId as string;
     await prisma.order.update({ where: { id: orderId }, data: { paymentMethod: "PIX" } });
     const payment = await prisma.payment.create({ data: { orderId, providerPaymentId: `mp-${orderId}`, amountCents: 1000, status: "APROVADO" } });
-    return { owner: cookie!, store, orderId, paymentId: payment.id };
+    // O acompanhamento público exige o token do pedido (NG-16): vem na resposta da criação.
+    return { owner: cookie!, store, orderId, paymentId: payment.id, token: json(res).token as string };
   }
   const cancelar = (c: { owner: string; orderId: string }) =>
     app.inject({ method: "POST", url: `/api/orders/${c.orderId}/cancel`, headers: { cookie: c.owner }, payload: { reason: { code: "ITEM_EM_FALTA" } } });
@@ -70,6 +72,7 @@ describe("API-06a — estorno travado", () => {
   });
 
   it(`TETO: na ${MAX_REFUND_AUTO_ATTEMPTS}ª tentativa que falha sai UM alerta (auditoria); as seguintes não repetem; o manual continua valendo`, async () => {
+    expect(MAX_REFUND_AUTO_ATTEMPTS).toBe(5); // o teto é decisão de produto: mudar exige mudar este número de propósito
     const c = await pedidoPagoPendenteDeEstorno();
     vi.spyOn(console, "error").mockImplementation(() => {});
     refundPayment.mockRejectedValue(new Error("fora do ar"));
@@ -112,6 +115,18 @@ describe("API-06a — estorno travado", () => {
     expect(await stuckRows(c.store.id)).toBe(1);
   });
 
+  it("falha TARDIA de uma tentativa que perdeu a corrida (o pagamento já foi REEMBOLSADO por outra): contador e alerta ficam intactos", async () => {
+    const c = await pedidoPagoPendenteDeEstorno();
+    await prisma.payment.update({ where: { id: c.paymentId }, data: { status: "REEMBOLSADO", refundAttempts: MAX_REFUND_AUTO_ATTEMPTS - 1 } });
+    const registrar = (orderService as unknown as { noteRefundFailure: (paymentId: string, order: { id: string; storeId: string }, origin: unknown, message: string) => Promise<void> }).noteRefundFailure.bind(orderService);
+    await registrar(c.paymentId, { id: c.orderId, storeId: c.store.id }, { source: "PANEL", userId: null, actor: "OWNER", reason: { code: "ITEM_EM_FALTA" } }, "texto qualquer");
+    const p = await prisma.payment.findUniqueOrThrow({ where: { id: c.paymentId } });
+    expect(p.refundAttempts).toBe(MAX_REFUND_AUTO_ATTEMPTS - 1); // não contou: o UPDATE só vale em ESTORNO_PENDENTE
+    expect(p.refundLastError).toBeNull();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(await stuckRows(c.store.id)).toBe(0); // e não alertou
+  });
+
   it("NÃO VAZA: `refundLastError`, `refundAttempts` e o texto de erro não saem no payment-status público nem no corpo do 202 público", async () => {
     const c = await pedidoPagoPendenteDeEstorno();
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -120,7 +135,7 @@ describe("API-06a — estorno travado", () => {
     await cancelar(c);
     const p = await prisma.payment.findUniqueOrThrow({ where: { id: c.paymentId } });
     expect(p.refundLastError).toBeTruthy(); // o texto existe no banco...
-    const status = await app.inject({ method: "GET", url: `/stores/${c.store.slug}/orders/${c.orderId}/payment-status` });
+    const status = await app.inject({ method: "GET", url: `/stores/${c.store.slug}/orders/${c.orderId}/payment-status`, headers: { "x-order-token": c.token } });
     expect(status.statusCode).toBe(200);
     for (const proibido of ["refundLastError", "refundAttempts", "Tentaremos novamente", "Não foi possível estornar", "refundContext", "idempotencyKey", "providerPaymentId"]) {
       expect(status.body, proibido).not.toContain(proibido);
