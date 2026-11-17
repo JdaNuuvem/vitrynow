@@ -84,7 +84,8 @@ export async function refundPayment(providerPaymentId: string, idempotencyKey?: 
 // só da notificação — sempre consultamos o provedor —, então o replay não altera nada de qualquer forma.
 function tsToleranceMs(): number {
   const seconds = Number(process.env.MP_WEBHOOK_TS_TOLERANCE_SEC);
-  return (Number.isFinite(seconds) && seconds > 0 ? seconds : 900) * 1000;
+  // Padrão 900 s; teto de 3600 s (uma janela maior vira convite a replay).
+  return Math.min(Number.isFinite(seconds) && seconds > 0 ? seconds : 900, 3600) * 1000;
 }
 
 export function verifyWebhookSignature(input: {

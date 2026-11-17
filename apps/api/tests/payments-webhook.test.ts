@@ -304,6 +304,71 @@ describe("API-03 — webhook e PIX", () => {
     expect(await prisma.orderStatusHistory.count({ where: { orderId, kind: "CANCEL" } })).toBe(1);
   });
 
+  // ───────────── A3-C1 (Nightingale): dinheiro saiu por fora com o pedido já finalizado ─────────────
+  async function pedidoConcluidoPago(ctx: Ctx) {
+    const { orderId, providerPaymentId } = await pixOrder(ctx);
+    await provider(providerPaymentId, "approved");
+    await webhook(providerPaymentId);
+    for (const to of ["CONFIRMADO", "EM_PREPARO", "PRONTO", "CONCLUIDO"]) {
+      const r = await app.inject({ method: "POST", url: `/api/orders/${orderId}/transition`, headers: { cookie: ctx.cookie }, payload: { to } });
+      expect(r.statusCode, to).toBe(200);
+    }
+    return { orderId, providerPaymentId };
+  }
+  const auditCount = (storeId: string, action: string) => prisma.auditLog.count({ where: { storeId, action } });
+
+  it.each([
+    ["refunded", "REEMBOLSADO", "estornado fora do sistema"],
+    ["charged_back", "CONTESTADO", "Contestação"],
+  ])("A3-C1: %s com o pedido já CONCLUIDO ⇒ conciliação visível (nota, alerta e auditoria), uma única vez", async (remoteStatus, internal, noteHint) => {
+    const ctx = await setup();
+    const { orderId, providerPaymentId } = await pedidoConcluidoPago(ctx);
+    const ws = wsSocket(ctx.storeId);
+    await provider(providerPaymentId, remoteStatus);
+    await Promise.all([webhook(providerPaymentId), webhook(providerPaymentId)]);
+    await webhook(providerPaymentId);
+    const o = await orderOf(orderId);
+    expect({ status: o?.status, payment: o?.payment?.status }).toEqual({ status: "CONCLUIDO", payment: internal });
+    expect(o?.payment?.reconcileNote).toContain(noteHint);
+    expect(ws.count("payment.reconcile_needed")).toBe(1);
+    await vi.waitFor(async () => expect(await auditCount(ctx.storeId, "order.refund_reconcile")).toBe(1));
+    const listed = json(await app.inject({ method: "GET", url: "/api/orders", headers: { cookie: ctx.cookie } })).orders.find((x: { id: string }) => x.id === orderId);
+    expect(listed.payment.reconcileRequired).toBe(true);
+  });
+
+  it("A3-C1: estorno por fora de pedido ATIVO cancela o pedido e NÃO é conciliação; chargeback de pedido ativo é conciliação", async () => {
+    const ctx = await setup();
+    const a = await pixOrder(ctx);
+    await provider(a.providerPaymentId, "approved");
+    await webhook(a.providerPaymentId);
+    await provider(a.providerPaymentId, "refunded");
+    await webhook(a.providerPaymentId);
+    const oa = await orderOf(a.orderId);
+    expect({ status: oa?.status, payment: oa?.payment?.status, note: oa?.payment?.reconcileNote }).toEqual({ status: "CANCELADO", payment: "REEMBOLSADO", note: null });
+
+    const b = await pixOrder(ctx);
+    await provider(b.providerPaymentId, "approved");
+    await webhook(b.providerPaymentId);
+    await provider(b.providerPaymentId, "charged_back");
+    await webhook(b.providerPaymentId);
+    const ob = await orderOf(b.orderId);
+    expect(ob?.payment).toMatchObject({ status: "CONTESTADO" });
+    expect(ob?.payment?.reconcileNote).toContain("Contestação");
+  });
+
+  it("R3: MP_WEBHOOK_TS_TOLERANCE_SEC tem teto de 3600 s", async () => {
+    const ctx = await setup();
+    const { providerPaymentId } = await pixOrder(ctx);
+    await provider(providerPaymentId, "approved");
+    process.env.MP_WEBHOOK_TS_TOLERANCE_SEC = "999999";
+    try {
+      expect((await webhook(providerPaymentId, String(Date.now() - 2 * 3600_000))).statusCode).toBe(401); // 2 h > teto de 1 h
+      expect((await webhook(providerPaymentId, String(Date.now() - 1800_000))).statusCode).toBe(200); // 30 min dentro do teto
+    } finally {
+      delete process.env.MP_WEBHOOK_TS_TOLERANCE_SEC;
+    }
+  });
+
   // ───────────── Cobrança órfã (SEC-17 / B16) ─────────────
   it("o pagamento nasce com a chave de idempotência ANTES de falar com o provedor, e a mesma chave vai para ele", async () => {
     const ctx = await setup();
@@ -429,6 +494,21 @@ describe("API-03 — webhook e PIX", () => {
     expect(days).toBeGreaterThan(29.5);
     expect(days).toBeLessThanOrEqual(30.01);
     expect(sub?.status).toBe("ACTIVE");
+  });
+
+  it("R6: dois pagamentos DISTINTOS da mesma assinatura aprovados em paralelo somam os períodos (60 dias), sem perder um", async () => {
+    const ctx = await setup();
+    const a = await subscriptionCheckout(ctx);
+    const b = await subscriptionCheckout(ctx);
+    getPayment.mockImplementation((async (id: string) => {
+      const sp = id === a.providerPaymentId ? a.sp : b.sp;
+      return { providerPaymentId: id, status: "approved", externalReference: sp.id, amountCents: sp.amountCents, currency: "BRL" };
+    }) as never);
+    await Promise.all([webhook(a.providerPaymentId), webhook(b.providerPaymentId)]);
+    const sub = await prisma.subscription.findUnique({ where: { storeId: ctx.storeId } });
+    const days = (sub!.currentPeriodEnd!.getTime() - Date.now()) / 86_400_000;
+    expect(days).toBeGreaterThan(59.5);
+    expect(days).toBeLessThanOrEqual(60.01);
   });
 
   it("assinatura: valor/referência divergentes não ativam; 'refunded' depois de aprovado não regride o estado", async () => {

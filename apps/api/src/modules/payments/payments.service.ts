@@ -138,17 +138,36 @@ export class PaymentService {
       case "CANCELADO":
         await this.orders.cancelBySystem(order.storeId, order.id, "PAGAMENTO_NAO_APROVADO", "WEBHOOK");
         return { applied: mapped };
-      case "REEMBOLSADO":
+      case "REEMBOLSADO": {
         // Estorno feito por fora (painel do provedor): o dinheiro já voltou, o pedido ativo não faz mais sentido.
         await this.orders.cancelBySystem(order.storeId, order.id, "PAGAMENTO_ESTORNADO_NO_PROVEDOR", "WEBHOOK");
+        // Pedido já finalizado (ex.: concluído): não dá para cancelar, mas o dinheiro voltou ⇒ conciliação visível (C5).
+        await this.reconcileIfNotCancelled(order, payment.id, "O pagamento foi estornado fora do sistema");
         return { applied: mapped };
+      }
       case "CONTESTADO":
-        // Sem automação de dinheiro (ADR-0007 §6.1): fica visível na auditoria para a loja e o suporte.
+        // Sem automação de dinheiro (ADR-0007 §6.1), mas NUNCA em silêncio: o dinheiro foi retirado pelo banco/MP.
         this.audit.log({ storeId: order.storeId, action: "payment.chargeback", targetType: "Payment", targetId: payment.id });
+        await this.markReconcile(order, payment.id, "Contestação (chargeback) aberta: o valor foi retirado. Conferir com o cliente.");
         return { applied: mapped };
       default:
         return { applied: mapped };
     }
+  }
+
+  // Dinheiro saiu por fora e o pedido não ficou CANCELADO: marca para conciliação manual, com alerta (nunca silencioso).
+  private async reconcileIfNotCancelled(order: { id: string; storeId: string }, paymentId: string, what: string) {
+    const current = await this.db.order.findUniqueOrThrow({ where: { id: order.id }, select: { status: true } });
+    if (current.status === "CANCELADO") return;
+    await this.markReconcile(order, paymentId, `${what}, mas o pedido está ${current.status}. Conferir com o cliente.`);
+  }
+
+  private async markReconcile(order: { id: string; storeId: string }, paymentId: string, note: string) {
+    // Condicional: só a primeira entrega grava e alerta; reentrega do mesmo webhook não repete o alerta.
+    const marked = await this.db.payment.updateMany({ where: { id: paymentId, reconcileNote: null }, data: { reconcileNote: note } });
+    if (marked.count !== 1) return;
+    this.publish(order.storeId, { type: "payment.reconcile_needed", orderId: order.id });
+    this.audit.log({ storeId: order.storeId, action: "order.refund_reconcile", targetType: "Order", targetId: order.id, metadata: { note } });
   }
 
   // ───────────── Assinatura da plataforma ─────────────
@@ -166,7 +185,11 @@ export class PaymentService {
     const activated = await this.db.$transaction(async (tx) => {
       const moved = await tx.subscriptionPayment.updateMany({ where: { id: payment.id, status: { in: originsFor(mapped) } }, data: { status: mapped } });
       if (moved.count !== 1) return null;
-      if (mapped === "APROVADO") await activateSubscription({ subscriptionId: payment.subscriptionId, planCode: payment.planCode }, tx);
+      if (mapped === "APROVADO") {
+        // Serializa ativações da mesma assinatura (dois pagamentos distintos em paralelo): cada uma lê o período já renovado.
+        await tx.$queryRaw`SELECT "id" FROM "Subscription" WHERE "id" = ${payment.subscriptionId} FOR UPDATE`;
+        await activateSubscription({ subscriptionId: payment.subscriptionId, planCode: payment.planCode }, tx);
+      }
       return mapped;
     });
     return activated ? { applied: activated } : "NOOP";
