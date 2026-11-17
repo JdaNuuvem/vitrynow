@@ -1,6 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Menu } from "@/core/domain/storefront";
-import { absoluteImageUrl, fetchMenuOnServer, INTERNAL_SECRET_HEADER, menuCacheTag, MENU_REVALIDATE_SECONDS, storeDescription } from "./serverMenu";
+import { absoluteImageUrl, fetchMenuOnServer, getMenuOnServer, INTERNAL_SECRET_HEADER, isInternalHost, menuCacheTag, MENU_REVALIDATE_SECONDS, storeDescription } from "./serverMenu";
+
+// unstable_cache só existe dentro do Next; aqui um duplo que repete o que importa: guarda o valor que a função
+// RETORNA (por chave) e, se ela lançar, não grava nada. Registra as opções recebidas.
+const cacheCalls: { keyParts: string[]; options: { revalidate?: number; tags?: string[] } }[] = [];
+const cacheStore = new Map<string, unknown>();
+vi.mock("next/cache", () => ({
+  unstable_cache: (fn: () => Promise<unknown>, keyParts: string[], options: { revalidate?: number; tags?: string[] }) => {
+    cacheCalls.push({ keyParts, options });
+    return async () => {
+      const key = keyParts.join("|");
+      if (!cacheStore.has(key)) cacheStore.set(key, await fn());
+      return cacheStore.get(key);
+    };
+  },
+}));
 
 const menu = {
   store: { name: "Pizzaria <b>Boa</b>", slug: "boa", address: "Rua A, 1", openingHours: "Seg a sex, 18h às 23h" },
@@ -15,12 +30,14 @@ describe("fetchMenuOnServer (ADR-0013)", () => {
     expect(await fetchMenuOnServer("boa", respond(200))).toEqual({ status: "ok", menu });
   });
 
-  it("pede à API interna, com revalidate curto e a tag do slug", async () => {
+  it("pede à API interna sem cache de resposta HTTP e sem seguir redirecionamento (ST-40/ST-41)", async () => {
     const fetchMock = respond(200);
     await fetchMenuOnServer("boa", fetchMock);
     const [url, init] = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(url).toBe("http://localhost:3001/stores/boa/menu");
-    expect(init.next).toEqual({ revalidate: MENU_REVALIDATE_SECONDS, tags: [menuCacheTag("boa")] });
+    expect(init.cache).toBe("no-store");
+    expect(init.redirect).toBe("error");
+    expect(init.next).toBeUndefined();
   });
 
   it("escapa o slug na URL", async () => {
@@ -31,6 +48,16 @@ describe("fetchMenuOnServer (ADR-0013)", () => {
 
   it("404 = loja inexistente", async () => {
     expect(await fetchMenuOnServer("x", respond(404, { error: "loja não encontrada" }))).toEqual({ status: "not-found" });
+  });
+
+  it("503 STORE_UNAVAILABLE (API-09) = loja suspensa, sem dados da loja", async () => {
+    expect(await fetchMenuOnServer("x", respond(503, { error: "Loja indisponível no momento.", code: "STORE_UNAVAILABLE" }))).toEqual({ status: "suspended" });
+  });
+
+  it("503 sem o código de suspensão é falha transitória, não suspensão", async () => {
+    expect(await fetchMenuOnServer("x", respond(503, { error: "falha" }))).toEqual({ status: "unavailable" });
+    const brokenBody = vi.fn().mockResolvedValue({ status: 503, ok: false, json: async () => Promise.reject(new Error("x")) }) as unknown as typeof fetch;
+    expect(await fetchMenuOnServer("x", brokenBody)).toEqual({ status: "unavailable" });
   });
 
   it("5xx e corpo inválido NÃO viram 404 (a loja pode existir)", async () => {
@@ -55,10 +82,8 @@ describe("fetchMenuOnServer e o limite da API (SEC-24)", () => {
     return (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit & { next?: unknown };
   };
 
-  it("continua em cache ISR: revalidate + tag, sem no-store e sem cabeçalho por visitante", async () => {
+  it("nunca manda cabeçalho por visitante (X-Forwarded-For): a resposta em cache é a mesma para todos", async () => {
     const init = await callOf();
-    expect(init.next).toMatchObject({ revalidate: MENU_REVALIDATE_SECONDS });
-    expect(init.cache).toBeUndefined();
     expect(Object.keys(init.headers as object).map((name) => name.toLowerCase())).not.toContain("x-forwarded-for");
   });
 
@@ -72,8 +97,66 @@ describe("fetchMenuOnServer e o limite da API (SEC-24)", () => {
     expect((await callOf()).headers).toMatchObject({ [INTERNAL_SECRET_HEADER]: "segredo-de-teste" });
   });
 
+  it("ST-41: o segredo NÃO acompanha a chamada se API_INTERNAL_URL não for host interno", async () => {
+    vi.stubEnv("API_INTERNAL_SECRET", "segredo-de-teste");
+    vi.stubEnv("API_INTERNAL_URL", "https://api.meucardapio.com.br");
+    expect((await callOf()).headers).toEqual({ Accept: "application/json" });
+  });
+
+  it("host interno: loopback, rede privada, nome de serviço do Docker e *.internal; público não", () => {
+    for (const url of ["http://localhost:3001", "http://127.0.0.1:3001", "http://10.0.0.5:3001", "http://172.18.0.3:3001", "http://192.168.1.9", "http://api:3001", "http://api.internal", "http://[::1]:3001"]) {
+      expect(isInternalHost(url), url).toBe(true);
+    }
+    for (const url of ["https://api.meucardapio.com.br", "http://8.8.8.8", "http://172.32.0.1", "http://169.254.169.254.evil.com", "ftp://api", "não é url"]) {
+      expect(isInternalHost(url), url).toBe(false);
+    }
+  });
+
   it("o segredo não é variável pública (NEXT_PUBLIC_* iria para o navegador)", () => {
     expect("API_INTERNAL_SECRET").not.toMatch(/^NEXT_PUBLIC_/);
+  });
+});
+
+describe("getMenuOnServer: o cache guarda o RESULTADO, não a resposta HTTP (ST-40)", () => {
+  afterEach(() => {
+    cacheStore.clear();
+    cacheCalls.length = 0;
+    vi.unstubAllGlobals();
+  });
+
+  const stubFetch = (response: Response) => vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+  const reply = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
+
+  it("cache de 30 s com a tag do slug e a chave por loja", async () => {
+    stubFetch(reply(200, menu));
+    await getMenuOnServer("boa");
+    expect(cacheCalls[0].options).toEqual({ revalidate: MENU_REVALIDATE_SECONDS, tags: [menuCacheTag("boa")] });
+    expect(cacheCalls[0].keyParts).toContain("boa");
+  });
+
+  it("200 → ok; depois a API devolve 503 STORE_UNAVAILABLE e 404: o valor novo substitui o antigo na revalidação", async () => {
+    stubFetch(reply(200, menu));
+    expect((await getMenuOnServer("boa")).status).toBe("ok");
+    cacheStore.clear(); // o cache expirou: a próxima chamada executa a função de novo
+    stubFetch(reply(503, { error: "x", code: "STORE_UNAVAILABLE" }));
+    expect(await getMenuOnServer("boa")).toEqual({ status: "suspended" });
+    cacheStore.clear();
+    stubFetch(reply(404, { error: "loja não encontrada" }));
+    expect(await getMenuOnServer("boa")).toEqual({ status: "not-found" });
+  });
+
+  it("suspensa é GRAVADA como resultado: não precisa nova chamada à API para continuar fechada", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(reply(503, { error: "x", code: "STORE_UNAVAILABLE" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await getMenuOnServer("boa");
+    await getMenuOnServer("boa");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("falha transitória (API com 500) NÃO é gravada: a cópia anterior continua e a página abre sem dados", async () => {
+    stubFetch(reply(500, { error: "boom" }));
+    expect(await getMenuOnServer("boa")).toEqual({ status: "unavailable" });
+    expect(cacheStore.size).toBe(0);
   });
 });
 
