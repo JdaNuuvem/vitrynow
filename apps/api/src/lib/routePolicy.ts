@@ -50,6 +50,7 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/store/settings": "blocked",
   "POST /api/store/availability": "blocked",
   "POST /api/store/hours": "blocked",
+  "POST /api/store/prep-times": "blocked",
   "POST /api/store/status": "blocked", // pausar/fechar por hoje: na Consulta já não há pedido novo para pausar
   "POST /api/users": "blocked",
   "POST /api/users/:id/delete": "blocked",

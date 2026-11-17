@@ -99,6 +99,8 @@ model Store {
   schedule      Json?   // B5/API-11: grade semanal + exceções + corte (modules/storeHours); null = sem grade (loja aberta quando ligada)
   pausedUntil   DateTime? // "Pausar 15/30/60 min": recusa pedido até este instante
   closedUntil   DateTime? // "Fechar por hoje": recusa pedido até a próxima abertura da grade
+  prepMinutesDelivery Int? // tempo médio de preparo (5..240) para a previsão ao cliente; null = sem previsão (API-57)
+  prepMinutesPickup   Int?
   minOrderCents Int?    // pedido mínimo do storefront público; null = sem mínimo
   deliveryEnabled Boolean @default(true)
   pickupEnabled   Boolean @default(true)
