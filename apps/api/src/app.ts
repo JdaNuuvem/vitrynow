@@ -28,6 +28,7 @@ import mfaRoutes from "./routes/mfa";
 import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
 import jobsPlugin from "./jobs/plugin";
 import subscriptionGate from "./plugins/subscriptionGate";
+import storeHoursRoutes from "./modules/storeHours/storeHours.module";
 
 export function buildApp() {
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
@@ -86,6 +87,7 @@ export function buildApp() {
   app.register(auditRoutes);
   app.register(feedbackRoutes);
   app.register(subscriptionRoutes);
+  app.register(storeHoursRoutes);
   app.register(noticeRoutes);
   app.register(mfaRoutes);
 

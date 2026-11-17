@@ -95,7 +95,10 @@ model Store {
   customDomain String? // guardado como referência; roteamento de domínio próprio é infra, não app
   address       String? // exibido no cardápio público
   whatsapp      String? // só dígitos com DDI, ex. "5521999999999" — vira link wa.me
-  openingHours  String? // texto livre, ex. "Seg a sáb, 09:00 às 17:00"
+  openingHours  String? // texto livre, ex. "Seg a sáb, 09:00 às 17:00" (só informativo; a grade fica em `schedule`)
+  schedule      Json?   // B5/API-11: grade semanal + exceções + corte (modules/storeHours); null = sem grade (loja aberta quando ligada)
+  pausedUntil   DateTime? // "Pausar 15/30/60 min": recusa pedido até este instante
+  closedUntil   DateTime? // "Fechar por hoje": recusa pedido até a próxima abertura da grade
   minOrderCents Int?    // pedido mínimo do storefront público; null = sem mínimo
   deliveryEnabled Boolean @default(true)
   pickupEnabled   Boolean @default(true)
