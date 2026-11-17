@@ -17,6 +17,19 @@ export function internalApiUrl(): string {
   return (process.env.API_INTERNAL_URL ?? "http://localhost:3001").replace(/\/+$/, "");
 }
 
+// SEC-24: a chamada servidor-a-servidor se identifica à API com um segredo de serviço (variável de ambiente, nunca no
+// código nem no navegador). Sem a variável não manda nada e a API usa o IP da conexão. O IP do visitante NÃO é
+// repassado de propósito: ler `headers()` aqui tornaria a página dinâmica e acabaria com o cache ISR; a resposta
+// guardada é a mesma para todos os visitantes e a API só é chamada na revalidação (≈ 1 chamada a cada 30 s por loja).
+export const INTERNAL_SECRET_HEADER = "x-internal-service-secret";
+
+function internalHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  const secret = process.env.API_INTERNAL_SECRET;
+  if (secret) headers[INTERNAL_SECRET_HEADER] = secret;
+  return headers;
+}
+
 export function menuCacheTag(slug: string): string {
   return `menu:${slug}`;
 }
@@ -24,7 +37,7 @@ export function menuCacheTag(slug: string): string {
 export async function fetchMenuOnServer(slug: string, fetchImpl: typeof fetch = fetch): Promise<ServerMenuResult> {
   try {
     const response = await fetchImpl(`${internalApiUrl()}/stores/${encodeURIComponent(slug)}/menu`, {
-      headers: { Accept: "application/json" },
+      headers: internalHeaders(),
       next: { revalidate: MENU_REVALIDATE_SECONDS, tags: [menuCacheTag(slug)] },
     });
     // 404 = a loja não existe. Qualquer outro erro não prova isso, então não vira 404.

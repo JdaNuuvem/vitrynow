@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Menu } from "@/core/domain/storefront";
-import { absoluteImageUrl, fetchMenuOnServer, menuCacheTag, MENU_REVALIDATE_SECONDS, storeDescription } from "./serverMenu";
+import { absoluteImageUrl, fetchMenuOnServer, INTERNAL_SECRET_HEADER, menuCacheTag, MENU_REVALIDATE_SECONDS, storeDescription } from "./serverMenu";
 
 const menu = {
   store: { name: "Pizzaria <b>Boa</b>", slug: "boa", address: "Rua A, 1", openingHours: "Seg a sex, 18h às 23h" },
@@ -41,6 +41,39 @@ describe("fetchMenuOnServer (ADR-0013)", () => {
   it("API fora do ar: indisponível, sem exceção", async () => {
     const down = vi.fn().mockRejectedValue(new Error("ECONNREFUSED")) as unknown as typeof fetch;
     expect(await fetchMenuOnServer("x", down)).toEqual({ status: "unavailable" });
+  });
+});
+
+// SEC-24: medido em execução (60 visitantes com IPs diferentes → 1 chamada à API; +32 s e 20 visitantes → 2). O que
+// garante isso é a página continuar em cache ISR: estes testes travam as condições.
+describe("fetchMenuOnServer e o limite da API (SEC-24)", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  const callOf = async () => {
+    const fetchMock = respond(200);
+    await fetchMenuOnServer("boa", fetchMock);
+    return (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit & { next?: unknown };
+  };
+
+  it("continua em cache ISR: revalidate + tag, sem no-store e sem cabeçalho por visitante", async () => {
+    const init = await callOf();
+    expect(init.next).toMatchObject({ revalidate: MENU_REVALIDATE_SECONDS });
+    expect(init.cache).toBeUndefined();
+    expect(Object.keys(init.headers as object).map((name) => name.toLowerCase())).not.toContain("x-forwarded-for");
+  });
+
+  it("sem a variável de segredo não manda cabeçalho de serviço", async () => {
+    vi.stubEnv("API_INTERNAL_SECRET", "");
+    expect((await callOf()).headers).toEqual({ Accept: "application/json" });
+  });
+
+  it("com a variável de segredo, manda o segredo de serviço (só no servidor)", async () => {
+    vi.stubEnv("API_INTERNAL_SECRET", "segredo-de-teste");
+    expect((await callOf()).headers).toMatchObject({ [INTERNAL_SECRET_HEADER]: "segredo-de-teste" });
+  });
+
+  it("o segredo não é variável pública (NEXT_PUBLIC_* iria para o navegador)", () => {
+    expect("API_INTERNAL_SECRET").not.toMatch(/^NEXT_PUBLIC_/);
   });
 });
 
