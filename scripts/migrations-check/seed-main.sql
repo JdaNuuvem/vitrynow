@@ -20,3 +20,14 @@ INSERT INTO "OrderStatusHistory" ("id","orderId","status","createdAt") VALUES ('
 -- o2: pedido em andamento (não pode ganhar canceledAt)
 INSERT INTO "Order" ("id","storeId","code","type","status","updatedAt") VALUES ('o2','s1','0002','BALCAO','EM_PREPARO', now());
 INSERT INTO "OrderStatusHistory" ("id","orderId","status") VALUES ('h2a','o2','PENDENTE'), ('h2b','o2','EM_PREPARO');
+
+-- Cupons LEGADOS que a regra nova do Leonardo (CA-CP-01..12) não aceitaria no cadastro: percentual acima de 100, 100% sem
+-- limite de usos, fixo zero, código curto demais, validade já passada. Qualquer migração futura que restrinja cupom (CHECK,
+-- NOT NULL, índice) roda sobre eles no S3/S4: tem de NEUTRALIZAR (ex.: active=false) e nunca falhar nem apagar.
+INSERT INTO "Coupon" ("id","storeId","code","discountType","discountValue","maxUses","usedCount","active") VALUES
+  ('c_leg150','s1','LEGADO150','PERCENT',150,NULL,0,true),
+  ('c_leg100','s1','LEGADO100','PERCENT',100,NULL,3,true),
+  ('c_legfix0','s1','LEGFIXO0','FIXED',0,NULL,0,true),
+  ('c_legcurto','s1','AB','PERCENT',10,5,0,true);
+INSERT INTO "Coupon" ("id","storeId","code","discountType","discountValue","maxUses","usedCount","active","expiresAt")
+  VALUES ('c_legvenc','s1','LEGVENCIDO','PERCENT',20,NULL,1,true, now() - interval '30 days');
