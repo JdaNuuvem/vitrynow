@@ -102,11 +102,30 @@ describe("TRUST_PROXY_CIDR em produção (SEC-22, ST-36)", () => {
     expect(prod("172.29.250.10/32, 10.0.0.5")()).toEqual(["172.29.250.10/32", "10.0.0.5"]);
   });
 
-  it("`none` continua valendo e fora de produção a política não bloqueia o desenvolvimento", () => {
+  it("`none` continua valendo e só `development` e `test` ficam livres da política", () => {
     expect(prod("none")()).toBe(false);
-    process.env.NODE_ENV = "development";
+    for (const env of ["development", "test"]) {
+      process.env.NODE_ENV = env;
+      process.env.TRUST_PROXY_CIDR = "8.0.0.0/8";
+      expect(trustProxySetting(), env).toEqual(["8.0.0.0/8"]);
+    }
+  });
+
+  it("NODE_ENV escrito diferente de production (prod, staging, vazio, ausente) NÃO desliga a política", () => {
     process.env.TRUST_PROXY_CIDR = "8.0.0.0/8";
-    expect(trustProxySetting()).toEqual(["8.0.0.0/8"]);
+    for (const env of ["prod", "Production", "staging", "", undefined]) {
+      if (env === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = env;
+      expect(() => trustProxySetting(), String(env)).toThrow(/TRUST_PROXY_CIDR recusado/);
+    }
+  });
+
+  it("a OBRIGATORIEDADE da variável continua só em production (dev sem NODE_ENV e sem proxy sobe normal)", () => {
+    delete process.env.NODE_ENV;
+    delete process.env.TRUST_PROXY_CIDR;
+    expect(trustProxySetting()).toBe(false);
+    process.env.NODE_ENV = "production";
+    expect(() => trustProxySetting()).toThrow(/não configurado em produção/);
   });
 
   it("mensagens dizem o que fazer", () => {
