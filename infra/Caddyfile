@@ -1,7 +1,5 @@
 {
 	email {$ACME_EMAIL}
-	# módulo de terceiros: precisa de ordem explícita (ver infra/caddy/Dockerfile)
-	order rate_limit before reverse_proxy
 }
 
 {$DOMAIN} {
@@ -55,7 +53,11 @@
 				key {remote_host}
 				events 120
 				window 1m
+				# ST-45: IPv6 agrupado em /64 (um atacante com um /64 tem 2^64 endereços; sem isto cada um teria o seu limite).
+				ipv6_prefix 64
 			}
+			# ST-49: o módulo varre e apaga limitadores vencidos (a cada 1 min por padrão); explícito para o runbook.
+			sweep_interval 1m
 		}
 		reverse_proxy web:3000
 	}

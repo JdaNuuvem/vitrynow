@@ -178,7 +178,19 @@ for v in JWT_SECRET MFA_HMAC_KEY API_INTERNAL_SECRET POSTGRES_PASSWORD WEB_ORIGI
 done
 rm -f "$ENVF.sem"
 
-echo "== 9 limite de requisições por IP em /loja/* (SEC-26 / ST-44); fica no fim porque a rajada limita este IP por 1 min"
+echo "== 9 limite de requisições por IP em /loja/* (SEC-26 / ST-44, ST-45, ST-48); fica no fim porque a rajada limita o IP do host por 1 min"
+# 9a visitantes DISTINTOS não se bloqueiam: 10 containers, cada um com o seu IP na rede, 100 requisições cada (< 120/min) => 0 x 429
+tot429=0
+for n in 1 2 3 4 5 6 7 8 9 10; do
+  r="$(docker run --rm --network "${PROJ}_default" node:20-alpine node -e "
+    const http=require('http');let c429=0,ok=0,i=0;
+    const next=()=>{ if(i>=100){console.log(c429+' '+ok);return;} i++;
+      http.get('http://caddy:80/loja/distinto-$n-'+i,r=>{ r.resume(); if(r.statusCode===429)c429++; else ok++; r.on('end',next); }).on('error',()=>{ ok++; next(); }); };
+    next();" 2>&1 | tail -1)"
+  tot429=$((tot429 + ${r%% *}))
+done
+[ "$tot429" = 0 ] && check ok "10 IPs distintos x 100 requisições: 0 respostas 429 (visitantes diferentes não se bloqueiam)" || check fail "visitantes distintos foram limitados ($tot429 respostas 429)"
+# 9b um IP só, com X-Forwarded-For diferente a cada requisição, bate no teto
 pass=0; lim=0; ra=""
 for i in $(seq 1 150); do
   out="$(curl -s -o /dev/null -D - -w 'CODE=%{http_code}' -H "X-Forwarded-For: 10.7.$((i % 250)).$((i % 250))" "http://127.0.0.1:$PORT/loja/slug-inexistente-$i")"
@@ -191,6 +203,49 @@ echo "   150 requisições a /loja/<aleatório>, cada uma com X-Forwarded-For di
 [ -n "$ra" ] && check ok "a resposta 429 traz Retry-After ($ra)" || check fail "429 sem Retry-After"
 h="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health")"; s="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/stores/nao-existe")"
 [ "$h" = 200 ] && [ "$s" = 404 ] && check ok "/health ($h) e a API ($s) seguem livres durante o limite de /loja/*" || check fail "o limite de /loja/* afetou outras rotas (health=$h, api=$s)"
+# 9c ST-48: formas de URL que o Next entrega como /loja/<slug> e o Caddy poderia não classificar em /loja/*. O IP JÁ está limitado:
+# a forma canônica tem de dar 429 (controle) e NENHUMA variante pode devolver a página da loja (200 com o nome) = contornou o limite.
+can="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/loja/$slug")"
+[ "$can" = 429 ] && check ok "controle: a forma canônica /loja/$slug está limitada agora (429)" || check fail "controle falhou: /loja/$slug deu $can (esperado 429)"
+bypass=""; ntot=0
+for form in "//loja/$slug" "/./loja/$slug" "/x/../loja/$slug" "/LOJA/$slug" "/%6coja/$slug" "/loja%2F$slug" "/loja;x/$slug"; do
+  n429=0; nweb=0; nstore=0
+  for k in $(seq 1 30); do
+    resp="$(curl -s --path-as-is -w '|CODE=%{http_code}' "http://127.0.0.1:$PORT$form")"; c="${resp##*CODE=}"; ntot=$((ntot+1))
+    if [ "$c" = 429 ]; then n429=$((n429+1)); else nweb=$((nweb+1)); case "$resp" in *"Loja Smoke SSR"*) [ "$c" = 200 ] && nstore=$((nstore+1));; esac; fi
+  done
+  echo "   forma [$form]: 30 req => $n429 limitadas, $nweb chegaram ao web, $nstore serviram a página da loja"
+  [ "$nstore" -gt 0 ] && bypass="$bypass [$form]"
+done
+[ -z "$bypass" ] && check ok "ST-48: nenhuma das 7 formas de URL serve a página da loja com o IP limitado ($ntot requisições)" || check fail "ST-48: contornam o limite de /loja/*:$bypass"
+# 9d ST-45 (IPv6): sem IPv6 na rede do smoke não há como testar com curl -6; confere que a zona agrupa IPv6 em /64 e que o módulo varre chaves (ST-49)
+grep -q 'ipv6_prefix 64' "$ROOT/infra/Caddyfile" && check ok "ST-45: a zona de limite agrupa IPv6 em /64 (ipv6_prefix 64); sem AAAA no piloto de qualquer forma" || check fail "ST-45: Caddyfile sem ipv6_prefix 64"
+grep -q 'sweep_interval' "$ROOT/infra/Caddyfile" && check ok "ST-49: varredura de chaves vencidas configurada (sweep_interval) e container com limite de memória" || check fail "ST-49: sem sweep_interval no Caddyfile"
+mem="$(docker inspect -f '{{.HostConfig.Memory}}' "$("${DC[@]}" ps -q caddy)")"
+[ "$mem" -gt 0 ] 2>/dev/null && check ok "ST-49: o container do Caddy tem teto de memória ($((mem/1024/1024)) MB)" || check fail "ST-49: container do Caddy sem limite de memória"
+
+echo "== 10 Caddy com privilégio mínimo, redes separadas e rastreabilidade do build (INF-18)"
+CID="$("${DC[@]}" ps -q caddy)"
+cuid="$(docker exec "$CID" id -u 2>/dev/null | tr -d '\r')"
+[ "$cuid" = 65532 ] && check ok "o Caddy roda SEM root (uid $cuid) e mesmo assim atende 80/443 (sem setcap no binário copiado)" || check fail "uid do Caddy = '$cuid' (esperado 65532)"
+caps="$(docker inspect -f '{{.HostConfig.CapDrop}} | {{.HostConfig.CapAdd}} | ro={{.HostConfig.ReadonlyRootfs}} | mem={{.HostConfig.Memory}}' "$CID")"
+echo "   $caps"
+case "$caps" in *ALL*NET_BIND_SERVICE*ro=true*) check ok "cap_drop ALL + só NET_BIND_SERVICE; sistema de arquivos somente leitura";; *) check fail "hardening do Caddy incompleto: $caps";; esac
+docker exec "$CID" sh -c 'touch /etc/caddy/x 2>/dev/null' && check fail "o Caddy conseguiu ESCREVER em /etc/caddy (sistema de arquivos deveria ser somente leitura)" || check ok "escrever em /etc/caddy é recusado (somente leitura)"
+docker exec "$CID" sh -c 'touch /data/.w && rm /data/.w && touch /config/.w && rm /config/.w' && check ok "/data (conta ACME) e /config são graváveis pelo usuário sem privilégio" || check fail "o Caddy sem root não consegue gravar em /data ou /config"
+for i in $(seq 1 20); do hs="$(docker inspect -f '{{.State.Health.Status}}' "$CID")"; [ "$hs" = healthy ] && break; sleep 3; done
+[ "$hs" = healthy ] && check ok "healthcheck do Caddy: healthy" || check fail "healthcheck do Caddy: $hs"
+# redes: o banco só existe na rede de dados (interna). Caddy e web não o enxergam; a API sim (controle positivo).
+cres="$(docker exec "$CID" nslookup postgres 2>&1 | tr -d '\r' | tr '\n' ' ')"; wres="$("${DC[@]}" exec -T web nslookup postgres 2>&1 | tr -d '\r' | tr '\n' ' ')"
+case "$cres" in *"can't resolve"*|*NXDOMAIN*|*"server can't find"*) check ok "o Caddy NÃO resolve 'postgres' (rede de dados isolada)";; *) check fail "o Caddy enxerga o banco: $cres";; esac
+case "$wres" in *"can't resolve"*|*NXDOMAIN*|*"server can't find"*) check ok "o web NÃO resolve 'postgres' (só a API fala com o banco)";; *) check fail "o web enxerga o banco: $wres";; esac
+ares="$("${DC[@]}" exec -T api node -e "require('dns').lookup('postgres',(e,a)=>console.log(e?'ERRO '+e.code:'ok '+a))" 2>&1 | tr -d '\r' | tail -1)"
+case "$ares" in ok*) check ok "controle: a API resolve 'postgres' ($ares)";; *) check fail "controle falhou: a API não resolve o banco ($ares)";; esac
+# rastreabilidade (BOARD): versão, build-info (módulo e commit) e digest da imagem final
+echo "   caddy version: $(docker exec "$CID" caddy version 2>&1 | head -1)"
+echo "   módulo no binário: $(docker exec "$CID" caddy build-info 2>&1 | tr -d '\r' | grep -i 'caddy-ratelimit' | head -1)"
+echo "   imagem final (id): $(docker inspect -f '{{.Image}}' "$CID")"
+docker exec "$CID" caddy build-info 2>&1 | tr -d '\r' | grep -qi 'caddy-ratelimit.*5625512f24f6' && check ok "o binário contém o módulo no commit travado 5625512f24f6" || check fail "build-info não mostra o commit esperado do módulo"
 
 echo; echo "RESULTADO: $PASS ok, $FAILS falhas"
 [ "$FAILS" -eq 0 ]
