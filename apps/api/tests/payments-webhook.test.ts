@@ -334,7 +334,7 @@ describe("API-03 — webhook e PIX", () => {
     await vi.waitFor(async () => expect(await auditCount(ctx.storeId, "order.refund_reconcile")).toBe(1), { timeout: 10_000, interval: 50 });
     const listed = json(await app.inject({ method: "GET", url: "/api/orders", headers: { cookie: ctx.cookie } })).orders.find((x: { id: string }) => x.id === orderId);
     expect(listed.payment.reconcileRequired).toBe(true);
-  });
+  }, 60_000); // pedido + webhook + 4 transições: sob carga passava de 15 s; o que o teste afirma não mudou
 
   it("A3-C1: estorno por fora de pedido ATIVO cancela o pedido e NÃO é conciliação; chargeback de pedido ativo é conciliação", async () => {
     const ctx = await setup();
@@ -367,7 +367,7 @@ describe("API-03 — webhook e PIX", () => {
     const pubB = json(await app.inject({ method: "GET", url: `/stores/${ctx.slug}/orders/${b.orderId}/payment-status`, headers: orderTokenHeader(b.orderId) }));
     expect(pubB.cancelReason).toBeNull();
     expect(ob?.payment?.reconcileNote).toContain("Contestação");
-  });
+  }, 60_000);
 
   it("R3: MP_WEBHOOK_TS_TOLERANCE_SEC tem teto de 3600 s", async () => {
     const ctx = await setup();
