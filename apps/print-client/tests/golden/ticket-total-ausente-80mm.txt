@@ -1,0 +1,20 @@
+              Lanchonete Boa Vista
+                  PEDIDO #5400
+                    ENTREGA
+                17/11/2026 11:05
+------------------------------------------------
+Cliente: Lia Nunes
+Telefone: (21) 96666-5555
+Endereço: Rua Nova, 10
+------------------------------------------------
+2x X-Burger                             R$ 50,00
+------------------------------------------------
+Subtotal                                R$ 50,00
+Desconto (BEM10)                        -R$ 5,00
+Taxa de entrega                          R$ 6,00
+    TOTAL NÃO INFORMADO - CONFERIR NO PAINEL
+CALCULADO                               R$ 51,00
+------------------------------------------------
+    COBRAR (TOTAL NÃO INFORMADO) EM DINHEIRO
+              TROCO PARA R$ 100,00
+------------------------------------------------

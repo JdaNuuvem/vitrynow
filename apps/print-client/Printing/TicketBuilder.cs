@@ -98,7 +98,9 @@ namespace MeuCardapio.PrintClient.Printing
             // 5) valores
             long fee = Math.Max(0, order.DeliveryFeeCents), tip = Math.Max(0, order.TipCents);
             long subtotal = order.SubtotalCents ?? sumLines;
-            long discount = order.DiscountCents ?? Math.Max(0, sumLines + fee + tip - order.TotalCents);
+            // Total AUSENTE (versao desencontrada ou bug; a API real sempre manda): nao deriva desconto de um total que nao existe.
+            bool hasTotal = order.HasTotalCents;
+            long discount = order.DiscountCents ?? (hasTotal ? Math.Max(0, sumLines + fee + tip - order.TotalCents) : 0);
             if (discount > 0 || fee > 0 || tip > 0)
             {
                 doc.Pair("Subtotal", Money(subtotal));
@@ -110,7 +112,16 @@ namespace MeuCardapio.PrintClient.Printing
                 if (fee > 0) doc.Pair("Taxa de entrega", Money(fee));
                 if (tip > 0) doc.Pair("Gorjeta", Money(tip));
             }
-            doc.Pair("TOTAL", Money(order.TotalCents), bold: true, scale: 1.2f);
+            if (hasTotal) doc.Pair("TOTAL", Money(order.TotalCents), bold: true, scale: 1.2f);
+            else
+            {
+                // PC-21 (parecer Nightingale): total AUSENTE nunca vira "TOTAL R$ 0,00" nem "COBRAR R$ 0,00" (o caixa cobraria zero). O papel diz
+                // que o total nao veio e, se os itens permitem, mostra o valor CALCULADO (itens + taxa + gorjeta - desconto) marcado como tal.
+                doc.Text("TOTAL NÃO INFORMADO - CONFERIR NO PAINEL", TicketAlign.Center, bold: true, scale: 1.2f);
+                bool subtotalAgrees = !order.SubtotalCents.HasValue || order.SubtotalCents.Value == sumLines;
+                long calc = sumLines + fee + tip - discount;
+                if (sumLines > 0 && subtotalAgrees && calc >= 0) doc.Pair("CALCULADO", Money(calc), bold: true);
+            }
 
             // 6) pagamento em destaque (B4.2)
             doc.Rule();
@@ -173,7 +184,7 @@ namespace MeuCardapio.PrintClient.Printing
         {
             var lines = new List<string>();
             string method = (o.PaymentMethod ?? "").Trim().ToUpperInvariant();
-            string total = Money(o.TotalCents);
+            string total = o.HasTotalCents ? Money(o.TotalCents) : "(TOTAL NÃO INFORMADO)";
 
             // Total zero (cupom que cobre o pedido inteiro; B4.2, RN-CP-12, CA-CP-07/18): a decisao e pelo TOTAL, qualquer paymentStatus
             // ou forma de pagamento, e vale tambem na 2a via. Nao imprime "COBRAR R$ 0,00" nem "PIX - CONFERIR NA HORA".
@@ -195,10 +206,11 @@ namespace MeuCardapio.PrintClient.Printing
             {
                 case "DINHEIRO":
                     lines.Add("COBRAR " + total + " EM DINHEIRO");
-                    if (o.ChangeForCents.HasValue && o.ChangeForCents.Value > o.TotalCents)
+                    if (o.ChangeForCents.HasValue && (!o.HasTotalCents || o.ChangeForCents.Value > o.TotalCents))
                     {
                         lines.Add("TROCO PARA " + Money(o.ChangeForCents.Value));
-                        lines.Add("LEVAR " + Money((long)o.ChangeForCents.Value - o.TotalCents) + " DE TROCO");
+                        // Sem o total nao ha como dizer quanto levar de troco: nunca calcula contra um total ausente.
+                        if (o.HasTotalCents) lines.Add("LEVAR " + Money((long)o.ChangeForCents.Value - o.TotalCents) + " DE TROCO");
                     }
                     break;
                 case "CREDITO": lines.Add("COBRAR " + total + " NO CARTÃO (crédito)"); break;

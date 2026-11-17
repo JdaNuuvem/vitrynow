@@ -130,6 +130,25 @@ namespace MeuCardapio.PrintClient
             return new PrintableOrder { IsTest = true, Code = "TESTE", StoreName = "Lanchonete Boa Vista", TotalCents = 0, Items = new List<PrintableOrderItem>() };
         }
 
+        // Pedido SEM totalCents (versao desencontrada): entrega com taxa, cupom, dinheiro e troco. Desconto informado, total ausente.
+        internal static PrintableOrder AbsentTotal()
+        {
+            var json = "{\"orderId\":\"ord-5400\",\"code\":\"5400\",\"type\":\"DELIVERY\",\"storeName\":\"Lanchonete Boa Vista\",\"customerName\":\"Lia Nunes\",\"customerPhone\":\"(21) 96666-5555\","
+                + "\"address\":\"Rua Nova, 10\",\"createdAt\":\"2026-11-17T14:05:00.000Z\",\"deliveryFeeCents\":600,\"tipCents\":0,\"subtotalCents\":5000,\"discountCents\":500,\"couponCode\":\"BEM10\","
+                + "\"paymentMethod\":\"DINHEIRO\",\"changeForCents\":10000,\"paymentStatus\":\"A_COBRAR\","
+                + "\"items\":[{\"productName\":\"X-Burger\",\"quantity\":2,\"unitPriceCents\":2500}]}";
+            return Newtonsoft.Json.JsonConvert.DeserializeObject<PrintableOrder>(json);
+        }
+
+        // Balcao, sem forma de pagamento, sem desconto e sem taxa, total AUSENTE.
+        internal static PrintableOrder AbsentTotalCounter()
+        {
+            var o = AbsentTotal();
+            o.OrderId = "ord-5401"; o.Code = "5401"; o.Type = "BALCAO"; o.DeliveryFeeCents = 0; o.DiscountCents = null; o.CouponCode = null;
+            o.SubtotalCents = null; o.PaymentMethod = null; o.ChangeForCents = null; o.Address = null;
+            return o;
+        }
+
         internal static PrintableOrder ZeroTotalReprint()
         {
             var o = ZeroTotal();
@@ -194,6 +213,7 @@ namespace MeuCardapio.PrintClient
             DateAndMoney();
             PaymentBlock();
             TotalZero();
+            AbsentTotals();
             Writer();
             Golden();
             Probe();
@@ -534,6 +554,47 @@ namespace MeuCardapio.PrintClient
                 d.Lines[last].Divider && d.Lines[last - 1].Text == "LEVAR R$ 4,00 DE TROCO" && d.Lines[last - 1].Bold && d.Lines[last - 1].Scale > 1f && d.Lines[last - 1].Align == TicketAlign.Center);
         }
 
+        // PC-21 (parecer Nightingale): total AUSENTE nunca imprime "TOTAL R$ 0,00" nem "COBRAR R$ 0,00".
+        static void AbsentTotals()
+        {
+            Func<PrintableOrder, int, string> paper = (o, mm) => TextTicketWriter.RenderText(Build(o, mm), TicketText.ColumnsFor(mm));
+            Func<string, PrintableOrder> fromJson = j => Newtonsoft.Json.JsonConvert.DeserializeObject<PrintableOrder>(j);
+            foreach (var mm in new[] { 58, 80 })
+            {
+                var t = paper(AbsentTotal(), mm);
+                Check("total ausente (" + mm + " mm): diz 'TOTAL NÃO INFORMADO - CONFERIR NO PAINEL' e NUNCA 'TOTAL R$ 0,00'", t.Replace("\n", " ").Contains("TOTAL NÃO INFORMADO") && !t.Contains("TOTAL                    R$ 0,00") && !t.Contains("R$ 0,00"));
+                Check("total ausente (" + mm + " mm): mostra o valor CALCULADO (itens R$ 50 + taxa R$ 6 - desconto R$ 5 = R$ 51,00)", t.Contains("CALCULADO") && t.Contains("R$ 51,00"));
+                Check("total ausente (" + mm + " mm): a linha de pagamento nunca manda cobrar R$ 0,00", !t.Contains("COBRAR R$ 0,00") && t.Contains("TOTAL NÃO INFORMADO"));
+            }
+            var pay = string.Join("|", TicketBuilder.PaymentLines(AbsentTotal(), "DELIVERY"));
+            Check("total ausente em dinheiro com troco: 'COBRAR (TOTAL NÃO INFORMADO) EM DINHEIRO' e 'TROCO PARA R$ 100,00', SEM 'LEVAR' (nao calcula contra total ausente)",
+                pay == "COBRAR (TOTAL NÃO INFORMADO) EM DINHEIRO|TROCO PARA R$ 100,00");
+            Check("total ausente no balcao sem forma de pagamento: 'COBRAR NO CAIXA (TOTAL NÃO INFORMADO)'", string.Join("|", TicketBuilder.PaymentLines(AbsentTotalCounter(), "BALCAO")) == "COBRAR NO CAIXA (TOTAL NÃO INFORMADO)");
+            foreach (var m in new[] { "CREDITO", "DEBITO", "VR", "VA" })
+            {
+                var c = AbsentTotalCounter(); c.PaymentMethod = m;
+                Check("total ausente no cartao (" + m + "): sem 'R$ 0,00'", !string.Join("|", TicketBuilder.PaymentLines(c, "BALCAO")).Contains("R$ 0,00"));
+            }
+            var pix = AbsentTotalCounter(); pix.PaymentMethod = "PIX";
+            Check("total ausente com PIX sem prova: continua 'PIX - CONFERIR NA HORA'", string.Join("|", TicketBuilder.PaymentLines(pix, "BALCAO")) == "PIX - CONFERIR NA HORA");
+            // sem desconto informado: NAO inventa desconto a partir de um total que nao existe
+            var counter = paper(AbsentTotalCounter(), 58);
+            Check("total ausente sem desconto informado: nao imprime 'Desconto' (nao deriva de total ausente) e calcula R$ 50,00", !counter.Contains("Desconto") && counter.Contains("CALCULADO") && counter.Contains("R$ 50,00"));
+            // sem itens: nao ha o que calcular
+            var empty = AbsentTotalCounter(); empty.Items = new List<PrintableOrderItem>();
+            Check("total ausente sem itens: avisa que o total nao veio e NAO mostra CALCULADO", paper(empty, 58).Contains("TOTAL NÃO INFORMADO") && !paper(empty, 58).Contains("CALCULADO"));
+            // subtotal informado que nao bate com os itens: nao calcula
+            var diverge = AbsentTotal(); diverge.SubtotalCents = 4000;
+            Check("total ausente com subtotal que nao bate com os itens: NAO mostra CALCULADO (nao chuta)", paper(diverge, 58).Contains("TOTAL NÃO INFORMADO") && !paper(diverge, 58).Contains("CALCULADO"));
+            // null explicito e campo ausente se comportam igual
+            var viaNull = fromJson("{\"orderId\":\"n\",\"code\":\"7\",\"type\":\"BALCAO\",\"totalCents\":null,\"items\":[{\"productName\":\"A\",\"quantity\":1,\"unitPriceCents\":1000}]}");
+            var viaMissing = fromJson("{\"orderId\":\"n\",\"code\":\"7\",\"type\":\"BALCAO\",\"items\":[{\"productName\":\"A\",\"quantity\":1,\"unitPriceCents\":1000}]}");
+            Check("totalCents null e campo ausente imprimem o mesmo papel (total nao informado, calculado R$ 10,00)", paper(viaNull, 58) == paper(viaMissing, 58) && paper(viaNull, 58).Contains("TOTAL NÃO INFORMADO") && paper(viaNull, 58).Contains("R$ 10,00"));
+            // total PRESENTE continua igual (golden dos demais fixtures cobre); 0 escrito segue sendo "TOTAL R$ 0,00" quando nao e nada-a-cobrar
+            var present = AbsentTotalCounter(); present.TotalCents = 5000;
+            Check("total presente: continua 'TOTAL R$ 50,00' e nenhuma linha de total nao informado", paper(present, 58).Contains("R$ 50,00") && !paper(present, 58).Contains("NÃO INFORMADO"));
+        }
+
         // PC-19 (RN-CP-12, CA-CP-07/18): total zero imprime "SEM COBRANÇA: NADA A COBRAR", decidido pelo TOTAL.
         static void TotalZero()
         {
@@ -661,6 +722,7 @@ namespace MeuCardapio.PrintClient
                 { "muitos-itens", ManyItems() }, { "segunda-via", Reprint() }, { "quantidades", Quantities() }, { "cancelamento", CancelFixture() },
                 { "total-zero", ZeroTotal() }, { "total-zero-segunda-via", ZeroTotalReprint() },
                 { "cancelamento-da-api", CancelFromApi() }, { "teste-da-api", TestFromClient() },
+                { "total-ausente", AbsentTotal() }, { "total-ausente-balcao", AbsentTotalCounter() },
             };
             foreach (var kv in fixtures)
             {
