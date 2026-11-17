@@ -223,7 +223,7 @@ describe("PIX por loja — conexão, estado e desconexão (HTTP)", () => {
     await prisma.payment.create({ data: { orderId: order.id, amountCents: 1000, status: "PENDENTE", paymentAccountId: account.id } });
     const blocked = await post("/api/store/payments/mercadopago/disconnect");
     expect(blocked.statusCode).toBe(409);
-    expect(json(blocked)).toMatchObject({ code: "DISCONNECT_BLOCKED", count: 1 });
+    expect(json(blocked)).toMatchObject({ code: "MP_HAS_PENDING_PAYMENTS", details: { pixPending: 1, refundPending: 0 } });
     await prisma.order.update({ where: { id: order.id }, data: { status: "CANCELADO" } });
     expect((await post("/api/store/payments/mercadopago/disconnect")).statusCode).toBe(200);
   });
@@ -252,11 +252,75 @@ describe("PIX por loja — conexão, estado e desconexão (HTTP)", () => {
     await prisma.payment.create({ data: { orderId: order.id, amountCents: 1000, status: "APROVADO", paymentAccountId: account.id } });
     const blocked = await post("/api/store/payments/mercadopago/disconnect");
     expect(blocked.statusCode).toBe(409);
-    expect(json(blocked)).toMatchObject({ code: "DISCONNECT_BLOCKED", count: 1 });
+    expect(json(blocked)).toMatchObject({ code: "MP_HAS_PENDING_PAYMENTS", details: { pixPending: 1, refundPending: 0 } });
     expect((await prisma.paymentAccount.findFirstOrThrow()).status).toBe("CONNECTED");
 
     await prisma.order.update({ where: { id: order.id }, data: { status: "CONCLUIDO" } });
     expect((await post("/api/store/payments/mercadopago/disconnect")).statusCode).toBe(200);
+  });
+
+  async function pendingOrder(accountId: string, status: "PENDENTE" | "APROVADO" | "ESTORNO_PENDENTE", orderStatus = "PENDENTE", code = "0100") {
+    const order = await prisma.order.create({ data: { storeId, code, type: "BALCAO", status: orderStatus as never, customerName: "C", totalCents: 1000, paymentMethod: "PIX" } });
+    return prisma.payment.create({ data: { orderId: order.id, amountCents: 1000, status, paymentAccountId: accountId } });
+  }
+
+  it("RN-B1-15: o bloqueio traz o código MP_HAS_PENDING_PAYMENTS, os contadores e a frase certa (1, N e estorno pendente) e nada é apagado", async () => {
+    await connect();
+    const account = await prisma.paymentAccount.findFirstOrThrow();
+    const message = async () => json(await post("/api/store/payments/mercadopago/disconnect"));
+
+    await pendingOrder(account.id, "PENDENTE", "PENDENTE", "0101");
+    expect(await message()).toMatchObject({ code: "MP_HAS_PENDING_PAYMENTS", error: "Há 1 PIX em andamento. Aguarde o pagamento ou cancele o pedido.", details: { pixPending: 1, refundPending: 0 } });
+    await pendingOrder(account.id, "APROVADO", "CONFIRMADO", "0102");
+    expect(await message()).toMatchObject({ error: "Há 2 PIX em andamento. Aguarde o pagamento ou cancele os pedidos.", details: { pixPending: 2 } });
+    await pendingOrder(account.id, "ESTORNO_PENDENTE", "CONFIRMADO", "0103");
+    expect(await message()).toMatchObject({ error: "Há um estorno em andamento. Aguarde terminar para desconectar.", details: { refundPending: 1 } });
+
+    const kept = await prisma.paymentAccount.findFirstOrThrow();
+    expect(kept.status).toBe("CONNECTED");
+    expect(kept.accessTokenEnc).not.toBeNull(); // nada apagado no bloqueio
+  });
+
+  it("reconectar a MESMA conta com PIX pendente passa e os pagamentos antigos passam para a conta nova (o token novo os confere)", async () => {
+    await connect("fake:vendedor-1");
+    const old = await prisma.paymentAccount.findFirstOrThrow();
+    const payment = await pendingOrder(old.id, "PENDENTE");
+    expect((await connect("fake:vendedor-1")).headers.location).toContain("mp=ok");
+    const current = await prisma.paymentAccount.findFirstOrThrow({ where: { status: "CONNECTED" } });
+    expect(current.id).not.toBe(old.id);
+    expect((await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } })).paymentAccountId).toBe(current.id);
+  });
+
+  it("trocar por OUTRA conta com PIX ou estorno pendente é BLOQUEADO (a conta antiga segue ativa); sem pendência a troca passa", async () => {
+    await connect("fake:vendedor-1");
+    const old = await prisma.paymentAccount.findFirstOrThrow();
+    const payment = await pendingOrder(old.id, "ESTORNO_PENDENTE", "CONFIRMADO");
+    const blocked = await connect("fake:vendedor-2");
+    expect(blocked.headers.location).toContain("MP_HAS_PENDING_PAYMENTS");
+    expect((await prisma.paymentAccount.findMany()).map((a) => [a.sellerUserId, a.status])).toEqual([["vendedor-1", "CONNECTED"]]);
+
+    await prisma.payment.update({ where: { id: payment.id }, data: { status: "REEMBOLSADO" } });
+    expect((await connect("fake:vendedor-2")).headers.location).toContain("mp=ok");
+  });
+
+  it("N-1: o rastro é ATÔMICO — se o banco recusar o registro de auditoria, conectar e desconectar NÃO acontecem", async () => {
+    const block = (action: string) => prisma.$executeRawUnsafe(`ALTER TABLE "AuditLog" ADD CONSTRAINT "zz_bloqueia_auditoria" CHECK ("action" <> '${action}')`);
+    const unblock = () => prisma.$executeRawUnsafe(`ALTER TABLE "AuditLog" DROP CONSTRAINT IF EXISTS "zz_bloqueia_auditoria"`);
+    try {
+      await block("payment_account.connect");
+      expect((await connect()).headers.location).toContain("mp=erro"); // erro, e...
+      expect(await prisma.paymentAccount.count()).toBe(0); // ...nenhuma conta ficou sem rastro
+      await unblock();
+
+      expect((await connect()).headers.location).toContain("mp=ok");
+      await block("payment_account.disconnect");
+      expect((await post("/api/store/payments/mercadopago/disconnect")).statusCode).toBe(500);
+      const still = await prisma.paymentAccount.findFirstOrThrow();
+      expect(still.status).toBe("CONNECTED"); // os tokens NÃO foram apagados sem rastro
+      expect(still.accessTokenEnc).not.toBeNull();
+    } finally {
+      await unblock();
+    }
   });
 
   it("tech.cleanup remove o `state` vencido e mantém o válido", async () => {
@@ -387,6 +451,20 @@ describe("conta de pagamento — token e renovação (serviço)", () => {
     expect((await prisma.paymentAccount.findUniqueOrThrow({ where: { id: account.id } })).refreshFailures).toBe(0);
   });
 
+  it("N-1: needs_reconnect grava o rastro NA MESMA transação da marcação; se o rastro falhar, nada muda e a próxima rodada tenta de novo", async () => {
+    const account = await accountFor(storeA, "vendedor-1", 5 * DAY);
+    fake.revoked.add(decryptSecret(account.refreshTokenEnc!, ctx(storeA, "refreshToken")));
+    await prisma.$executeRawUnsafe(`ALTER TABLE "AuditLog" ADD CONSTRAINT "zz_bloqueia_auditoria" CHECK ("action" <> 'payment_account.needs_reconnect')`);
+    try {
+      await expect(service.refreshAccount(account.id)).rejects.toThrow();
+      expect((await prisma.paymentAccount.findUniqueOrThrow({ where: { id: account.id } })).status).toBe("CONNECTED");
+    } finally {
+      await prisma.$executeRawUnsafe(`ALTER TABLE "AuditLog" DROP CONSTRAINT IF EXISTS "zz_bloqueia_auditoria"`);
+    }
+    expect(await service.refreshAccount(account.id)).toBe("needs_reconnect");
+    expect(await prisma.auditLog.count({ where: { action: "payment_account.needs_reconnect", targetId: account.id } })).toBe(1);
+  });
+
   it("accessTokenFor: devolve o token da conta; vencido, desconectado ou sem token ⇒ PixUnavailableError (NUNCA o token da plataforma)", async () => {
     const account = await accountFor(storeA, "vendedor-1", 90 * DAY);
     expect(await service.accessTokenFor(account)).toMatch(/^fake-access-vendedor-1-/);
@@ -428,7 +506,8 @@ describe("OAuth — seleção por ambiente e cliente real (sem credencial)", () 
     expect(() => oauthProvider({ NODE_ENV: "production" })).toThrow(/MP_OAUTH_MODE não configurado/);
     expect(() => oauthProvider({ MP_OAUTH_MODE: "real" })).toThrow(/MP_CLIENT_ID/);
     expect(oauthProvider({ NODE_ENV: "development" }).mode).toBe("fake");
-    expect(oauthProvider({}).mode).toBe("fake"); // NODE_ENV ausente = dev local
+    expect(oauthProvider({ NODE_ENV: "test" }).mode).toBe("fake");
+    expect(() => oauthProvider({})).toThrow(/MP_OAUTH_MODE não configurado/); // NODE_ENV AUSENTE conta como produção (SEC-22)
     expect(oauthProvider({ MP_OAUTH_MODE: "real", MP_CLIENT_ID: "1", MP_CLIENT_SECRET: "s", NODE_ENV: "production" }).mode).toBe("real");
   });
 
@@ -485,11 +564,12 @@ describe("M-1: configuração de pagamentos no boot", () => {
     expect(() => assertPaymentsBootConfig({ MP_OAUTH_MODE: "talvez" }, currentKey)).toThrow(/inválido/);
   });
 
-  it("dev/teste: fake por padrão; real exige as credenciais", () => {
-    for (const NODE_ENV of [undefined, "development", "test"]) {
-      expect(assertPaymentsBootConfig(NODE_ENV ? { NODE_ENV } : {}, currentKey)).toBe("fake");
-    }
-    expect(() => assertPaymentsBootConfig({ MP_OAUTH_MODE: "real" }, currentKey)).toThrow(/MP_CLIENT_ID/);
+  it("dev/teste EXPLÍCITOS: fake por padrão; real exige as credenciais; NODE_ENV ausente NÃO relaxa (fail-closed)", () => {
+    for (const NODE_ENV of ["development", "test"]) expect(assertPaymentsBootConfig({ NODE_ENV }, currentKey)).toBe("fake");
+    expect(() => assertPaymentsBootConfig({}, currentKey)).toThrow(/MP_OAUTH_MODE não configurado/);
+    expect(() => assertPaymentsBootConfig({ NODE_ENV: "" }, currentKey)).toThrow(/MP_OAUTH_MODE não configurado/);
+    expect(() => assertPaymentsBootConfig({ MP_OAUTH_MODE: "fake" }, currentKey)).toThrow(/só roda em dev\/teste/);
+    expect(() => assertPaymentsBootConfig({ NODE_ENV: "development", MP_OAUTH_MODE: "real" }, currentKey)).toThrow(/MP_CLIENT_ID/);
   });
 
   it("real em produção: exige chave de cifra forte, credenciais e PUBLIC_API_URL https; com tudo certo sobe", () => {
