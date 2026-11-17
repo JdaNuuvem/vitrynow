@@ -41,6 +41,15 @@ describe("fase da assinatura (ADR-0003 §2.2)", () => {
     expect(phaseOf(paid("ACTIVE", DAY), NOW).readOnlyEndsAt).toBeNull();
   });
 
+  it("nextPhaseAt: fim do teste, fim do período, fim da Consulta; nulo na Suspensão", () => {
+    const basico = { features: [] as string[], limits: {} };
+    const at2 = (sub: Sub) => resolveEntitlements({ ...sub, plan: null }, basico, NOW).nextPhaseAt;
+    expect(at2(trial(2 * DAY))).toBe(at(2 * DAY).toISOString());
+    expect(at2(paid("ACTIVE", 5 * DAY))).toBe(at(5 * DAY).toISOString());
+    expect(at2(trial(-DAY))).toBe(at(-DAY + READ_ONLY_DAYS * DAY).toISOString());
+    expect(at2(trial(-READ_ONLY_DAYS * DAY))).toBeNull();
+  });
+
   it("reativação imediata: pagar dentro da Consulta ou da Suspensão volta a ACTIVE sem esperar nada", () => {
     expect(phaseOf(trial(-3 * DAY), NOW).phase).toBe("READ_ONLY");
     expect(phaseOf({ status: "ACTIVE", trialEndsAt: at(-3 * DAY), currentPeriodEnd: at(30 * DAY) }, NOW).phase).toBe("ACTIVE");
