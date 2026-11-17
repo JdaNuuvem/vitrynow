@@ -22,9 +22,16 @@ import {
 } from "../../lib/orderStateMachine";
 import { toPanelOrder, type ContactAccess } from "./orders.view";
 import { authorizeContactView } from "./contactAccess";
+import { searchOrderHistory, type HistoryQuery } from "./orders.history";
+import { safeTimeZone, startOfStoreDay } from "../../lib/storeTime";
 
 type Db = typeof prismaClient;
 type Tx = Prisma.TransactionClient;
+
+// Kanban (RN-KB-01): pedidos em andamento; teto de segurança para não devolver a loja inteira se algo ficar preso.
+const OPEN_STATUSES: OrderStatus[] = ["PENDENTE", "CONFIRMADO", "EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA"];
+export const KANBAN_OPEN_CAP = 500;
+export const INTERNAL_NOTE_MAX = 500;
 
 export type PanelActor = { storeId: string; userId: string; role: Role };
 // Sem campo editável ao cliente (GRW-15): o texto que o cliente vê é derivado de (código, ator) em lib/cancelMessages.
@@ -90,18 +97,80 @@ export class OrderService {
   }
 
   // ───────────── Leitura (kanban) ─────────────
+  // RN-KB-01..05: TODO pedido em aberto, de qualquer data, mais os concluídos/cancelados DO DIA (fuso da loja). Os abertos vêm
+  // inteiros (o mais antigo primeiro) e só os encerrados do dia são paginados por cursor (mais recente primeiro): "os 100
+  // últimos" escondia pedido aberto antigo. PIX ainda não pago fica de fora (RN-KB-07; aparece no histórico).
   async list(actor: PanelActor, query: { cursor?: string; limit?: number }) {
     const limit = Math.min(Math.max(query.limit || 100, 1), 200);
-    const orders = await this.db.order.findMany({
-      where: { storeId: actor.storeId, awaitingPayment: false },
-      orderBy: { createdAt: "desc" },
-      include: { items: true, deliverer: true, payment: true, statusHistory: { orderBy: { seq: "desc" }, take: 3 } },
+    const store = await this.db.store.findUnique({ where: { id: actor.storeId }, select: { timezone: true } });
+    const timezone = safeTimeZone(store?.timezone);
+    const now = this.now();
+    const todayStart = startOfStoreDay(now, timezone, 0);
+    const include = { items: true, deliverer: true, payment: true, statusHistory: { orderBy: { seq: "desc" as const }, take: 3 } };
+
+    const open = query.cursor
+      ? []
+      : await this.db.order.findMany({
+          where: { storeId: actor.storeId, awaitingPayment: false, status: { in: OPEN_STATUSES } },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          include,
+          take: KANBAN_OPEN_CAP,
+        });
+    const closedToday = {
+      storeId: actor.storeId,
+      awaitingPayment: false,
+      status: { in: [...FINAL_STATUSES] },
+      OR: [
+        // encerrado hoje pelo histórico (a verdade); sem registro de encerramento, vale a última alteração
+        { statusHistory: { some: { status: { in: [...FINAL_STATUSES] }, createdAt: { gte: todayStart } } } },
+        { updatedAt: { gte: todayStart }, statusHistory: { none: { status: { in: [...FINAL_STATUSES] } } } },
+      ],
+    };
+    const closed = await this.db.order.findMany({
+      where: closedToday,
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+      include,
       take: limit,
       ...(query.cursor ? { skip: 1, cursor: { id: query.cursor } } : {}),
     });
+
+    const orders = [...open, ...closed];
     const roles = await this.rolesOf(orders.flatMap((o) => o.statusHistory.map((h) => h.userId)));
-    const decorated = orders.map(({ statusHistory, ...order }) => this.decorate(order, statusHistory, actor.role, roles));
-    return { orders: decorated, nextCursor: orders.length === limit ? orders[orders.length - 1].id : null };
+    const decorate = ({ statusHistory, ...order }: (typeof orders)[number]) => this.decorate(order, statusHistory, actor.role, roles);
+    const decoratedOpen = open.map(decorate);
+    // Dentro de cada coluna, quem espera há mais tempo no estado fica no topo (RN-KB-04); a tela agrupa por status.
+    decoratedOpen.sort((a, b) => a.statusChangedAt.getTime() - b.statusChangedAt.getTime());
+    return {
+      orders: [...decoratedOpen, ...closed.map(decorate)],
+      nextCursor: closed.length === limit ? closed[closed.length - 1].id : null,
+      serverNow: now,
+      timezone,
+      // Início do "hoje" da loja: pedido aberto criado ANTES disto leva o selo "de ontem" (RN-KB-03).
+      todayStartsAt: todayStart,
+      openCount: open.length,
+      staleOpenCount: open.filter((o) => o.createdAt < todayStart).length,
+      openCapped: open.length >= KANBAN_OPEN_CAP,
+    };
+  }
+
+  // Histórico (RN-HP): busca e filtros por período; só linhas de lista (telefone mascarado, sem endereço).
+  async history(actor: PanelActor, query: HistoryQuery) {
+    const store = await this.db.store.findUnique({ where: { id: actor.storeId }, select: { timezone: true } });
+    const { phoneCriterion, ...result } = await searchOrderHistory(this.db, actor.storeId, store?.timezone ?? "America/Sao_Paulo", this.now(), query, actor.role);
+    // Busca por telefone do STAFF deixa rastro de CONTAGEM (nunca os dígitos): é um "este número é cliente?" e precisa ser auditável.
+    if (phoneCriterion && actor.role !== "OWNER") this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "order.history_phone_search", targetType: "Store", targetId: actor.storeId, metadata: { results: result.total } });
+    return result;
+  }
+
+  // Observação interna do pedido (API-54): texto livre da equipe, nunca ao cliente nem ao tíquete. A auditoria registra
+  // QUE mudou e o tamanho, nunca o texto (pode ter dado pessoal).
+  async setInternalNote(actor: PanelActor, orderId: string, note: string | null) {
+    const text = note === null ? null : note.trim() || null;
+    if (text && text.length > INTERNAL_NOTE_MAX) throw err(400, "NOTE_TOO_LONG", `A observação pode ter até ${INTERNAL_NOTE_MAX} caracteres.`);
+    const updated = await this.db.order.updateMany({ where: { id: orderId, storeId: actor.storeId }, data: { internalNote: text } });
+    if (updated.count !== 1) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
+    this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "order.internal_note", targetType: "Order", targetId: orderId, metadata: { length: text?.length ?? 0 } });
+    return { internalNote: text };
   }
 
   async get(actor: PanelActor, orderId: string) {
@@ -152,6 +221,8 @@ export class OrderService {
     return toPanelOrder(
       order,
       {
+        statusChangedAt: last?.createdAt ?? order.createdAt,
+        serverNow: this.now(),
         allowedTransitions: allowedTransitions(order, role),
         blocked: [...blockedTransitions(order, role), ...this.undoBlocked(order, history, role)],
         canUndo: undo.canUndo,
