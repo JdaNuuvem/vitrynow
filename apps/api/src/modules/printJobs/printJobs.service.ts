@@ -187,9 +187,12 @@ export class PrintJobService {
     // gravado de forma ESTRITA antes de o tíquete existir e falha fechada se o rastro não puder ser gravado.
     const found = await this.db.order.findFirst({
       where: { id: orderId, storeId: actor.storeId },
-      select: { id: true, status: true, customerPhone: true, address: true },
+      select: { id: true, status: true, awaitingPayment: true, customerPhone: true, address: true },
     });
     if (!found) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
+    // Recusas por estado ANTES do rastro de contato: não se registra acesso a contato que nem vai ser entregue (R-1, Nightingale).
+    if (found.status === "CANCELADO") throw err(409, "ORDER_CANCELED", "Pedido cancelado: não há o que reimprimir.");
+    if (found.awaitingPayment) throw err(409, "ORDER_AWAITING_PAYMENT", "Pedido aguardando pagamento: ainda não foi para a cozinha.");
     const closing = await this.db.orderStatusHistory.findFirst({ where: { orderId }, orderBy: { seq: "desc" }, select: { createdAt: true } });
     const decision = await authorizeContactView({ db: this.db, audit: this.audit, now: this.now }, actor, found, closing?.createdAt ?? null);
     if (decision.unavailable) {

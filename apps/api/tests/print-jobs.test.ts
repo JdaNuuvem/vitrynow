@@ -435,6 +435,45 @@ describe("API-12 — PrintJob", () => {
     for (const proibido of ["Ana Secreta", "11987654321", "sem cebola"]) expect(dump, proibido).not.toContain(proibido);
   });
 
+  it("C-1 (Nightingale): aviso falha DENTRO da saga de estorno ⇒ pagamento e pedido intactos (PENDENTE, nada dobrado); 'Tentar estorno' conclui com 1 aviso e o provedor é chamado UMA só vez", async () => {
+    const ctx = await setup();
+    const token = await ctx.mkToken("PC");
+    const id = await order(ctx);
+    const kitchen = json(await claim(token)).job;
+    await ack(token, kitchen.id, { status: "PRINTED" }); // o tíquete já saiu: cancelar exige o aviso
+    await prisma.order.update({ where: { id }, data: { paymentMethod: "PIX", awaitingPayment: false } });
+    await prisma.payment.create({ data: { orderId: id, providerPaymentId: `mp-c1-${id}`, amountCents: 1000, status: "APROVADO" } });
+    vi.mocked(mp.refundPayment).mockResolvedValue(undefined);
+    vi.mocked(mp.refundPayment).mockClear();
+
+    vi.mocked(queue.enqueueCancelNoticeIfPrinted).mockRejectedValueOnce(new Error("banco falhou ao gravar o aviso"));
+    const cancel = await app.inject({ method: "POST", url: `/api/orders/${id}/cancel`, headers: { cookie: ctx.owner }, payload: { reason: { code: "ITEM_EM_FALTA" } } });
+    expect([cancel.statusCode, json(cancel).refund]).toEqual([202, "PENDING"]); // pendente e VISÍVEL, não 500 mudo
+    const meio = await prisma.order.findUniqueOrThrow({ where: { id }, include: { payment: true } });
+    expect({ status: meio.status, payment: meio.payment?.status, attempts: meio.payment?.refundAttempts }).toEqual({ status: "PENDENTE", payment: "ESTORNO_PENDENTE", attempts: 1 });
+    expect(meio.payment?.refundLastError).toContain("falta concluir o cancelamento");
+    expect((await jobsOf(id)).filter((j) => j.kind === "ORDER_CANCEL_NOTICE")).toHaveLength(0);
+    expect(await prisma.orderStatusHistory.count({ where: { orderId: id, kind: "CANCEL" } })).toBe(0);
+    expect(vi.mocked(mp.refundPayment)).toHaveBeenCalledTimes(1);
+
+    const retry = await app.inject({ method: "POST", url: `/api/orders/${id}/refund/retry`, headers: { cookie: ctx.owner } });
+    expect([retry.statusCode, json(retry).refund]).toEqual([200, "DONE"]);
+    const fim = await prisma.order.findUniqueOrThrow({ where: { id }, include: { payment: true } });
+    expect({ status: fim.status, payment: fim.payment?.status }).toEqual({ status: "CANCELADO", payment: "REEMBOLSADO" });
+    expect((await jobsOf(id)).filter((j) => j.kind === "ORDER_CANCEL_NOTICE")).toHaveLength(1);
+    expect(await prisma.orderStatusHistory.count({ where: { orderId: id, kind: "CANCEL" } })).toBe(1);
+    expect(vi.mocked(mp.refundPayment)).toHaveBeenCalledTimes(1); // o dinheiro foi devolvido UMA vez: a retentativa só refez a Tx 2
+  });
+
+  it("R-1: 2ª via de pedido cancelado ou aguardando pagamento é recusada ANTES de gravar rastro de contato", async () => {
+    const ctx = await setup();
+    const id = await order(ctx, { type: "DELIVERY", customerPhone: "11987654321", address: "Rua Sigilosa, 77", customerName: "Ana" });
+    await app.inject({ method: "POST", url: `/api/orders/${id}/cancel`, headers: { cookie: ctx.owner }, payload: { reason: { code: "ITEM_EM_FALTA" } } });
+    const r = await app.inject({ method: "POST", url: `/api/orders/${id}/reprint`, headers: { cookie: ctx.owner } });
+    expect([r.statusCode, json(r).code]).toEqual([409, "ORDER_CANCELED"]);
+    expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "order.view_contact", targetId: id } })).toBe(0);
+  });
+
   it("C1 (Deming): se o aviso de cancelamento não puder ser gravado, o cancelamento NÃO acontece (mesma transação); repetido, cancela COM o aviso", async () => {
     const ctx = await setup();
     const token = await ctx.mkToken("PC");

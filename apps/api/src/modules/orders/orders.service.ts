@@ -37,6 +37,9 @@ type CancelOrigin = {
   userId: string | null;
   actor: ActorKind;
   reason: CancelReason;
+  // Preenchido quando o PROVEDOR já devolveu o dinheiro mas a Tx 2 (cancelar o pedido) ainda não concluiu: a retentativa
+  // não chama o provedor de novo, só refaz a Tx 2 (estorno chamado UMA só vez).
+  providerRefundedAt?: string;
 };
 
 type OrderWithPayment = Order & { payment: Payment | null };
@@ -419,13 +422,21 @@ export class OrderService {
     const origin = payment.refundContext as unknown as CancelOrigin | null;
     if (!origin) throw err(409, "NOT_REFUND_PENDING", "Estorno sem contexto de cancelamento.");
 
-    if (!(await this.providerRefund(payment.id, payment.providerPaymentId))) {
-      await this.db.payment.updateMany({
-        where: { id: payment.id, status: "ESTORNO_PENDENTE" },
-        data: { refundAttempts: { increment: 1 }, refundLastError: "Não foi possível estornar no Mercado Pago. Tentaremos novamente." },
-      });
-      this.publish(order.storeId, { type: "payment.refund_pending", orderId: order.id });
-      return "PENDING";
+    if (!origin.providerRefundedAt) {
+      if (!(await this.providerRefund(payment.id, payment.providerPaymentId))) {
+        await this.db.payment.updateMany({
+          where: { id: payment.id, status: "ESTORNO_PENDENTE" },
+          data: { refundAttempts: { increment: 1 }, refundLastError: "Não foi possível estornar no Mercado Pago. Tentaremos novamente." },
+        });
+        this.publish(order.storeId, { type: "payment.refund_pending", orderId: order.id });
+        return "PENDING";
+      }
+      // O dinheiro JÁ voltou: anota antes da Tx 2. Se a anotação falhar, a retentativa chama o provedor de novo com a MESMA
+      // chave de idempotência (devolve o mesmo resultado, não estorna duas vezes).
+      origin.providerRefundedAt = this.now().toISOString();
+      await this.db.payment
+        .updateMany({ where: { id: payment.id, status: "ESTORNO_PENDENTE" }, data: { refundContext: JSON.parse(JSON.stringify(origin)) as Prisma.InputJsonValue } })
+        .catch((error) => console.error("[estorno] não consegui anotar que o provedor já devolveu:", error));
     }
 
     // Tx 2: ESTORNO_PENDENTE → REEMBOLSADO + cancelar o pedido (qualquer estado ativo: o dinheiro já voltou).
@@ -434,7 +445,9 @@ export class OrderService {
     // Se o pedido NÃO pôde ser cancelado e não está cancelado (ex.: já concluído), o dinheiro voltou mesmo assim:
     // fica marcado para conciliação manual, com alerta — nunca REEMBOLSADO em silêncio.
     const sink = { noticeQueued: false };
-    const concluded = await this.runTx(async (tx) => {
+    let concluded: { orderCancelled: boolean; reconcile: boolean } | null;
+    try {
+      concluded = await this.runTx(async (tx) => {
       // Ordem de locks ÚNICA no sistema: Pedido → Pagamento (a Tx 1 da saga também começa pelo pedido). Travar o
       // pagamento primeiro aqui criava a ordem inversa e permitia deadlock quando duas tentativas se sobrepõem.
       await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${order.id} FOR UPDATE`;
@@ -456,7 +469,19 @@ export class OrderService {
         }
       }
       return { orderCancelled, reconcile };
-    });
+      });
+    } catch (error) {
+      // O dinheiro JÁ voltou no provedor mas a conclusão (cancelar o pedido, aviso de cancelamento...) falhou e foi desfeita
+      // por inteiro: o pagamento continua ESTORNO_PENDENTE e o pedido intacto. NUNCA 500 mudo: fica pendente e visível, e o
+      // "Tentar estorno" (ou o job de conciliação) refaz SÓ a Tx 2.
+      console.error("[estorno] provedor devolveu, mas a conclusão do cancelamento falhou:", error);
+      await this.db.payment.updateMany({
+        where: { id: payment.id, status: "ESTORNO_PENDENTE" },
+        data: { refundAttempts: { increment: 1 }, refundLastError: "O estorno foi feito, mas falta concluir o cancelamento. Tentaremos novamente." },
+      });
+      this.publish(order.storeId, { type: "payment.refund_pending", orderId: order.id });
+      return "PENDING";
+    }
     if (concluded) {
       if (concluded.orderCancelled) await this.afterCancelCommitted(order, origin, sink.noticeQueued);
       this.publish(order.storeId, { type: "payment.refund_done", orderId: order.id });
