@@ -554,9 +554,27 @@ namespace MeuCardapio.PrintClient
         }
         static Newtonsoft.Json.Linq.JToken Job(string json) { return Newtonsoft.Json.Linq.JObject.Parse(json)["job"]; }
 
+        // Claim repetido ate o servidor oferecer um job (apos o availableAt do recuo): espera por evento, nao por tempo fixo.
+        static string ClaimWhenAvailable(FakeApi api, string auth, int timeoutMs, out int status)
+        {
+            var end = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+            string r = null; status = 0;
+            while (DateTime.UtcNow < end)
+            {
+                r = Post(api, "/api/device/print-jobs/claim", "{}", auth, out status);
+                if (status == 200 && Job(r).Type != Newtonsoft.Json.Linq.JTokenType.Null) return r;
+                Thread.Sleep(100);
+            }
+            return r;
+        }
+
         static void ContractTable()
         {
-            using (var api = new FakeApi { LeaseMs = 700, FailBackoffMs = 500 })
+            // Imune a pausa de CPU (PC-20): a lease e GENEROSA (60 s) em tudo, menos no unico trecho que TESTA o vencimento (aquele so
+            // fica mais correto com um engasgo), e o recuo do servidor e de 2 s com a espera por EVENTO (claim ate o job aparecer),
+            // nao por Sleep fixo. Com lease de 700 ms um engasgo da maquina vencia a lease entre o claim e o ack e derrubava em cascata
+            // 5 verificacoes (achado do Deming, 1 rodada em 3).
+            using (var api = new FakeApi { LeaseMs = 60000, FailBackoffMs = 2000 })
             {
                 const string A = "Bearer mcd_a_x", B = "Bearer mcd_b_y";
                 api.AddJob("c1", Order("C1", "1"));
@@ -575,8 +593,7 @@ namespace MeuCardapio.PrintClient
                 Check("contrato §8.3: FAILED do dono => 200 e o job volta a PENDING (attempts < max)", st == 200 && api.JobState("c1") == "PENDING" && api.JobLastError("c1") == "sem papel");
                 r = Post(api, "/api/device/print-jobs/claim", "{}", B, out st);
                 Check("contrato §8.3: o claim NAO devolve o job antes do availableAt (recuo do servidor)", st == 200 && Job(r).Type == Newtonsoft.Json.Linq.JTokenType.Null);
-                Thread.Sleep(650);
-                r = Post(api, "/api/device/print-jobs/claim", "{}", B, out st);
+                r = ClaimWhenAvailable(api, B, 20000, out st);
                 Check("contrato §8.3: depois do availableAt o job volta, com attempt 2", st == 200 && (string)Job(r)["id"] == "c1" && (int)Job(r)["attempt"] == 2);
                 r = Post(api, "/api/device/print-jobs/c1/ack", "{\"status\":\"PRINTED\"}", B, out st);
                 Check("contrato: ack PRINTED do dono com lease valida => 200 e o job fica PRINTED", st == 200 && api.JobState("c1") == "PRINTED");
@@ -586,13 +603,15 @@ namespace MeuCardapio.PrintClient
                 Check("contrato §8.4: o claim NUNCA devolve job PRINTED", st == 200 && Job(r).Type == Newtonsoft.Json.Linq.JTokenType.Null);
                 r = Post(api, "/api/device/print-jobs/nao-existe/ack", "{\"status\":\"PRINTED\"}", B, out st);
                 Check("contrato §8.5: job inexistente => 404", st == 404);
-                // lease vencida => 409
+                // lease vencida => 409 (so aqui a lease e curta: um engasgo so a deixa mais vencida)
+                api.LeaseMs = 700;
                 api.AddJob("c2", Order("C2", "2"));
                 Post(api, "/api/device/print-jobs/claim", "{}", B, out st);
                 Thread.Sleep(900); // passa a lease de 700 ms
                 r = Post(api, "/api/device/print-jobs/c2/ack", "{\"status\":\"PRINTED\"}", B, out st);
                 Check("contrato §8.5: ack com a lease vencida => 409 (o job volta a PENDING)", st == 409 && api.JobState("c2") == "PENDING");
                 // o c2 (mais antigo) voltou a PENDING: reclama e fecha, senao o claim do c3 pegaria o c2
+                api.LeaseMs = 60000;
                 r = Post(api, "/api/device/print-jobs/claim", "{}", B, out st);
                 Post(api, "/api/device/print-jobs/c2/ack", "{\"status\":\"PRINTED\"}", B, out st);
                 Check("contrato: depois do 409 o job vencido e reoferecido e fecha com PRINTED", (string)Job(r)["id"] == "c2" && st == 200 && api.JobState("c2") == "PRINTED");
@@ -600,8 +619,7 @@ namespace MeuCardapio.PrintClient
                 api.AddJob("c3", Order("C3", "3"), "ORDER_KITCHEN");
                 for (int i = 0; i < 3; i++)
                 {
-                    Thread.Sleep(600);
-                    Post(api, "/api/device/print-jobs/claim", "{}", B, out st);
+                    ClaimWhenAvailable(api, B, 20000, out st);
                     Post(api, "/api/device/print-jobs/c3/ack", "{\"status\":\"FAILED\",\"error\":\"x\"}", B, out st);
                 }
                 Check("contrato §8.3: ao estourar o maximo de tentativas (3) o job vira FAILED definitivo", api.JobState("c3") == "FAILED" && api.JobAttempts("c3") == 3);
