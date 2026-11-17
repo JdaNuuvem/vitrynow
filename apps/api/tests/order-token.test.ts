@@ -270,4 +270,21 @@ describe("CORS do cardápio (preflight) e redação de log", () => {
     expect(redactLogUrl("/a?%E0%A4%A=x&token=1")).toBe("/a?%E0%A4%A=x&token=[redigido]");
     expect(redactLogUrl("/a?code=1#f")).toBe("/a?code=[redigido]#f");
   });
+
+  it("redactLogUrl: nomes novos (jwt, pwd, otp, bearer, credential, passcode), separador `;` e parâmetro solto que parece credencial", () => {
+    for (const name of ["jwt", "pwd", "otp", "bearer", "credential", "passcode", "JWT", "Access_Token[]", "x-api-key"]) {
+      expect(redactLogUrl(`/a?${name}=VALOR-SECRETO&page=2`), name).toBe(`/a?${name}=[redigido]&page=2`);
+    }
+    // `;` também separa parâmetros: o segredo depois dele não pode escapar
+    expect(redactLogUrl("/a?a=1;token=SEGREDO;page=2")).toBe("/a?a=1;token=[redigido];page=2");
+    expect(redactLogUrl("/a?page=2;jwt=SEGREDO&otp=123456")).toBe("/a?page=2;jwt=[redigido]&otp=[redigido]");
+    // parâmetro SEM nome que parece uma credencial (≥ 16 caracteres com letra e número) some; palavras comuns e curtos ficam
+    expect(redactLogUrl("/a?mco_AbC123xyz456QWE789&page=2")).toBe("/a?[redigido]&page=2");
+    expect(redactLogUrl("/a?ativo&apenas-palavras-sem-numero&v2")).toBe("/a?ativo&apenas-palavras-sem-numero&v2");
+    // parâmetros comuns continuam legíveis para diagnóstico
+    expect(redactLogUrl("/a?page=2&limit=50&motivo=ok&periodo=7d")).toBe("/a?page=2&limit=50&motivo=ok&periodo=7d");
+    // vários separadores seguidos e query vazia não quebram
+    expect(redactLogUrl("/a?&&;;")).toBe("/a?&&;;");
+    expect(redactLogUrl("/a?")).toBe("/a?");
+  });
 });
