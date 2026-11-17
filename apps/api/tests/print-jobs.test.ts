@@ -13,6 +13,13 @@ vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   return { ...original, createPixPayment: vi.fn(), getPayment: vi.fn(), cancelPayment: vi.fn(), refundPayment: vi.fn() };
 });
 import * as mp from "../src/lib/mercadopago";
+import * as queue from "../src/modules/printJobs/printJobs.queue";
+
+// O aviso de cancelamento precisa nascer NA transação do cancelamento: aqui o gravador do aviso pode ser feito falhar uma vez.
+vi.mock("../src/modules/printJobs/printJobs.queue", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/modules/printJobs/printJobs.queue")>();
+  return { ...original, enqueueCancelNoticeIfPrinted: vi.fn(original.enqueueCancelNoticeIfPrinted) };
+});
 
 // ───────────── Puros ─────────────
 describe("regras puras da fila", () => {
@@ -425,6 +432,28 @@ describe("API-12 — PrintJob", () => {
     expect(next.ticket.printedAtOriginal).not.toBeNull();
     const dump = JSON.stringify(next.ticket);
     for (const proibido of ["Ana Secreta", "11987654321", "sem cebola"]) expect(dump, proibido).not.toContain(proibido);
+  });
+
+  it("C1 (Deming): se o aviso de cancelamento não puder ser gravado, o cancelamento NÃO acontece (mesma transação); repetido, cancela COM o aviso", async () => {
+    const ctx = await setup();
+    const token = await ctx.mkToken("PC");
+    const id = await order(ctx);
+    const printed = json(await claim(token)).job;
+    await ack(token, printed.id, { status: "PRINTED" });
+
+    vi.mocked(queue.enqueueCancelNoticeIfPrinted).mockRejectedValueOnce(new Error("banco falhou ao gravar o aviso"));
+    const cancel = () => app.inject({ method: "POST", url: `/api/orders/${id}/cancel`, headers: { cookie: ctx.owner }, payload: { reason: { code: "ITEM_EM_FALTA" } } });
+    const falhou = await cancel();
+    expect(falhou.statusCode).toBeGreaterThanOrEqual(500); // falha ALTA e visível, não silenciosa
+    const aposFalha = await prisma.order.findUniqueOrThrow({ where: { id } });
+    expect(aposFalha.status).not.toBe("CANCELADO"); // nada pela metade: o pedido não ficou cancelado sem aviso
+    expect((await jobsOf(id)).filter((j) => j.kind === "ORDER_CANCEL_NOTICE")).toHaveLength(0);
+    expect(await prisma.orderStatusHistory.count({ where: { orderId: id, kind: "CANCEL" } })).toBe(0);
+
+    const ok = await cancel();
+    expect(ok.statusCode).toBe(200);
+    expect((await prisma.order.findUniqueOrThrow({ where: { id } })).status).toBe("CANCELADO");
+    expect((await jobsOf(id)).filter((j) => j.kind === "ORDER_CANCEL_NOTICE")).toHaveLength(1); // cancelou COM o aviso
   });
 
   // ───────────── Reimpressão e teste ─────────────
