@@ -129,7 +129,7 @@ describe("auth", () => {
     expect(resetToken).toBeTruthy();
     // NG-06: o banco guarda só o hash; o valor só existe no link enviado por e-mail.
     const sentUrl = sentResetUrls.at(-1)!;
-    const plainToken = new URL(sentUrl).searchParams.get("token")!;
+    const plainToken = new URLSearchParams(new URL(sentUrl).hash.slice(1)).get("token")!;
     expect(plainToken).toHaveLength(32);
     expect(resetToken!.tokenHash).not.toBe(plainToken);
     expect(resetToken!.tokenHash).toBe(hashToken(plainToken));

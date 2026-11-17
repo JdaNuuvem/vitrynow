@@ -152,7 +152,7 @@ describe("tokens com hash e sockets revogáveis", () => {
   it("redefinição de senha: o banco guarda só o hash e o hash não serve como token", async () => {
     const { credentials, user } = await owner();
     await app.inject({ method: "POST", url: "/auth/forgot-password", payload: { email: credentials.email } });
-    const plain = new URL(resetUrls.at(-1)!).searchParams.get("token")!;
+    const plain = new URLSearchParams(new URL(resetUrls.at(-1)!).hash.slice(1)).get("token")!;
     const row = await prisma.passwordResetToken.findFirstOrThrow({ where: { userId: user.id } });
     expect(row.tokenHash).toBe(hashToken(plain));
     expect(row.tokenHash).not.toBe(plain);

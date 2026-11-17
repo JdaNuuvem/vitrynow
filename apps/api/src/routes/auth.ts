@@ -150,7 +150,9 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         await prisma.passwordResetToken.create({
           data: { userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + 60 * 60 * 1000) },
         });
-        const resetUrl = `${process.env.WEB_ORIGIN ?? "http://localhost:3000"}/reset-senha?token=${token}`;
+        // O token vai no FRAGMENTO (#), que o navegador nunca envia ao servidor: não aparece em log de acesso, de erro do proxy,
+        // nem no Referer. A página lê, apaga da barra de endereço e manda no corpo do POST.
+        const resetUrl = `${process.env.WEB_ORIGIN ?? "http://localhost:3000"}/reset-senha#token=${token}`;
         await sendPasswordResetEmail({ to: user.email, resetUrl });
       }
 
