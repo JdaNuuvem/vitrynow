@@ -14,7 +14,6 @@ vi.mock("../../src/lib/mercadopago", async (importOriginal) => {
 });
 import * as mp from "../../src/lib/mercadopago";
 
-const bug = process.env.QA_STRICT ? it : it.fails;
 
 const PHONE = "11987654321";
 const ADDRESS = "Rua Sigilosa Número 777, apto 12, Bairro Privado";
@@ -61,19 +60,19 @@ describe("QA privacidade das respostas de pedido (API-54a)", () => {
     return { owner: cookie!, staff: (login.headers["set-cookie"] as string).split(";")[0], store, orderId };
   }
 
-  bug("P1 (API-54a) GET /api/orders para o DONO não devolve telefone/endereço completos nem campos internos do pagamento", async () => {
+  it("P1 (API-54a) GET /api/orders para o DONO não devolve telefone/endereço completos nem campos internos do pagamento", async () => {
     const c = await cenario();
     const body = (await app.inject({ method: "GET", url: "/api/orders", headers: { cookie: c.owner } })).body;
     expect(varrer(body)).toEqual([]);
   });
 
-  bug("P2 (API-54a) GET /api/orders para o STAFF também não", async () => {
+  it("P2 (API-54a) GET /api/orders para o STAFF também não", async () => {
     const c = await cenario();
     const body = (await app.inject({ method: "GET", url: "/api/orders", headers: { cookie: c.staff } })).body;
     expect(varrer(body)).toEqual([]);
   });
 
-  bug("P3 (API-54a) a lista mostra o telefone só mascarado (últimos 4 dígitos) e nenhum endereço", async () => {
+  it("P3 (API-54a) a lista mostra o telefone só mascarado (últimos 4 dígitos) e nenhum endereço", async () => {
     const c = await cenario();
     const orders = JSON.parse((await app.inject({ method: "GET", url: "/api/orders", headers: { cookie: c.owner } })).body).orders as Array<Record<string, unknown>>;
     expect(orders.length).toBe(1);
