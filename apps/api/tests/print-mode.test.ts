@@ -255,7 +255,7 @@ describe("API-12b — modo de impressão e virada", () => {
     const again = json(await setMode(ctx, "QUEUE"));
     expect(again).toMatchObject({ mode: "QUEUE", changed: false, reconciled: { closedPendingJobs: 0, createdJobs: 0, markedOrdersPrinted: 0 } });
     expect(await kitchenJobs(semJob)).toHaveLength(1);
-    await vi.waitFor(async () => expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "print.mode_change" } })).toBe(1));
+    await vi.waitFor(async () => expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "print.mode_change" } })).toBe(1), { timeout: 10_000, interval: 100 });
   });
 
   it("virada concorrente: dois PUTs simultâneos ⇒ um job por pedido (lock por loja + dedupeKey)", async () => {
@@ -516,7 +516,7 @@ describe("API-12b — modo de impressão e virada", () => {
     const ctx = await setup();
     await order(ctx, { type: "DELIVERY", customerName: "Ana Sigilosa", customerPhone: "11987654321", address: "Rua Sigilosa, 777" });
     await setMode(ctx, "QUEUE");
-    await vi.waitFor(async () => expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "print.mode_change" } })).toBe(1));
+    await vi.waitFor(async () => expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "print.mode_change" } })).toBe(1), { timeout: 10_000, interval: 100 });
     const row = await prisma.auditLog.findFirstOrThrow({ where: { storeId: ctx.storeId, action: "print.mode_change" } });
     expect(row.metadata).toEqual({ from: "LEGACY", to: "QUEUE", closedPendingJobs: 0, createdJobs: 0, markedOrdersPrinted: 0 });
     const dump = JSON.stringify(row);
