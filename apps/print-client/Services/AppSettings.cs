@@ -58,6 +58,9 @@ namespace MeuCardapio.PrintClient.Services
         // ficam publicados. Vazio = auto-update desligado (padrão até você publicar isso).
         public string UpdateBaseUrl { get; set; } = "";
         public bool ReceivePrints { get; set; } = true;
+        // PC-03: consome a fila de PrintJob (claim/ack, ADR-0004) em vez de /api/device/orders/pending. DESLIGADO por padrão
+        // até a API-12 existir e as lojas-piloto migrarem (o endpoint antigo some depois, D4-4).
+        public bool UsePrintJobs { get; set; } = false;
         public bool ReceiveAlerts { get; set; } = true;
         public int FontSize { get; set; } = 12;
         public int PaperWidthMm { get; set; } = 57;

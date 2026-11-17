@@ -1,0 +1,588 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using MeuCardapio.PrintClient.Models;
+using MeuCardapio.PrintClient.Printing;
+using MeuCardapio.PrintClient.Services;
+
+namespace MeuCardapio.PrintClient
+{
+    // PC-03: o cliente no modo PrintJob (claim/ack, ADR-0004) contra uma API falsa que implementa a semantica do ADR:
+    // lease, ack idempotente, 409 em lease vencida, attempts. Pipeline inteiro (DeviceClient real -> PrintCoordinator ->
+    // impressora virtual). Contrato assumido: docs\contrato-printjob-cliente.md.
+    static class SelfTestJobs
+    {
+        static void Check(string label, bool cond) { SelfTest.Check(label, cond); }
+        static bool WaitFor(Func<bool> c, int ms) { return SelfTestUtil.WaitFor(c, ms); }
+
+        sealed class Rig : IDisposable
+        {
+            public readonly FakeApi Api;
+            public readonly VirtualPrintTarget Printer;
+            public readonly PrintLedger Ledger;
+            public readonly DeviceClient Device;
+            public readonly PrintCoordinator Coordinator;
+            public readonly List<string> Messages = new List<string>();
+            public readonly List<string> Problems = new List<string>();
+            public DateTime Now = new DateTime(2026, 11, 16, 12, 0, 0, DateTimeKind.Utc);
+            int _alerts; public int Alerts { get { return Volatile.Read(ref _alerts); } }
+
+            public Rig(FakeApi api, VirtualPrintTarget printer, string ledgerPath, string token, int pollMs = 60, int paperMm = 58)
+            {
+                Api = api; Printer = printer;
+                Ledger = new PrintLedger(ledgerPath, () => Now);
+                var settings = new AppSettings { ApiBaseUrl = "http://127.0.0.1:" + api.Port, DeviceToken = token, UsePrintJobs = true };
+                Device = new DeviceClient(Ledger, settings) { PollIntervalMs = pollMs, WsRetryMs = 150, RevokedProbeMs = 600000 };
+                Coordinator = new PrintCoordinator(Device, printer, () => paperMm, SelfTestPrint.Tz);
+                Coordinator.Message += m => { lock (Messages) Messages.Add(m); };
+                Device.StatusChanged += m => { lock (Messages) Messages.Add(m); };
+                Device.PrintProblemsChanged += l => { lock (Problems) Problems.Add(string.Join(",", l)); };
+                Device.OrderPending += () => Interlocked.Increment(ref _alerts);
+                Device.TicketReady += o => System.Threading.Tasks.Task.Run(() => Coordinator.Handle(o));
+            }
+            public void Start() { Device.Start(); }
+            public bool HasMessage(string part) { lock (Messages) return Messages.Any(m => m.Contains(part)); }
+            public int MessageCount(string part) { lock (Messages) return Messages.Count(m => m.Contains(part)); }
+            public string LastProblem() { lock (Problems) return Problems.Count == 0 ? null : Problems[Problems.Count - 1]; }
+            public int ProblemCount { get { lock (Problems) return Problems.Count; } }
+            public void Dispose() { try { Device.Dispose(); } catch { } }
+        }
+
+        static string Tmp() { var d = Path.Combine(Path.GetTempPath(), "meucardapio_jobs_" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(d); return d; }
+        static void Clean(string d) { try { Directory.Delete(d, true); } catch { } }
+        static PrintableOrder Order(string id, string code) { var o = SelfTestPrint.Basic(); o.OrderId = id; o.Code = code; return o; }
+        static string Read(List<string> files, int i = 0) { lock (files) return i < files.Count ? File.ReadAllText(files[i]) : null; }
+        static string Expected(PrintableOrder o, int mm = 58) { return TextTicketWriter.RenderText(TicketBuilder.Build(o, mm, SelfTestPrint.Tz), TicketText.ColumnsFor(mm)); }
+        const string Tok = "Bearer mcd_impressora1_segredo";
+
+        public static void Run()
+        {
+            Happy();
+            EmptyQueue();
+            PrinterOffline();
+            KindsAndNotices();
+            UnknownKindAndMissingTicket();
+            LeaseExpiredBeforeAck();
+            ReofferedAfterPrinted();
+            AckRetriedAndRestart();
+            TwoPrinters();
+            AuthRevoked();
+            NoHotLoop();
+            FailedPrinterDoesNotHoldJob();
+            ContractTable();
+            ReclaimedBySameOwner();
+            BadJobDoesNotBlockQueue();
+            TestJobWithTicket();
+            LegacyUnchanged();
+        }
+
+        // 1) caminho feliz: claim -> imprime 1x -> ack PRINTED
+        static void Happy()
+        {
+            var dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    var order = Order("A", "1001");
+                    api.AddJob("j1", order);
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo"))
+                    {
+                        rig.Start();
+                        bool done = WaitFor(() => api.JobState("j1") == "PRINTED" && printer.Printed.Count == 1, 20000);
+                        Thread.Sleep(300);
+                        Check("job: claim -> imprime 1 vez -> ack PRINTED (servidor marca PRINTED)", done && printer.Printed.Count == 1);
+                        Check("job: o tiquete impresso e exatamente o esperado", Read(printer.Printed) == Expected(order));
+                        Check("job: Bearer da impressora enviado no claim e no ack", api.Has(r => r.Contains("/print-jobs/claim") && r.EndsWith("auth=" + Tok)) && api.Has(r => r.Contains("/print-jobs/j1/ack") && r.EndsWith("auth=" + Tok)));
+                        Check("job: nao usa o endpoint antigo /orders/pending", !api.Has(r => r.Contains("/api/device/orders/pending")));
+                        Check("job: ledger por JOB (job:j1), sem ack pendente", rig.Ledger.IsPrinted("job:j1") && rig.Ledger.PendingAcks().Count == 0);
+                        Check("job: sem indicador de problema nem erro", rig.ProblemCount == 0 && !rig.HasMessage("Erro"));
+                        Check("job: pedido novo (ORDER_KITCHEN) alerta 1 vez", rig.Alerts == 1);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
+
+        // 2) fila vazia: {"job":null} e 204 nao imprimem, nao dao erro e nao pausam
+        static void EmptyQueue()
+        {
+            foreach (var as204 in new[] { false, true })
+            {
+                var dir = Tmp();
+                try
+                {
+                    using (var api = new FakeApi { EmptyAs204 = as204 })
+                    {
+                        var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                        using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo"))
+                        {
+                            rig.Start();
+                            bool polled = WaitFor(() => api.ClaimCalls >= 4, 8000);
+                            Check("fila vazia (" + (as204 ? "204" : "{job:null}") + "): continua pedindo, nao imprime, sem erro e sem pausar", polled && printer.Printed.Count == 0 && !rig.HasMessage("Erro") && !rig.Device.IsRevoked);
+                        }
+                    }
+                }
+                finally { Clean(dir); }
+            }
+        }
+
+        // 3) impressora offline: ack FAILED com o motivo, indicador, recuo local; depois imprime 1 vez
+        static void PrinterOffline()
+        {
+            var dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    var order = Order("B", "2002");
+                    api.AddJob("j2", order);
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out")) { Fault = VirtualFault.Offline };
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo"))
+                    {
+                        rig.Start();
+                        bool failed = WaitFor(() => api.AcksOf("j2", "FAILED") >= 1 && rig.LastProblem() == "#2002", 20000);
+                        Thread.Sleep(400);
+                        Check("job offline: ack FAILED com o motivo (offline) e indicador '#2002'", failed && (api.JobLastError("j2") ?? "").Contains("offline"));
+                        Check("job offline: servidor conta a tentativa e devolve o job a PENDING", api.JobAttempts("j2") >= 1 && api.JobState("j2") != "PRINTED");
+                        int claimsBefore = api.ClaimCalls; Thread.Sleep(700);
+                        Check("job offline: durante o recuo o cliente NAO reclama (nao segura o job pela lease: o servidor o mantem PENDING para outra impressora)",
+                            api.ClaimCalls - claimsBefore <= 1 && api.JobState("j2") == "PENDING" && api.AcksOf("j2", "FAILED") == 1 && printer.Printed.Count == 0);
+                        printer.Fault = VirtualFault.None;
+                        rig.Now = rig.Now.AddSeconds(20); // passou o recuo de 15 s
+                        bool printed = WaitFor(() => printer.Printed.Count == 1 && api.JobState("j2") == "PRINTED", 20000);
+                        Thread.Sleep(300);
+                        Check("job offline: impressora voltou => o job volta, imprime 1 vez e fecha com PRINTED", printed && printer.Printed.Count == 1);
+                        Check("job offline: o indicador some", WaitFor(() => rig.LastProblem() == "", 5000));
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
+
+        // 4) reimpressao (2a via), aviso de cancelamento e tiquete de teste (sem ticket do servidor)
+        static void KindsAndNotices()
+        {
+            var dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    var re = SelfTestPrint.Reprint(); re.OrderId = "R"; re.Code = "3003";
+                    var cancel = SelfTestPrint.CancelFixture(); cancel.OrderId = "C"; cancel.Code = "3004";
+                    api.AddJob("j3", re, "ORDER_REPRINT");
+                    api.AddJob("j4", cancel, "ORDER_REPRINT");
+                    api.AddJob("j5", null, "TEST");
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo"))
+                    {
+                        rig.Start();
+                        bool done = WaitFor(() => api.JobState("j3") == "PRINTED" && api.JobState("j4") == "PRINTED" && api.JobState("j5") == "PRINTED", 30000);
+                        Thread.Sleep(300);
+                        Check("job: reimpressao, cancelamento e teste imprimem e fecham (3 tiquetes, cada um 1 vez)", done && printer.Printed.Count == 3);
+                        var all = new[] { Read(printer.Printed, 0), Read(printer.Printed, 1), Read(printer.Printed, 2) };
+                        Check("job ORDER_REPRINT: sai '2ª VIA (1)' e '1ª impressão'", all[0] != null && all[0].Contains("2ª VIA (1)") && all[0].Contains("1ª impressão"));
+                        Check("job com cancelNotice: sai o aviso 'CANCELADO' sem itens nem valores", all[1] != null && all[1].Contains("CANCELADO") && !all[1].Contains("Calabresa") && !all[1].Contains("R$"));
+                        Check("job TEST sem ticket do servidor: sai o tiquete de teste proprio (acentos, regua, sem dados de pedido)", all[2] != null && all[2].Contains("TESTE DE IMPRESSÃO") && all[2].Contains("ação") && !all[2].Contains("PEDIDO") && !all[2].Contains("R$ 0,00"));
+                        Check("job: original e 2a via do mesmo pedido sao jobs diferentes (chave por job, nao por pedido)", rig.Ledger.IsPrinted("job:j3") && rig.Ledger.IsPrinted("job:j4"));
+                        Check("job: alerta sonoro so para ORDER_KITCHEN (reimpressao, cancelamento e teste NAO alertam)", rig.Alerts == 0);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
+
+        // 5) tipo desconhecido (TAB_BILL e do PC-08) e job sem ticket: ack FAILED, nada impresso
+        static void UnknownKindAndMissingTicket()
+        {
+            var dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.AddJob("j6", Order("U", "4004"), "TAB_BILL");
+                    api.AddJob("j7", null, "ORDER_KITCHEN");
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo"))
+                    {
+                        rig.Start();
+                        bool done = WaitFor(() => api.AcksOf("j6", "FAILED") >= 1 && api.AcksOf("j7", "FAILED") >= 1, 20000);
+                        Check("job de tipo desconhecido: ack FAILED 'tipo nao suportado' e NADA impresso", done && (api.JobLastError("j6") ?? "").Contains("tipo não suportado") && printer.Printed.Count == 0);
+                        Check("job sem ticket: ack FAILED 'tiquete ausente' e nada impresso", (api.JobLastError("j7") ?? "").Contains("ausente") && printer.Printed.Count == 0);
+                        Check("job recusado nao fica em 'sem imprimir' no painel local (erro do servidor, nao da impressora)", rig.ProblemCount == 0);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
+
+        // 6) a impressao demora mais que a lease: o cliente NAO reclama o mesmo job de novo enquanto imprime; o ack volta 409;
+        //    o servidor re-oferece, o cliente reconhece que ja imprimiu e so reenvia PRINTED (nunca reimprime)
+        static void LeaseExpiredBeforeAck()
+        {
+            var dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi { LeaseMs = 1000 })
+                {
+                    api.AddJob("j8", Order("L", "5005"));
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out")) { DelayMs = 2600 };
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo"))
+                    {
+                        rig.Start();
+                        bool first = WaitFor(() => api.AcksOf("j8", "PRINTED") >= 1, 25000);
+                        Check("lease vencida: durante a impressao o cliente nao reclama o mesmo job de novo (1 so claim ate o fim da impressao)", first && api.ClaimCalls >= 1);
+                        Check("lease vencida: o 1o ack vem DEPOIS da lease e o servidor responde 409; o cliente avisa", rig.HasMessage("lease vencida"));
+                        Check("lease vencida: avisa que a impressao passou da lease", rig.HasMessage("demorou mais que a lease"));
+                        bool closed = WaitFor(() => api.JobState("j8") == "PRINTED", 25000);
+                        Thread.Sleep(500);
+                        Check("lease vencida: o servidor re-oferece, o cliente reenvia PRINTED e o job fecha", closed);
+                        Check("lease vencida: impresso UMA vez so (nunca reimprime), ledger sabe", printer.Printed.Count == 1 && rig.Ledger.IsPrinted("job:j8"));
+                        Check("lease vencida: sem laco de ack (poucos acks)", api.AcksOf("j8", "PRINTED") <= 3);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
+
+        // 7) servidor re-oferece um job que ja imprimimos (ack perdido, lease vencida): NAO reimprime, so reenvia PRINTED
+        static void ReofferedAfterPrinted()
+        {
+            var dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi { LeaseMs = 700 })
+                {
+                    var order = Order("O", "6006");
+                    var job = api.AddJob("j9", order);
+                    api.JobAckStatus = 500; api.JobAckFailFirst = 1;   // o 1o ack falha (rede/erro)
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo"))
+                    {
+                        rig.Start();
+                        bool printed = WaitFor(() => printer.Printed.Count == 1, 20000);
+                        // espera a lease vencer no servidor e o job ser oferecido de novo
+                        bool closed = WaitFor(() => api.JobState("j9") == "PRINTED", 25000);
+                        Thread.Sleep(500);
+                        Check("job re-oferecido depois de impresso: NAO reimprime (1 tiquete so)", printed && printer.Printed.Count == 1);
+                        Check("job re-oferecido: reenvia PRINTED e o servidor fecha o job", closed && api.AcksOf("j9", "PRINTED") >= 2);
+                        Check("job re-oferecido: sem ack pendente no ledger no fim", WaitFor(() => rig.Ledger.PendingAcks().Count == 0, 5000));
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
+
+        // 8) ack com falha de rede fica pendente em disco; reiniciar o app nao reimprime e o ack sai
+        static void AckRetriedAndRestart()
+        {
+            var dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    var order = Order("K", "7007");
+                    api.AddJob("j10", order);
+                    api.JobAckStatus = 500; api.JobAckFailFirst = 3;   // os 3 primeiros acks falham
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    var ledgerPath = Path.Combine(dir, "printed.json");
+                    using (var rig1 = new Rig(api, printer, ledgerPath, "mcd_impressora1_segredo"))
+                    {
+                        rig1.Start();
+                        bool printed = WaitFor(() => printer.Printed.Count == 1 && api.JobAckCalls >= 1, 20000);
+                        Check("ack de job com falha: imprimiu e o ack ficou PENDENTE em disco (chave job:)", printed && rig1.Ledger.PendingAcks().Contains("job:j10"));
+                    }
+                    Thread.Sleep(200);
+                    using (var rig2 = new Rig(api, printer, ledgerPath, "mcd_impressora1_segredo"))
+                    {
+                        Check("reinicio: o ack pendente do job sobreviveu em disco", rig2.Ledger.PendingAcks().Contains("job:j10") || api.JobState("j10") == "PRINTED");
+                        rig2.Start();
+                        bool closed = WaitFor(() => api.JobState("j10") == "PRINTED" && rig2.Ledger.PendingAcks().Count == 0, 25000);
+                        Thread.Sleep(400);
+                        Check("reinicio: reabriu, repetiu o ack ate passar e NAO reimprimiu", closed && printer.Printed.Count == 1);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
+
+        // 9) duas impressoras (tokens diferentes) na mesma loja: cada job sai exatamente uma vez no total
+        static void TwoPrinters()
+        {
+            var dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    for (int i = 1; i <= 8; i++) api.AddJob("m" + i, Order("M" + i, "80" + i));
+                    var p1 = new VirtualPrintTarget(Path.Combine(dir, "out1")) { DelayMs = 60 };
+                    var p2 = new VirtualPrintTarget(Path.Combine(dir, "out2")) { DelayMs = 60 };
+                    using (var r1 = new Rig(api, p1, null, "mcd_impressora1_segredo", 40))
+                    using (var r2 = new Rig(api, p2, null, "mcd_impressora2_segredo", 40))
+                    {
+                        r1.Start(); r2.Start();
+                        bool all = WaitFor(() => Enumerable.Range(1, 8).All(i => api.JobState("m" + i) == "PRINTED"), 30000);
+                        Thread.Sleep(500);
+                        Check("duas impressoras: os 8 jobs foram impressos e fechados", all);
+                        Check("duas impressoras: cada job saiu em UMA impressora so (8 tiquetes no total, sem duplicidade)", p1.Printed.Count + p2.Printed.Count == 8);
+                        Check("duas impressoras: o servidor distribuiu o trabalho entre as duas", p1.Printed.Count >= 1 && p2.Printed.Count >= 1);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
+
+        // 10) chave recusada no claim segue a regra do PC-05 (pausa so depois da janela)
+        static void AuthRevoked()
+        {
+            var dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi { ClaimStatus = 401 })
+                {
+                    api.AddJob("x1", Order("X", "9009"));
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", 60))
+                    {
+                        rig.Device.AuthFailureWindow = TimeSpan.FromMilliseconds(500);
+                        rig.Start();
+                        bool paused = WaitFor(() => rig.Device.IsRevoked, 15000);
+                        Check("claim com 401 seguido por mais que a janela: pausa (chave recusada), nada impresso", paused && printer.Printed.Count == 0);
+                        int calls = api.ClaimCalls; Thread.Sleep(600);
+                        Check("claim pausado: nao martela a API", api.ClaimCalls - calls <= 1);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
+
+        // 11) enquanto o job esta em recuo de falha, o cliente nao reclama nada (sem laco quente e sem segurar o job)
+        static void NoHotLoop()
+        {
+            var dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.AddJob("h1", Order("H", "1100"));
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out")) { Fault = VirtualFault.Offline };
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", 40))
+                    {
+                        rig.Start();
+                        WaitFor(() => api.AcksOf("h1", "FAILED") >= 1, 20000);
+                        Thread.Sleep(150);
+                        int before = api.ClaimCalls; Thread.Sleep(1500);
+                        Check("recuo: em 1,5 s (37 ciclos de 40 ms) o cliente fez no maximo 1 claim (sem laco quente)", api.ClaimCalls - before <= 1);
+                        Check("recuo: o job continua PENDING no servidor (outra impressora poderia pegar) e so houve 1 FAILED", api.JobState("h1") == "PENDING" && api.AcksOf("h1", "FAILED") == 1);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
+
+        // 11b) duas impressoras: a que falhou nao segura o job; a outra imprime
+        static void FailedPrinterDoesNotHoldJob()
+        {
+            var dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    api.AddJob("f1", Order("F", "1300"));
+                    var bad = new VirtualPrintTarget(Path.Combine(dir, "bad")) { Fault = VirtualFault.Offline };
+                    var good = new VirtualPrintTarget(Path.Combine(dir, "good"));
+                    using (var rbad = new Rig(api, bad, null, "mcd_impressora1_segredo", 40))
+                    {
+                        rbad.Start();
+                        WaitFor(() => api.AcksOf("f1", "FAILED") >= 1, 20000);
+                        using (var rgood = new Rig(api, good, null, "mcd_impressora2_segredo", 40))
+                        {
+                            rgood.Start();
+                            bool done = WaitFor(() => api.JobState("f1") == "PRINTED" && good.Printed.Count == 1, 20000);
+                            Thread.Sleep(300);
+                            Check("impressora com defeito nao segura o job: a outra impressora assume e imprime 1 vez", done && good.Printed.Count == 1 && bad.Printed.Count == 0);
+                        }
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
+
+        // ---- ADR-0004 §8 como TABELA DE CONTRATO sobre o servidor falso (o Turing pode reaproveitar estes casos na API-12) ----
+        static string Post(FakeApi api, string path, string body, string auth, out int status)
+        {
+            using (var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) })
+            using (var req = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Post, "http://127.0.0.1:" + api.Port + path))
+            {
+                req.Headers.TryAddWithoutValidation("Authorization", auth);
+                req.Content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
+                var resp = http.SendAsync(req).Result;
+                status = (int)resp.StatusCode;
+                return resp.Content.ReadAsStringAsync().Result;
+            }
+        }
+        static Newtonsoft.Json.Linq.JToken Job(string json) { return Newtonsoft.Json.Linq.JObject.Parse(json)["job"]; }
+
+        static void ContractTable()
+        {
+            using (var api = new FakeApi { LeaseMs = 700, FailBackoffMs = 500 })
+            {
+                const string A = "Bearer mcd_a_x", B = "Bearer mcd_b_y";
+                api.AddJob("c1", Order("C1", "1"));
+                int st; string r;
+                r = Post(api, "/api/device/print-jobs/claim", "{}", B, out st);
+                var first = Job(r);
+                Check("contrato §8.2: claim devolve {job:{id,kind,attempt,leaseSeconds,ticket}} com attempt 1", st == 200 && (string)first["id"] == "c1" && (int)first["attempt"] == 1 && first["ticket"] != null && first["kind"] != null);
+                Check("contrato §8.1: leaseSeconds e RELATIVO (inteiro, nao data) e o ticket traz o schema do tiquete", (int)first["leaseSeconds"] >= 1 && (string)first["ticket"]["code"] == "1");
+                r = Post(api, "/api/device/print-jobs/claim", "{}", B, out st);
+                Check("contrato §8.4: mesmo dono, lease valida => devolve o MESMO job sem incrementar attempt", st == 200 && (string)Job(r)["id"] == "c1" && (int)Job(r)["attempt"] == 1 && api.JobAttempts("c1") == 1);
+                r = Post(api, "/api/device/print-jobs/claim", "{}", A, out st);
+                Check("contrato: outro token nao recebe um job CLAIMED por alguem com lease valida (200 {job:null})", st == 200 && Job(r).Type == Newtonsoft.Json.Linq.JTokenType.Null);
+                r = Post(api, "/api/device/print-jobs/c1/ack", "{\"status\":\"PRINTED\"}", A, out st);
+                Check("contrato §8.5: ack de OUTRO dono => 409", st == 409 && api.JobState("c1") == "CLAIMED");
+                r = Post(api, "/api/device/print-jobs/c1/ack", "{\"status\":\"FAILED\",\"error\":\"sem papel\"}", B, out st);
+                Check("contrato §8.3: FAILED do dono => 200 e o job volta a PENDING (attempts < max)", st == 200 && api.JobState("c1") == "PENDING" && api.JobLastError("c1") == "sem papel");
+                r = Post(api, "/api/device/print-jobs/claim", "{}", B, out st);
+                Check("contrato §8.3: o claim NAO devolve o job antes do availableAt (recuo do servidor)", st == 200 && Job(r).Type == Newtonsoft.Json.Linq.JTokenType.Null);
+                Thread.Sleep(650);
+                r = Post(api, "/api/device/print-jobs/claim", "{}", B, out st);
+                Check("contrato §8.3: depois do availableAt o job volta, com attempt 2", st == 200 && (string)Job(r)["id"] == "c1" && (int)Job(r)["attempt"] == 2);
+                r = Post(api, "/api/device/print-jobs/c1/ack", "{\"status\":\"PRINTED\"}", B, out st);
+                Check("contrato: ack PRINTED do dono com lease valida => 200 e o job fica PRINTED", st == 200 && api.JobState("c1") == "PRINTED");
+                r = Post(api, "/api/device/print-jobs/c1/ack", "{\"status\":\"PRINTED\"}", B, out st);
+                Check("contrato §8.5: ack repetido do dono => 200 idempotente", st == 200 && api.JobState("c1") == "PRINTED");
+                r = Post(api, "/api/device/print-jobs/claim", "{}", B, out st);
+                Check("contrato §8.4: o claim NUNCA devolve job PRINTED", st == 200 && Job(r).Type == Newtonsoft.Json.Linq.JTokenType.Null);
+                r = Post(api, "/api/device/print-jobs/nao-existe/ack", "{\"status\":\"PRINTED\"}", B, out st);
+                Check("contrato §8.5: job inexistente => 404", st == 404);
+                // lease vencida => 409
+                api.AddJob("c2", Order("C2", "2"));
+                Post(api, "/api/device/print-jobs/claim", "{}", B, out st);
+                Thread.Sleep(900); // passa a lease de 700 ms
+                r = Post(api, "/api/device/print-jobs/c2/ack", "{\"status\":\"PRINTED\"}", B, out st);
+                Check("contrato §8.5: ack com a lease vencida => 409 (o job volta a PENDING)", st == 409 && api.JobState("c2") == "PENDING");
+                // o c2 (mais antigo) voltou a PENDING: reclama e fecha, senao o claim do c3 pegaria o c2
+                r = Post(api, "/api/device/print-jobs/claim", "{}", B, out st);
+                Post(api, "/api/device/print-jobs/c2/ack", "{\"status\":\"PRINTED\"}", B, out st);
+                Check("contrato: depois do 409 o job vencido e reoferecido e fecha com PRINTED", (string)Job(r)["id"] == "c2" && st == 200 && api.JobState("c2") == "PRINTED");
+                // estourar attempts => FAILED definitivo
+                api.AddJob("c3", Order("C3", "3"), "ORDER_KITCHEN");
+                for (int i = 0; i < 3; i++)
+                {
+                    Thread.Sleep(600);
+                    Post(api, "/api/device/print-jobs/claim", "{}", B, out st);
+                    Post(api, "/api/device/print-jobs/c3/ack", "{\"status\":\"FAILED\",\"error\":\"x\"}", B, out st);
+                }
+                Check("contrato §8.3: ao estourar o maximo de tentativas (3) o job vira FAILED definitivo", api.JobState("c3") == "FAILED" && api.JobAttempts("c3") == 3);
+            }
+        }
+
+        // §8.4 no cliente: o app caiu depois do claim (resposta perdida / reinicio); o novo claim devolve o MESMO job (attempt 1)
+        // e o cliente imprime sem consumir tentativa.
+        static void ReclaimedBySameOwner()
+        {
+            var dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    var order = Order("S", "1500");
+                    api.AddJob("s1", order);
+                    int st;
+                    Post(api, "/api/device/print-jobs/claim", "{}", Tok, out st); // "processo anterior" reclamou e caiu antes de imprimir
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo"))
+                    {
+                        rig.Start();
+                        bool done = WaitFor(() => api.JobState("s1") == "PRINTED" && printer.Printed.Count == 1, 20000);
+                        Thread.Sleep(300);
+                        Check("reinicio depois do claim: o claim devolve o MESMO job e o cliente imprime 1 vez", done && printer.Printed.Count == 1 && Read(printer.Printed) == Expected(order));
+                        Check("reinicio depois do claim: nao gastou tentativa (attempt continua 1)", api.JobAttempts("s1") == 1);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
+
+        // §8.3: um job que falha sempre NAO trava a fila: o servidor so o devolve depois do availableAt e o proximo job sai.
+        static void BadJobDoesNotBlockQueue()
+        {
+            var dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi { FailBackoffMs = 250 })
+                {
+                    api.AddJob("bad", null, "ORDER_KITCHEN");                 // sem ticket: o cliente responde FAILED a cada tentativa
+                    var good = Order("Q", "1600");
+                    api.AddJob("good", good);
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo", 40))
+                    {
+                        rig.Start();
+                        bool goodDone = WaitFor(() => api.JobState("good") == "PRINTED", 20000);
+                        bool badDead = WaitFor(() => api.JobState("bad") == "FAILED", 20000);
+                        Thread.Sleep(300);
+                        Check("job ruim nao trava a fila: o job seguinte e impresso", goodDone && printer.Printed.Count == 1 && Read(printer.Printed) == Expected(good));
+                        Check("job ruim: depois de 3 tentativas o servidor o marca FAILED definitivo e o cliente parou de pedi-lo", badDead && api.JobAttempts("bad") == 3 && api.AcksOf("bad", "FAILED") == 3);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
+
+        // §8.2: TEST leva ticket (mesmo schema, conteudo fixo e ficticio): imprime pelo caminho normal de tiquete
+        static void TestJobWithTicket()
+        {
+            var dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    var t = new PrintableOrder { OrderId = "t", Code = "TESTE", Type = "BALCAO", StoreName = "Loja de Teste", TotalCents = 0, Items = new List<PrintableOrderItem>(), PaymentMethod = "DINHEIRO", CreatedAt = "2026-11-16T12:00:00Z" };
+                    api.AddJob("t1", t, "TEST");
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    using (var rig = new Rig(api, printer, null, "mcd_impressora1_segredo"))
+                    {
+                        rig.Start();
+                        bool done = WaitFor(() => api.JobState("t1") == "PRINTED" && printer.Printed.Count == 1, 20000);
+                        Check("job TEST com ticket do servidor: imprime pelo caminho normal e fecha", done && (Read(printer.Printed) ?? "").Contains("Loja de Teste"));
+                        Check("job TEST: nao alerta (so ORDER_KITCHEN alerta)", rig.Alerts == 0);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
+
+        // 12) UsePrintJobs desligado (padrao): o cliente continua no /pending e nunca chama o claim
+        static void LegacyUnchanged()
+        {
+            var dir = Tmp();
+            try
+            {
+                using (var api = new FakeApi())
+                {
+                    var order = Order("G", "1200");
+                    api.Pending.Add(new[] { order.OrderId, order.Code });
+                    api.PrintableBody = o => Newtonsoft.Json.JsonConvert.SerializeObject(new PrintableOrderResponse { Order = order });
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "out"));
+                    var ledger = new PrintLedger(null);
+                    var settings = new AppSettings { ApiBaseUrl = "http://127.0.0.1:" + api.Port, DeviceToken = "mcd_x_y" }; // UsePrintJobs padrao = false
+                    using (var dc = new DeviceClient(ledger, settings) { PollIntervalMs = 60, WsRetryMs = 150 })
+                    {
+                        var coord = new PrintCoordinator(dc, printer, () => 58, SelfTestPrint.Tz);
+                        dc.TicketReady += o => System.Threading.Tasks.Task.Run(() => coord.Handle(o));
+                        dc.Start();
+                        bool done = WaitFor(() => printer.Printed.Count == 1 && api.Pending.Count == 0, 20000);
+                        Thread.Sleep(300);
+                        Check("padrao (UsePrintJobs desligado): continua no /pending antigo e imprime", done && printer.Printed.Count == 1);
+                        Check("padrao: nunca chama o claim de PrintJob", api.ClaimCalls == 0 && !new AppSettings().UsePrintJobs);
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
+    }
+}

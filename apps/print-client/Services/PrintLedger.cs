@@ -142,6 +142,48 @@ namespace MeuCardapio.PrintClient.Services
             }
         }
 
+        // Em impressão agora (entre TryBeginPrint e MarkPrinted/MarkPrintFailed/Release/watchdog). O cliente de jobs espera
+        // por isto para só pedir o próximo job depois de resolver o atual.
+        public bool IsInFlight(string key)
+        {
+            lock (_lock) { return _inFlight.ContainsKey(key); }
+        }
+
+        // Modo PrintJob: há job em impressão agora? (não reclamar outro nem o mesmo de novo enquanto isso)
+        public bool AnyJobInFlight()
+        {
+            lock (_lock) { return _inFlight.Keys.Any(k => k.StartsWith("job:", StringComparison.Ordinal)); }
+        }
+
+        // Modo PrintJob: há job que falhou aqui e ainda está no recuo? Reclamar agora prenderia um job que o cliente não vai
+        // imprimir até o fim do recuo (segurando-o pela lease inteira e bloqueando as outras impressoras).
+        public bool AnyJobInBackoff()
+        {
+            lock (_lock)
+            {
+                var now = _utcNow();
+                return _entries.Any(kv => kv.Key.StartsWith("job:", StringComparison.Ordinal) && kv.Value.Failures > 0 && !kv.Value.PrintedAtUtc.HasValue
+                                          && kv.Value.RetryAfterUtc.HasValue && kv.Value.RetryAfterUtc.Value > now);
+            }
+        }
+
+        // Modo PrintJob (PC-03): uma falha local de um job que o servidor parou de oferecer há mais de `age` não fica no
+        // indicador "sem imprimir" para sempre (o aviso passa a ser o do painel, ADR-0004 §2). Usa o fim do recuo como
+        // "última falha". Devolve quantas esqueceu.
+        public int ForgetStaleFailures(TimeSpan age)
+        {
+            lock (_lock)
+            {
+                var limit = _utcNow() - age;
+                var stale = _entries.Where(kv => kv.Key.StartsWith("job:", StringComparison.Ordinal) && kv.Value.Failures > 0 && !kv.Value.PrintedAtUtc.HasValue
+                                                 && kv.Value.RetryAfterUtc.HasValue && kv.Value.RetryAfterUtc.Value < limit && !_inFlight.ContainsKey(kv.Key))
+                                    .Select(kv => kv.Key).ToList();
+                foreach (var k in stale) { _entries[k].Failures = 0; _entries[k].RetryAfterUtc = null; }
+                if (stale.Count > 0) Save();
+                return stale.Count;
+            }
+        }
+
         public bool IsPrinted(string orderId)
         {
             lock (_lock)

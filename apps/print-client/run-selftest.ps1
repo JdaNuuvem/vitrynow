@@ -19,8 +19,8 @@ New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 $outD = Join-Path $tmp "MeuCardapioSelfTest.dll"
 $json = Join-Path $libs "Newtonsoft.Json.dll"
 $srcs = @(
-  "SelfTest.cs", "SelfTestPrint.cs", "SelfTestHarness.cs", "SelfTestAudio.cs", "SelfTestInstall.cs", "SelfTestFakeApi.cs", "SelfTestDevice.cs", "SelfTestUpdater.cs", "SelfTestDeviceClient.cs",
-  "Models\PrintableOrder.cs",
+  "SelfTest.cs", "SelfTestPrint.cs", "SelfTestHarness.cs", "SelfTestAudio.cs", "SelfTestJobs.cs", "SelfTestInstall.cs", "SelfTestFakeApi.cs", "SelfTestDevice.cs", "SelfTestUpdater.cs", "SelfTestDeviceClient.cs",
+  "Models\PrintableOrder.cs", "Models\PrintJob.cs",
   "Printing\TicketDocument.cs", "Printing\TicketText.cs", "Printing\TicketBuilder.cs", "Printing\TextTicketWriter.cs", "Printing\IPrintTarget.cs",
   "Printing\GdiTicketPainter.cs", "Printing\VirtualPrintTarget.cs", "Printing\PrinterProbe.cs",
   "Services\PrintCoordinator.cs", "Services\SingleInstance.cs", "Services\AlertSounds.cs", "Services\AudioPlayer.cs", "Services\DeviceClient.cs", "Services\PrintLedger.cs", "Services\SecretStore.cs",

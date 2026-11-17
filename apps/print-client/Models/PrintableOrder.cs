@@ -47,6 +47,8 @@ namespace MeuCardapio.PrintClient.Models
         [JsonProperty("cancelNotice")] public bool? CancelNotice { get; set; }              // true = imprime o aviso de cancelamento
         [JsonProperty("ticketSchemaVersion")] public int? TicketSchemaVersion { get; set; }
         [JsonProperty("tableLabel")] public string TableLabel { get; set; }
+        // Job TEST sem tíquete do servidor: o cliente imprime o tíquete de teste próprio (não vem da API).
+        [JsonIgnore] public bool IsTest { get; set; }
         [JsonProperty("createdAt")] public string CreatedAt { get; set; }
         [JsonProperty("items")] public List<PrintableOrderItem> Items { get; set; } = new List<PrintableOrderItem>();
     }

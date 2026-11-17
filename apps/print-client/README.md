@@ -204,6 +204,19 @@ agora" do WebSocket, em vez de desaparecer da fila pra sempre.
 - **Consulta WMI da impressora:** timeout de 3 s na enumeração e teto de 5 s no total (acima disso vale "desconhecido" e a impressão segue), cada objeto liberado.
   A consulta é de **voo único**: se uma está presa, a próxima volta "desconhecido" na hora, sem criar outra tarefa. Imprimir e consultar rodam **fora da thread da interface** e uma impressão por vez (tíquetes nunca se misturam).
 
+## Modo PrintJob (PC-03, ADR-0004)
+
+Com `"UsePrintJobs": true` no `settings.json` o cliente consome a fila de **jobs** (claim com lease + ack) em vez de `/api/device/orders/pending`. **Desligado por padrão** até a API-12 existir e as
+lojas-piloto migrarem. O formato JSON é uma **suposição** nossa, documentada em `docs\contrato-printjob-cliente.md` (o ADR fixa o comportamento, não os campos): o Turing precisa confirmá-la.
+
+- O servidor decide o que imprimir; o cliente obedece. Um job por vez, no máximo 20 por ciclo.
+- Dedupe local **por job** (`job:<id>`): original e 2ª via do mesmo pedido são jobs diferentes. Job já impresso que o servidor oferece de novo (ack perdido, lease vencida) **não reimprime**: só reenvia `PRINTED`.
+- **Não faz claim enquanto há job em impressão ou em recuo de falha:** não segura job que não vai imprimir (outra impressora pode pegar) e não reclama o mesmo job se a impressão passar da lease.
+- Falha de impressão: ack `FAILED` com o motivo (melhor esforço) + indicador "sem imprimir" + recuo local. `PRINTED` perdido por rede fica **pendente em disco** e é repetido; `409` (lease vencida) e `404` encerram sem repetir.
+- Tipos: `ORDER_KITCHEN` (com alerta sonoro), `ORDER_REPRINT` (2ª via, aviso de cancelamento via `cancelNotice`) e `TEST` (tíquete de teste próprio com acentos e régua de colunas). Tipo desconhecido (`TAB_BILL` é do PC-08) ⇒ `FAILED`.
+- Teste: `SelfTestJobs.cs` roda o `DeviceClient` real contra uma API falsa que implementa lease, ack idempotente, 409 e attempts (feliz, fila vazia, offline, 2ª via/cancelamento/teste, tipo desconhecido,
+  lease vencida, re-oferta, ack com falha + reinício, duas impressoras, chave recusada, recuo sem laço quente, impressora com defeito não segura o job, padrão legado intacto).
+
 ## Confiabilidade e segredos (PC-02)
 
 - **Dedupe e ack persistido** (`Services/PrintLedger.cs`, arquivo `%LOCALAPPDATA%\MeuCardapioPrintClient\printed.json`): polling e WS passam pelo mesmo portão, um pedido nunca é impresso duas vezes, e se o aviso à API falhar o ack é repetido sem reimprimir. Falha de impressão volta com recuo (15 s até 5 min) e sem novo alerta sonoro.
