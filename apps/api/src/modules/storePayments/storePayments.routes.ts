@@ -14,7 +14,7 @@ export function redirectUriFor(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 // Motivos do redirecionamento de volta ao painel (conjunto FECHADO: nada do provedor chega à URL).
-const RETURN_REASONS = new Set(["OAUTH_STATE_INVALID", "OAUTH_CODE_INVALID", "PAYMENT_PROVIDER_UNAVAILABLE", "PAYMENT_ACCOUNT_IN_USE"]);
+const RETURN_REASONS = new Set(["OAUTH_STATE_INVALID", "OAUTH_CODE_INVALID", "PAYMENT_PROVIDER_UNAVAILABLE", "MP_ACCOUNT_IN_USE"]);
 
 // A sessão (`sid`) amarra o `state` do OAuth ao navegador que o iniciou (D1-1). Todo token do painel tem `sid`.
 function actorOf(request: FastifyRequest) {

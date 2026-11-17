@@ -3,7 +3,7 @@ import type { PaymentAccount, PaymentAccountStatus, prisma as prismaClient } fro
 import type { AuditLogger } from "../../shared/audit";
 import { CodedError } from "../../shared/errors";
 import { decryptSecret, encryptSecret } from "../../lib/paymentCrypto";
-import { OAuthError, type MercadoPagoOAuth, type OAuthTokens } from "./oauth";
+import { OAuthError, PaymentsDisabledError, type MercadoPagoOAuth, type OAuthTokens } from "./oauth";
 
 type Db = typeof prismaClient;
 
@@ -81,6 +81,13 @@ export class StorePaymentsService {
 
   /** Passo 1: gera o `state` (128 bits; só o HASH vai ao banco) e devolve a URL de autorização. */
   async startConnect(actor: Actor, redirectUri: string): Promise<{ authorizationUrl: string }> {
+    let provider: MercadoPagoOAuth;
+    try {
+      provider = this.oauth();
+    } catch (error) {
+      if (error instanceof PaymentsDisabledError) throw new CodedError(409, "PAYMENTS_DISABLED", "O recebimento por PIX ainda não está disponível neste ambiente.");
+      throw error;
+    }
     const state = randomBytes(16).toString("base64url");
     const now = this.clock.now();
     await this.db.paymentOAuthState.deleteMany({ where: { storeId: actor.storeId, OR: [{ expiresAt: { lt: now } }, { usedAt: { not: null } }] } });
@@ -88,7 +95,7 @@ export class StorePaymentsService {
       data: { storeId: actor.storeId, userId: actor.userId, sid: actor.sid, stateHash: sha256(state), expiresAt: new Date(now.getTime() + STATE_TTL_MS) },
     });
     this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "payment_account.connect_start", targetType: "PaymentAccount" });
-    return { authorizationUrl: this.oauth().authorizationUrl({ state, redirectUri }) };
+    return { authorizationUrl: provider.authorizationUrl({ state, redirectUri }) };
   }
 
   /**
@@ -138,15 +145,16 @@ export class StorePaymentsService {
       });
     } catch (error) {
       // Índice parcial único: esse vendedor já está ativo em OUTRA loja. Mensagem genérica, sem revelar qual (D1-3).
-      if ((error as { code?: string }).code === "P2002") throw new CodedError(409, "PAYMENT_ACCOUNT_IN_USE", "Esta conta do Mercado Pago já está em uso.");
+      if ((error as { code?: string }).code === "P2002") throw new CodedError(409, "MP_ACCOUNT_IN_USE", "Esta conta do Mercado Pago já está em uso.");
       throw error;
     }
-    this.audit.log({
+    // Estrita (parecer da Nightingale): o rastro de conectar/desconectar tem que existir; sem `sid` nem token no metadata.
+    await this.audit.logStrict({
       storeId: actor.storeId,
       userId: actor.userId,
       action: "payment_account.connect",
       targetType: "PaymentAccount",
-      metadata: { seller: maskSeller(tokens.sellerUserId), sid: actor.sid },
+      metadata: { seller: maskSeller(tokens.sellerUserId) },
     });
     return (await this.view(actor.storeId)).mercadopago;
   }
@@ -163,24 +171,25 @@ export class StorePaymentsService {
     const open = await this.db.payment.count({
       where: {
         paymentAccountId: account.id,
-        status: { in: ["APROVADO", "ESTORNO_PENDENTE"] },
+        // pago em andamento, estorno pendente OU PIX ainda vigente (o cliente pode pagar depois de a conta sumir)
+        status: { in: ["APROVADO", "ESTORNO_PENDENTE", "PENDENTE", "EM_ANALISE"] },
         order: { status: { notIn: ["CONCLUIDO", "CANCELADO"] } },
       },
     });
     if (open > 0) {
-      throw new CodedError(409, "DISCONNECT_BLOCKED", `Há ${open} pedido(s) com PIX pago ainda em andamento. Conclua ou cancele antes de desconectar.`, { count: open });
+      throw new CodedError(409, "DISCONNECT_BLOCKED", `Há ${open} pedido(s) com PIX pago ou aguardando pagamento. Conclua ou cancele antes de desconectar.`, { count: open });
     }
     await this.db.paymentAccount.update({
       where: { id: account.id },
       data: { status: "DISCONNECTED", accessTokenEnc: null, refreshTokenEnc: null, disconnectedAt: this.clock.now() },
     });
-    this.audit.log({
+    await this.audit.logStrict({
       storeId: actor.storeId,
       userId: actor.userId,
       action: "payment_account.disconnect",
       targetType: "PaymentAccount",
       targetId: account.id,
-      metadata: { seller: maskSeller(account.sellerUserId), sid: actor.sid },
+      metadata: { seller: maskSeller(account.sellerUserId) },
     });
   }
 
@@ -232,13 +241,20 @@ export class StorePaymentsService {
   async refreshAccount(accountId: string): Promise<"refreshed" | "skipped" | "failed" | "needs_reconnect"> {
     const outcome = await this.refreshLocked(accountId);
     if (outcome.result === "needs_reconnect") {
-      // fora da transação e sem derrubar nada: o aviso é do dono, a conta já está marcada
+      // fora da transação: a conta já está marcada. Rastro ESTRITO (propaga se não gravar) e depois o aviso, que nunca derruba nada.
+      await this.audit.logStrict({
+        storeId: outcome.storeId,
+        action: "payment_account.needs_reconnect",
+        targetType: "PaymentAccount",
+        targetId: accountId,
+        metadata: { seller: maskSeller(outcome.seller ?? ""), failures: outcome.failures },
+      });
       await this.notifyOwner(outcome.storeId, "needs_reconnect").catch(() => undefined);
     }
     return outcome.result;
   }
 
-  private async refreshLocked(accountId: string): Promise<{ result: "refreshed" | "skipped" | "failed" | "needs_reconnect"; storeId: string }> {
+  private async refreshLocked(accountId: string): Promise<{ result: "refreshed" | "skipped" | "failed" | "needs_reconnect"; storeId: string; seller?: string; failures?: number }> {
     return this.db.$transaction(async (tx) => {
       const rows = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "PaymentAccount" WHERE "id" = ${accountId} FOR UPDATE`;
       if (rows.length === 0) return { result: "skipped" as const, storeId: "" };
@@ -280,17 +296,42 @@ export class StorePaymentsService {
           },
         });
         if (giveUp) {
-          this.audit.log({
-            storeId: account.storeId,
-            action: "payment_account.needs_reconnect",
-            targetType: "PaymentAccount",
-            targetId: accountId,
-            metadata: { seller: maskSeller(account.sellerUserId), failures },
-          });
-          return { result: "needs_reconnect" as const, storeId: account.storeId };
+          return { result: "needs_reconnect" as const, storeId: account.storeId, seller: account.sellerUserId, failures };
         }
         return { result: "failed" as const, storeId: account.storeId };
       }
     }, { maxWait: 15_000, timeout: 30_000 }); // quem espera a trava da conta segura uma conexão; a chamada ao provedor tem prazo próprio (10 s)
+  }
+
+  // P-4: recifra TODOS os tokens com a chave ATUAL (depois de uma rotação, a chave anterior só sai de cena quando isto roda).
+  // Idempotente e seguro de repetir: registros já na chave atual são contados e não mudam. Uma conta por vez, com a linha travada.
+  async reencryptAll(currentKeyId: string): Promise<{ reencrypted: number; alreadyCurrent: number; failed: number }> {
+    const result = { reencrypted: 0, alreadyCurrent: 0, failed: 0 };
+    const ids = await this.db.paymentAccount.findMany({ where: { accessTokenEnc: { not: null } }, select: { id: true } });
+    for (const { id } of ids) {
+      try {
+        const outcome = await this.db.$transaction(async (tx) => {
+          await tx.$queryRaw`SELECT "id" FROM "PaymentAccount" WHERE "id" = ${id} FOR UPDATE`;
+          const account = await tx.paymentAccount.findUniqueOrThrow({ where: { id } });
+          if (!account.accessTokenEnc || !account.refreshTokenEnc) return "current" as const;
+          if (account.accessTokenEnc.split(".")[1] === currentKeyId && account.refreshTokenEnc.split(".")[1] === currentKeyId) return "current" as const;
+          const access = decryptSecret(account.accessTokenEnc, this.ctx(account.storeId, "accessToken"));
+          const refresh = decryptSecret(account.refreshTokenEnc, this.ctx(account.storeId, "refreshToken"));
+          await tx.paymentAccount.update({
+            where: { id },
+            data: {
+              accessTokenEnc: encryptSecret(access, this.ctx(account.storeId, "accessToken")),
+              refreshTokenEnc: encryptSecret(refresh, this.ctx(account.storeId, "refreshToken")),
+            },
+          });
+          return "done" as const;
+        });
+        if (outcome === "done") result.reencrypted += 1;
+        else result.alreadyCurrent += 1;
+      } catch {
+        result.failed += 1; // nunca registra a mensagem do erro (poderia citar o dado)
+      }
+    }
+    return result;
   }
 }

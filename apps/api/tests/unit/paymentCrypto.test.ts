@@ -100,6 +100,12 @@ describe("paymentCrypto", () => {
     }
   });
 
+  it("AAD não aceita '|' nem parte vazia (dois contextos diferentes não podem gerar o mesmo AAD); KEY_ID igual ao PREV_ID é recusado", () => {
+    expect(() => encryptSecret("x", { ...ctx, storeId: "a|b" }, env())).toThrow(/contexto de cifra inválido/);
+    expect(() => encryptSecret("x", { ...ctx, field: "" }, env())).toThrow(/contexto de cifra inválido/);
+    expect(() => currentKey({ PAYMENT_ENC_KEY: KEY_B, PAYMENT_ENC_KEY_ID: "v1", PAYMENT_ENC_KEY_PREV: KEY_A, PAYMENT_ENC_KEY_PREV_ID: "v1" })).toThrow(/não podem ser iguais/);
+  });
+
   it("aceita segredo com unicode e vazio", () => {
     for (const secret of ["", "çãõ-🔑-token"]) expect(decryptSecret(encryptSecret(secret, ctx, env()), ctx, env())).toBe(secret);
   });

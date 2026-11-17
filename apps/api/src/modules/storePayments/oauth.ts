@@ -135,6 +135,45 @@ export class RealMercadoPagoOAuth implements MercadoPagoOAuth {
 
 // ───────────── Seleção por ambiente ─────────────
 
+export type PaymentsMode = "fake" | "real" | "off";
+
+/** Só nestes ambientes o fake é aceito. NODE_ENV ausente = dev local (os scripts de dev não o definem). */
+export const isDevLike = (env: NodeJS.ProcessEnv) => env.NODE_ENV === undefined || env.NODE_ENV === "" || env.NODE_ENV === "development" || env.NODE_ENV === "test";
+
+/** Pagamentos por loja desligados (MP_OAUTH_MODE=off): PIX nunca é oferecido e conectar é recusado. */
+export class PaymentsDisabledError extends Error {
+  constructor() {
+    super("pagamentos por loja desligados neste ambiente");
+    this.name = "PaymentsDisabledError";
+  }
+}
+
+/** Modo efetivo: fora de dev/test o modo é OBRIGATÓRIO (`off` ou `real`); o fake nunca sobe em produção, staging ou similares. */
+export function paymentsMode(env: NodeJS.ProcessEnv = process.env): PaymentsMode {
+  const raw = env.MP_OAUTH_MODE?.trim();
+  if (raw && raw !== "fake" && raw !== "real" && raw !== "off") throw new Error(`MP_OAUTH_MODE inválido: "${raw}" (use off, real ou, só em dev/teste, fake).`);
+  if (!raw) {
+    if (!isDevLike(env)) throw new Error("MP_OAUTH_MODE não configurado: fora de dev/teste use `off` (PIX desligado) ou `real` (com as credenciais do aplicativo do Mercado Pago).");
+    return "fake";
+  }
+  if (raw === "fake" && !isDevLike(env)) throw new Error("O provedor FAKE de OAuth só roda em dev/teste (NODE_ENV ausente, development ou test): use MP_OAUTH_MODE=off ou real.");
+  return raw as PaymentsMode;
+}
+
+/**
+ * Falha ALTO no boot (não no 1º uso): modo coerente com o ambiente e, no modo real, chave de cifra forte, credenciais e
+ * PUBLIC_API_URL https (o callback tem de ser o cadastrado no aplicativo do Mercado Pago).
+ */
+export function assertPaymentsBootConfig(env: NodeJS.ProcessEnv = process.env, check: (env: NodeJS.ProcessEnv) => unknown): PaymentsMode {
+  const mode = paymentsMode(env);
+  if (mode === "real") {
+    if (!env.MP_CLIENT_ID || !env.MP_CLIENT_SECRET) throw new Error("MP_OAUTH_MODE=real exige MP_CLIENT_ID e MP_CLIENT_SECRET (credenciais pendentes: CL-13).");
+    check(env); // PAYMENT_ENC_KEY forte, própria e sem valor de teste
+    if (!isDevLike(env) && !/^https:\/\//.test(env.PUBLIC_API_URL ?? "")) throw new Error("PUBLIC_API_URL deve ser https:// fora de dev/teste (é o endereço do callback cadastrado no Mercado Pago).");
+  }
+  return mode;
+}
+
 let override: MercadoPagoOAuth | undefined;
 /** Só para testes: injeta o provedor (por exemplo, um `FakeMercadoPagoOAuth` com falhas simuladas). */
 export function setOAuthProvider(provider?: MercadoPagoOAuth) {
@@ -143,15 +182,13 @@ export function setOAuthProvider(provider?: MercadoPagoOAuth) {
 
 let sharedFake: FakeMercadoPagoOAuth | undefined;
 
-/** `MP_OAUTH_MODE=real` exige MP_CLIENT_ID e MP_CLIENT_SECRET; o padrão é fake — e o fake NUNCA sobe em produção. */
 export function oauthProvider(env: NodeJS.ProcessEnv = process.env): MercadoPagoOAuth {
   if (override) return override;
-  if (env.MP_OAUTH_MODE === "real") {
+  const mode = paymentsMode(env);
+  if (mode === "off") throw new PaymentsDisabledError();
+  if (mode === "real") {
     if (!env.MP_CLIENT_ID || !env.MP_CLIENT_SECRET) throw new Error("MP_OAUTH_MODE=real exige MP_CLIENT_ID e MP_CLIENT_SECRET (credenciais pendentes: CL-13).");
     return new RealMercadoPagoOAuth({ clientId: env.MP_CLIENT_ID, clientSecret: env.MP_CLIENT_SECRET });
-  }
-  if (env.NODE_ENV === "production") {
-    throw new Error("O provedor FAKE de OAuth não pode rodar em produção: configure MP_OAUTH_MODE=real com as credenciais do aplicativo.");
   }
   return (sharedFake ??= new FakeMercadoPagoOAuth());
 }

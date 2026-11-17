@@ -37,6 +37,9 @@ function load(id: string, secret: string | undefined, label: string, env: NodeJS
 /** Chave atual (grava) — obrigatória fora dos testes: perdê-la obriga todas as lojas a reconectar o Mercado Pago. */
 export function currentKey(env: NodeJS.ProcessEnv = process.env): EncKey {
   const key = load(env.PAYMENT_ENC_KEY_ID?.trim() || "v1", env.PAYMENT_ENC_KEY, "PAYMENT_ENC_KEY", env, TEST_KEY);
+  if (key && env.PAYMENT_ENC_KEY_PREV && (env.PAYMENT_ENC_KEY_PREV_ID?.trim() || "prev") === key.id) {
+    throw new Error("PAYMENT_ENC_KEY_ID e PAYMENT_ENC_KEY_PREV_ID não podem ser iguais (o id identifica a chave dentro de cada registro).");
+  }
   if (!key) {
     throw new Error('PAYMENT_ENC_KEY não configurado. Gere um com: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'base64url\'))"');
   }
@@ -48,7 +51,11 @@ function previousKey(env: NodeJS.ProcessEnv): EncKey | null {
   return load(env.PAYMENT_ENC_KEY_PREV_ID?.trim() || "prev", env.PAYMENT_ENC_KEY_PREV, "PAYMENT_ENC_KEY_PREV", env);
 }
 
-const aad = (ctx: CryptoContext) => Buffer.from(`${ctx.storeId}|${ctx.provider}|${ctx.field}`, "utf8");
+const aad = (ctx: CryptoContext) => {
+  // "|" é o separador do AAD: se aparecesse num campo, dois contextos diferentes poderiam gerar o mesmo AAD.
+  if ([ctx.storeId, ctx.provider, ctx.field].some((part) => part.includes("|") || part === "")) throw new Error("contexto de cifra inválido");
+  return Buffer.from(`${ctx.storeId}|${ctx.provider}|${ctx.field}`, "utf8");
+};
 const b64 = (buffer: Buffer) => buffer.toString("base64url");
 
 /** Cifra um segredo para uma loja/provedor/campo. O id da chave usada vai dentro do próprio registro. */
