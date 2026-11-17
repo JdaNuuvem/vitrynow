@@ -5,11 +5,14 @@ import { useState } from "react";
 export function NewCategoryForm({ onCreate }: { onCreate: (name: string, icon: string) => Promise<string | null> }) {
   const [name, setName] = useState("");
   const [icon, setIcon] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
   async function submit() {
     if (!name.trim()) return;
+    setError(null);
     const failure = await onCreate(name, icon);
-    if (failure) return alert(failure);
+    // Erro na própria tela, anunciado ao leitor de tela (antes era alert() nativo).
+    if (failure) return setError(failure);
     setName("");
     setIcon("");
   }
@@ -27,6 +30,11 @@ export function NewCategoryForm({ onCreate }: { onCreate: (name: string, icon: s
       <button type="button" className="catalogo__btn catalogo__btn--primary" onClick={submit}>
         Adicionar categoria
       </button>
+      {error && (
+        <p className="catalogo__error" role="alert">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

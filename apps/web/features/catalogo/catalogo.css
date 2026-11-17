@@ -57,6 +57,7 @@
 
 /* botões e links */
 .catalogo__btn {
+  min-height: 44px; /* alvo de toque (checklist UX-07 item 6) */
   padding: 6px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -92,6 +93,9 @@
 }
 
 .catalogo__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   align-self: flex-start;
   padding: 0;
   border: none;
@@ -311,4 +315,9 @@
     flex-direction: column;
     align-items: flex-start;
   }
+}
+
+/* editar e excluir bem separados: um toque errado não pode apagar o produto (UX-19) */
+.catalogo-product__actions {
+  gap: 20px;
 }
