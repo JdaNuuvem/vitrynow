@@ -257,16 +257,29 @@ describe("migração 20261117130000 (produto órfão → 'Sem categoria' oculta)
       ],
     });
     await prisma.product.create({ data: { storeId: other.id, categoryId: null, name: "Órfão de outra", priceCents: 100, active: true } });
+    // Loja D: o dono JÁ criou uma categoria "Sem categoria" — a migração a reaproveita (não cria outra igual).
+    const third = await prisma.store.create({ data: { name: "L3", slug: "loja-mig3", code: "MG3" } });
+    const existing = await prisma.category.create({ data: { storeId: third.id, name: "Sem categoria", position: 3 } });
+    await prisma.product.create({ data: { storeId: third.id, categoryId: null, name: "Órfão da D", priceCents: 100, active: true } });
+    // Loja E: sem órfãos, não ganha categoria alguma.
+    const clean = await prisma.store.create({ data: { name: "L4", slug: "loja-mig4", code: "MG4" } });
 
     // roda o SQL da migração (idempotente para o que já foi tratado)
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
     const sql = readFileSync(join(__dirname, "../../../packages/db/prisma/migrations/20261117130000_api56_categoria_obrigatoria/migration.sql"), "utf-8");
-    for (const statement of sql.split(/;\s*\n/).map((s) => s.replace(/--.*$/gm, "").trim()).filter(Boolean)) await prisma.$executeRawUnsafe(statement);
+    const run = async () => {
+      for (const statement of sql.split(/;\s*\n/).map((s) => s.replace(/--.*$/gm, "").trim()).filter(Boolean)) await prisma.$executeRawUnsafe(statement);
+    };
+    await run();
+    await run(); // idempotente: reexecutar não muda nada
 
     const orphans = await prisma.product.findMany({ where: { name: { startsWith: "Órfão" } }, include: { category: true } });
     expect(orphans.every((p) => p.categoryId !== null && p.active === false && p.category!.name === "Sem categoria")).toBe(true);
-    expect(await prisma.category.count({ where: { name: "Sem categoria" } })).toBe(2); // uma por loja
+    expect(await prisma.category.count({ where: { name: "Sem categoria" } })).toBe(3); // uma por loja com órfão; a da D foi reaproveitada
+    expect(await prisma.category.count({ where: { storeId: third.id } })).toBe(1);
+    expect((await prisma.product.findFirstOrThrow({ where: { name: "Órfão da D" } })).categoryId).toBe(existing.id);
+    expect(await prisma.category.count({ where: { storeId: clean.id } })).toBe(0);
     const semCategoria = await prisma.category.findFirstOrThrow({ where: { name: "Sem categoria", storeId: store.id } });
     expect(semCategoria.position).toBe(5); // no fim
     const intact = await prisma.product.findFirstOrThrow({ where: { name: "Com categoria" } });
