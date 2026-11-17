@@ -30,6 +30,32 @@ export async function buildPrintableOrder(orderId: string, options: PrintableOpt
   });
   if (!order) return null;
 
+  // Aviso de cancelamento: só o necessário para a cozinha reconhecer o tíquete que já saiu — sem itens, valores,
+  // contato nem endereço (ADR-0004 §6; contrato do cliente: "imprime só o aviso").
+  if (options.cancelNotice) {
+    return printableOrderSchema.parse({
+      ticketSchemaVersion: TICKET_SCHEMA_VERSION,
+      orderId: order.id,
+      code: order.code,
+      type: order.type,
+      storeName: order.store.name,
+      customerName: null,
+      customerPhone: null,
+      address: null,
+      notes: null,
+      totalCents: 0,
+      deliveryFeeCents: 0,
+      tipCents: 0,
+      paymentMethod: null,
+      paymentStatus: "A_COBRAR",
+      cancelNotice: true,
+      reprintCount: 0,
+      printedAtOriginal: options.printedAtOriginal ? options.printedAtOriginal.toISOString() : null,
+      createdAt: order.createdAt.toISOString(),
+      items: [],
+    });
+  }
+
   return printableOrderSchema.parse({
     ticketSchemaVersion: TICKET_SCHEMA_VERSION,
     orderId: order.id,
@@ -62,5 +88,36 @@ export async function buildPrintableOrder(orderId: string, options: PrintableOpt
       notes: item.notes,
       additionals: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })),
     })),
+  });
+}
+
+// Tíquete do job TEST (teste de impressora): conteúdo FIXO e FICTÍCIO — nenhum dado real de loja, cliente ou pedido
+// (ADR-0004 §8.2). Passa pelo mesmo schema e pelo mesmo caminho de renderização do tíquete de verdade.
+export function buildTestTicket(jobId: string, now: Date): PrintableOrder {
+  return printableOrderSchema.parse({
+    ticketSchemaVersion: TICKET_SCHEMA_VERSION,
+    orderId: `teste-${jobId}`,
+    code: "TESTE",
+    type: "BALCAO",
+    storeName: "Teste de impressora",
+    customerName: "Cliente de teste",
+    customerPhone: null,
+    address: null,
+    notes: "Se você leu isto, a impressora está funcionando.",
+    subtotalCents: 1000,
+    discountCents: 0,
+    couponCode: null,
+    totalCents: 1000,
+    deliveryFeeCents: 0,
+    tipCents: 0,
+    changeForCents: null,
+    paymentMethod: null,
+    paymentStatus: "A_COBRAR",
+    tableLabel: null,
+    reprintCount: 0,
+    printedAtOriginal: null,
+    cancelNotice: false,
+    createdAt: now.toISOString(),
+    items: [{ productName: "Item de teste", quantity: 1, unitPriceCents: 1000, notes: null, additionals: [] }],
   });
 }

@@ -4,6 +4,7 @@ import { CodedError } from "../../shared/errors";
 import type { AuditLogger } from "../../shared/audit";
 import { cancelPayment, getPayment, refundPayment } from "../../lib/mercadopago";
 import { ORDER_TX_OPTIONS } from "../../lib/order-code";
+import { cancelPendingTickets, enqueueCancelNoticeIfPrinted } from "../printJobs/printJobs.queue";
 import { customerMessageFor, messageActorFor, moneyLineFor } from "../../lib/cancelMessages";
 import {
   FINAL_STATUSES,
@@ -351,6 +352,8 @@ export class OrderService {
         customerMessage: customerMessageFor(origin.reason.code, messageActorFor(origin.source)),
       },
     });
+    // Tíquete que ainda não começou a imprimir não deve sair: a cozinha não recebe pedido cancelado.
+    await cancelPendingTickets(tx, { id: order.id, storeId: order.storeId });
     if (order.couponId) {
       const released = await tx.order.updateMany({ where: { id: order.id, couponReleasedAt: null }, data: { couponReleasedAt: now } });
       if (released.count === 1) {
@@ -362,6 +365,10 @@ export class OrderService {
 
   private async afterCancelCommitted(order: Pick<Order, "id" | "storeId" | "printedAt">, origin: CancelOrigin) {
     this.publish(order.storeId, { type: "order.updated", orderId: order.id });
+    // Se algum tíquete já saiu (ou está saindo), a cozinha recebe o AVISO de cancelamento (job idempotente).
+    if (await enqueueCancelNoticeIfPrinted(this.db, { id: order.id, storeId: order.storeId }).catch(() => false)) {
+      this.publish(order.storeId, { type: "print.available" });
+    }
     if (order.printedAt) this.publish(order.storeId, { type: "order.cancel_notice", orderId: order.id });
     this.audit.log({
       storeId: order.storeId,

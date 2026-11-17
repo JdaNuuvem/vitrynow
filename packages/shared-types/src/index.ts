@@ -94,6 +94,9 @@ export const wsServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("payment.refund_pending"), orderId: z.string() }),
   z.object({ type: z.literal("payment.refund_done"), orderId: z.string() }),
   z.object({ type: z.literal("payment.reconcile_needed"), orderId: z.string() }),
+  // Fila de impressão (ADR-0004): só "acorde e peça job"; nenhum dado de pedido ou cliente no canal.
+  z.object({ type: z.literal("print.available") }),
+  z.object({ type: z.literal("print.job_failed"), jobId: z.string() }),
   z.object({ type: z.literal("ping") }),
 ]);
 export type WsServerMessage = z.infer<typeof wsServerMessageSchema>;
@@ -314,3 +317,13 @@ export const mfaVerifySchema = z.object({
   code: z.string().regex(/^\d{6}$/, "o código tem 6 dígitos"),
 });
 export type MfaVerifyInput = z.infer<typeof mfaVerifySchema>;
+
+// ---- Fila de impressão (ADR-0004 §8) ----
+// Corpo do ack que o print-client envia. `code` e `error` vêm do computador da loja: NÃO são confiáveis (a API normaliza
+// o código para a lista fechada e sanitiza o texto); aqui só se limita o tamanho aceito.
+export const printAckSchema = z.object({
+  status: z.enum(["PRINTED", "FAILED"]),
+  code: z.string().max(40).optional(),
+  error: z.string().max(2000).optional(),
+});
+export type PrintAckInput = z.infer<typeof printAckSchema>;

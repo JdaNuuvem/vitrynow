@@ -10,6 +10,7 @@ import authRoutes from "./routes/auth";
 import storefrontRoutes from "./routes/storefront";
 import orderRoutes from "./modules/orders/orders.module";
 import deviceRoutes from "./routes/device";
+import printJobRoutes from "./modules/printJobs/printJobs.module";
 import deviceTokenRoutes from "./modules/deviceTokens/deviceTokens.module";
 import realtimeRoutes from "./routes/realtime";
 import catalogRoutes from "./modules/catalog/catalog.module";
@@ -70,6 +71,7 @@ export function buildApp() {
   app.register(storefrontRoutes);
   app.register(orderRoutes);
   app.register(deviceRoutes);
+  app.register(printJobRoutes);
   app.register(deviceTokenRoutes);
   app.register(realtimeRoutes);
   app.register(catalogRoutes);

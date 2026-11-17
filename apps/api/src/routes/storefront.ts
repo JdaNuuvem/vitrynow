@@ -6,6 +6,7 @@ import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
 import { publishToStore } from "../realtime/hub";
 import { createPixPayment } from "../lib/mercadopago";
 import { orderService } from "../modules/orders/orders.module";
+import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { customerMessageFor, messageActorFor, moneyLineFor } from "../lib/cancelMessages";
 import { DomainError } from "../shared/errors";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
@@ -179,9 +180,10 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
 
     // Código e pedido na MESMA transação: o contador da loja fica travado até o commit, então
     // pedidos simultâneos são serializados e nunca colidem (B01).
+    let ticketQueued = false;
     const order = await prisma.$transaction(async (tx) => {
       const code = await nextOrderCode(tx, store.id);
-      return tx.order.create({
+      const created = await tx.order.create({
       data: {
         storeId: store.id,
         code,
@@ -217,6 +219,9 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         },
       },
       });
+      // Pedido que já entra no kanban (não aguarda PIX): o tíquete nasce NA MESMA transação — nunca pedido sem job.
+      if (!usePix) ticketQueued = await enqueueOrderTicket(tx, { id: created.id, storeId: store.id });
+      return created;
     }, ORDER_TX_OPTIONS);
 
     if (coupon) {
@@ -225,6 +230,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
 
     if (!usePix) {
       publishToStore(store.id, { type: "order.created", orderId: order.id });
+      if (ticketQueued) publishToStore(store.id, { type: "print.available" });
       return reply.code(201).send({ orderId: order.id, code: order.code });
     }
 
