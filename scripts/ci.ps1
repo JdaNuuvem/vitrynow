@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   CI local (INF-05): o mesmo portão que qualquer entrega precisa passar antes de ir para review.
 
@@ -100,10 +100,60 @@ if ($continue) {
     }
   }
 }
+# 4b) TESTE DE TEMPO (SEGURANÇA; decisão do Atlas, 17/11): reset-email-confirmation > "MESMO tempo nas três recusas" (diferença entre medianas < 35 ms e todas
+# no piso). É teste de SEGURANÇA: não se silencia nem se afrouxa. Mede tempo ABSOLUTO e por isso falha com a máquina ocupada (medido: em repouso 0 de 5; com 12 laços
+# de CPU 1 de 4, diferença de 484 ms; no CI de 1023 s, 143 ms). Roda SOZINHO, ANTES da suíte, e a suíte principal o PULA (-t negativo), para não ser medido em paralelo.
+# Regra: passa de 1ª => ok. Falhou => 1 repetição automática (o valor da 1ª falha fica registrado). Passou na repetição => ok com aviso. Falhou nas duas:
+#   * em REPOUSO (CPU < 60% e nenhuma outra suíte rodando) => BLOQUEIA;
+#   * sob carga CONHECIDA => espera 20 s e roda mais 3 vezes: 3 de 3 => não bloqueia (aviso com os números); senão BLOQUEIA.
+# Padrão do nome em ASCII (. no lugar de ê): sem BOM o PowerShell 5.1 lê o .ps1 como ANSI e o acento viraria lixo.
+$timingFile = 'tests/reset-email-confirmation.test.ts'
+$timingPattern = 'MESMO\stempo\snas\str.s\srecusas'
+function Get-CargaConhecida {  # devolve @{ Cpu=<int|-1>; Outras=<n suítes vitest alheias>; Alta=<bool> }
+  $vals = @(); for ($i = 0; $i -lt 3; $i++) { try { $vals += [int](Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average } catch { }; Start-Sleep -Seconds 1 }
+  $cpu = if ($vals.Count) { [int](($vals | Measure-Object -Average).Average) } else { -1 }
+  $outras = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match 'vitest' -and $_.CommandLine -notmatch 'reset-email-confirmation' }).Count
+  [pscustomobject]@{ Cpu = $cpu; Outras = $outras; Alta = (($cpu -ge 60) -or ($outras -gt 0)) }
+}
+function Invoke-TimingTest {  # roda SÓ o teste de tempo; devolve @{ Ok; Valor }
+  Push-Location (Join-Path $repo 'apps/api')
+  try {
+    $env:TEST_DATABASE_URL = $testUrl
+    $out = node node_modules/vitest/vitest.mjs run $timingFile -t $timingPattern 2>&1 | ForEach-Object { $_ -replace "\x1b\[[0-9;]*m", '' }
+    $rc = $LASTEXITCODE
+  } finally { Pop-Location }
+  $m = $out | Select-String -Pattern 'expected ([0-9.]+) to be less than' | Select-Object -First 1
+  $valor = if ($m) { $m.Matches[0].Groups[1].Value } else { '' }
+  # "nenhum teste casou" NÃO pode contar como passou: exige 1 teste passado
+  $passou = ($rc -eq 0) -and [bool]($out | Select-String -Pattern 'Tests\s+1 passed' -Quiet)
+  if (-not $passou -and -not $valor) { $out | Select-Object -Last 12 | ForEach-Object { Write-Host "   $_" } }
+  [pscustomobject]@{ Ok = $passou; Valor = $valor }
+}
+if ($continue -and -not $SkipTests) {
+  $continue = Step 'teste de tempo (SEGURANÇA), isolado, antes da suíte' {
+    $carga = Get-CargaConhecida
+    Write-Host "   carga antes: CPU $($carga.Cpu)%, outras suítes vitest: $($carga.Outras) => $(if ($carga.Alta) { 'CARGA CONHECIDA' } else { 'repouso' })"
+    $r1 = Invoke-TimingTest
+    if ($r1.Ok) { Write-Host '   passou de primeira'; $global:LASTEXITCODE = 0; return }
+    Write-Host "   1ª tentativa FALHOU (diferença medida: $($r1.Valor) ms; limite 35). Repetindo automaticamente 1 vez."
+    $r2 = Invoke-TimingTest
+    if ($r2.Ok) { Write-Host "   AVISO: falhou na 1ª ($($r1.Valor) ms) e passou na repetição: confira a carga da máquina."; $global:LASTEXITCODE = 0; return }
+    Write-Host "   a repetição também FALHOU (diferença medida: $($r2.Valor) ms)."
+    if (-not $carga.Alta) { throw "teste de tempo falhou 2 vezes EM REPOUSO ($($r1.Valor) e $($r2.Valor) ms; limite 35): é defeito (SEGURANÇA, o tempo de resposta distingue contas); não afrouxe o limite" }
+    Write-Host '   carga conhecida: esperando 20 s e repetindo 3 vezes; só 3 de 3 libera.'
+    Start-Sleep -Seconds 20
+    $vals = @(); for ($i = 0; $i -lt 3; $i++) { $r = Invoke-TimingTest; $vals += $(if ($r.Ok) { 'ok' } else { "falhou($($r.Valor) ms)" }) }
+    if (($vals | Where-Object { $_ -eq 'ok' }).Count -eq 3) { Write-Host "   AVISO: falhas sob carga ($($r1.Valor) e $($r2.Valor) ms), mas 3 de 3 passaram depois: não bloqueia. Rode o CI com a máquina em repouso." ; $global:LASTEXITCODE = 0; return }
+    throw "teste de tempo falhou sob carga E não passou 3 de 3 depois ($($vals -join ', ')): trate como defeito"
+  }
+}
+
 if ($continue -and -not $SkipTests) {
   $continue = Step 'testes da API' {
     $env:TEST_DATABASE_URL = $testUrl
-    pnpm --filter '@meucardapio/api' test
+    # A suíte principal PULA só o teste de tempo (ele roda sozinho, antes; ver 4b). -t negativo, ASCII e sem espaços; node direto (o shim do pnpm quebra argumentos).
+    Push-Location (Join-Path $repo 'apps/api')
+    try { node node_modules/vitest/vitest.mjs run -t ('^((?!' + $timingPattern + ').)*$') } finally { Pop-Location }
   }
 }
 if ($continue -and -not $SkipTests) {
