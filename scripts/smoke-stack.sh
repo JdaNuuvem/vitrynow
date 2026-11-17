@@ -36,7 +36,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Caddyfile do smoke = o REAL + uma rota de eco para provar o que o backend recebe
-awk '/^\thandle \{$/ && !done { print "\thandle /__xff {\n\t\treverse_proxy xffecho:8080\n\t}"; done=1 } { print }' "$ROOT/infra/Caddyfile" > "$ROOT/infra/Caddyfile.smoke"
+awk '/^\thandle \{$/ && !done { print "\thandle /__xff {\n\t\treverse_proxy xffecho:8080\n\t}\n\thandle /__mem {\n\t\trate_limit {\n\t\t\tzone mem_test {\n\t\t\t\tkey {http.request.header.X-Mem-Key}\n\t\t\t\tevents 120\n\t\t\t\twindow 1m\n\t\t\t}\n\t\t\tsweep_interval 1m\n\t\t}\n\t\trespond \"ok\" 200\n\t}"; done=1 } { print }' "$ROOT/infra/Caddyfile" > "$ROOT/infra/Caddyfile.smoke"
 mkdir -p "$ROOT/infra/backups"
 
 echo "== validando e subindo a stack ($PROJ)"
@@ -223,6 +223,32 @@ grep -q 'ipv6_prefix 64' "$ROOT/infra/Caddyfile" && check ok "ST-45: a zona de l
 grep -q 'sweep_interval' "$ROOT/infra/Caddyfile" && check ok "ST-49: varredura de chaves vencidas configurada (sweep_interval) e container com limite de memória" || check fail "ST-49: sem sweep_interval no Caddyfile"
 mem="$(docker inspect -f '{{.HostConfig.Memory}}' "$("${DC[@]}" ps -q caddy)")"
 [ "$mem" -gt 0 ] 2>/dev/null && check ok "ST-49: o container do Caddy tem teto de memória ($((mem/1024/1024)) MB)" || check fail "ST-49: container do Caddy sem limite de memória"
+
+CID9="$("${DC[@]}" ps -q caddy)"
+# 9e ST-50 (Sun Tzu): memória do limitador por CHAVE. A chave real é o IP e do host todo tráfego tem um IP só; então a rota de teste
+# /__mem (só no Caddyfile do smoke) usa a MESMA zona (events 120, window 1m) chaveada pelo cabeçalho X-Mem-Key: 20 mil valores
+# distintos medem o custo por chave sem precisar de 20 mil IPs. Critério do Sun Tzu: > ~60 MB para 20 mil chaves => a estimativa vale.
+memmb() { docker stats --no-stream --format '{{.MemUsage}}' "$1" | awk '{v=$1; if (v ~ /GiB/) {sub(/GiB/,"",v); printf "%.1f", v*1024} else if (v ~ /MiB/) {sub(/MiB/,"",v); printf "%.1f", v} else if (v ~ /KiB/) {sub(/KiB/,"",v); printf "%.1f", v/1024} else {sub(/B/,"",v); printf "%.1f", v/1048576}}'; }
+m0="$(memmb "$CID9")"
+mres="$(docker run --rm --network "${PROJ}_default" node:20-alpine node -e "
+  const http=require('http');const agent=new http.Agent({keepAlive:true,maxSockets:64});
+  let sent=0,done=0,c429=0,total=20000;
+  const one=()=>{ if(sent>=total) return; const i=sent++;
+    http.get({host:'caddy',port:80,path:'/__mem',agent,headers:{'X-Mem-Key':'chave-'+i}},r=>{ r.resume(); if(r.statusCode===429)c429++; r.on('end',()=>{done++; if(done===total){console.log('done '+c429);agent.destroy();} else one();}); }).on('error',()=>{done++; if(done===total){console.log('done '+c429);agent.destroy();} else one();}); };
+  for(let k=0;k<64;k++) one();" 2>&1 | tail -1)"
+m1="$(memmb "$CID9")"
+delta="$(awk -v a="$m0" -v b="$m1" 'BEGIN{printf "%.1f", b-a}')"
+perkey="$(awk -v d="$delta" 'BEGIN{printf "%.0f", d*1048576/20000}')"
+proj="$(awk -v p="$perkey" 'BEGIN{ if (p>0) printf "%.0f", (256*0.8*1048576)/p/1000; else print "n/a" }')"
+echo "   20000 chaves distintas (resultado do cliente: $mres): memória do Caddy $m0 MB -> $m1 MB (+$delta MB, ~${perkey} B/chave); projeção: ~${proj} mil IPs distintos por janela para encher 80% de 256 MB"
+if awk -v d="$delta" 'BEGIN{exit !(d <= 60)}'; then check ok "ST-50: 20 mil chaves custaram +$delta MB (<= 60 MB): a estimativa de 3 KB/chave NÃO se confirma (~${perkey} B/chave)"
+else check fail "ST-50: 20 mil chaves custaram +$delta MB (> 60 MB, ~${perkey} B/chave): mitigar (events 60 em /loja/*, mem_limit maior ou limite na borda/CDN)"; fi
+echo "   aguardando ${SMOKE_SWEEP_WAIT:-130}s para a varredura de chaves vencidas (janela 1m + sweep 1m)..."
+sleep "${SMOKE_SWEEP_WAIT:-130}"
+m2="$(memmb "$CID9")"
+echo "   memória do Caddy 2 min depois: $m2 MB (antes da carga: $m0 MB; logo após: $m1 MB)"
+if awk -v a="$m1" -v b="$m2" 'BEGIN{exit !(b < a)}'; then check ok "ST-49: depois da janela + varredura a memória recuou ($m1 -> $m2 MB)"
+else echo "   [aviso] a memória não recuou ($m1 -> $m2 MB): o Go pode reter o heap liberado; o teto de 256 MB segue valendo"; fi
 
 echo "== 10 Caddy com privilégio mínimo, redes separadas e rastreabilidade do build (INF-18)"
 CID="$("${DC[@]}" ps -q caddy)"
