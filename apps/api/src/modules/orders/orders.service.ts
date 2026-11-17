@@ -20,7 +20,8 @@ import {
   type Actor as ActorKind,
   type Role,
 } from "../../lib/orderStateMachine";
-import { contactAccessFor, toPanelOrder, type ContactAccess } from "./orders.view";
+import { toPanelOrder, type ContactAccess } from "./orders.view";
+import { authorizeContactView } from "./contactAccess";
 
 type Db = typeof prismaClient;
 type Tx = Prisma.TransactionClient;
@@ -108,19 +109,9 @@ export class OrderService {
     const { statusHistory, ...rest } = order;
     const roles = await this.rolesOf(statusHistory.map((h) => h.userId));
     const closedAt = statusHistory[0]?.createdAt ?? null;
-    const access = contactAccessFor(actor.role, order, closedAt, this.now());
-    if (access === "FULL" && (order.customerPhone || order.address)) await this.auditViewContact(actor, order.id);
-    return this.decorate(rest, statusHistory, actor.role, roles, { detail: true, access });
-  }
-
-  private async auditViewContact(actor: PanelActor, orderId: string) {
-    const since = new Date(this.now().getTime() - 10 * 60 * 1000);
-    const recent = await this.db.auditLog.findFirst({
-      where: { storeId: actor.storeId, userId: actor.userId, action: "order.view_contact", targetId: orderId, createdAt: { gte: since } },
-      select: { id: true },
-    });
-    if (recent) return;
-    this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "order.view_contact", targetType: "Order", targetId: orderId });
+    // Contato completo só depois de o rastro estar gravado (falha fechada; ver contactAccess.ts).
+    const decision = await authorizeContactView({ db: this.db, audit: this.audit, now: this.now }, actor, order, closedAt);
+    return this.decorate(rest, statusHistory, actor.role, roles, { detail: true, access: decision.access, contactUnavailable: decision.unavailable });
   }
 
   private async rolesOf(userIds: (string | null)[]) {
@@ -136,7 +127,7 @@ export class OrderService {
     history: HistoryRow[],
     role: Role,
     roles: Map<string, string>,
-    opts: { detail: boolean; access: ContactAccess } = { detail: false, access: "MASKED" },
+    opts: { detail: boolean; access: ContactAccess; contactUnavailable?: "AUDIT_UNAVAILABLE" | null } = { detail: false, access: "MASKED" },
   ) {
     const last = history[0];
     const undo = this.undoInfo(order, history, role);

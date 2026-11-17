@@ -41,7 +41,11 @@ export type PanelOrderExtras = {
 
 // `detail` = true devolve o contato conforme `access`; na lista (detail=false) o endereço NUNCA vai e o telefone vai
 // só mascarado, qualquer que seja o papel.
-export function toPanelOrder(order: PanelOrderSource, extras: PanelOrderExtras, opts: { detail: boolean; access: ContactAccess }) {
+export function toPanelOrder(
+  order: PanelOrderSource,
+  extras: PanelOrderExtras,
+  opts: { detail: boolean; access: ContactAccess; contactUnavailable?: "AUDIT_UNAVAILABLE" | null },
+) {
   const full = opts.detail && opts.access === "FULL";
   return {
     id: order.id,
@@ -56,6 +60,8 @@ export function toPanelOrder(order: PanelOrderSource, extras: PanelOrderExtras, 
     address: full ? order.address : null,
     hasAddress: !!order.address,
     contactMasked: !full,
+    // Só no detalhe, e só quando o contato foi negado por não poder registrar o acesso (falha fechada, API-54b).
+    ...(opts.contactUnavailable ? { contactUnavailable: opts.contactUnavailable } : {}),
     notes: order.notes, // alergia/restrição aparece inteira (PRD-15)
     subtotalCents: order.subtotalCents,
     discountCents: order.discountCents,
