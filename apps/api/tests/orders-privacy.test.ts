@@ -2,6 +2,7 @@
 // A varredura procura no JSON inteiro o que nunca pode sair, e as regras de papel e idade do detalhe.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { activateSubscription } from "../src/lib/subscription";
 import { contactAccessFor, maskPhone, RECENT_WINDOW_MS } from "../src/modules/orders/orders.view";
 import { login, makeApp, registerStore, resetDb } from "./helpers";
 
@@ -70,6 +71,8 @@ describe("API-54a — lista, ações e detalhe", () => {
     const productId = json(
       await app.inject({ method: "POST", url: "/api/catalog/products", headers: { cookie: cookie! }, payload: { categoryId: cat, name: "P", priceCents: 1000 } }),
     ).product.id as string;
+    // Equipe é recurso do PRO (API-08): ativa o PRO desta loja antes de convidar.
+    await activateSubscription({ subscriptionId: (await prisma.subscription.findFirstOrThrow({ where: { storeId } })).id, planCode: "PRO" });
     const invited = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: cookie! }, payload: { email: `staff-${Date.now()}@t.com`, password: "provisoria1" } });
     const staff = (await login(app, json(invited).user.email, "provisoria1")).cookie!;
     return { owner: cookie!, staff, storeId: storeId as string, slug: slug as string, productId };
