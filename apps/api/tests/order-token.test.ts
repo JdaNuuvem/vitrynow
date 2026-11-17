@@ -1,8 +1,9 @@
+import Fastify from "fastify";
 import { Writable } from "node:stream";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { buildApp } from "../src/app";
-import { loggerOptions } from "../src/lib/logging";
+import { loggerOptions, redactLogUrl } from "../src/lib/logging";
 import { newOrderToken, orderTokenMatches } from "../src/lib/orderToken";
 import { hashToken } from "../src/lib/tokenHash";
 import { makeApp, orderTokenOf, registerStore, resetDb } from "./helpers";
@@ -208,5 +209,65 @@ describe("CORS do cardápio (preflight) e redação de log", () => {
     expect(redacted.headers.authorization).toBe("[redigido]");
     expect(redacted.headers["x-mfa-challenge"]).toBe("[redigido]");
     expect(redacted.headers["x-admin-token"]).toBe("[redigido]");
+  });
+
+  it("token (ou code/state/senha) mandado na QUERY não vai para o log: o valor some, o nome e os outros parâmetros ficam", async () => {
+    const lines: string[] = [];
+    const stream = new Writable({
+      write(chunk, _enc, done) {
+        lines.push(String(chunk));
+        done();
+      },
+    });
+    const app = buildApp({ logger: { ...loggerOptions(), level: "info", stream } as never });
+    await app.ready();
+    const TOKEN = "mco_TOKEN-NA-QUERY-nao-pode-aparecer-0123456789";
+    await app.inject({ method: "GET", url: `/stores/x/orders/y/payment-status?token=${TOKEN}&x-order-token=${TOKEN}&page=2` });
+    await app.inject({ method: "GET", url: "/api/store/payments/mercadopago/callback?code=CODIGO-OAUTH-SECRETO&state=ESTADO-SECRETO&motivo=ok" });
+    await app.inject({ method: "GET", url: "/qualquer?%74oken=CODIFICADO-SECRETO&senha=SENHA-SECRETA#frag" });
+    await app.close();
+    const all = lines.join("\n");
+    for (const secret of [TOKEN, "CODIGO-OAUTH-SECRETO", "ESTADO-SECRETO", "CODIFICADO-SECRETO", "SENHA-SECRETA"]) expect(all).not.toContain(secret);
+    expect(all).toContain("page=2"); // parâmetro comum continua legível para diagnóstico
+    expect(all).toContain("motivo=ok");
+    expect(all).toContain("token=[redigido]");
+  });
+
+  it("o 404 de rota inexistente tem o MESMO corpo e status do Fastify puro, em vários métodos e caminhos (só a query sensível some)", async () => {
+    const bare = Fastify({ logger: false });
+    await bare.ready();
+    const app = buildApp();
+    await app.ready();
+    const cases: { method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH"; url: string }[] = [
+      { method: "GET", url: "/nao-existe" },
+      { method: "POST", url: "/nao-existe/aninhado/rota" },
+      { method: "PUT", url: "/stores/x/orders/nao-e-rota" },
+      { method: "DELETE", url: "/api/store/qualquer-coisa" },
+      { method: "PATCH", url: "/%C3%A7/acentuado" },
+      { method: "GET", url: "/nao-existe?page=2&motivo=ok" },
+    ];
+    for (const c of cases) {
+      const a = await app.inject({ method: c.method, url: c.url });
+      const b = await bare.inject({ method: c.method, url: c.url });
+      expect(a.statusCode, c.url).toBe(b.statusCode);
+      expect(a.json(), c.url).toEqual(b.json());
+      expect(String(a.headers["content-type"]).split(";")[0], c.url).toBe(String(b.headers["content-type"]).split(";")[0]);
+    }
+    // com segredo na query: o corpo muda SÓ nesse valor (nunca o ecoa de volta nem cai em 500)
+    const secret = await app.inject({ method: "GET", url: "/nao-existe?token=SEGREDO-NA-URL&page=2" });
+    expect(secret.statusCode).toBe(404);
+    expect(secret.body).not.toContain("SEGREDO-NA-URL");
+    expect(secret.json()).toEqual({ message: "Route GET:/nao-existe?token=[redigido]&page=2 not found", error: "Not Found", statusCode: 404 });
+    await app.close();
+    await bare.close();
+  });
+
+  it("redactLogUrl: sem query intacta; sem nome sensível intacta; nome malformado não quebra; fragmento preservado", () => {
+    expect(redactLogUrl(undefined)).toBeUndefined();
+    expect(redactLogUrl("/a/b")).toBe("/a/b");
+    expect(redactLogUrl("/a?page=1&q=pizza")).toBe("/a?page=1&q=pizza");
+    expect(redactLogUrl("/a?token=1&page=1")).toBe("/a?token=[redigido]&page=1");
+    expect(redactLogUrl("/a?%E0%A4%A=x&token=1")).toBe("/a?%E0%A4%A=x&token=[redigido]");
+    expect(redactLogUrl("/a?code=1#f")).toBe("/a?code=[redigido]#f");
   });
 });
