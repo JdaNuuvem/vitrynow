@@ -1,12 +1,14 @@
 import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
-import { printAckSchema } from "@meucardapio/shared-types";
+import { printAckSchema, setPrintModeSchema } from "@meucardapio/shared-types";
 import { prismaAuditLogger } from "../../shared/audit";
 import { useDomainErrors } from "../../shared/errors";
 import { publishToStore } from "../../realtime/hub";
 import { PrintJobService } from "./printJobs.service";
+import { PrintModeService, loadPrintMode } from "./printMode.service";
 
 export const printJobService = new PrintJobService(prisma, prismaAuditLogger, publishToStore);
+export const printModeService = new PrintModeService(prisma, prismaAuditLogger);
 
 // Rotas da fila de impressão. Dispositivo (token da impressora): claim e ack. Painel (sessão): reimprimir, teste e lista.
 const printJobRoutes: FastifyPluginAsync = async (app) => {
@@ -14,6 +16,9 @@ const printJobRoutes: FastifyPluginAsync = async (app) => {
 
   // ───────────── Dispositivo ─────────────
   const device = { preHandler: app.requireDeviceAuth };
+
+  // Configuração que o cliente lê a cada ciclo: o MODO da loja (a virada é atômica entre todas as impressoras).
+  app.get("/api/device/config", device, async (request) => ({ mode: await loadPrintMode(prisma, request.deviceStoreId!) }));
 
   app.post("/api/device/print-jobs/claim", device, async (request) => {
     return printJobService.claim(request.deviceStoreId!, request.deviceTokenId!);
@@ -27,6 +32,14 @@ const printJobRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // ───────────── Painel ─────────────
+  // Modo de impressão da loja: só o OWNER altera (auditado). A troca RECONCILIA no mesmo ato (ADR-0004 §8.13).
+  app.get("/api/store/print-mode", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request) => printModeService.get(request.user.storeId));
+  app.put("/api/store/print-mode", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request, reply) => {
+    const parsed = setPrintModeSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "modo inválido", code: "VALIDATION_ERROR" });
+    return printModeService.set({ storeId: request.user.storeId, userId: request.user.userId }, parsed.data.mode);
+  });
+
   const panel = { preHandler: app.requirePanelAuth };
   const actorOf = (request: { user: { storeId: string; userId: string; role: "OWNER" | "STAFF" } }) => ({ storeId: request.user.storeId, userId: request.user.userId, role: request.user.role });
 

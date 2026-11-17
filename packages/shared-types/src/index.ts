@@ -335,3 +335,8 @@ export const printAckSchema = z.object({
   error: z.string().max(2000).optional(),
 });
 export type PrintAckInput = z.infer<typeof printAckSchema>;
+
+// Modo de impressão da loja (ADR-0004 §8.12). Só o OWNER altera.
+export const printModeSchema = z.enum(["LEGACY", "QUEUE"]);
+export type PrintModeValue = z.infer<typeof printModeSchema>;
+export const setPrintModeSchema = z.object({ mode: printModeSchema });
