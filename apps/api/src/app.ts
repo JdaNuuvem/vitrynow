@@ -27,6 +27,7 @@ import subscriptionRoutes from "./routes/subscription";
 import noticeRoutes from "./routes/notices";
 import mfaRoutes from "./routes/mfa";
 import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
+import { clientKey } from "./lib/clientKey";
 import jobsPlugin from "./jobs/plugin";
 
 export function buildApp() {
@@ -48,7 +49,8 @@ export function buildApp() {
   app.register(helmet, { contentSecurityPolicy: false });
   // Teto global por IP; rotas sensíveis (login, cadastro, pedido público, webhook) têm limites
   // mais estritos definidos na própria rota via `config.rateLimit`.
-  app.register(rateLimit, { max: 300, timeWindow: "1 minute" });
+  // SEC-23: a chave do limite é o cliente normalizado (IPv6 /64, alias IPv4-mapeado ⇒ IPv4), não o endereço cru.
+  app.register(rateLimit, { max: 300, timeWindow: "1 minute", keyGenerator: (request) => clientKey(request.ip) });
   app.register(websocket);
   app.register(authPlugin);
   app.register(jobsPlugin);

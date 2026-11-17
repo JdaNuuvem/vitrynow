@@ -15,6 +15,8 @@
 // Em memória (uma instância da API no MVP). Com 2+ instâncias, mover as contagens para uma tabela com
 // UPDATE atômico (mesmo contrato).
 
+import { clientKey } from "./clientKey";
+
 export type Reservation =
   | { allowed: true; delayMs: number; alertOwner: boolean }
   | { allowed: false; retryAfterSeconds: number };
@@ -51,7 +53,8 @@ export class LoginThrottle {
   reserve(email: string, ip: string): Reservation {
     const t = this.now();
     const acc = LoginThrottle.key(email);
-    const pk = `${acc}|${ip}`;
+    // SEC-23: IPv6 vira /64 e o alias ::ffff:a.b.c.d vira o IPv4; a faixa inteira divide o mesmo limite.
+    const pk = `${acc}|${clientKey(ip)}`;
     if (this.pairs.size >= MAX_ENTRIES) this.sweep(t);
 
     let pair = this.pairs.get(pk);
@@ -93,7 +96,7 @@ export class LoginThrottle {
   // Senha certa: devolve a reserva da conta e zera o par (o dono voltou). O que o atacante já gastou fica.
   succeed(email: string, ip: string): void {
     const acc = LoginThrottle.key(email);
-    this.pairs.delete(`${acc}|${ip}`);
+    this.pairs.delete(`${acc}|${clientKey(ip)}`);
     const account = this.accounts.get(acc);
     if (account && account.attempts > 0) account.attempts -= 1;
   }
