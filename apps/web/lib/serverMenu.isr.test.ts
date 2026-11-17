@@ -131,4 +131,34 @@ describe("PEN-02 · cache ISR do cardápio com SWR do Next (SEC-25/SEC-26)", () 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(store.size).toBe(0);
   });
+  // ST-54: voo único. No Next real a página de ISR já junta renderizações; isto protege se a rota virar dinâmica.
+  it("ISR-h: 100 visitantes chegam JUNTOS depois de 11 min de ociosidade ⇒ a API não recebe uma chamada por visitante (voo único)", async () => {
+    expect(await visita()).toBe("ok");
+    avancar(11 * 60);
+    fetchMock.mockClear();
+    const rs = await Promise.all(Array.from({ length: 100 }, () => getMenuOnServer("boa")));
+    await Promise.allSettled(pending.splice(0));
+    expect(rs.every((r) => r.status === "ok")).toBe(true);
+    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(5);
+  });
+
+  it("ISR-i: cópia velha demais + API em 429 (balde esgotado) ⇒ fecha como 'unavailable' (sem dados da loja) e não como 'ok' nem 'suspended'", async () => {
+    expect(await visita()).toBe("ok");
+    api = { status: 429, body: { error: "Too Many Requests" } };
+    avancar(11 * 60);
+    const r = await getMenuOnServer("boa");
+    await Promise.allSettled(pending.splice(0));
+    expect(r.status).toBe("unavailable");
+    expect(JSON.stringify(r)).not.toContain("Pizzaria");
+  });
+
+  it("ISR-j: loja SUSPENSA com cópia velha demais e API em 503 STORE_UNAVAILABLE ⇒ 'suspended' na hora, sem dados", async () => {
+    expect(await visita()).toBe("ok");
+    api = { status: 503, body: { code: "STORE_UNAVAILABLE" } };
+    avancar(11 * 60);
+    const r = await getMenuOnServer("boa");
+    await Promise.allSettled(pending.splice(0));
+    expect(r.status).toBe("suspended");
+    expect(JSON.stringify(r)).not.toContain("Pizzaria");
+  });
 });

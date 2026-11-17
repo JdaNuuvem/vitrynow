@@ -141,8 +141,21 @@ function rememberOk(slug: string) {
   if (seenOk.size > SEEN_OK_MAX_ENTRIES) seenOk.delete(seenOk.keys().next().value as string);
 }
 
+// ST-54: voo único. Se N visitantes chegam juntos (cópia velha, rota dinâmica no futuro), a mesma loja faz UMA busca à
+// API e todos esperam por ela; a entrada sai do mapa quando a busca termina, com sucesso ou não.
+const inflight = new Map<string, Promise<ServerMenuResult>>();
+
+function fetchOnce(slug: string): Promise<ServerMenuResult> {
+  const running = inflight.get(slug);
+  if (running) return running;
+  const started = fetchMenuOnServer(slug).finally(() => inflight.delete(slug));
+  inflight.set(slug, started);
+  return started;
+}
+
 // Só para testes.
 export function resetServerMenuState() {
+  inflight.clear();
   failedUntil.clear();
   missingUntil.clear();
   seenOk.clear();
@@ -169,7 +182,7 @@ export async function getMenuOnServer(slug: string): Promise<ServerMenuResult> {
     async (): Promise<CachedResult> => {
       const started = Date.now();
       if (fresh(failedUntil, slug, started)) throw new Error("cardápio indisponível (cache negativo)");
-      const result = await fetchMenuOnServer(slug);
+      const result = await fetchOnce(slug);
       if (result.status === "unavailable") {
         remember(failedUntil, slug, Date.now(), NEGATIVE_CACHE_SECONDS);
         throw new Error("cardápio indisponível");
@@ -202,7 +215,7 @@ export async function getMenuOnServer(slug: string): Promise<ServerMenuResult> {
 // própria leitura já disparou. Falha transitória confirmada fecha como `unavailable` (sem dados da loja).
 async function refreshBlocking(slug: string): Promise<ServerMenuResult> {
   if (fresh(failedUntil, slug, Date.now())) return { status: "unavailable" };
-  const result = await fetchMenuOnServer(slug);
+  const result = await fetchOnce(slug);
   if (result.status === "unavailable") remember(failedUntil, slug, Date.now(), NEGATIVE_CACHE_SECONDS);
   if (result.status === "ok") rememberOk(slug);
   return result;
