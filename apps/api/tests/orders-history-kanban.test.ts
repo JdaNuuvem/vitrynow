@@ -184,14 +184,31 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
       expect(orders.map((o: { id: string }) => o.id)).toEqual([velho, recente, encerrado]);
     });
 
-    it("encerrado sem registro de histórico entra pelo `updatedAt` de hoje (pedido legado)", async () => {
+    it("pedido LEGADO (sem registro de encerramento) vale pela CRIAÇÃO: criado hoje entra; criado antes NÃO volta ao 'hoje' por reimpressão, entregador ou observação (updatedAt)", async () => {
       const ctx = await setup();
-      const legadoHoje = await mk(ctx, { ago: 2 * HOUR, status: "CONCLUIDO" });
-      await prisma.order.update({ where: { id: legadoHoje }, data: { status: "CONCLUIDO" } }); // updatedAt = agora
+      const legadoHoje = await mk(ctx, { ago: 60_000, status: "CONCLUIDO" });
       const legadoAntigo = await mk(ctx, { ago: 3 * DAY, status: "CONCLUIDO" });
+      const deliverer = await prisma.deliverer.create({ data: { storeId: ctx.storeId, name: "Moto" } });
+      await prisma.order.update({ where: { id: legadoAntigo }, data: { printedAt: new Date() } }); // reimpressão: updatedAt = agora
+      await prisma.order.update({ where: { id: legadoAntigo }, data: { delivererId: deliverer.id } }); // entregador: updatedAt = agora
       const ids = (await kanban(ctx.owner)).orders.map((o: { id: string }) => o.id);
       expect(ids).toContain(legadoHoje);
       expect(ids).not.toContain(legadoAntigo);
+      expect((await prisma.order.findUniqueOrThrow({ where: { id: legadoAntigo } })).updatedAt.getTime()).toBeGreaterThan(Date.now() - 60_000); // o `updatedAt` mexeu de fato
+    });
+
+    it("pedido encerrado HOJE com histórico some do kanban se for reaberto (desfazer) e volta ao encerrar de novo; PIX não pago e outra loja ficam de fora", async () => {
+      const a = await setup();
+      const b = await setup();
+      const reaberto = await mk(a, { ago: HOUR, status: "EM_PREPARO", history: [{ status: "CONCLUIDO", ago: 30 * 60_000 }] }); // tem registro final, mas o estado atual não é final
+      const final = await mk(a, { ago: HOUR, status: "CONCLUIDO", history: [{ status: "CONCLUIDO", ago: 20 * 60_000 }] });
+      const pix = await mk(a, { ago: HOUR, status: "CANCELADO", awaiting: true, history: [{ status: "CANCELADO", ago: 10 * 60_000 }] });
+      const deB = await mk(b, { ago: HOUR, status: "CONCLUIDO", history: [{ status: "CONCLUIDO", ago: 5 * 60_000 }] });
+      const closed = (await kanban(a.owner)).orders.filter((o: { status: string }) => o.status === "CONCLUIDO" || o.status === "CANCELADO").map((o: { id: string }) => o.id);
+      expect(closed).toEqual([final]);
+      expect(closed).not.toContain(deB);
+      expect(closed).not.toContain(pix);
+      expect((await kanban(a.owner)).orders.map((o: { id: string }) => o.id)).toContain(reaberto); // continua na coluna dele (aberto)
     });
 
     it("encerrados do dia são paginados por cursor, sem repetir nem perder", async () => {
