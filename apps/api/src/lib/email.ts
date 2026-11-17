@@ -9,12 +9,22 @@ function client() {
   return new Resend(apiKey);
 }
 
+// Só em desenvolvimento/teste o "modo sem chave" pode escrever no log o que seria o conteúdo do e-mail (link de recuperação,
+// código de confirmação): fora disso esse log iria para `docker logs` e para o coletor de logs, e quem lê o log tomaria a
+// conta. NODE_ENV ausente conta como produção (mesma regra da SEC-22). `EMAIL_LOG_LINKS=true` é o aceite explícito para
+// quem roda local sem NODE_ENV; nunca vai para o compose.
+function mayLogEmailSecrets(): boolean {
+  const env = process.env.NODE_ENV;
+  return env === "development" || env === "test" || process.env.EMAIL_LOG_LINKS === "true";
+}
+
 const FROM = process.env.EMAIL_FROM ?? "MeuCardapio <onboarding@resend.dev>";
 
 export async function sendPasswordResetEmail(input: { to: string; resetUrl: string }) {
   const resend = client();
   if (!resend) {
-    console.warn(`[email] RESEND_API_KEY não configurado — link de recuperação para ${input.to}: ${input.resetUrl}`);
+    if (mayLogEmailSecrets()) console.warn(`[email] RESEND_API_KEY não configurado — link de recuperação para ${input.to}: ${input.resetUrl}`);
+    else console.error("[email] RESEND_API_KEY não configurado: o e-mail de recuperação de senha NÃO foi enviado (o link não é registrado no log).");
     return;
   }
 
@@ -39,7 +49,8 @@ export async function sendPasswordResetEmail(input: { to: string; resetUrl: stri
 export async function sendMfaCodeEmail(input: { to: string; code: string; purposeLabel: string }) {
   const resend = client();
   if (!resend) {
-    console.warn(`[email] RESEND_API_KEY não configurado — código de confirmação (${input.purposeLabel}) para ${input.to}: ${input.code}`);
+    if (mayLogEmailSecrets()) console.warn(`[email] RESEND_API_KEY não configurado — código de confirmação (${input.purposeLabel}) para ${input.to}: ${input.code}`);
+    else console.error("[email] RESEND_API_KEY não configurado: o código de confirmação NÃO foi enviado (o código não é registrado no log).");
     return;
   }
 
