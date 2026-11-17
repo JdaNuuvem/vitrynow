@@ -5,6 +5,7 @@ import { getPayment, mapMpStatus, type ProviderPayment } from "../../lib/mercado
 import { canMovePayment, originsFor } from "../../lib/paymentStateMachine";
 import { activateSubscription } from "../../lib/subscription";
 import type { OrderService } from "../orders/orders.service";
+import { enqueueOrderTicket } from "../printJobs/printJobs.queue";
 
 type Db = typeof prismaClient;
 
@@ -117,12 +118,18 @@ export class PaymentService {
     switch (mapped) {
       case "APROVADO": {
         // Conditional: se o pedido foi cancelado no meio do caminho a contagem é 0 e vira estorno automático.
-        const announced = await this.db.order.updateMany({
-          where: { id: order.id, awaitingPayment: true, status: { not: "CANCELADO" } },
-          data: { awaitingPayment: false },
+        // O tíquete entra na MESMA transação: ou o pedido vai para o kanban COM job, ou nada muda.
+        const announced = await this.db.$transaction(async (tx) => {
+          const moved = await tx.order.updateMany({
+            where: { id: order.id, awaitingPayment: true, status: { not: "CANCELADO" } },
+            data: { awaitingPayment: false },
+          });
+          if (moved.count !== 1) return null;
+          return { queued: await enqueueOrderTicket(tx, { id: order.id, storeId: order.storeId }) };
         });
-        if (announced.count === 1) {
+        if (announced) {
           this.publish(order.storeId, { type: "order.created", orderId: order.id });
+          if (announced.queued) this.publish(order.storeId, { type: "print.available" });
           return { applied: mapped, announced: true };
         }
         const current = await this.db.order.findUniqueOrThrow({ where: { id: order.id }, select: { status: true } });

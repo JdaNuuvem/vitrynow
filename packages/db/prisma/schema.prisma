@@ -115,6 +115,7 @@ model Store {
   auditLogs    AuditLog[]
   subscription Subscription?
   counter      StoreCounter?
+  printJobs    PrintJob[]
 }
 
 // Contador atômico por loja (hoje: sequência do código do pedido). Incrementado com
@@ -248,8 +249,10 @@ model Order {
   items           OrderItem[]
   statusHistory    OrderStatusHistory[]
   payment          Payment?
+  printJobs        PrintJob[]
 
   @@unique([storeId, code])
+  @@unique([id, storeId]) // alvo da FK composta de PrintJob (ADR-0009: o banco recusa referência entre lojas)
   @@index([storeId, status])
   @@index([couponId])
   @@index([delivererId])
@@ -506,4 +509,50 @@ model RevokedSession {
   createdAt DateTime @default(now())
 
   @@index([expiresAt])
+}
+
+// Fila de impressão (ADR-0004). O servidor decide, o cliente obedece: claim com lease (relógio do BANCO), ack
+// idempotente pelo dono, recuo por falha (availableAt). Tabela nova ⇒ FK composta (orderId, storeId) → Order(id, storeId).
+enum PrintKind {
+  ORDER_KITCHEN // tíquete do pedido (1ª impressão)
+  ORDER_REPRINT // 2ª via, com contador
+  ORDER_CANCEL_NOTICE // aviso de cancelamento de pedido já impresso
+  TEST // teste de impressora (ticket fictício, sem dado de loja/cliente)
+}
+
+enum PrintJobStatus {
+  PENDING
+  CLAIMED
+  PRINTED
+  FAILED
+  CANCELED
+}
+
+model PrintJob {
+  id               String         @id @default(cuid())
+  storeId          String
+  store            Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  kind             PrintKind
+  orderId          String?
+  order            Order?         @relation(fields: [orderId, storeId], references: [id, storeId], onDelete: Cascade)
+  status           PrintJobStatus @default(PENDING)
+  attempts         Int            @default(0)
+  maxAttempts      Int            @default(3)
+  availableAt      DateTime       @default(now()) // só é entregue com availableAt <= agora (recuo por falha)
+  claimedAt        DateTime?
+  leaseUntil       DateTime? // vence pelo relógio do banco; vencida = pode ser reclamada por outro
+  claimedByTokenId String?
+  printedAt        DateTime?
+  ackStatus        String? // PRINTED | FAILED do último ack do dono (idempotência do ack repetido)
+  lastErrorCode    String? // lista fechada (PRINTER_OFFLINE, NO_PAPER, DRIVER_ERROR, PRINTER_NOT_FOUND, OTHER)
+  lastError        String? // texto do cliente, NÃO confiável: sanitizado e nunca mostrado/interpolado
+  reprintNumber    Int? // contador da 2ª via (ORDER_REPRINT)
+  requestedByUserId String? // quem pediu a reimpressão/teste (auditoria, D4-5)
+  dedupeKey        String?        @unique // "orderId:ORDER_KITCHEN" / "orderId:ORDER_CANCEL_NOTICE": 1 job por (pedido, tipo)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@unique([id, storeId])
+  @@index([storeId, status, availableAt, createdAt])
+  @@index([orderId])
 }

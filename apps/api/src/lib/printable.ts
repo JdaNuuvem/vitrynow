@@ -30,6 +30,32 @@ export async function buildPrintableOrder(orderId: string, options: PrintableOpt
   });
   if (!order) return null;
 
+  // Aviso de cancelamento: só o necessário para a cozinha reconhecer o tíquete que já saiu — sem itens, valores,
+  // contato nem endereço (ADR-0004 §6; contrato do cliente: "imprime só o aviso").
+  if (options.cancelNotice) {
+    return printableOrderSchema.parse({
+      ticketSchemaVersion: TICKET_SCHEMA_VERSION,
+      orderId: order.id,
+      code: order.code,
+      type: order.type,
+      storeName: order.store.name,
+      customerName: null,
+      customerPhone: null,
+      address: null,
+      notes: null,
+      totalCents: 0,
+      deliveryFeeCents: 0,
+      tipCents: 0,
+      paymentMethod: null,
+      paymentStatus: "A_COBRAR",
+      cancelNotice: true,
+      reprintCount: 0,
+      printedAtOriginal: options.printedAtOriginal ? options.printedAtOriginal.toISOString() : null,
+      createdAt: order.createdAt.toISOString(),
+      items: [],
+    });
+  }
+
   return printableOrderSchema.parse({
     ticketSchemaVersion: TICKET_SCHEMA_VERSION,
     orderId: order.id,
@@ -62,5 +88,29 @@ export async function buildPrintableOrder(orderId: string, options: PrintableOpt
       notes: item.notes,
       additionals: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })),
     })),
+  });
+}
+
+// Tíquete do job TEST (teste de impressora): o MÍNIMO e FICTÍCIO — nenhum dado de loja, cliente ou pedido, e NADA que
+// pareça cobrança: sem `paymentStatus`, sem forma de pagamento, sem itens e com os totais obrigatórios do schema em zero
+// (ADR-0004 §8 itens 2 e 11). O cliente imprime o próprio tíquete de teste ("TESTE DE IMPRESSÃO") e ignora campos de pedido;
+// a regra fail-safe do cliente ("sem prova de pagamento, COBRAR NO CAIXA") vale só para pedidos reais.
+export function buildTestTicket(jobId: string, now: Date): PrintableOrder {
+  return printableOrderSchema.parse({
+    ticketSchemaVersion: TICKET_SCHEMA_VERSION,
+    orderId: `teste-${jobId}`,
+    code: "TESTE",
+    type: "BALCAO",
+    storeName: "Teste de impressora",
+    customerName: null,
+    customerPhone: null,
+    address: null,
+    notes: null,
+    totalCents: 0,
+    deliveryFeeCents: 0,
+    tipCents: 0,
+    paymentMethod: null,
+    createdAt: now.toISOString(),
+    items: [],
   });
 }
