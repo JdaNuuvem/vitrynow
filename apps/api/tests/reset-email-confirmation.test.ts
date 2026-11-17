@@ -116,9 +116,15 @@ describe("redefinição de senha exige o e-mail da conta do token (SEC-29, ST-67
     const wrongEmail = await sample({ token: a.token, email: "errado@exemplo.com", newPassword: "senha-nova-da-vitima" }, 3); // só 3: 5 invalidam o token
     const noToken = await sample({ token: "y".repeat(32), email: a.credentials.email, newPassword: "senha-nova-da-vitima" });
     const empty = await sample({ token: "z", email: a.credentials.email, newPassword: "senha-nova-da-vitima" });
+    // 4º ramo (bundle antigo em cache): SEM o campo e-mail, e com e-mail malformado. É recusa sem consulta ao banco, então é a que mais facilmente sai
+    // ANTES do piso: sem o `padToMinimum` dela a resposta voltaria em poucos ms e revelaria "este corpo nem chegou a olhar o token". Não gasta tentativa.
+    const noEmail = await sample({ token: a.token, newPassword: "senha-nova-da-vitima" });
+    const badEmail = await sample({ token: a.token, email: "isto-nao-e-um-email", newPassword: "senha-nova-da-vitima" });
     expect(Math.abs(wrongEmail - noToken)).toBeLessThan(35);
     expect(Math.abs(noToken - empty)).toBeLessThan(35);
-    for (const value of [wrongEmail, noToken, empty]) expect(value).toBeGreaterThanOrEqual(RESET_FAIL_MIN_DURATION_MS - 10);
+    expect(Math.abs(noToken - noEmail)).toBeLessThan(35);
+    expect(Math.abs(noToken - badEmail)).toBeLessThan(35);
+    for (const value of [wrongEmail, noToken, empty, noEmail, badEmail]) expect(value).toBeGreaterThanOrEqual(RESET_FAIL_MIN_DURATION_MS - 10);
   }, 120000);
 
   it(`${RESET_MAX_EMAIL_FAILURES} e-mails errados INVALIDAM o token, com a mesma resposta; depois nem o e-mail certo o reabre`, async () => {
