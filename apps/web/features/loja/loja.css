@@ -1065,6 +1065,54 @@
   line-height: 1.25rem;
   color: var(--loja-muted);
 }
+.loja__result-warning {
+  margin-top: 0.75rem;
+  font-size: 0.9375rem;
+  line-height: 1.375rem;
+  font-weight: 700;
+  color: var(--loja-ink);
+}
+.loja__result-store {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: var(--loja-muted);
+}
+.loja__result-total {
+  margin-top: 0.25rem;
+  font-size: 1.125rem;
+  line-height: 1.5rem;
+  font-weight: 700;
+}
+.loja__cta--outline {
+  border: 2px solid var(--loja-accent);
+  background: transparent;
+  color: var(--loja-accent);
+}
+.loja__qr-box {
+  width: 100%;
+  max-width: 24rem; /* a linha inteira do "Mostrar QR Code" é o alvo de toque, como o botão de copiar */
+  margin: 0.75rem 0;
+}
+.loja__qr-box summary {
+  display: flex;
+  min-height: 2.75rem; /* 44 px */
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--loja-ink-3);
+  text-decoration: underline;
+}
+.loja__qr-box .loja__qr {
+  margin: 0.5rem auto 0;
+}
+.loja__order-note {
+  margin-top: 0.25rem;
+  font-size: 0.8125rem;
+  line-height: 1.125rem;
+  color: var(--loja-muted);
+}
 .loja__result-error {
   margin-top: 0.5rem;
   margin-bottom: 1rem;

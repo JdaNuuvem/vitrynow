@@ -26,8 +26,8 @@ async function toResult<T>(response: Response): Promise<HttpResult<T>> {
 }
 
 export class FetchHttpClient implements HttpClient {
-  async get<T>(path: string): Promise<HttpResult<T>> {
-    return toResult<T>(await apiFetch(path));
+  async get<T>(path: string, options?: RequestOptions): Promise<HttpResult<T>> {
+    return toResult<T>(await apiFetch(path, options?.headers ? { headers: options.headers } : undefined));
   }
 
   async post<T>(path: string, body?: unknown, options?: RequestOptions): Promise<HttpResult<T>> {
