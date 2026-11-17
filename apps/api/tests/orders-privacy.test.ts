@@ -16,6 +16,7 @@ const SEGREDOS = {
   providerPaymentId: "mp-SEGREDO-999",
   pixQrCode: "00020126-QR-COPIA-E-COLA-SEGREDO",
   pixQrCodeBase64: "UVJTRUdSRURP",
+  idempotencyKey: "chave-idem-SEGREDO",
   refundContext: { userId: "usuario-SEGREDO", reason: { code: "ITEM_EM_FALTA", text: "nota-interna-do-contexto-SEGREDO" } },
   refundLastError: "erro-interno-SEGREDO",
   lastRawStatus: "raw-SEGREDO",
