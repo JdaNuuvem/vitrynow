@@ -4,9 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import { BottomNav } from "./BottomNav";
 
 describe("BottomNav (spec 09 §2.3)", () => {
-  it("três destinos com rótulo visível: Cardápio, Buscar, Meus pedidos", () => {
+  it("três destinos com rótulo visível: Cardápio, Buscar, Pedidos", () => {
     render(<BottomNav active="itens" onSelect={vi.fn()} />);
-    for (const name of ["Cardápio", "Buscar", "Meus pedidos"]) {
+    for (const name of ["Cardápio", "Buscar", "Pedidos"]) {
       const button = screen.getByRole("button", { name });
       expect(button).toBeInTheDocument();
       expect(button).toHaveTextContent(name); // texto real, não só aria-label
@@ -25,13 +25,13 @@ describe("BottomNav (spec 09 §2.3)", () => {
     render(<BottomNav active="pesquisa" onSelect={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Buscar" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("button", { name: "Cardápio" })).not.toHaveAttribute("aria-current");
-    expect(screen.getByRole("button", { name: "Meus pedidos" })).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: "Pedidos" })).not.toHaveAttribute("aria-current");
   });
 
   it("tocar numa aba avisa qual foi (os ids internos não mudaram)", async () => {
     const onSelect = vi.fn();
     render(<BottomNav active="itens" onSelect={onSelect} />);
-    await userEvent.click(screen.getByRole("button", { name: "Meus pedidos" }));
+    await userEvent.click(screen.getByRole("button", { name: "Pedidos" }));
     expect(onSelect).toHaveBeenCalledWith("pedidos");
   });
 

@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Menu, Product } from "@/core/domain/storefront";
 import { formatCents } from "@/shared/format/money";
 import { BottomNav, type NavTab } from "./components/BottomNav";
 import { CartDrawer } from "./components/CartDrawer";
 import { CategoriesScreen } from "./components/CategoriesScreen";
-import { CategoryChips, CategorySectionHeading } from "./components/CategoryNav";
+import { CategoryChips, CategorySectionHeading, StickyBar } from "./components/CategoryNav";
 import { CheckoutDrawer } from "./components/CheckoutDrawer";
 import { OrderResultScreen } from "./components/OrderResultScreen";
 import { OrdersScreen } from "./components/OrdersScreen";
@@ -14,14 +14,21 @@ import { ProductDetailScreen } from "./components/ProductDetailScreen";
 import { ProductListItem } from "./components/ProductListItem";
 import { SearchScreen } from "./components/SearchScreen";
 import { StoreHeader } from "./components/StoreHeader";
-import { STORE_CLOSED_MESSAGE, buildOrderSummary, type CheckoutForm, type CheckoutTotals } from "./checkoutForm";
+import { buildOrderSummary, type CheckoutForm, type CheckoutTotals } from "./checkoutForm";
 import { restoreReturnPoint, type ReturnPoint } from "./focusReturn";
-import { InfoIcon } from "./icons";
 import { useCart } from "./hooks/useCart";
+import { useInView } from "./hooks/useInView";
+import { useScrolledPast } from "./hooks/useScrolledPast";
+import { useScrollSpy } from "./hooks/useScrollSpy";
 import { useMenu } from "./hooks/useMenu";
 import { useOrderFlow } from "./hooks/useOrderFlow";
 import { useOrderHistory } from "./hooks/useOrderHistory";
 import { scrollBehavior } from "@/lib/motion";
+import { storeInitials } from "@/lib/storeInitials";
+import { useMediaQuery } from "@/lib/useMediaQuery";
+import { lojaTitleFont } from "./fonts";
+import { isCompactCategory, quickAddMode } from "./storeInfo";
+import { lojaThemeStyle } from "./theme";
 import "./loja.css";
 import "./motion.css";
 
@@ -50,12 +57,31 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
   );
   const cart = useCart(productsById);
 
+  // Barra de categorias fixa e destaque da categoria na tela (spec 12 §2.1). Tudo por IntersectionObserver: nenhum
+  // ouvinte de scroll. O marcador fica logo abaixo da identidade; quando ela sai de vista, as barras fixas aparecem.
+  const [identityMarker, setIdentityMarker] = useState<Element | null>(null);
+  const identityGone = useScrolledPast(identityMarker);
+  const wide = useMediaQuery("(min-width: 768px)");
+  const sectionIds = useMemo(() => (menu?.categories ?? []).filter((category) => category.products.length > 0).map((category) => "categoria-" + category.id), [menu]);
+  // Faixa de leitura: abaixo das barras fixas (56 + 56 no celular; uma linha só de 64 em tela larga).
+  // A tela do cardápio só existe quando nada (detalhe, busca, categorias, resultado do pedido) está por cima.
+  const itemsScreenShown = Boolean(menu) && !order.placed && !detailProduct && tab === "itens" && !showCategories;
+  // Fim da página: as últimas categorias são curtas e não chegam à linha de leitura. Se a pessoa tocou num chip e a página
+  // parou no fim, o chip tocado continua destacado (o pino cai assim que ela sai do fim).
+  const [endMarker, setEndMarker] = useState<Element | null>(null);
+  const atEnd = useInView(endMarker);
+  const [pinnedId, setPinnedId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!atEnd) setPinnedId(null);
+  }, [atEnd]);
+  const spyId = useScrollSpy(sectionIds, { topOffsetPx: wide ? 72 : 120, enabled: itemsScreenShown });
+
   // Se o servidor recusou por loja fechada, rebusca o cardápio: o banner e o bloqueio passam a vir do estado real.
   useEffect(() => {
     if (order.errorCode === "STORE_CLOSED") refresh();
   }, [order.errorCode, refresh]);
 
-  const rootStyle = menu?.store.primaryColor ? ({ "--loja-accent": menu.store.primaryColor } as CSSProperties) : undefined;
+  const rootStyle = lojaThemeStyle(menu?.store.primaryColor);
 
   function openProduct(product: Product) {
     returnPoint.current = { productId: product.id, scrollY: window.scrollY };
@@ -72,8 +98,10 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
     if (point) restoreReturnPoint(document, point, (y) => window.scrollTo(0, y));
   }, [detailProduct]);
 
+  // "+" do cartão (spec 12 §3): sem adicionais ou só com adicionais OPCIONAIS adiciona 1 unidade simples; só grupo
+  // obrigatório (quando existir, API-15) abre o detalhe. O servidor valida do mesmo jeito (RN-B8-01).
   function quickAdd(product: Product) {
-    if (product.additionals.length > 0) return openProduct(product);
+    if (quickAddMode(product) === "detail") return openProduct(product);
     cart.add(product.id, 1, [], "");
   }
 
@@ -81,6 +109,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
     setTab("itens");
     setShowCategories(false);
     setSelectedCategoryId(id);
+    setPinnedId(id);
     setTimeout(() => document.getElementById(`categoria-${id}`)?.scrollIntoView({ behavior: scrollBehavior(), block: "start" }), 0);
   }
 
@@ -100,7 +129,9 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
     // Categoria sem produto não aparece para o cliente (spec 09 §6).
     const visibleCategories = categories.filter((category) => category.products.length > 0);
     const hasProducts = visibleCategories.length > 0;
-    const activeCategoryId = selectedCategoryId ?? categories[0]?.id ?? null;
+    // Destaque do chip: a seção que está na tela (scrollspy); antes da 1ª leitura, a escolhida ou a primeira.
+    const activeCategoryId = pinnedId && atEnd ? pinnedId : spyId ? spyId.replace("categoria-", "") : (selectedCategoryId ?? visibleCategories[0]?.id ?? null);
+    const identity = { name: store.name, logoUrl: store.logoUrl, initials: storeInitials(store.name) };
     const closed = !store.acceptingOrders;
 
     if (order.placed) {
@@ -144,6 +175,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
           onClose={() => setTab("itens")}
           onOpenProduct={openProduct}
           onQuickAdd={quickAdd}
+          onRemoveOne={(product) => cart.removeOne(product.id)}
         />
       );
     }
@@ -155,61 +187,85 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
     return (
       <main className="loja__page">
         {tab === "pedidos" ? (
-          <OrdersScreen orders={history.orders} storeName={store.name} />
+          <div className="loja__column">
+            <OrdersScreen orders={history.orders} storeName={store.name} />
+          </div>
         ) : (
           <>
-            <StoreHeader store={store} onOpenSearch={() => setTab("pesquisa")}>
-              <CategoryChips
-                categories={visibleCategories}
-                activeCategoryId={activeCategoryId}
-                onSelect={scrollToCategory}
-                onViewAll={() => setShowCategories(true)}
-              />
-            </StoreHeader>
+            <StickyBar visible={identityGone} identity={identity} onOpenSearch={() => setTab("pesquisa")} />
+            <StoreHeader
+              store={store}
+              onOpenSearch={() => setTab("pesquisa")}
+              onViewAllCategories={() => setShowCategories(true)}
+              showCategoriesHead={visibleCategories.length > 1}
+            />
+            <div ref={setIdentityMarker} className="loja__marker" aria-hidden="true" />
+            {/* Filha da página inteira (não da folha da identidade): é o que a deixa fixa até o fim da rolagem. */}
+            <CategoryChips
+              categories={visibleCategories}
+              activeCategoryId={activeCategoryId}
+              stuck={identityGone}
+              identity={identity}
+              onSelect={scrollToCategory}
+              onOpenSearch={() => setTab("pesquisa")}
+            />
 
             {/* Destino do link "Ir para o cardápio" (primeiro foco da página). */}
             <div className="loja__content" id="cardapio-conteudo" tabIndex={-1}>
-              {closed && (
-                <div className="loja__closed" role="status">
-                  <InfoIcon />
-                  <span>{STORE_CLOSED_MESSAGE}.</span>
-                </div>
-              )}
               {!hasProducts && (
                 <div className="loja__empty-menu" role="status">
                   <p>Este cardápio ainda não tem produtos.</p>
                   {store.whatsapp && (
-                    <a href={`https://wa.me/${store.whatsapp}`} target="_blank" rel="noreferrer" className="loja__empty-menu-link">
+                    <a href={"https://wa.me/" + store.whatsapp} target="_blank" rel="noreferrer" className="loja__empty-menu-link">
                       Falar com a loja
                     </a>
                   )}
                 </div>
               )}
-              {visibleCategories.map((category) => (
-                <section key={category.id} id={`categoria-${category.id}`} className="loja__section">
-                  <CategorySectionHeading category={category} />
-                  <div className="loja__list">
-                    {category.products.map((product) => (
-                      <ProductListItem
-                        key={product.id}
-                        closed={closed}
-                        product={product}
-                        quantityInCart={cart.quantityByProduct[product.id] ?? 0}
-                        onOpen={openProduct}
-                        onQuickAdd={quickAdd}
-                      />
-                    ))}
-                  </div>
-                </section>
-              ))}
+              {visibleCategories.map((category) => {
+                const compact = isCompactCategory(category);
+                return (
+                  <section key={category.id} id={"categoria-" + category.id} className="loja__section">
+                    <CategorySectionHeading category={category} />
+                    <div className={"loja__list" + (compact ? " loja__list--compact" : "")}>
+                      {category.products.map((product) => (
+                        <ProductListItem
+                          key={product.id}
+                          closed={closed}
+                          compact={compact}
+                          categoryIcon={category.icon}
+                          product={product}
+                          quantityInCart={cart.quantityByProduct[product.id] ?? 0}
+                          onOpen={openProduct}
+                          onQuickAdd={quickAdd}
+                          onRemoveOne={(item) => cart.removeOne(item.id)}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                );
+              })}
             </div>
+            <div ref={setEndMarker} className="loja__end" aria-hidden="true" />
           </>
         )}
 
         {cart.itemCount > 0 && !checkoutOpen && (
-          <button onClick={() => setCartOpen(true)} className="loja__cart-bar">
-            <span>Ver carrinho ({cart.itemCount})</span>
-            <span className="loja__cart-bar-total">{formatCents(cart.totalCents)}</span>
+          <button
+            type="button"
+            onClick={() => setCartOpen(true)}
+            className="loja__cart-bar"
+            aria-label={"Ver carrinho: " + cart.itemCount + (cart.itemCount === 1 ? " item, " : " itens, ") + formatCents(cart.totalCents)}
+          >
+            <span className="loja__cart-bar-left">
+              <span className="loja__cart-bar-count" aria-hidden="true">
+                {cart.itemCount}
+              </span>
+              <span aria-hidden="true">Ver carrinho</span>
+            </span>
+            <span className="loja__cart-bar-total" aria-hidden="true">
+              {formatCents(cart.totalCents)}
+            </span>
           </button>
         )}
 
@@ -249,7 +305,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
   }
 
   return (
-    <div className="loja" style={rootStyle} data-brand={menu?.store.primaryColor ? "" : undefined}>
+    <div className={"loja " + lojaTitleFont.variable} style={rootStyle}>
       <a href="#cardapio-conteudo" className="loja__skip">
         Ir para o cardápio
       </a>
