@@ -72,7 +72,14 @@ namespace MeuCardapio.PrintClient.Services
         public const string ModeLegacy = "LEGACY";
         public const string ModeQueue = "QUEUE";
         volatile string _mode;
-        volatile bool _configUnsupported;   // a API respondeu 404 em /api/device/config (API antiga): nao pergunta de novo
+        // /api/device/config: um 404 (API antiga, ou deploy/proxy/rollback em andamento) suprime a pergunta POR UM PRAZO, nao para sempre: senao uma
+        // loja virada para a fila ficaria sem tiquete e sem sinal (parecer Nightingale). Falhas SEGUIDAS (rede, 5xx, lixo) avisam na tela, sem trocar o modo.
+        public TimeSpan ConfigSuppression = TimeSpan.FromMinutes(10);
+        public int ConfigFailuresBeforeWarning = 5;
+        long _configSuppressedUntilTicks;
+        int _configFailures;
+        volatile bool _modeUnconfirmed;
+        public bool ModeUnconfirmed { get { return _modeUnconfirmed; } }
         public string CurrentMode { get { return _mode; } }
         public event Action<string> ModeChanged;
 
@@ -235,7 +242,11 @@ namespace MeuCardapio.PrintClient.Services
             // modo na configuracao do dispositivo a cada ciclo; o 409 MODE_QUEUE dos endpoints do pedido continua valendo como cinto.
             await RefreshModeFromConfigAsync(token);
             if (_mode == ModeQueue) { await ClaimJobsAsync(token); return; }
-            try { await LegacyCycleAsync(token); }
+            try
+            {
+                await LegacyCycleAsync(token);
+                if (_mode == ModeQueue) await ClaimJobsAsync(token);   // o corpo do /pending disse QUEUE: segue para a fila no mesmo ciclo
+            }
             catch (ModeQueueException)
             {
                 SetMode(ModeQueue, "o servidor respondeu MODE_QUEUE");
@@ -243,11 +254,12 @@ namespace MeuCardapio.PrintClient.Services
             }
         }
 
-        // GET /api/device/config -> {"mode":"LEGACY"|"QUEUE"}. Melhor esforco: 404 (API antiga) desliga a pergunta; erro de rede/HTTP/JSON
-        // so passa (o proprio ciclo legado reclama se a API estiver fora); 401/403 seguem a regra de chave recusada.
+        // GET /api/device/config -> {"mode":"LEGACY"|"QUEUE"}. Melhor esforco. 404: suprime a pergunta por ConfigSuppression e volta a tentar depois.
+        // Rede/HTTP/JSON com problema: conta falha SEGUIDA; ao chegar em ConfigFailuresBeforeWarning avisa "Nao consigo confirmar o modo de impressao da
+        // loja" (uma vez, sem trocar o modo) e limpa ao voltar a responder. 401/403 seguem a regra de chave recusada.
         async Task RefreshModeFromConfigAsync(CancellationToken token)
         {
-            if (_configUnsupported) return;
+            if (DateTime.UtcNow.Ticks < Interlocked.Read(ref _configSuppressedUntilTicks)) return;
             try
             {
                 using (var request = NewRequest(HttpMethod.Get, "/api/device/config", null))
@@ -255,8 +267,8 @@ namespace MeuCardapio.PrintClient.Services
                 {
                     int code = (int)response.StatusCode;
                     if (code == 401 || code == 403) throw new DeviceAuthException(code);
-                    if (code == 404) { _configUnsupported = true; return; }
-                    if (code < 200 || code >= 300) return;
+                    if (code == 404) { Interlocked.Exchange(ref _configSuppressedUntilTicks, (DateTime.UtcNow + ConfigSuppression).Ticks); ConfigAnswered(); return; }
+                    if (code < 200 || code >= 300) { ConfigFailed(); return; }
                     string body;
                     using (var stream = await response.Content.ReadAsStreamAsync())
                     {
@@ -264,13 +276,32 @@ namespace MeuCardapio.PrintClient.Services
                         while (n < buffer.Length && (r = await stream.ReadAsync(buffer, n, buffer.Length - n)) > 0) n += r;
                         body = Encoding.UTF8.GetString(buffer, 0, n);
                     }
-                    var cfg = JsonConvert.DeserializeObject<DeviceConfigResponse>(body);
-                    if (cfg != null) ApplyServerMode(cfg.Mode);
+                    DeviceConfigResponse cfg = null;
+                    try { cfg = JsonConvert.DeserializeObject<DeviceConfigResponse>(body); } catch { }
+                    if (cfg == null) { ConfigFailed(); return; }
+                    ConfigAnswered();
+                    ApplyServerMode(cfg.Mode);
                 }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
             catch (DeviceAuthException) { throw; }
-            catch { /* melhor esforco */ }
+            catch { ConfigFailed(); }
+        }
+
+        void ConfigAnswered()
+        {
+            Interlocked.Exchange(ref _configFailures, 0);
+            if (_modeUnconfirmed) { _modeUnconfirmed = false; StatusChanged?.Invoke("Modo de impressão da loja confirmado novamente."); }
+        }
+
+        void ConfigFailed()
+        {
+            int n = Interlocked.Increment(ref _configFailures);
+            if (n >= ConfigFailuresBeforeWarning && !_modeUnconfirmed)
+            {
+                _modeUnconfirmed = true;
+                StatusChanged?.Invoke("Não consigo confirmar o modo de impressão da loja (a configuração não responde). Continuo no modo atual; se a loja mudou de modo, os pedidos podem não sair: avise o suporte.");
+            }
         }
 
         async Task LegacyCycleAsync(CancellationToken token)
@@ -279,6 +310,10 @@ namespace MeuCardapio.PrintClient.Services
             var json = await GetStringAsync("/api/device/orders/pending", token);
             var pending = JsonConvert.DeserializeObject<PendingOrdersResponse>(json);
             if (pending?.Orders == null) return;
+            // O "mode" do corpo (API-12b) e a fonte; o cabecalho X-Print-Mode e so dica e NAO e lido. Em QUEUE a lista vem vazia: troca na hora
+            // (o CheckPendingAsync segue para o claim no mesmo ciclo).
+            ApplyServerMode(pending.Mode);
+            if (_mode == ModeQueue) return;
             // A lista da API é a verdade: o que falhou aqui e já não está pendente deixa de contar.
             _ledger.ReconcileFailures(pending.Orders.Select(o => o.Id));
             if (pending.Orders.Count == 0) return;

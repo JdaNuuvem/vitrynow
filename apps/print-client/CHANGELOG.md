@@ -18,6 +18,7 @@ O hash do EXE de cada release sai em `tools\build-installer.ps1` e entra no mani
 
 - O modo de impressão (legado ou fila) vem do servidor, por loja; o app segue o servidor a cada ciclo e nunca mistura os dois na virada (nada em impressão é reclamado pelo outro modo; pedido já impresso no legado não reimprime pelo job).
 - O cliente que começa no legado descobre a fila lendo a configuração do dispositivo a cada ciclo (em fila a lista legada vem vazia, sem erro): sem isso uma loja virada para a fila ficaria sem tíquete.
+- A configuração do dispositivo com 404 só suprime a pergunta por 10 min (não para sempre); falha seguida da configuração avisa "Não consigo confirmar o modo de impressão da loja" sem trocar o modo; o modo no corpo da lista legada troca para a fila no próprio ciclo.
 - Sons de alerta gerados pelo app.
 - Build reprodutível sem dependência do `reconstruction/`; instalador Inno Setup sem identidade do terceiro (`tools\scan-identity.ps1`).
 

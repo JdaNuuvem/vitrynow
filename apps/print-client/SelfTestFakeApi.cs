@@ -62,6 +62,7 @@ namespace MeuCardapio.PrintClient
         public bool ConfigEnabled = true;                              // GET /api/device/config (API-12b); false = API antiga (404)
         public int ConfigStatus = 200;                                 // 500 etc. para simular erro da configuracao
         public string ConfigBody;                                      // corpo bruto no lugar de {"mode":...} (lixo, vazio)
+        public bool PendingCarriesMode = true;                         // API-12b: /pending devolve {orders, mode}; false = formato antigo {orders}
         public bool PendingEmptyInQueue = true;                        // API-12b real: em QUEUE o /pending devolve 200 {orders:[]}; false = 409 (cinto antigo)
         public int ConfigCalls { get { lock (Lock) return _configCalls; } }
         int _configCalls;
@@ -241,7 +242,7 @@ namespace MeuCardapio.PrintClient
             if (path == "/api/device/orders/pending" && PrintMode == "QUEUE" && PendingEmptyInQueue)
             {
                 lock (Lock) _legacyCalls++;
-                Reply(c, 200, "{\"orders\":[]}");
+                Reply(c, 200, PendingCarriesMode ? "{\"orders\":[],\"mode\":\"QUEUE\"}" : "{\"orders\":[]}");
                 return;
             }
             if (LegacyAck500 && path.StartsWith("/api/device/orders/") && path.EndsWith("/printed")) { lock (Lock) _legacyCalls++; Reply(c, 500, "{}"); return; }
