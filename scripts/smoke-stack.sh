@@ -157,10 +157,28 @@ if printf '%s' "$html" | grep -qF "$SECRET"; then leak=1; echo "   VAZOU no HTML
 if [ "$n" -ge 3 ] && [ "$leak" = 0 ]; then check ok "segredo ausente do HTML e de $n arquivos estáticos que o navegador baixa"; else check fail "vazamento ($leak) ou poucos arquivos conferidos ($n)"; fi
 # SSR de ponta a ponta: cadastra uma loja de teste e abre o cardápio dela; o nome só vem no HTML se o servidor do web alcançou a API
 slug="smoke-ssr-$RANDOM"
-rc="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "{\"storeName\":\"Loja Smoke SSR\",\"slug\":\"$slug\",\"code\":\"SM$RANDOM\",\"email\":\"smoke$RANDOM@exemplo.invalid\",\"password\":\"SenhaLonga-12345\"}" "http://127.0.0.1:$PORT/auth/register")"
+smokeEmail="smoke$RANDOM@exemplo.invalid"; smokePass="SenhaLonga-12345"
+rc="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "{\"storeName\":\"Loja Smoke SSR\",\"slug\":\"$slug\",\"code\":\"SM$RANDOM\",\"email\":\"$smokeEmail\",\"password\":\"$smokePass\"}" "http://127.0.0.1:$PORT/auth/register")"
 page="$(curl -s -w '|%{http_code}' "http://127.0.0.1:$PORT/loja/$slug")"
 if [ "$rc" = 201 ] && [ "${page##*|}" = 200 ] && printf '%s' "$page" | grep -q "Loja Smoke SSR"; then check ok "SSR: /loja/$slug traz o nome da loja no HTML (o servidor do web alcançou a API por http://api:3001)"
 else check fail "SSR não trouxe a loja (cadastro=$rc, página=${page##*|}); o web pode estar caindo no plano B do navegador"; fi
+# LOGIN BEM-SUCEDIDO + ROTAS DO PAINEL que leem várias tabelas, com o cookie da sessão (INF-22): é o que um `--filter` que deixasse de fora um pacote de que a API precisa em
+# tempo de execução (db/Prisma client, shared-types, bcrypt) quebraria. O limite do /auth/login (8/min por IP) pode ainda estar valendo por causa da seção 6b: espera o Retry-After.
+jar="$ROOTW/infra/.smoke.cookies"; body="$ROOTW/infra/.smoke.body"; rm -f "$jar"   # ROOTW (C:/...): o curl.exe do Windows não entende /c/... com MSYS_NO_PATHCONV=1
+for try in 1 2 3; do
+  lh="$(curl -s -D - -o /dev/null -c "$jar" -X POST -H 'Content-Type: application/json' -d "{\"email\":\"$smokeEmail\",\"password\":\"$smokePass\"}" "http://127.0.0.1:$PORT/auth/login" | tr -d '\r')"
+  lrc="$(printf '%s' "$lh" | head -1 | awk '{print $2}')"
+  [ "$lrc" != 429 ] && break
+  ra="$(printf '%s' "$lh" | awk -F': ' 'tolower($1)=="retry-after"{print $2}')"; sleep "$(( ${ra:-30} + 2 ))"
+done
+if [ "$lrc" = 200 ] && grep -q mc_session "$jar" 2>/dev/null; then check ok "login BEM-SUCEDIDO pela API da imagem (bcrypt carregado, cookie de sessão emitido)"; else check fail "login do usuário recém-cadastrado falhou (HTTP $lrc)"; fi
+nrc="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/orders")"
+[ "$nrc" = 401 ] && check ok "controle: /api/orders SEM cookie é recusada (401)" || check fail "/api/orders sem cookie devolveu $nrc (esperado 401)"
+for p in /auth/me /api/orders /api/catalog/categories /api/store/settings /api/store/subscription /api/reports/summary; do
+  prc="$(curl -s -o "$body" -w '%{http_code}' -b "$jar" "http://127.0.0.1:$PORT$p")"
+  if [ "$prc" = 200 ]; then check ok "rota do painel com sessão: GET $p = 200 ($(wc -c < "$body" | tr -d ' ') bytes; leitura via Prisma)"; else check fail "GET $p com sessão devolveu $prc: $(head -c 150 "$body")"; fi
+done
+rm -f "$jar" "$body"
 
 echo "== 6f menor privilégio: o web NÃO recebe segredo nenhum além do necessário; a API recebe o PIX desligado; check-env.sh aprova o .env do smoke"
 # o container do web só pode ter: NODE_ENV, API_INTERNAL_URL, API_INTERNAL_SECRET e o que a imagem traz. Nenhum destes nomes:
