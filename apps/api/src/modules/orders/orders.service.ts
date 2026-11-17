@@ -3,6 +3,7 @@ import type { WsServerMessage } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
 import type { AuditLogger } from "../../shared/audit";
 import { cancelPayment, getPayment, refundPayment } from "../../lib/mercadopago";
+import { ORDER_TX_OPTIONS } from "../../lib/order-code";
 import {
   FINAL_STATUSES,
   HUMAN_REASON_CODES,
@@ -60,6 +61,12 @@ export class OrderService {
     private readonly publish: (storeId: string, message: WsServerMessage) => void,
     private readonly now: () => Date = () => new Date(),
   ) {}
+
+  // Toda transação do pedido usa as mesmas opções (espera e duração folgadas): a fila por lock conta no relógio da
+  // transação e, com o padrão de 5 s, estourava sob carga virando 500 em fluxo de dinheiro.
+  private runTx<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
+    return this.db.$transaction(fn, ORDER_TX_OPTIONS);
+  }
 
   // ───────────── Leitura (kanban) ─────────────
   async list(actor: PanelActor, query: { cursor?: string; limit?: number }) {
@@ -180,7 +187,7 @@ export class OrderService {
     if (order.payment?.status === "ESTORNO_PENDENTE") throw err(409, "REFUND_PENDING", "Há um estorno em andamento neste pedido.");
     if (!isAdvanceAllowed(order, to)) throw err(409, "INVALID_TRANSITION", "Esta mudança de status não é permitida.");
 
-    await this.db.$transaction(async (tx) => {
+    await this.runTx(async (tx) => {
       const moved = await tx.order.updateMany({
         where: { id: order.id, storeId: actor.storeId, status: order.status, refundLockedAt: null },
         data: { status: to },
@@ -208,7 +215,7 @@ export class OrderService {
       throw err(409, "UNDO_WINDOW_EXPIRED", "O prazo para desfazer acabou.");
     }
 
-    await this.db.$transaction(async (tx) => {
+    await this.runTx(async (tx) => {
       const moved = await tx.order.updateMany({
         where: { id: order.id, storeId: actor.storeId, status: order.status, refundLockedAt: null },
         data: { status: prev.status },
@@ -281,7 +288,7 @@ export class OrderService {
   private async cancelOrder(order: OrderWithPayment, origin: CancelOrigin): Promise<RefundOutcome> {
     if (holdsMoney(order.payment)) return this.refundSaga(order, origin);
 
-    const completed = await this.db.$transaction((tx) => this.applyCancel(tx, order, origin, { expected: order.status, noMoney: true }));
+    const completed = await this.runTx((tx) => this.applyCancel(tx, order, origin, { expected: order.status, noMoney: true }));
     if (!completed) {
       // Perdeu a corrida: ou o pagamento foi aprovado agora (vira saga) ou o status mudou (outro chegou antes).
       const fresh = await this.load(order.storeId, order.id);
@@ -371,7 +378,7 @@ export class OrderService {
     // A única exceção é o estorno de pagamento tardio de pedido já CANCELADO (nada a proteger no pedido).
     const context = JSON.parse(JSON.stringify(origin)) as Prisma.InputJsonValue;
     const lateRefund = origin.reason.code === "PAGAMENTO_APOS_CANCELAMENTO";
-    await this.db.$transaction(async (tx) => {
+    await this.runTx(async (tx) => {
       const guard = await tx.order.updateMany({
         where: {
           id: order.id,
@@ -420,7 +427,10 @@ export class OrderService {
     // (retry manual + job) terminam todas em "DONE", mas os efeitos rodam uma única vez.
     // Se o pedido NÃO pôde ser cancelado e não está cancelado (ex.: já concluído), o dinheiro voltou mesmo assim:
     // fica marcado para conciliação manual, com alerta — nunca REEMBOLSADO em silêncio.
-    const concluded = await this.db.$transaction(async (tx) => {
+    const concluded = await this.runTx(async (tx) => {
+      // Ordem de locks ÚNICA no sistema: Pedido → Pagamento (a Tx 1 da saga também começa pelo pedido). Travar o
+      // pagamento primeiro aqui criava a ordem inversa e permitia deadlock quando duas tentativas se sobrepõem.
+      await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${order.id} FOR UPDATE`;
       const flipped = await tx.payment.updateMany({
         where: { id: payment.id, status: "ESTORNO_PENDENTE" },
         data: { status: "REEMBOLSADO", refundLastError: null },
