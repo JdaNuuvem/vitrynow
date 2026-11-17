@@ -55,3 +55,24 @@ export async function sendMfaCodeEmail(input: { to: string; code: string; purpos
   });
   if (error) console.error(`[email] falha ao enviar código de confirmação para ${input.to}:`, error);
 }
+
+// SEC-20 / ST-33: aviso ao dono quando a conta recebe muitas tentativas de senha errada (de vários IPs).
+// Texto genérico: não traz IP, horário exato nem qualquer dado que ajude um atacante.
+export async function sendLoginAlertEmail(input: { to: string }) {
+  const resend = client();
+  if (!resend) {
+    console.warn(`[email] RESEND_API_KEY não configurado — aviso de tentativas de login para ${input.to}`);
+    return;
+  }
+  const { error } = await resend.emails.send({
+    from: FROM,
+    to: input.to,
+    subject: "Tentativas de entrada na sua conta — MeuCardapio",
+    html: `
+      <p>Detectamos várias tentativas de entrada na sua conta com senha incorreta.</p>
+      <p>Se foi você, pode ignorar. Se não foi, use "Esqueci a senha" para trocar a sua senha agora e,
+      depois de entrar, escolha "Sair de todos os dispositivos".</p>
+    `,
+  });
+  if (error) console.error(`[email] falha ao enviar aviso de tentativas de login para ${input.to}:`, error);
+}

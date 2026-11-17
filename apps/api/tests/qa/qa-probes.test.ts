@@ -324,7 +324,7 @@ describe("QA probes — API", () => {
   });
 
   // ───────────── Sessão / autenticação ─────────────
-  bug("D05 cadastro com e-mail já existente responde 409 (não 500)", async () => {
+  it("D05 cadastro com e-mail já existente responde 409 (não 500)", async () => {
     await registerStore(app, { email: "dup@teste.com" });
     const second = await registerStore(app, { email: "dup@teste.com" });
     expect(second.response.statusCode).toBe(409);

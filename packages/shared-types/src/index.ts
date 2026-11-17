@@ -45,14 +45,18 @@ export const createOrderSchema = z.object({
 });
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
 
+// ST-34: e-mail sempre normalizado na entrada (sem espaços nas pontas e em minúsculas), para "VITIMA@x" e
+// "vitima@x" nunca virarem duas contas. Vale para login, cadastro, convite e esqueci-a-senha.
+export const emailField = z.string().trim().toLowerCase().email().max(200);
+
 export const loginSchema = z.object({
-  email: z.string().email().max(200),
+  email: emailField,
   password: z.string().min(1).max(200),
 });
 export type LoginInput = z.infer<typeof loginSchema>;
 
 export const createStaffUserSchema = z.object({
-  email: z.string().email().max(200),
+  email: emailField,
   password: z.string().min(6).max(200),
   role: z.enum(["OWNER", "STAFF"]).optional(),
 });
@@ -64,7 +68,7 @@ export const changePasswordSchema = z.object({
 });
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
 
-export const forgotPasswordSchema = z.object({ email: z.string().email().max(200) });
+export const forgotPasswordSchema = z.object({ email: emailField });
 export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
 
 export const resetPasswordSchema = z.object({
@@ -81,7 +85,7 @@ export const registerStoreSchema = z.object({
     .max(80)
     .regex(/^[a-z0-9-]+$/, "use apenas letras minúsculas, números e hífen"),
   code: z.string().min(1).max(30),
-  email: z.string().email().max(200),
+  email: emailField,
   password: z.string().min(6).max(200),
 });
 export type RegisterStoreInput = z.infer<typeof registerStoreSchema>;
