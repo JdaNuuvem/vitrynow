@@ -157,8 +157,8 @@ services:
       DOMAIN: ${DOMAIN:?defina DOMAIN no .env}
       ACME_EMAIL: ${ACME_EMAIL:?defina ACME_EMAIL no .env}
       # O Go passa a devolver memória ANTES de bater no teto do container (mem_limit); sem isso ele retém o heap liberado e o
-      # container pode ser morto por falta de memória. Mantenha ~20% abaixo do mem_limit.
-      GOMEMLIMIT: 400MiB
+      # container pode ser morto por falta de memória. É um TETO, não uma reserva. Mantenha ~20% abaixo do mem_limit.
+      GOMEMLIMIT: 600MiB
     ports:
       - "80:80"
       - "443:443"
@@ -166,10 +166,11 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
-    # Teto de memória (ST-49/ST-50). Medido: ~6,5 KB por IP distinto na janela; 512 MB sustentam ~64 mil IPs a 80% (o smoke confere
-    # que o teto aguenta >= 60 mil). Acima disso (ataque distribuído) o Caddy é morto e volta em segundos (restart); risco ACEITO pelo
-    # Atlas: se tratar na borda/CDN. Se baixar este valor, o smoke reprova.
-    mem_limit: 512m
+    # Teto de memória (ST-49/ST-50). Medido: 6 a 7 KB por IP distinto na janela. Decisão do Atlas (17/11): 768 MB, porque com 512 MB
+    # o Caddy chegou a ~450 MB sob rotatividade alta de IPs (o cenário do ataque) e a folga era pequena. É um TETO (custo só de RAM
+    # se for usado). O smoke exige que o teto sustente >= 60 mil IPs a 80%. Acima disso (ataque distribuído) o Caddy é morto e volta
+    # em segundos (restart); risco ACEITO: tratar na borda/CDN. RISCO ABERTO: há um crescimento lento que não expliquei (ST-50-levas.md).
+    mem_limit: 768m
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2019/config/"]   # API de administração do Caddy, só dentro do container
       interval: 15s
