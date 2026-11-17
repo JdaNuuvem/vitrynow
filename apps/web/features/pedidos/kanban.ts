@@ -7,16 +7,8 @@ export const KANBAN_COLUMNS: readonly OrderStatus[] = ["PENDENTE", "CONFIRMADO",
 // É a única exceção à regra "nenhum pedido some"; qualquer outro valor cai em "Outros".
 export const OFF_BOARD_STATUSES: readonly string[] = ["CANCELADO"];
 
-// Fluxo do clique que avança o pedido HOJE (rota legada /status). Separado de KANBAN_COLUMNS de
-// propósito: a API em uso ainda recusa SAIU_PARA_ENTREGA, então o clique não pode levar para lá.
-// Com a API-02 os botões passam a vir de `allowedTransitions` (WEB-05) e este fluxo some.
-const LEGACY_FLOW: readonly OrderStatus[] = ["PENDENTE", "CONFIRMADO", "EM_PREPARO", "PRONTO", "CONCLUIDO"];
-
-export function nextStatus(status: OrderStatus): OrderStatus | null {
-  const index = LEGACY_FLOW.indexOf(status);
-  if (index === -1) return null;
-  return LEGACY_FLOW[index + 1] ?? null;
-}
+// O fluxo de avanço NÃO fica mais aqui: com a API-02 cada botão vem de `allowedTransitions` calculado
+// no servidor (WEB-05), então o quadro só decide ONDE o pedido aparece, nunca o próximo passo.
 
 export function ordersByStatus(orders: Order[], status: OrderStatus): Order[] {
   return orders.filter((order) => order.status === status);

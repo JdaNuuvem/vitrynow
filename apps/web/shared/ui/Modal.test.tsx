@@ -130,3 +130,30 @@ describe("Modal: o fundo fica inerte enquanto aberto (revisão da WEB-05, B1)", 
     expect(container.querySelectorAll("[inert]")).toHaveLength(0);
   });
 });
+
+describe("Modal: folha que ocupa só o conteúdo (revisão da Da Vinci, W2)", () => {
+  it("fitContent só vale junto com sheetOnMobile", () => {
+    const { container, rerender } = render(
+      <Modal open labelledBy="t" onClose={() => {}} sheetOnMobile fitContent>
+        <h2 id="t">x</h2>
+      </Modal>,
+    );
+    expect(container.querySelector(".ui-modal")).toHaveClass("ui-modal--sheet", "ui-modal--fit");
+    rerender(
+      <Modal open labelledBy="t" onClose={() => {}} fitContent>
+        <h2 id="t">x</h2>
+      </Modal>,
+    );
+    expect(container.querySelector(".ui-modal")).not.toHaveClass("ui-modal--fit");
+  });
+
+  it("sem fitContent a folha continua preenchendo a tela (padrão dos outros chamadores)", () => {
+    const { container } = render(
+      <Modal open labelledBy="t" onClose={() => {}} sheetOnMobile>
+        <h2 id="t">x</h2>
+      </Modal>,
+    );
+    expect(container.querySelector(".ui-modal")).toHaveClass("ui-modal--sheet");
+    expect(container.querySelector(".ui-modal")).not.toHaveClass("ui-modal--fit");
+  });
+});

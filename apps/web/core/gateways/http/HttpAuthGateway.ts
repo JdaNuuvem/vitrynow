@@ -1,8 +1,12 @@
 import type { HttpClient, RequestOptions } from "../../http/HttpClient";
-import type { AuthGateway } from "../AuthGateway";
+import type { AuthGateway, CurrentUser } from "../AuthGateway";
 
 export class HttpAuthGateway implements AuthGateway {
   constructor(private readonly http: HttpClient) {}
+
+  me() {
+    return this.http.get<{ user: CurrentUser }>("/auth/me");
+  }
 
   login(email: string, password: string) {
     return this.http.post("/auth/login", { email, password });

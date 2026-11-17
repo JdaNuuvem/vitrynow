@@ -62,6 +62,12 @@
     padding: 0;
   }
 
+  /* folha curta: altura do conteúdo, no máximo a da tela menos a margem de cima */
+  .ui-modal--sheet.ui-modal--fit .ui-modal__panel {
+    height: auto;
+    max-height: calc(100% - 32px);
+  }
+
   .ui-modal--sheet .ui-modal__panel {
     width: 100% !important;
     height: calc(100% - 32px);
