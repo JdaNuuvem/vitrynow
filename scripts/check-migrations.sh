@@ -20,6 +20,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"; ROOTW="$(cygpath -m "$ROOT")"
 BASE="${BASE:-main}"; AGENT="${AGENT:-hopper}"; PORT="${PORT:-55442}"; CT="mc-test-$AGENT-$PORT"
 MIGDIR="packages/db/prisma/migrations"
 HERE="$ROOT/scripts/migrations-check"
+. "$HERE/stamps.sh"   # regra do carimbo: único e crescente (testada em scripts/test-stamps.sh)
 TMP="$(mktemp -d)"; TMPW="$(cygpath -m "$TMP")"
 PASS=0; FAILS=0; DBS=()
 ok()   { PASS=$((PASS+1)); echo "  [ok]    $1"; }
@@ -73,7 +74,11 @@ ALL=(); for d in "$TMP/union"/*/; do ALL+=("$(basename "$d")"); done   # glob j�
 LASTBASE="${BASE_NAMES[${#BASE_NAMES[@]}-1]}"
 DUPS="$(printf '%s\n' "${ALL[@]}" | cut -c1-14 | sort | uniq -d)"
 for p in $DUPS; do echo "   prefixo repetido $p: $(printf '%s ' "${ALL[@]}" | tr ' ' '\n' | grep "^$p" | tr '\n' ' ')"; done
-for n in "${NEW[@]}"; do [[ "$n" < "$LASTBASE" ]] && echo "   AVISO: $n ordena ANTES da última migração da base ($LASTBASE)"; done
+# Regra do BOARD §0: carimbo único e crescente. Repetido ou anterior à última da base = FALHA (ALLOW_OUT_OF_ORDER=1 só
+# rebaixa o "decrescente" a aviso, para reproduzir histórico; nunca perdoa carimbo repetido).
+STAMP_OUT="$(stamp_problems "$LASTBASE" "${BASE_NAMES[@]}" -- "${NEW[@]}")"; STAMP_FAILS=$?
+while IFS= read -r l; do case "$l" in FALHA*) bad "${l#FALHA }";; AVISO*) echo "   ${l}";; esac; done <<< "$STAMP_OUT"
+[ "$STAMP_FAILS" = 0 ] && ok "carimbos únicos e crescentes (regra do BOARD §0)"
 [ -z "$DUPS" ] && ok "sem prefixos repetidos" || echo "   (prefixos repetidos aplicam por ordem alfabética do nome; provado abaixo)"
 
 # ---------- helpers de aplicação ----------
