@@ -28,30 +28,44 @@ function mayLogEmailSecrets(): boolean {
 
 const FROM = process.env.EMAIL_FROM ?? "MeuCardapio <onboarding@resend.dev>";
 
-export async function sendPasswordResetEmail(input: { to: string; resetUrl: string }) {
+// SEC-28b (ST-66): quem pede duas vezes (o 1º e-mail demorou, a caixa de spam) recebe dois e-mails e o primeiro link morre quando o segundo é
+// emitido; o texto diz isso para a pessoa não clicar no link velho e achar que o sistema quebrou.
+export function passwordResetEmailHtml(resetUrl: string): string {
+  return `
+      <p>Você pediu para redefinir sua senha.</p>
+      <p><a href="${resetUrl}">Clique aqui para criar uma nova senha</a> (válido por 1 hora).</p>
+      <p>Se você pediu mais de uma vez, use apenas o e-mail mais recente: os links anteriores deixam de valer.</p>
+      <p>Se não foi você, pode ignorar este e-mail.</p>
+    `;
+}
+
+// Devolve `true` quando o e-mail foi aceito pelo provedor (ou, só em desenvolvimento, quando o link foi para o console) e `false` quando NÃO
+// saiu (sem chave fora de dev, ou erro do provedor). O chamador usa isso para devolver a tentativa ao usuário (SEC-28b, ST-65).
+export async function sendPasswordResetEmail(input: { to: string; resetUrl: string }): Promise<boolean> {
   const resend = client();
   if (!resend) {
-    if (mayLogEmailSecrets()) console.warn(`[email] RESEND_API_KEY não configurado — link de recuperação para ${input.to}: ${input.resetUrl}`);
-    else console.error("[email] RESEND_API_KEY não configurado: o e-mail de recuperação de senha NÃO foi enviado (o link não é registrado no log).");
-    return;
+    if (mayLogEmailSecrets()) {
+      console.warn(`[email] RESEND_API_KEY não configurado — link de recuperação para ${input.to}: ${input.resetUrl}`);
+      return true;
+    }
+    console.error("[email] RESEND_API_KEY não configurado: o e-mail de recuperação de senha NÃO foi enviado (o link não é registrado no log).");
+    return false;
   }
 
   const { error } = await resend.emails.send({
     from: FROM,
     to: input.to,
     subject: "Recuperação de senha — MeuCardapio",
-    html: `
-      <p>Você pediu para redefinir sua senha.</p>
-      <p><a href="${input.resetUrl}">Clique aqui para criar uma nova senha</a> (válido por 1 hora).</p>
-      <p>Se não foi você, pode ignorar este e-mail.</p>
-    `,
+    html: passwordResetEmailHtml(input.resetUrl),
   });
 
   if (error) {
     // Não derruba o fluxo de forgot-password por isso — a resposta já é genérica
     // (nunca revela se o e-mail existe), só registramos a falha de envio.
     console.error(`[email] falha ao enviar recuperação de senha para ${maskEmail(input.to)}:`, error);
+    return false;
   }
+  return true;
 }
 
 export async function sendMfaCodeEmail(input: { to: string; code: string; purposeLabel: string }) {

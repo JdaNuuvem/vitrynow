@@ -154,6 +154,8 @@ model PasswordResetToken {
   createdAt DateTime  @default(now())
   // SEC-29 (ST-67): e-mails de confirmação que NÃO bateram com a conta deste token; na 5ª falha o token é invalidado.
   emailFailures Int   @default(0)
+  // SEC-28b (ST-65): o envio do e-mail falhou (provedor fora, sem chave, erro); a tentativa não conta nos 3 pedidos por hora.
+  sendFailedAt DateTime?
 
   @@index([userId])
 }

@@ -10,7 +10,7 @@ import { SESSION_COOKIE, revokeSession, sessionCookieOptions, signSession } from
 import { disconnectSession, disconnectUser } from "../realtime/hub";
 import { hashToken } from "../lib/tokenHash";
 import { LoginThrottle } from "../lib/loginThrottle";
-import { NOW, RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, constantTimeEqual, issueResetToken, padToMinimum, runBeforeClaimHook } from "../lib/passwordReset";
+import { NOW, RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, constantTimeEqual, issueResetToken, markResetSendFailed, padToMinimum, runBeforeClaimHook } from "../lib/passwordReset";
 
 // Hash de uma senha que ninguém conhece, no mesmo custo dos hashes reais: login com e-mail inexistente
 // gasta o mesmo tempo do login com senha errada (ST-05, sem enumeração de contas por tempo).
@@ -155,9 +155,14 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         // O token vai no FRAGMENTO (#), que o navegador nunca envia ao servidor: não aparece em log de acesso, de erro do proxy,
         // nem no Referer. A página lê, apaga da barra de endereço e manda no corpo do POST.
         const resetUrl = `${process.env.WEB_ORIGIN ?? "http://localhost:3000"}/reset-senha#token=${issued.token}`;
-        void sendPasswordResetEmail({ to: issued.to, resetUrl }).catch((error: unknown) => {
-          console.error(`[email] falha ao enviar recuperação de senha para ${maskEmail(issued.to)}: ${error instanceof Error ? error.name : "erro"}`);
-        });
+        // ST-65: o envio que não saiu (retorno `false`, ou exceção) devolve a tentativa: o token é marcado e deixa de gastar a cota de 3/hora.
+        const giveBack = () => markResetSendFailed(issued.id).catch(() => console.error(`[email] não consegui devolver a tentativa de recuperação de ${maskEmail(issued.to)}`));
+        void sendPasswordResetEmail({ to: issued.to, resetUrl })
+          .then((sent) => (sent === false ? giveBack() : undefined))
+          .catch((error: unknown) => {
+            console.error(`[email] falha ao enviar recuperação de senha para ${maskEmail(issued.to)}: ${error instanceof Error ? error.name : "erro"}`);
+            return giveBack();
+          });
       }
       await padToMinimum(startedAt);
 
