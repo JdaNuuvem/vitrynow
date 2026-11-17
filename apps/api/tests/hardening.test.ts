@@ -116,11 +116,15 @@ describe("hardening", () => {
     });
     const productId = JSON.parse(product.body).product.id;
 
-    await app.inject({
+    const placed = await app.inject({
       method: "POST",
       url: "/stores/loja-snapshot/orders",
       payload: { type: "BALCAO", items: [{ productId, quantity: 2 }] },
     });
+    // API-56: produto em pedido EM ABERTO não é excluído (409, RN-CT-12); o pedido antigo é o já encerrado.
+    const blocked = await app.inject({ method: "POST", url: `/api/catalog/products/${productId}/delete`, headers: { cookie: cookie! } });
+    expect(blocked.statusCode).toBe(409);
+    await prisma.order.update({ where: { id: JSON.parse(placed.body).orderId }, data: { status: "CONCLUIDO" } });
 
     const deleteProduct = await app.inject({
       method: "POST",
