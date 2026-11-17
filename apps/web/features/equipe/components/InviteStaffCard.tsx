@@ -1,6 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { isPasswordRuleError, PASSWORD_HELP_STAFF } from "@/shared/auth/passwordPolicy";
+import { usePasswordRule } from "@/shared/auth/usePasswordRule";
+import { PasswordField } from "@/shared/ui/PasswordField";
 
 export function InviteStaffCard({
   error,
@@ -11,8 +14,11 @@ export function InviteStaffCard({
 }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const serverRejectedLength = isPasswordRuleError(error);
+  const rule = usePasswordRule(password, serverRejectedLength);
 
   async function submit() {
+    if (!rule.validate()) return;
     if (!(await onInvite(email, password))) return;
     setEmail("");
     setPassword("");
@@ -22,13 +28,8 @@ export function InviteStaffCard({
     <div className="equipe-card">
       <h2>Adicionar funcionário</h2>
       <input placeholder="E-mail" value={email} onChange={(event) => setEmail(event.target.value)} />
-      <input
-        type="password"
-        placeholder="Senha provisória (mín. 6 caracteres)"
-        value={password}
-        onChange={(event) => setPassword(event.target.value)}
-      />
-      {error && <p className="equipe__error">{error}</p>}
+      <PasswordField label="Senha do funcionário" value={password} onChange={setPassword} help={PASSWORD_HELP_STAFF} error={rule.error} onBlur={rule.onBlur} />
+      {error && !serverRejectedLength && <p className="equipe__error">{error}</p>}
       <button type="button" className="equipe__button" onClick={submit}>
         Adicionar
       </button>

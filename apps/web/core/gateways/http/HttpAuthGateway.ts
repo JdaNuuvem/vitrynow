@@ -27,4 +27,8 @@ export class HttpAuthGateway implements AuthGateway {
   resetPassword(token: string, newPassword: string) {
     return this.http.post("/auth/reset-password", { token, newPassword });
   }
+
+  inspectResetToken(token: string) {
+    return this.http.post<{ valid: boolean; email?: string }>("/auth/reset-password/inspect", { token });
+  }
 }
