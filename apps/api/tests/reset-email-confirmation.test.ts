@@ -120,6 +120,8 @@ describe("redefinição de senha exige o e-mail da conta do token (SEC-29, ST-67
     // ANTES do piso: sem o `padToMinimum` dela a resposta voltaria em poucos ms e revelaria "este corpo nem chegou a olhar o token". Não gasta tentativa.
     const noEmail = await sample({ token: a.token, newPassword: "senha-nova-da-vitima" });
     const badEmail = await sample({ token: a.token, email: "isto-nao-e-um-email", newPassword: "senha-nova-da-vitima" });
+    // Linha lida pelo estágio de tempo do scripts/ci.ps1 (INF-20b): QUAL ramo ficou lento em cada falha. Defeito real = sempre o MESMO ramo; ruído = ramos variados.
+    console.log(`TEMPO_RAMOS ${JSON.stringify({ wrongEmail, noToken, empty, noEmail, badEmail })}`);
     expect(Math.abs(wrongEmail - noToken)).toBeLessThan(35);
     expect(Math.abs(noToken - empty)).toBeLessThan(35);
     expect(Math.abs(noToken - noEmail)).toBeLessThan(35);
