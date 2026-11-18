@@ -46,7 +46,7 @@ namespace MeuCardapio.PrintClient
 
         // fault: "" (impressora boa) | "offline" | "nopaper" | "driver"
         // startLegacy: o cliente PADRAO (UsePrintJobs desligado) comeca no legado; a virada para a fila vem do servidor (PC-18/PC-22).
-        public static string Run(string baseUrl, string token, string outDir, string ledgerPath, int seconds, string fault, bool startLegacy = false)
+        public static string Run(string baseUrl, string token, string outDir, string ledgerPath, int seconds, string fault, bool startLegacy = false, int pollMs = 1500)
         {
             var sb = new StringBuilder();
             var messages = new List<string>();
@@ -59,7 +59,7 @@ namespace MeuCardapio.PrintClient
 
             var ledger = new PrintLedger(ledgerPath, () => DateTime.UtcNow);
             var settings = new AppSettings { ApiBaseUrl = baseUrl, DeviceToken = token, UsePrintJobs = !startLegacy };
-            var device = new DeviceClient(ledger, settings) { PollIntervalMs = 1500, WsRetryMs = 1000, RevokedProbeMs = 600000 };
+            var device = new DeviceClient(ledger, settings) { PollIntervalMs = pollMs, WsRetryMs = 1000, RevokedProbeMs = 600000 };
             var coordinator = new PrintCoordinator(device, printer, () => 58, TimeZoneInfo.Local);
             coordinator.Message += m => { lock (messages) messages.Add(m); };
             device.StatusChanged += m => { lock (messages) messages.Add(m); };
