@@ -133,7 +133,7 @@ describe("API-54a — lista, ações e detalhe", () => {
       [
         "address", "allowedTransitions", "awaitingPayment", "blocked", "cancel", "canUndo", "canceledAt", "changeForCents", "code", "contactMasked", "createdAt",
         "customerName", "customerPhone", "delivererId", "deliverer", "deliveryFeeCents", "discountCents", "hasAddress", "hasPhone", "id", "items", "notes",
-        "paymentMethod", "payment", "printedAt", "serverNow", "status", "statusChangedAt", "subtotalCents", "tipCents", "totalCents", "type", "undoUntil", "updatedAt",
+        "paymentMethod", "payment", "printedAt", "serverNow", "status", "source", "statusChangedAt", "subtotalCents", "tableId", "tipCents", "totalCents", "type", "undoUntil", "updatedAt",
       ].sort(),
     );
     expect(Object.keys(o.items[0]).sort()).toEqual(["id", "notes", "productName", "quantity", "unitPriceCents"]);
