@@ -13,6 +13,7 @@
 #      [estorno] (erro de estorno), [audit] falha (auditoria que não gravou), respostas 5xx por taxa (> 1% das respostas, mínimo 5)
 # NÃO cobre: disco/memória do servidor (use o monitoramento do provedor), certificado TLS, nem a fila de impressão (alerta central do PC-24 é outro canal).
 set -uo pipefail
+export MSYS_NO_PATHCONV=1   # Git Bash no Windows reescreve /backups/LAST_OK como caminho do Windows; no Linux não faz nada
 cd "$(dirname "$0")"
 ENVF="${ENV_FILE:-.env}"; MIN=15
 if [ "${1:-}" = "--minutos" ]; then MIN="${2:-}"; fi
@@ -26,7 +27,7 @@ conta()  { local n; n="$(printf '%s\n' "$1" | grep -c -- "$2" || true)"; printf 
 
 echo "== serviços"
 for svc in postgres api web caddy postgres-backup; do
-  cid="$("${DC[@]}" ps -q "$svc" 2>/dev/null | head -1)"
+  cid="$("${DC[@]}" ps -a -q "$svc" 2>/dev/null | head -1)"
   if [ -z "$cid" ]; then alerta "$svc: container não existe"; continue; fi
   est="$(docker inspect -f '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}|{{.RestartCount}}' "$cid" 2>/dev/null)"
   status="${est%%|*}"; rest="${est#*|}"; saude="${rest%%|*}"; reinicios="${rest##*|}"

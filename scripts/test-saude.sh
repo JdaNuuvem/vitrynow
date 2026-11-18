@@ -9,7 +9,7 @@ PASS=0; FAILS=0
 cat > "$TMP/bin/docker" <<'EOF'
 #!/bin/bash
 case "$*" in
-  *" ps -q "*) a="$*"; svc="${a##* }"; [ "${STUB_SEM:-}" = "$svc" ] && exit 0; echo "cid-$svc"; exit 0 ;;
+  *" ps -a -q "*) a="$*"; svc="${a##* }"; [ "${STUB_SEM:-}" = "$svc" ] && exit 0; echo "cid-$svc"; exit 0 ;;
   "inspect -f "*) a="$*"; cid="${a##* }"; svc="${cid#cid-}"
      case "$svc" in
        "${STUB_PARADO:-}") echo "exited|-|0" ;;
