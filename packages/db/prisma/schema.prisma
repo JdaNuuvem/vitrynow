@@ -444,8 +444,8 @@ model CashSession {
   openingNotes       String?
   closingNotes       String?
   closedByUserId     String?
-  expectedClosingCents Int? // saldo esperado calculado no momento do fechamento
-  differenceCents    Int? // closingBalanceCents - expectedClosingCents
+  expectedClosingCents BigInt? // saldo esperado calculado no momento do fechamento
+  differenceCents    BigInt? // closingBalanceCents - expectedClosingCents
   closeReason        String? // código do motivo da diferença (lista fechada; obrigatório só acima da tolerância)
   closeReasonText    String? // texto livre SÓ quando o código é OUTRO (1 a 200); nunca vai para a auditoria
   closedByRole       String? // papel de quem fechou (OWNER/STAFF); nunca o e-mail
@@ -469,7 +469,9 @@ model CashMovement {
   createdByUserId String? // sem FK de propósito: o registro sobrevive ao usuário; a API devolve só o PAPEL, nunca o e-mail
   createdByRole String? // OWNER/STAFF no instante do lançamento
   createdAt     DateTime         @default(now())
+  idempotencyKey String? // API-27b (M3): Idempotency-Key do cliente; repetir a mesma chave no mesmo caixa devolve a mesma movimentação
 
+  @@unique([cashSessionId, idempotencyKey])
   @@index([cashSessionId])
 }
 
