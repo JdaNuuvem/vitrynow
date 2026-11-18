@@ -1,12 +1,14 @@
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { Prisma, prisma } from "@meucardapio/db";
-import { createTableOrderSchema, createTableSchema, qrSettingsSchema, updateTableSchema } from "@meucardapio/shared-types";
+import { createTableOrderSchema, createTableSchema, qrSettingsSchema, receiveTableSchema, updateTableSchema } from "@meucardapio/shared-types";
 import { logAudit } from "../lib/audit";
 import { buildMenuView } from "../lib/menuView";
 import { clientKey } from "../lib/clientKey";
 import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
 import { newOrderToken } from "../lib/orderToken";
+import { toOrderPaymentMethod } from "../lib/paymentMethod";
+import { SALE_STATUSES } from "../lib/saleLines";
 import { limited, tooMany } from "../lib/slidingLimit";
 import { hashToken } from "../lib/tokenHash";
 import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
@@ -47,6 +49,10 @@ function deviceTokenOf(request: FastifyRequest): string | null {
   return typeof raw === "string" && raw.length <= MAX_TOKEN_LENGTH && DEVICE_TOKEN_FORMAT.test(raw) ? raw : null;
 }
 
+const RECEIVES_PER_MINUTE = 60;
+// Conta da mesa (RN-MB-02, virtual): pedidos ACEITOS (CONFIRMADO em diante), não cancelados, ainda não recebidos.
+const accountWhere = (storeId: string, tableId: string) => ({ storeId, tableId, receiptId: null, paidAt: null, awaitingPayment: false, status: { in: [...SALE_STATUSES] } });
+
 const tableView = (t: { id: string; label: string; qrToken: string; active: boolean; position: number }, slug: string) => ({
   id: t.id,
   label: t.label,
@@ -62,15 +68,22 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   // ---------- Painel ----------
   app.get("/api/tables", { preHandler: app.requirePanelAuth }, async (request) => {
     const { storeId } = request.user;
-    const [store, tables, pending] = await Promise.all([
+    const [store, tables, pending, account] = await Promise.all([
       prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { slug: true, qrOrderingEnabled: true, qrOrdersNeedApproval: true } }),
       prisma.table.findMany({ where: { storeId }, orderBy: [{ position: "asc" }, { label: "asc" }] }),
-      prisma.order.groupBy({ by: ["tableId"], where: { storeId, tableId: { not: null }, status: "PENDENTE" }, _count: { _all: true } }),
+      prisma.order.groupBy({ by: ["tableId"], where: { storeId, tableId: { not: null }, receiptId: null, status: "PENDENTE" }, _count: { _all: true } }),
+      prisma.order.groupBy({ by: ["tableId"], where: { storeId, tableId: { not: null }, receiptId: null, paidAt: null, awaitingPayment: false, status: { in: [...SALE_STATUSES] } }, _count: { _all: true }, _sum: { totalCents: true } }),
     ]);
     const pendingBy = new Map(pending.map((p) => [p.tableId, p._count._all]));
+    const accountBy = new Map(account.map((a) => [a.tableId, { count: a._count._all, totalCents: a._sum.totalCents ?? 0 }]));
     return {
       settings: { qrOrderingEnabled: store.qrOrderingEnabled, qrOrdersNeedApproval: store.qrOrdersNeedApproval },
-      tables: tables.map((t) => ({ ...tableView(t, store.slug), pendingOrders: pendingBy.get(t.id) ?? 0 })),
+      tables: tables.map((t) => {
+        const acc = accountBy.get(t.id);
+        const pendingOrders = pendingBy.get(t.id) ?? 0;
+        // RN-MB-02: livre = sem pedido aceito a receber e sem pedido PENDENTE.
+        return { ...tableView(t, store.slug), pendingOrders, accountOrders: acc?.count ?? 0, accountCents: acc?.totalCents ?? 0, free: pendingOrders === 0 && !acc };
+      }),
     };
   });
 
@@ -147,6 +160,92 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const store = await prisma.store.update({ where: { id: storeId }, data: { qrOrderingEnabled, qrOrdersNeedApproval }, select: { qrOrderingEnabled: true, qrOrdersNeedApproval: true } });
     logAudit({ storeId, userId, action: "store.qr_settings", targetType: "Store", targetId: storeId, metadata: { qrOrderingEnabled, qrOrdersNeedApproval } });
     return { settings: store };
+  });
+
+  // Conta da mesa para a EQUIPE (RN-MB-02): a lista e o total só existem aqui, nunca no QR do cliente (RN-MB-06).
+  app.get("/api/tables/:id/account", { preHandler: app.requirePanelAuth }, async (request, reply) => {
+    const { storeId } = request.user;
+    const { id } = request.params as { id: string };
+    const table = await prisma.table.findFirst({ where: { id, storeId }, select: { id: true, label: true } });
+    if (!table) return notFound(reply);
+    const [orders, pendingOrders] = await Promise.all([
+      prisma.order.findMany({
+        where: accountWhere(storeId, id),
+        orderBy: { createdAt: "asc" },
+        select: { id: true, code: true, status: true, totalCents: true, createdAt: true, customerName: true, items: { select: { productName: true, quantity: true, unitPriceCents: true } } },
+      }),
+      prisma.order.count({ where: { storeId, tableId: id, receiptId: null, status: "PENDENTE" } }),
+    ]);
+    return { table, orders, pendingOrders, totalCents: orders.reduce((sum, o) => sum + o.totalCents, 0) };
+  });
+
+  // RECEBER A MESA (API-24; RN-MB-03/04/05, ADR-0012): soma a conta no SERVIDOR e grava UM Receipt com UMA forma de pagamento, marcando os pedidos.
+  app.post("/api/tables/:id/receive", { preHandler: app.requirePanelAuth }, async (request, reply) => {
+    const { storeId, userId } = request.user;
+    const { id } = request.params as { id: string };
+    if (limited(`table-receive:${userId}`, RECEIVES_PER_MINUTE)) return tooMany(reply);
+    const parsed = receiveTableSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Corpo inválido.", code: "VALIDATION_ERROR", fields: parsed.error.flatten().fieldErrors });
+    const input = parsed.data;
+    const method = toOrderPaymentMethod(input.paymentMethod);
+    if (!method) return reply.code(400).send({ error: "Forma de pagamento inválida.", code: "PAYMENT_METHOD_REQUIRED" });
+    if (input.changeForCents !== undefined && method !== "DINHEIRO") return reply.code(400).send({ error: "troco só se aplica a pagamento em dinheiro", code: "CHANGE_ONLY_CASH" });
+    const table = await prisma.table.findFirst({ where: { id, storeId }, select: { id: true } });
+    if (!table) return notFound(reply);
+
+    const receipt = await prisma.$transaction(async (tx) => {
+      // Trava os pedidos da mesa: cancelar e receber ao mesmo tempo se enfileiram (o cancelamento só vale com receiptId nulo).
+      await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "storeId" = ${storeId} AND "tableId" = ${id} AND "receiptId" IS NULL FOR UPDATE`;
+      // CA-MB-13: pedido PENDENTE bloqueia; aceitar ou recusar antes.
+      const pending = await tx.order.count({ where: { storeId, tableId: id, receiptId: null, status: "PENDENTE" } });
+      if (pending > 0) throw new CodedError(409, "PENDING_ORDERS", "Aceite ou recuse os pedidos pendentes da mesa antes de receber.", { details: { pendingOrders: pending } });
+      const orders = await tx.order.findMany({ where: accountWhere(storeId, id), select: { id: true, totalCents: true } });
+      const totalCents = orders.reduce((sum, o) => sum + o.totalCents, 0);
+      if (orders.length === 0 || totalCents <= 0) throw new CodedError(409, "NOTHING_TO_RECEIVE", "Esta mesa não tem conta a receber.");
+      if (input.expectedTotalCents !== undefined && input.expectedTotalCents !== totalCents) {
+        throw new CodedError(409, "TOTAL_CHANGED", "A conta da mesa mudou. Confira o novo total.", { details: { totalCents } });
+      }
+      if (input.changeForCents !== undefined && input.changeForCents < totalCents) throw new CodedError(400, "CHANGE_TOO_LOW", "o valor para troco deve cobrir o total da mesa");
+      // RN-MB-03/CA-MB-04: dinheiro só com caixa ABERTO. FOR SHARE: o fechamento (FOR UPDATE) espera este recebimento terminar.
+      let cashSessionId: string | null = null;
+      if (method === "DINHEIRO") {
+        const open = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "CashSession" WHERE "storeId" = ${storeId} AND "closedAt" IS NULL FOR SHARE`;
+        if (open.length === 0) throw new CodedError(409, "CASH_REQUIRED", "Abra o caixa para receber esta mesa em dinheiro.");
+        cashSessionId = open[0].id;
+      }
+      const receivedAt = new Date();
+      const created = await tx.receipt.create({
+        data: {
+          storeId,
+          kind: "TABLE",
+          tableId: id,
+          subtotalCents: totalCents,
+          totalCents,
+          receivedAt,
+          receivedByUserId: userId,
+          cashSessionId,
+          payments: { create: { storeId, method, amountCents: totalCents, changeForCents: input.changeForCents ?? null } },
+        },
+        include: { payments: true },
+      });
+      const marked = await tx.order.updateMany({ where: { id: { in: orders.map((o) => o.id) }, storeId, receiptId: null }, data: { receiptId: created.id, paidAt: receivedAt } });
+      if (marked.count !== orders.length) throw new CodedError(409, "ORDER_STATE_CHANGED", "A conta da mesa mudou enquanto você agia. Atualize a tela.");
+      return { ...created, orderIds: orders.map((o) => o.id) };
+    }, ORDER_TX_OPTIONS);
+
+    logAudit({ storeId, userId, action: "table.receive", targetType: "Receipt", targetId: receipt.id, metadata: { tableId: id, method, totalCents: receipt.totalCents, orders: receipt.orderIds.length } });
+    for (const orderId of receipt.orderIds) publishToStore(storeId, { type: "order.updated", orderId });
+    return reply.code(201).send({
+      receipt: {
+        id: receipt.id,
+        totalCents: receipt.totalCents,
+        receivedAt: receipt.receivedAt,
+        method,
+        changeForCents: input.changeForCents ?? null,
+        changeDueCents: input.changeForCents !== undefined ? input.changeForCents - receipt.totalCents : null,
+        orderIds: receipt.orderIds,
+      },
+    });
   });
 
   // ---------- Público (QR) ----------

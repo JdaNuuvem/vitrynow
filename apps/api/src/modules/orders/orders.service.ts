@@ -397,6 +397,8 @@ export class OrderService {
   }
 
   private async cancelOrder(order: OrderWithPayment, origin: CancelOrigin): Promise<RefundOutcome> {
+    // API-24 (RN-MB-05, CA-MB-12): pedido de mesa já recebido não se cancela; a correção é o estorno do recebimento (P2).
+    if (order.receiptId) throw err(409, "ORDER_ALREADY_RECEIVED", "Este pedido já foi recebido na mesa e não pode ser cancelado.");
     if (holdsMoney(order.payment)) return origin.skipIfPaid ? "NONE" : this.refundSaga(order, origin);
 
     const sink = { noticeQueued: false };
@@ -445,6 +447,7 @@ export class OrderService {
       where: {
         id: order.id,
         storeId: order.storeId,
+        receiptId: null, // recebido na mesa entre a leitura e a gravação: não cancela (API-24)
         status: opts.expected === "ANY_ACTIVE" ? { notIn: [...FINAL_STATUSES] } : opts.expected,
         ...(opts.noMoney ? { refundLockedAt: null, NOT: { payment: { is: { status: { in: ["APROVADO", "ESTORNO_PENDENTE"] } } } } } : {}),
       },
