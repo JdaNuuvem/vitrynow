@@ -290,7 +290,8 @@ export class OrderService {
     await this.runTx(async (tx) => {
       const moved = await tx.order.updateMany({
         where: { id: order.id, storeId: actor.storeId, status: order.status, refundLockedAt: null },
-        data: { status: to },
+        // RN-CX-02(b): pedido pago na entrega/retirada em DINHEIRO só vira dinheiro recebido ao ser CONCLUIDO (quem vence a corrida grava `paidAt`)
+        data: { status: to, ...(to === "CONCLUIDO" && order.paymentMethod === "DINHEIRO" && !order.paidAt && order.totalCents > 0 ? { paidAt: this.now() } : {}) },
       });
       if (moved.count !== 1) throw STATE_CHANGED();
       await tx.orderStatusHistory.create({ data: { orderId: order.id, status: to, userId: actor.userId, source: "PANEL", kind: "ADVANCE" } });

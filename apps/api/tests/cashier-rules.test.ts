@@ -304,15 +304,26 @@ describe("API-27 — caixa: regras do servidor", () => {
     const ctx = await setup(10000);
     const cat = json(await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie: ctx.owner }, payload: { name: "X" } })).category.id;
     const productId = json(await app.inject({ method: "POST", url: "/api/catalog/products", headers: { cookie: ctx.owner }, payload: { categoryId: cat, name: "P", priceCents: 4500 } })).product.id as string;
-    const o = await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders`, payload: { type: "BALCAO", paymentMethod: "DINHEIRO", items: [{ productId, quantity: 1 }] } });
-    expect(o.statusCode, o.body).toBe(201);
+    const novo = async () => {
+      const r = await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders`, payload: { type: "BALCAO", paymentMethod: "DINHEIRO", items: [{ productId, quantity: 1 }] } });
+      expect(r.statusCode, r.body).toBe(201);
+      return json(r).orderId as string;
+    };
+    const avancar = async (id: string, ate: string[]) => {
+      for (const to of ate) expect((await app.inject({ method: "POST", url: `/api/orders/${id}/transition`, headers: { cookie: ctx.owner }, payload: { to } })).statusCode).toBe(200);
+    };
+    const recebido = await novo(); // concluído no turno: o dinheiro (R$ 45,00) foi RECEBIDO
+    await avancar(recebido, ["CONFIRMADO", "EM_PREPARO", "PRONTO", "CONCLUIDO"]);
+    const emAndamento = await novo(); // aceito e ainda não pago: só "a receber"
+    await avancar(emAndamento, ["CONFIRMADO"]);
     const closed = await close(ctx.owner, { closingBalanceCents: 14500 });
     expect(closed.statusCode, closed.body).toBe(200);
     const sessionId = json(closed).session.id as string;
     expect(json(closed).session.expectedClosingCents).toBe(14500);
     const antes = json(await app.inject({ method: "GET", url: `/api/cashier/sessions/${sessionId}/summary`, headers: { cookie: ctx.owner } }));
-    // o dono cancela o pedido DEPOIS do fechamento: o resumo do caixa fechado continua o mesmo
-    const cancel = await app.inject({ method: "POST", url: `/api/orders/${json(o).orderId}/cancel`, headers: { cookie: ctx.owner }, payload: { reason: { code: "ITEM_EM_FALTA" } } });
+    expect(antes.summary.toReceiveCents).toBe(4500);
+    // o dono cancela o pedido em andamento DEPOIS do fechamento: o resumo do caixa fechado continua o mesmo
+    const cancel = await app.inject({ method: "POST", url: `/api/orders/${emAndamento}/cancel`, headers: { cookie: ctx.owner }, payload: { reason: { code: "ITEM_EM_FALTA" } } });
     expect(cancel.statusCode, cancel.body).toBe(200);
     const depois = json(await app.inject({ method: "GET", url: `/api/cashier/sessions/${sessionId}/summary`, headers: { cookie: ctx.owner } }));
     expect(depois.summary).toEqual(antes.summary);

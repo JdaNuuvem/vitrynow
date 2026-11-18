@@ -20,11 +20,15 @@ async function summarizeSession(db: Db | typeof prisma, storeId: string, session
     where: {
       storeId,
       awaitingPayment: false,
-      createdAt: { gte: session.openedAt, ...(session.closedAt ? { lte: session.closedAt } : {}) },
+      // criados no turno OU com dinheiro recebido no turno (entrega pedida antes e paga agora, RN-CX-01)
+      OR: [
+        { createdAt: { gte: session.openedAt, ...(session.closedAt ? { lte: session.closedAt } : {}) } },
+        { paidAt: { gte: session.openedAt, ...(session.closedAt ? { lte: session.closedAt } : {}) } },
+      ],
     },
-    select: { type: true, status: true, totalCents: true, deliveryFeeCents: true, tipCents: true, paymentMethod: true },
+    select: { type: true, status: true, totalCents: true, deliveryFeeCents: true, tipCents: true, paymentMethod: true, createdAt: true, paidAt: true, awaitingPayment: true },
   });
-  return computeCashSummary(session, orders);
+  return computeCashSummary(session, orders, session.closedAt ?? new Date());
 }
 
 // A API devolve a movimentação com TIPO, valor, motivo, PAPEL e HORA de quem lançou: nunca o id do usuário nem o e-mail (CA-CX-22).
