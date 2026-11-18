@@ -21,8 +21,12 @@ export function NewTokenCard({ onCreate }: { onCreate: (label: string) => Promis
   return (
     <div className="impressoras-card">
       <h2>Nova chave</h2>
-      <input placeholder="Identificação (ex.: PC do balcão)" value={label} onChange={(event) => setLabel(event.target.value)} />
-      {error && <p className="impressoras__error">{error}</p>}
+      <input aria-label="Identificação da chave" placeholder="Identificação (ex.: PC do balcão)" value={label} onChange={(event) => setLabel(event.target.value)} />
+      {error && (
+        <p role="alert" className="impressoras__error">
+          {error}
+        </p>
+      )}
       <button type="button" className="impressoras__button" onClick={submit}>
         Gerar chave
       </button>
