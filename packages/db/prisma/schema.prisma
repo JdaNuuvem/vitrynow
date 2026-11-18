@@ -118,6 +118,7 @@ model Store {
   subscription Subscription?
   counter      StoreCounter?
   printJobs    PrintJob[]
+  images       Image[]
   printMode    PrintMode @default(LEGACY) // modo de impressão decidido pelo SERVIDOR por loja (ADR-0004 §8.12)
   cashStaffWithdrawalLimitCents Int @default(0) // limite de sangria do STAFF por lançamento (RN-CX-09); 0 = toda sangria exige o dono
 }
@@ -629,4 +630,31 @@ model PrintJob {
   @@unique([id, storeId])
   @@index([storeId, status, availableAt, createdAt])
   @@index([orderId])
+}
+
+// API-18 / ADR-0010: imagem processada (WebP em larguras fixas) guardada no ObjectStorage sob stores/<storeId>/.
+// PENDING = em quarentena (objetos sendo gravados; nunca exposta); READY = publicada. PENDING velha é varrida.
+enum ImageKind {
+  PRODUCT
+  LOGO
+  COVER
+}
+
+enum ImageStatus {
+  PENDING
+  READY
+}
+
+model Image {
+  id        String      @id @default(cuid())
+  storeId   String
+  store     Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  kind      ImageKind
+  keyBase   String      // stores/<storeId>/<uuid>; as variantes são <keyBase>-<largura>.webp
+  widths    Int[]
+  bytes     Int
+  status    ImageStatus @default(PENDING)
+  createdAt DateTime    @default(now())
+
+  @@index([storeId, status, createdAt])
 }
