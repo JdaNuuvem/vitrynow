@@ -11,6 +11,7 @@ import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { customerMessageFor, messageActorFor, moneyLineFor } from "../lib/cancelMessages";
 import { DomainError } from "../shared/errors";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
+import { buildMenuView } from "../lib/menuView";
 import { newOrderToken, orderTokenMatches, ORDER_TOKEN_HEADER } from "../lib/orderToken";
 
 const COUPON_EXHAUSTED_MESSAGE = "Esse cupom acabou.";
@@ -23,37 +24,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     const store = await prisma.store.findUnique({ where: { slug } });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });
 
-    const categories = await prisma.category.findMany({
-      where: { storeId: store.id },
-      orderBy: { position: "asc" },
-      include: {
-        products: {
-          // SEC-11: nunca confiar só na categoria — o produto precisa ser DESTA loja.
-          where: { active: true, storeId: store.id },
-          orderBy: { position: "asc" },
-          include: { additionals: true },
-        },
-      },
-    });
-
-    return {
-      store: {
-        name: store.name,
-        slug: store.slug,
-        logoUrl: store.logoUrl,
-        coverImageUrl: store.coverImageUrl,
-        primaryColor: store.primaryColor,
-        address: store.address,
-        whatsapp: store.whatsapp,
-        openingHours: store.openingHours,
-        minOrderCents: store.minOrderCents,
-        deliveryEnabled: store.deliveryEnabled,
-        pickupEnabled: store.pickupEnabled,
-        acceptingOrders: store.acceptingOrders,
-        deliveryFeeCents: store.deliveryFeeCents,
-      },
-      categories,
-    };
+    return buildMenuView(store);
   });
 
   app.post(

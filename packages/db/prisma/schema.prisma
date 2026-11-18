@@ -65,6 +65,7 @@ enum HistorySource {
 enum OrderSource {
   CLIENTE
   PAINEL
+  QR_MESA // API-22: pedido feito pelo celular do cliente no QR da mesa
 }
 
 enum HistoryKind {
@@ -127,6 +128,26 @@ model Store {
   printMode    PrintMode @default(LEGACY) // modo de impressão decidido pelo SERVIDOR por loja (ADR-0004 §8.12)
   manualDiscountStaffLimitPercent Int @default(10) // desconto manual do pedido lançado no painel: STAFF até este %, acima só o OWNER (RN-B2-06)
   cashStaffWithdrawalLimitCents Int @default(0) // limite de sangria do STAFF por lançamento (RN-CX-09); 0 = toda sangria exige o dono
+  // API-22 (mesa/QR, ADR-0002): aceita pedido pelo QR; por padrão a equipe precisa aceitar (RN-MB-01).
+  qrOrderingEnabled    Boolean @default(true)
+  qrOrdersNeedApproval Boolean @default(true)
+  tables               Table[]
+}
+
+// API-22 (ADR-0002 nível 1): mesa física com QR próprio. `qrToken` é opaco (256 bits), nunca derivado de id/slug, e regenerável.
+model Table {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  label     String
+  qrToken   String   @unique
+  active    Boolean  @default(true)
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+  orders    Order[]
+
+  @@unique([storeId, label])
+  @@unique([id, storeId]) // alvo da FK composta de Order: o banco recusa mesa de outra loja
 }
 
 // Contador atômico por loja (hoje: sequência do código do pedido). Incrementado com
@@ -283,6 +304,10 @@ model Order {
   manualBodyHash    String? // impressão digital do corpo que usou a chave: mesma chave + corpo diferente = 409 (RN-B2-10)
   manualDiscountPercent Int?
   manualDiscountReason  String?
+  // API-22 (mesa): mesa do pedido e SHA-256 do token anônimo do aparelho que o fez ("Minha mesa" mostra só os pedidos do próprio aparelho, RN-MB-06).
+  tableId           String?
+  table             Table?      @relation(fields: [tableId, storeId], references: [id, storeId])
+  deviceTokenHash   String?
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
@@ -296,6 +321,8 @@ model Order {
   @@unique([id, storeId]) // alvo da FK composta de PrintJob (ADR-0009: o banco recusa referência entre lojas)
   @@index([storeId, status])
   @@index([storeId, createdAt]) // histórico e kanban por período (API-54)
+  @@index([storeId, tableId, status])
+  @@index([storeId, deviceTokenHash])
   @@index([couponId])
   @@index([delivererId])
 }

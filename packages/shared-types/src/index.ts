@@ -45,6 +45,22 @@ export const createOrderSchema = z.object({
 });
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
 
+// API-22 — mesa e pedido pelo QR (ADR-0002 nível 1). O cliente não manda preço, telefone nem forma de pagamento: paga ao receber a mesa (API-24).
+export const createTableOrderSchema = z.object({
+  customerName: z.string().trim().min(1).max(60).optional(),
+  notes: z.string().max(500).optional(),
+  items: z.array(createOrderItemSchema).min(1).max(100),
+});
+export type CreateTableOrderInput = z.infer<typeof createTableOrderSchema>;
+export const tableLabelSchema = z.string().trim().min(1).max(40);
+export const createTableSchema = z.object({ label: tableLabelSchema, position: z.number().int().min(0).max(10_000).optional() });
+export const updateTableSchema = z.object({ label: tableLabelSchema.optional(), active: z.boolean().optional(), position: z.number().int().min(0).max(10_000).optional() }).refine((v) => Object.keys(v).length > 0, "nada para alterar");
+export const qrSettingsSchema = z.object({
+  qrOrderingEnabled: z.boolean().optional(),
+  qrOrdersNeedApproval: z.boolean().optional(),
+  confirmNoApproval: z.boolean().optional(), // RN-MB-01: desligar o aceite exige confirmar o aviso
+}).refine((v) => v.qrOrderingEnabled !== undefined || v.qrOrdersNeedApproval !== undefined, "nada para alterar");
+
 // API-13 — pedido lançado no PAINEL (atendente). O servidor calcula todo preço (RN-B2-01); a tela manda só ids e quantidades. Sem MESA no BASICO (RN-B2-13).
 export const MANUAL_DISCOUNT_REASONS = ["CORTESIA", "ERRO_DO_PEDIDO", "CLIENTE_FREQUENTE", "PROMOCAO_DO_DIA", "OUTRO"] as const;
 export const manualOrderChannelSchema = z.enum(["TELEFONE", "WHATSAPP", "BALCAO", "OUTRO"]);
@@ -140,6 +156,8 @@ export const wsServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("cashier.difference_over_tolerance"), sessionId: z.string() }),
   // PC-24: alerta de dispositivo para o painel do dono. Só o CÓDIGO (a frase sai do código no painel); nada de pedido, cliente ou texto livre.
   z.object({ type: z.literal("device.alert"), code: z.string() }),
+  // API-22 (mesa): chamar garçom / pedir a conta / rajada de pedidos do QR. Só ids e o tipo; nada de dado do cliente. Painel (ADR-0002 D2-5).
+  z.object({ type: z.literal("table.alert"), tableId: z.string(), kind: z.enum(["CALL_WAITER", "ASK_BILL", "BURST"]) }),
   z.object({ type: z.literal("ping") }),
 ]);
 export type WsServerMessage = z.infer<typeof wsServerMessageSchema>;

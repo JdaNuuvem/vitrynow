@@ -67,6 +67,8 @@ export function toPanelOrder(
     id: order.id,
     code: order.code,
     type: order.type,
+    source: order.source, // API-22: QR_MESA, PAINEL ou CLIENTE (o painel mostra a origem do pedido da mesa, RN-MB-08)
+    tableId: order.tableId,
     status: order.status,
     awaitingPayment: order.awaitingPayment,
     customerName: order.customerName,
