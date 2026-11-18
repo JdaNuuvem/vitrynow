@@ -118,6 +118,7 @@ export async function buildPrintableOrder(orderId: string, options: PrintableOpt
     reprintCount: options.reprintCount ?? 0,
     printedAtOriginal: options.printedAtOriginal ? options.printedAtOriginal.toISOString() : null,
     cancelNotice: options.cancelNotice ?? false,
+    customerRemoved: order.anonymizedAt !== null,
     createdAt: order.createdAt.toISOString(),
     items: order.items.map((item) => ({
       productName: clean(item.productName) ?? "",

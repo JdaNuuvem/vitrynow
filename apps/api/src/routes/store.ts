@@ -101,7 +101,7 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
       throw error;
     });
     if (!store) return reply.code(409).send({ error: "este domínio já está em uso por outra loja", code: "CUSTOM_DOMAIN_TAKEN" });
-    logAudit({ storeId, userId: request.user.userId, action: "store.settings_update", targetType: "Store", targetId: storeId, metadata: parsed.data });
+    logAudit({ storeId, userId: request.user.userId, action: "store.settings_update", targetType: "Store", targetId: storeId, metadata: { fields: Object.keys(parsed.data) } }); // só QUAIS campos mudaram, nunca os valores (endereço, telefone, textos; ADR-0014 §3.4)
     return { store };
   });
 };

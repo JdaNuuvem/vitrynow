@@ -25,7 +25,9 @@ export default defineConfig({
       UV_THREADPOOL_SIZE: "4",
     },
     fileParallelism: false,
-    hookTimeout: 30000,
-    testTimeout: 15000,
+    // Folga para máquina carregada (CI, várias suítes em paralelo): testes simples chegaram a levar 19-37 s e um estouro de 15 s derrubava os seguintes em
+    // cascata (orders-state, payments-webhook, storefront-order, qa-probes D11, cashier-rules CA-CX-28). Só o PRAZO muda; nenhuma asserção.
+    hookTimeout: 60000,
+    testTimeout: 45000,
   },
 });

@@ -131,6 +131,8 @@ model Store {
   schedule      Json?   // B5/API-11: grade semanal + exceções + corte (modules/storeHours); null = sem grade (loja aberta quando ligada)
   pausedUntil   DateTime? // "Pausar 15/30/60 min": recusa pedido até este instante
   closedUntil   DateTime? // "Fechar por hoje": recusa pedido até a próxima abertura da grade
+  prepMinutesDelivery Int? // tempo médio de preparo (5..240) para a previsão ao cliente; null = sem previsão (API-57)
+  prepMinutesPickup   Int?
   minOrderCents Int?    // pedido mínimo do storefront público; null = sem mínimo
   deliveryEnabled Boolean @default(true)
   pickupEnabled   Boolean @default(true)
@@ -153,6 +155,8 @@ model Store {
   deliverers   Deliverer[]
   auditLogs    AuditLog[]
   deviceAlerts DeviceAlert[]
+  feedbacks    Feedback[]
+  doNotContact DoNotContact[]
   subscription Subscription?
   paymentAccounts PaymentAccount[]
   optionGroups OptionGroup[]
@@ -348,6 +352,7 @@ model Order {
   canceledAt        DateTime?
   couponReleasedAt  DateTime? // idempotência da devolução do cupom (ADR-0007)
   refundLockedAt    DateTime? // estorno em curso: congela o pedido NA PRÓPRIA linha (ver ADR-0007 §11); nula = livre
+  anonymizedAt      DateTime? // LGPD (API-52, ADR-0014): quando o dado pessoal do cliente foi removido (nome, telefone, endereço, observações); valores, itens e datas ficam
   internalNote      String? // observação interna da loja (API-54): nunca vai ao cliente, ao tíquete nem a lista; só ao detalhe do painel
   // API-13 (pedido manual, RN-B2-09/10): quem lançou e por onde; a chave de idempotência da abertura do formulário (única por loja)
   source            OrderSource @default(CLIENTE)
@@ -645,6 +650,8 @@ model Payment {
   lastRawStatus     String?
   lastCheckedAt     DateTime?
   reconcileNote     String? // estorno feito mas o pedido já estava finalizado: conciliação manual (nunca silencioso)
+  refundManualAt    DateTime? // API-65: dono registrou que devolveu direto no app do Mercado Pago (o provedor NÃO foi chamado)
+  refundManualCode  String? // API-65: código fechado do motivo; sem texto livre
   refundAbandonedAt DateTime? // API-61: dono encerrou o estorno SEM devolver por aqui (o dinheiro continua como recebido); nulo = em curso
   refundAbandonCode String? // API-61: código fechado do motivo (MP_RECUSA|PAGAMENTO_ANTIGO|CONTA_DESCONECTADA|ACERTADO_COM_CLIENTE|OUTRO); sem texto livre
   paymentAccountId  String? // conta do vendedor que criou a cobrança (API-07); pagamento antigo/da plataforma = null
@@ -689,6 +696,30 @@ model DeviceAlert {
 
 // Log de ações sensíveis (quem fez o quê) — não é feature de produto, é rastro pra
 // investigar disputa/incidente depois (ex.: "quem revogou essa chave", "quem fechou o caixa").
+// Mensagem livre do lojista ao time do produto (API-52, ADR-0014 §3.4): tabela PRÓPRIA, nunca dentro do AuditLog (o texto pode ter dado pessoal).
+model Feedback {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  userId    String?
+  message   String
+  createdAt DateTime @default(now())
+
+  @@index([storeId, createdAt])
+}
+
+// Lista de "não contatar" (API-52d, ADR-0014): só o HASH do telefone (HMAC com sal da plataforma), por loja. Sobrevive à anonimização do pedido.
+model DoNotContact {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  phoneHash String
+  reason    String // código (ex.: ANONYMIZED), nunca texto livre
+  createdAt DateTime @default(now())
+
+  @@unique([storeId, phoneHash])
+}
+
 model AuditLog {
   id         String   @id @default(cuid())
   storeId    String
@@ -747,6 +778,7 @@ model Subscription {
   updatedAt        DateTime           @updatedAt
 
   payments SubscriptionPayment[]
+  notices  SubscriptionNotice[]
 }
 
 // "Quero ser avisado" (RN-B10-05): lojista tentou usar recurso que o plano não tem. Um registro por
@@ -1055,4 +1087,27 @@ model AiCreditLedger {
 
   @@unique([storeId, idempotencyKey])
   @@index([storeId, createdAt])
+}
+
+// API-10 (RN-A-06, ADR-0003 §2.4): aviso de assinatura JÁ enviado ao dono. A chave única (assinatura, tipo, `dueAt` = o vencimento a que o aviso se
+// refere) é o que garante "cada aviso UMA vez": reiniciar o job ou rodar 2 instâncias não repete; renovar o plano muda o `dueAt` e reabre os avisos.
+// Sem texto nem e-mail guardados (o e-mail sai do usuário na hora; o texto é fixo no código).
+enum SubscriptionNoticeKind {
+  D7
+  D3
+  D1
+  READ_ONLY
+  SUSPENDED
+}
+
+model SubscriptionNotice {
+  id             String                 @id @default(cuid())
+  subscriptionId String
+  subscription   Subscription           @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  kind           SubscriptionNoticeKind
+  dueAt          DateTime // o vencimento (fim do teste ou do período) a que este aviso se refere
+  sentAt         DateTime               @default(now())
+
+  @@unique([subscriptionId, kind, dueAt])
+  @@index([sentAt])
 }

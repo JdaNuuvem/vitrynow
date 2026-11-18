@@ -37,6 +37,8 @@ API_INTERNAL_SECRET=$S3
 DOMAIN=pedidos.exemplo.invalid
 ACME_EMAIL=ops@exemplo.invalid
 APP_VERSION=abc1234
+MFA_ENFORCED=true
+RESEND_API_KEY=re_chave_ficticia_para_o_teste
 WEB_ORIGIN=https://pedidos.exemplo.invalid
 NEXT_PUBLIC_API_URL=https://pedidos.exemplo.invalid
 EOF
@@ -53,6 +55,13 @@ envok; roda ok 0 0 --check
 caso "--check com .env válido sai 0 e NÃO chama o docker" '[ "$RC" = 0 ] && [ -z "$LOG" ]'
 sed -i "s/^JWT_SECRET=.*/JWT_SECRET=curto/" "$TMP/infra/.env"; roda ok 0 0 --check
 caso "--check com segredo curto sai != 0, nada de docker e não imprime os outros valores" '[ "$RC" != 0 ] && [ -z "$LOG" ] && semsegredo'
+# INF-19/C2: o deploy de produção usa check-env --prod: sem MFA_ENFORCED=true ou sem RESEND_API_KEY ele ABORTA antes de tocar no docker
+envok; sed -i "/^MFA_ENFORCED=/d" "$TMP/infra/.env"; roda ok 0 0
+caso "deploy sem MFA_ENFORCED=true ABORTA (exit 1), sem chamar o docker" '[ "$RC" = 1 ] && [ -z "$LOG" ] && [[ "$OUT" == *"MFA_ENFORCED não é true"* ]] && [[ "$OUT" == *"ABORTADO"* ]]'
+envok; sed -i "s/^RESEND_API_KEY=.*/RESEND_API_KEY=/" "$TMP/infra/.env"; roda ok 0 0
+caso "deploy com RESEND_API_KEY vazia ABORTA (exit 1), sem chamar o docker" '[ "$RC" = 1 ] && [ -z "$LOG" ] && [[ "$OUT" == *"RESEND_API_KEY vazia"* ]]'
+envok; sed -i "s/^APP_VERSION=.*/APP_VERSION=local/" "$TMP/infra/.env"; roda ok 0 0
+caso "deploy com APP_VERSION=local ABORTA (exit 1), sem chamar o docker" '[ "$RC" = 1 ] && [ -z "$LOG" ] && [[ "$OUT" == *"APP_VERSION=local"* ]]'
 echo "== deploy normal"
 envok; roda ok 0 0
 caso "deploy saudável sai 0 e diz 'Deploy concluído'" '[ "$RC" = 0 ] && [[ "$OUT" == *"Deploy concluído"* ]]'

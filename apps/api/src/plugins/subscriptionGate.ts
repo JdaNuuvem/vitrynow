@@ -126,7 +126,9 @@ const publicMenuSerializer = async (request: FastifyRequest, _reply: FastifyRepl
       // `hours` (RN-B5-04): status, motivo, próxima abertura e mensagem pronta; nada de assinatura.
       const switchedOn = state.publicOrders && body.store.acceptingOrders !== false;
       const accepting = switchedOn && (hours ? hours.status === "ABERTO" : true);
-      return { ...body, store: { ...body.store, acceptingOrders: switchedOn, accepting, hours: hours ?? null } };
+      // `prepMinutes` só existe quando a loja configurou (API-57): nunca um prazo inventado.
+      const prepMinutes = state.hours?.prepMinutes;
+      return { ...body, store: { ...body.store, acceptingOrders: switchedOn, accepting, hours: hours ?? null, ...(prepMinutes ? { prepMinutes } : {}) } };
     }
   }
   return payload;

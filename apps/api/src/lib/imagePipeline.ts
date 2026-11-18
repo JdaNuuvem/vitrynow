@@ -4,6 +4,9 @@ import sharp, { type Metadata } from "sharp";
 // o tipo vem dos magic bytes; só JPEG, PNG e WebP estáticos. Remove EXIF (sharp não copia metadados sem withMetadata),
 // aplica a orientação, redimensiona para larguras fixas (sem ampliar) e converte para WebP. O original não é guardado.
 
+// Nightingale (#78 A): libvips usa threads próprias; 1 thread por tarefa e faixa curta no chamador (imageLane).
+sharp.concurrency(1);
+
 export type ImageKind = "PRODUCT" | "LOGO" | "COVER";
 
 export const WIDTHS: Record<ImageKind, number[]> = {

@@ -4,7 +4,16 @@ import type { StoreHoursRepository, StoreHoursRow } from "./storeHours.service";
 
 type Db = typeof prismaClient;
 
-const select = { id: true, timezone: true, acceptingOrders: true, schedule: true, pausedUntil: true, closedUntil: true } as const;
+const select = {
+  id: true,
+  timezone: true,
+  acceptingOrders: true,
+  schedule: true,
+  pausedUntil: true,
+  closedUntil: true,
+  prepMinutesDelivery: true,
+  prepMinutesPickup: true,
+} as const;
 
 export class PrismaStoreHoursRepository implements StoreHoursRepository {
   constructor(private readonly db: Db) {}
@@ -25,6 +34,10 @@ export class PrismaStoreHoursRepository implements StoreHoursRepository {
   }
 
   async saveOverrides(storeId: string, data: { pausedUntil: Date | null; closedUntil: Date | null }) {
+    await this.db.store.update({ where: { id: storeId }, data });
+  }
+
+  async savePrepTimes(storeId: string, data: { prepMinutesDelivery: number | null; prepMinutesPickup: number | null }) {
     await this.db.store.update({ where: { id: storeId }, data });
   }
 }

@@ -8,6 +8,8 @@ const PURPOSE_LABELS: Record<MfaPurpose, string> = {
   refund: "estorno de pagamento",
   change_password: "troca de senha",
   delete_user: "remoção de usuário",
+  anonymize_customer: "remoção de dados pessoais de um cliente",
+  export_customer: "exportação dos dados de um cliente",
   connect_payment: "conexão da conta do Mercado Pago",
   disconnect_payment: "desconexão da conta do Mercado Pago",
   device_token_create: "criação de chave de impressora",

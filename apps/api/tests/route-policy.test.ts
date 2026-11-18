@@ -90,7 +90,8 @@ describe("Consulta e Suspensão por rota (integração)", () => {
   const toReadOnly = () => prisma.subscription.updateMany({ data: { trialEndsAt: new Date(Date.now() - DAY) } });
   const toSuspended = () => prisma.subscription.updateMany({ data: { trialEndsAt: new Date(Date.now() - 8 * DAY) } });
   // `logout-all` derruba a própria sessão do teste (é o que ele faz): fica fora dos laços e tem teste próprio.
-  const loopEntries = () => Object.entries(PANEL_ROUTE_POLICY).filter(([key]) => key !== "POST /auth/logout-all");
+  // A classe `export` (exportar/anonimizar dados do titular) tem teste PRÓPRIO ("política `export`..."): na Suspensão ela abre para o OWNER, então não entra nos laços genéricos.
+  const loopEntries = () => Object.entries(PANEL_ROUTE_POLICY).filter(([key, policy]) => key !== "POST /auth/logout-all" && policy !== "export");
   const concrete = (key: string) => {
     const [method, url] = key.split(" ");
     return { method: method as "GET" | "POST", url: url.replace(/:[A-Za-z]+/g, "x") };

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@meucardapio/db";
 import { BadRequestError, CodedError } from "../../shared/errors";
 import { ImageRejectedError, processImage, type ImageKind } from "../../lib/imagePipeline";
+import { imageLane } from "../../lib/imageLane";
 import { storeKeyPrefix, type ObjectStorage } from "../../lib/objectStorage";
 
 // API-18 / ADR-0010: upload de imagem pela API. Toda chave nasce de um uuid gerado aqui, sob stores/<storeId>/;
@@ -27,12 +28,10 @@ export class MediaService {
   async upload(storeId: string, kind: ImageKind, input: Buffer): Promise<ImageView> {
     await this.sweepStale(storeId); // limpeza oportunista da quarentena desta loja
 
-    const used = await this.db.image.count({ where: { storeId } });
-    if (used >= MAX_IMAGES_PER_STORE) throw new CodedError(409, "IMAGE_QUOTA_EXCEEDED", "Limite de imagens da loja atingido. Remova imagens que não usa mais.");
-
     let variants;
     try {
-      variants = await processImage(input, kind); // valida antes de qualquer coisa chegar ao storage
+      // Faixa curta de CPU (1–2 em voo, 1 por loja): sem espera longa; recusa com 503 SERVER_BUSY. Nada de banco/transação aberto aqui.
+      variants = await imageLane.run(storeId, () => processImage(input, kind)); // valida antes de qualquer coisa chegar ao storage
     } catch (e) {
       if (e instanceof ImageRejectedError) throw new CodedError(e.code === "UNSUPPORTED_TYPE" ? 415 : 422, e.code, e.message);
       throw e;
@@ -41,9 +40,7 @@ export class MediaService {
     const keyBase = `${storeKeyPrefix(storeId)}${randomUUID()}`;
     const widths = variants.map((v) => v.width);
     // Quarentena: a linha PENDING existe antes dos objetos; só vira READY (visível/usável) com todos gravados.
-    const image = await this.db.image.create({
-      data: { storeId, kind, keyBase, widths, bytes: variants.reduce((s, v) => s + v.body.length, 0), status: "PENDING" },
-    });
+    const image = await this.reserve(storeId, kind, keyBase, widths, variants.reduce((s, v) => s + v.body.length, 0));
     try {
       for (const v of variants) {
         await this.storage.put(`${keyBase}-${v.width}.webp`, v.body, { contentType: "image/webp", cacheControl: CACHE_CONTROL });
@@ -57,10 +54,26 @@ export class MediaService {
     return this.view(ready);
   }
 
+  /** Cota SEM corrida: lock advisory por loja na transação que confere a contagem e cria a linha PENDING (quarentena). */
+  async reserve(storeId: string, kind: ImageKind, keyBase: string, widths: number[], bytes: number) {
+    return this.db.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"image-quota:" + storeId}))`;
+      const used = await tx.image.count({ where: { storeId } });
+      if (used >= MAX_IMAGES_PER_STORE) throw new CodedError(409, "IMAGE_QUOTA_EXCEEDED", "Limite de imagens da loja atingido. Remova imagens que não usa mais.");
+      return tx.image.create({ data: { storeId, kind, keyBase, widths, bytes, status: "PENDING" } });
+    });
+  }
+
   /** Remove só imagens READY da PRÓPRIA loja (a busca é por id + storeId; nunca por padrão de nome). */
   async remove(storeId: string, imageId: string): Promise<void> {
     const image = await this.db.image.findFirst({ where: { id: imageId, storeId } });
     if (!image) throw new CodedError(404, "IMAGE_NOT_FOUND", "Imagem não encontrada.");
+    // Em uso por produto ou pela loja (logo/capa) da PRÓPRIA loja: 409, nada é apagado. O uuid da chave identifica a imagem.
+    const [products, store] = await Promise.all([
+      this.db.product.count({ where: { storeId, imageUrl: { contains: image.keyBase } } }),
+      this.db.store.count({ where: { id: storeId, OR: [{ logoUrl: { contains: image.keyBase } }, { coverImageUrl: { contains: image.keyBase } }] } }),
+    ]);
+    if (products + store > 0) throw new CodedError(409, "IMAGE_IN_USE", "A imagem está em uso por um produto ou pela loja. Troque-a antes de apagar.");
     await this.removeObjects(image);
     await this.db.image.deleteMany({ where: { id: image.id, storeId } });
   }

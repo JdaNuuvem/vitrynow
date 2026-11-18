@@ -29,6 +29,7 @@ import reportRoutes from "./routes/reports";
 import userRoutes from "./modules/users/users.module";
 import auditRoutes from "./modules/audit/audit.module";
 import feedbackRoutes from "./routes/feedback";
+import privacyRoutes from "./modules/privacy/privacy.module";
 import subscriptionRoutes from "./routes/subscription";
 import noticeRoutes from "./routes/notices";
 import platformAuthPlugin from "./plugins/platformAuth";
@@ -37,6 +38,7 @@ import mfaRoutes from "./routes/mfa";
 import deliveryZoneRoutes from "./routes/deliveryZones";
 import onboardingRoutes from "./routes/onboarding";
 import { clientKey } from "./lib/clientKey";
+import { captchaMode } from "./lib/captcha";
 import { isPrismaError, loggerOptions, redactLogUrl } from "./lib/logging";
 import { ORDER_TOKEN_HEADER } from "./lib/orderToken";
 import { currentKey } from "./lib/paymentCrypto";
@@ -49,14 +51,17 @@ import storePaymentRoutes from "./modules/storePayments/storePayments.module";
 import subscriptionGate from "./plugins/subscriptionGate";
 import storeHoursRoutes from "./modules/storeHours/storeHours.module";
 import optionGroupRoutes from "./modules/optionGroups/optionGroups.module";
+import { assertStorageBootConfig } from "./lib/objectStorage";
 import menuRevalidationPlugin from "./plugins/menuRevalidation";
 
 export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = {}) {
+  captchaMode(); // NG-08: modo inválido, ou `fake` fora de dev/teste, derruba o boot
   const serviceSecrets = internalServiceSecrets(); // SEC-24: em produção, sem segredo de serviço válido a API nem sobe
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
   // e o rate limit deixa de contar o IP do proxy. Vazio = ignora X-Forwarded-For (não forjável).
   // Pagamentos por loja: modo/credenciais/chave inválidos derrubam o boot (não o 1º PIX). `code`/`state` do OAuth saem do log pelo `redactLogUrl` do SEC-31.
   assertPaymentsBootConfig(process.env, currentKey);
+  assertStorageBootConfig(process.env); // API-18: produção sem S3 configurado não sobe (nada de Fake em memória silencioso)
   // ST-76: o id padrão do Fastify é um contador sequencial (`req-1`, `req-2`…) e o 5xx devolve esse id ao cliente (ST-75): dois erros espaçados
   // mediriam o tráfego da API desde o boot. Id aleatório curto, e `requestIdHeader: false` para NÃO aceitar o `request-id` do cliente como id do log.
   const app = Fastify({
@@ -160,6 +165,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(userRoutes);
   app.register(auditRoutes);
   app.register(feedbackRoutes);
+  app.register(privacyRoutes);
   app.register(subscriptionRoutes);
   app.register(storePaymentRoutes);
   app.register(storeHoursRoutes);

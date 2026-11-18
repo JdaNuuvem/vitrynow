@@ -2,7 +2,9 @@
 # Valida o infra/.env ANTES de subir a stack (INF-09; o deploy.sh do INF-11 vai chamá-lo). Não executa o arquivo: só lê KEY=VALUE.
 # NUNCA imprime valores de segredo: só nomes e tamanhos. Sai com 1 se houver ERRO; AVISO não reprova.
 #
-#   infra/check-env.sh [caminho/do/.env]        (padrão: infra/.env)
+#   infra/check-env.sh [--prod] [caminho/do/.env]        (padrão: infra/.env)
+#   --prod (INF-19/C2, Nightingale): o que é só AVISO em dev vira ERRO para um servidor real: MFA_ENFORCED != true, APP_VERSION=local e RESEND_API_KEY vazia
+#   (sem e-mail não há redefinição de senha nem aviso de tentativa de login). Rode com --prod antes de todo deploy de produção.
 #
 # Regras que o compose não consegue expressar (`:?` do compose é sempre incondicional):
 #  - segredos fortes (32+), todos DIFERENTES entre si, sem valores de exemplo;
@@ -10,7 +12,9 @@
 #  - PIX por loja (API-07): MP_OAUTH_MODE=off|real (`fake` só em dev). Com `off` nada do PIX é exigido; com `real` exige chave de
 #    cifra própria, MP_CLIENT_ID/SECRET e PUBLIC_API_URL https; rotação (PREV/PREV_ID) só em par e diferente da atual.
 set -uo pipefail
-ENVF="${1:-$(dirname "$0")/.env}"
+PROD=0; ARQ=""
+for a in "$@"; do case "$a" in --prod) PROD=1 ;; *) ARQ="$a" ;; esac; done
+ENVF="${ARQ:-$(dirname "$0")/.env}"
 [ -f "$ENVF" ] || { echo "arquivo $ENVF não existe (copie infra/.env.example e preencha)"; exit 2; }
 
 declare -A V
@@ -32,6 +36,7 @@ ERR=0; WARN=0
 bad()  { echo "  [ERRO]  $*"; ERR=$((ERR+1)); }
 warn() { echo "  [aviso] $*"; WARN=$((WARN+1)); }
 ok()   { echo "  [ok]    $*"; }
+risco() { if [ "$PROD" = 1 ]; then bad "$* (--prod)"; else warn "$*"; fi; }   # aviso em dev, ERRO com --prod
 
 strong() { # NOME [mínimo] -> exige valor com pelo menos N caracteres
   local n="$1" min="${2:-32}" v; v="$(get "$n")"
@@ -56,8 +61,41 @@ https_url WEB_ORIGIN; https_url NEXT_PUBLIC_API_URL
 [ "$(get COOKIE_SECURE)" = "false" ] && bad "COOKIE_SECURE=false só vale em teste local sem https"
 [[ "$(get CADDY_IP)" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ || -z "$(get CADDY_IP)" ]] || bad "CADDY_IP inválido"
 [ -n "$(get TRUST_PROXY_CIDR)" ] && bad "TRUST_PROXY_CIDR não deve ser definido: o compose o deriva de CADDY_IP (mudar só um dos dois reabre o ST-02c)"
-[ "$(get APP_VERSION)" = "local" ] && warn "APP_VERSION=local: sem versão fixa não há como voltar para a imagem anterior"
-[ "$(get MFA_ENFORCED)" != "true" ] && warn "MFA_ENFORCED não é true: ligue antes do primeiro cliente real (SEC-13)"
+[ "$(get APP_VERSION)" = "local" ] && risco "APP_VERSION=local: sem versão fixa não há como voltar para a imagem anterior"
+# LGPD (ADR-0014, API-52b): as ações de privacidade só ligam em produção com a confirmação jurídica explícita (parecer P1-P17)
+[ "$(get PRIVACY_ACTIONS_ENABLED)" = "true" ] && [ "$(get PRIVACY_ACTIONS_LEGAL_OK)" != "true" ] && bad "PRIVACY_ACTIONS_ENABLED=true exige PRIVACY_ACTIONS_LEGAL_OK=true (parecer jurídico LGPD); sem ele, deixe desligada"
+PHS="$(get PRIVACY_HASH_SALT)"
+[ "$(get PRIVACY_ACTIONS_ENABLED)" = "true" ] && [ "${#PHS}" -lt 16 ] && bad "PRIVACY_ACTIONS_ENABLED=true exige PRIVACY_HASH_SALT (16+ caracteres, segredo; sem ele a lista de não contatar não funciona)"
+[ "$(get MFA_ENFORCED)" != "true" ] && risco "MFA_ENFORCED não é true: ligue antes do primeiro cliente real (SEC-13; em produção a API nem sobe sem isso)"
+[ -z "$(get RESEND_API_KEY)" ] && risco "RESEND_API_KEY vazia: a API não envia e-mail (redefinição de senha e aviso de tentativas de login ficam mudos)"
+# C4 (Nightingale): ADMIN_TOKEN é opcional, mas se preenchido precisa ser forte (protege as rotas /api/admin, só por túnel)
+AT="$(get ADMIN_TOKEN)"; [ -n "$AT" ] && [ "${#AT}" -lt 32 ] && bad "ADMIN_TOKEN curto (${#AT} caracteres; mínimo 32 quando preenchido)"
+# C3 (Nightingale): o .env guarda todos os segredos; não pode ser legível por outros usuários do servidor (só onde o modo de arquivo é confiável: não em Windows)
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*) : ;;
+  *) modo="$(stat -c %a "$ENVF" 2>/dev/null || true)"
+     if [ -n "$modo" ] && [[ ! "$modo" =~ ^[0-7]?[0-7]00$ ]]; then warn "$ENVF com modo $modo: outros usuários do servidor conseguem ler os segredos (chmod 600 $ENVF)"; fi ;;
+esac
+
+# --- storage das imagens (API-18, ADR-0017): padrão do compose = disco local. Com local NÃO exige S3; com s3 exige as 5 variáveis (a API recusa subir sem elas)
+drv="$(get STORAGE_DRIVER)"; drv="${drv:-local}"
+case "$drv" in
+  local) ok "STORAGE_DRIVER=local: fotos em disco (volume uploads_data); nenhuma variável de S3 é exigida"
+         ld="$(get STORAGE_LOCAL_DIR)"
+         if [ -n "$ld" ]; then
+           [[ "$ld" == /* ]] || bad "STORAGE_LOCAL_DIR deve ser um caminho ABSOLUTO (tem ${#ld} caracteres)"
+           [ "$ld" = /uploads ] || warn "STORAGE_LOCAL_DIR difere de /uploads: o compose FIXA /uploads (é onde o volume está montado); o valor do .env é ignorado"
+         fi
+         pb="$(get STORAGE_PUBLIC_BASE_URL)"
+         [ -z "$pb" ] || [[ "$pb" =~ ^https:// ]] || bad "STORAGE_PUBLIC_BASE_URL deve começar com https:// (a API recusa subir com outro valor); vazia = WEB_ORIGIN/media"
+         for n in STORAGE_S3_ENDPOINT STORAGE_S3_BUCKET STORAGE_S3_ACCESS_KEY_ID STORAGE_S3_SECRET_ACCESS_KEY; do [ -n "$(get $n)" ] && warn "$n está preenchida mas STORAGE_DRIVER=local a ignora"; done ;;
+  s3)    falt=""; for n in STORAGE_S3_ENDPOINT STORAGE_S3_BUCKET STORAGE_S3_ACCESS_KEY_ID STORAGE_S3_SECRET_ACCESS_KEY STORAGE_PUBLIC_BASE_URL; do [ -n "$(get $n)" ] || falt="$falt $n"; done
+         if [ -n "$falt" ]; then risco "STORAGE_DRIVER=s3 incompleto: faltam$falt (a API NÃO sobe em produção sem elas)"; else
+           ok "storage S3 das imagens configurado (5 variáveis)"
+           [[ "$(get STORAGE_PUBLIC_BASE_URL)" =~ ^https:// ]] || bad "STORAGE_PUBLIC_BASE_URL deve começar com https:// (a API recusa subir com outro valor)"
+         fi ;;
+  *)     bad "STORAGE_DRIVER='$drv' inválido (use local ou s3)" ;;
+esac
 
 # --- PIX por loja (API-07)
 mode="$(get MP_OAUTH_MODE)"; mode="${mode:-off}"
