@@ -22,6 +22,7 @@ O hash do EXE de cada release sai em `tools\build-installer.ps1` e entra no mani
 - A configuração do dispositivo com 404 só suprime a pergunta por 10 min (não para sempre); falha seguida da configuração avisa "Não consigo confirmar o modo de impressão da loja" sem trocar o modo; o modo no corpo da lista legada troca para a fila no próprio ciclo.
 - Os avisos do cliente (nothingToCharge incoerente, tíquete sem itens e total zero, modo da loja não confirmado) também vão ao painel do dono: `POST /api/device/alerts` com código de lista fechada, sem texto livre e sem dado do cliente; melhor esforço, nunca atrasa a impressão.
 - Alertas de modo (`MODE_UNCONFIRMED`/`MODE_RECOVERED`) que se perdem no caminho são reenviados (intervalo mínimo de 60 s) até chegarem ao painel do dono.
+- Resposta 400/422 ao alerta central é descarte definitivo: o cliente não repete o mesmo corpo a cada 60 s para sempre.
 - Sons de alerta gerados pelo app.
 - Build reprodutível sem dependência do `reconstruction/`; instalador Inno Setup sem identidade do terceiro (`tools\scan-identity.ps1`).
 

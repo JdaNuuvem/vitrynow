@@ -975,6 +975,21 @@ namespace MeuCardapio.PrintClient
                     }
                 }
 
+                // 11c) 400/422 (servidor recusou o corpo): descarte DEFINITIVO, o alerta de modo NAO e reenviado a cada 60 s para sempre
+                foreach (int refused in new int[] { 400, 422 })
+                using (var api = new FakeApi { AlertStatus = refused })
+                {
+                    api.PrintMode = "LEGACY"; api.ConfigStatus = 500;
+                    var o = Order("mx" + refused, "74" + (refused - 360)); LegacyOrder(api, o);
+                    using (var rig = StartedRig(api, new VirtualPrintTarget(Path.Combine(dir, "a11c" + refused)), null, "mcd_impressora1_segredo", usePrintJobs: false))
+                    {
+                        rig.Device.ConfigFailuresBeforeWarning = 3; rig.Device.ModeAlertRetry = TimeSpan.FromMilliseconds(200);
+                        bool first = WaitFor(() => rig.Device.ModeUnconfirmed && api.AlertCalls >= 1, 20000);
+                        System.Threading.Thread.Sleep(2500);   // 12 janelas de reenvio; a config segue falhando
+                        Check("alerta: resposta " + refused + " ao MODE_UNCONFIRMED e descarte definitivo, sem reenvio (chamadas: " + api.AlertCalls + ")", first && api.AlertCalls == 1);
+                    }
+                }
+
                 // 12) teto de alertas em voo: uma rajada de pedidos distintos nao inunda o servidor nem trava nada
                 using (var api = new FakeApi { AlertDelayMs = 2500 })
                 {
