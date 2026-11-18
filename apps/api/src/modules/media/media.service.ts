@@ -40,13 +40,7 @@ export class MediaService {
     const keyBase = `${storeKeyPrefix(storeId)}${randomUUID()}`;
     const widths = variants.map((v) => v.width);
     // Quarentena: a linha PENDING existe antes dos objetos; só vira READY (visível/usável) com todos gravados.
-    // Cota SEM corrida: lock advisory por loja na transação que confere a contagem e cria a linha PENDING.
-    const image = await this.db.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"image-quota:" + storeId}))`;
-      const used = await tx.image.count({ where: { storeId } });
-      if (used >= MAX_IMAGES_PER_STORE) throw new CodedError(409, "IMAGE_QUOTA_EXCEEDED", "Limite de imagens da loja atingido. Remova imagens que não usa mais.");
-      return tx.image.create({ data: { storeId, kind, keyBase, widths, bytes: variants.reduce((s, v) => s + v.body.length, 0), status: "PENDING" } });
-    });
+    const image = await this.reserve(storeId, kind, keyBase, widths, variants.reduce((s, v) => s + v.body.length, 0));
     try {
       for (const v of variants) {
         await this.storage.put(`${keyBase}-${v.width}.webp`, v.body, { contentType: "image/webp", cacheControl: CACHE_CONTROL });
@@ -58,6 +52,16 @@ export class MediaService {
     }
     const ready = await this.db.image.update({ where: { id: image.id }, data: { status: "READY" } });
     return this.view(ready);
+  }
+
+  /** Cota SEM corrida: lock advisory por loja na transação que confere a contagem e cria a linha PENDING (quarentena). */
+  async reserve(storeId: string, kind: ImageKind, keyBase: string, widths: number[], bytes: number) {
+    return this.db.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"image-quota:" + storeId}))`;
+      const used = await tx.image.count({ where: { storeId } });
+      if (used >= MAX_IMAGES_PER_STORE) throw new CodedError(409, "IMAGE_QUOTA_EXCEEDED", "Limite de imagens da loja atingido. Remova imagens que não usa mais.");
+      return tx.image.create({ data: { storeId, kind, keyBase, widths, bytes, status: "PENDING" } });
+    });
   }
 
   /** Remove só imagens READY da PRÓPRIA loja (a busca é por id + storeId; nunca por padrão de nome). */

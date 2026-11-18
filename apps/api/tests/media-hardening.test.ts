@@ -124,16 +124,19 @@ describe("endurecimento do upload (API-18)", () => {
   });
 
   describe("cota sem corrida", () => {
-    it("uploads simultâneos na mesma loja (direto no serviço, sem a faixa) nunca passam do teto", async () => {
+    it("reservas simultâneas (direto na etapa da cota, sem a faixa) nunca passam do teto", async () => {
       await registerStore(app);
       const store = await prisma.store.findFirstOrThrow();
       await prisma.image.createMany({
         data: Array.from({ length: 499 }, (_, i) => ({ storeId: store.id, kind: "PRODUCT" as const, keyBase: `stores/${store.id}/q${i}`, widths: [320], bytes: 1, status: "READY" as const })),
       });
       const { mediaService } = await import("../src/modules/media/media.module");
-      const img = await jpeg();
-      const results = await Promise.allSettled([1, 2, 3].map(() => mediaService.upload(store.id, "PRODUCT", img)));
+      // `reserve` é a etapa da cota, chamada DIRETO (sem a faixa do sharp): só o lock advisory impede que as 8 vejam "499" ao mesmo tempo.
+      const results = await Promise.allSettled(Array.from({ length: 8 }, (_, i) => mediaService.reserve(store.id, "PRODUCT", `stores/${store.id}/r${i}`, [320], 1)));
       expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      const rejected = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+      expect(rejected).toHaveLength(7);
+      expect(rejected.every((r) => r.reason?.code === "IMAGE_QUOTA_EXCEEDED")).toBe(true);
       expect(await prisma.image.count({ where: { storeId: store.id } })).toBe(500);
     });
   });
