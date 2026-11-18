@@ -42,6 +42,8 @@ import { isPrismaError, loggerOptions, redactLogUrl } from "./lib/logging";
 import { ORDER_TOKEN_HEADER } from "./lib/orderToken";
 import { currentKey } from "./lib/paymentCrypto";
 import { assertPaymentsBootConfig } from "./modules/storePayments/oauth";
+import { allowedOrigin, internalServiceSecrets, trustProxySetting } from "./lib/securityConfig";
+import { rateLimitKey, rateLimitMax } from "./lib/clientIp";
 import jobsPlugin from "./jobs/plugin";
 import pixAvailabilityPlugin from "./plugins/pixAvailability";
 import storePaymentRoutes from "./modules/storePayments/storePayments.module";
@@ -51,6 +53,8 @@ import optionGroupRoutes from "./modules/optionGroups/optionGroups.module";
 import menuRevalidationPlugin from "./plugins/menuRevalidation";
 
 export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = {}) {
+export function buildApp() {
+  const serviceSecrets = internalServiceSecrets(); // SEC-24: em produção, sem segredo de serviço válido a API nem sobe
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
   // e o rate limit deixa de contar o IP do proxy. Vazio = ignora X-Forwarded-For (não forjável).
   // Pagamentos por loja: modo/credenciais/chave inválidos derrubam o boot (não o 1º PIX). `code`/`state` do OAuth saem do log pelo `redactLogUrl` do SEC-31.
@@ -63,6 +67,9 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
     genReqId: () => nanoid(12),
     requestIdHeader: false,
   });
+
+  // SEC-24: uma linha por subida diz se o segredo de serviço está ligado (nunca o valor).
+  app.log.info({ serviceSecretCount: serviceSecrets.length }, serviceSecrets.length > 0 ? "serviço interno: ligado" : "serviço interno: desligado (none ou ausente)");
 
   // app.close() (graceful shutdown) também desconecta o Prisma — ele é um singleton
   // importado direto de @meucardapio/db, não um plugin fastify com ciclo de vida próprio.
@@ -109,7 +116,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   // Teto global por IP; rotas sensíveis (login, cadastro, pedido público, webhook) têm limites
   // mais estritos definidos na própria rota via `config.rateLimit`.
   // SEC-23: a chave do limite é o cliente normalizado (IPv6 /64, alias IPv4-mapeado ⇒ IPv4), não o endereço cru.
-  app.register(rateLimit, { max: 300, timeWindow: "1 minute", keyGenerator: (request) => clientKey(request.ip) });
+  app.register(rateLimit, { max: (_request, key) => rateLimitMax(String(key)), timeWindow: "1 minute", keyGenerator: (request) => rateLimitKey(request) });
   app.register(websocket);
   app.register(authPlugin);
   app.register(platformAuthPlugin);

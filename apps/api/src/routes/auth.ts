@@ -16,6 +16,7 @@ import { ServerBusyError, sendServerBusy } from "../shared/errors";
 import { DUMMY_HASH, bcryptPasswordHasher as passwordHasher } from "../shared/passwordHasher";
 import { RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, constantTimeEqual, issueResetToken, markResetSendFailed, padToMinimum, runBeforeClaimHook } from "../lib/passwordReset";
 import { NOW_UTC as NOW } from "../lib/sqlTime";
+import { clientIpOf } from "../lib/clientIp";
 
 // Sentinela interno (não vira resposta): desfaz a transação da redefinição quando o claim passou sem hash pronto (ver o comentário no uso).
 class ResetHashNotReady extends Error {}
@@ -96,7 +97,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
 
     // Reserva a tentativa ANTES de qualquer await (ST-32): uma rajada paralela não passa toda pela checagem.
     // Limite estrito por (conta, IP); o total da conta só atrasa e avisa o dono, nunca tranca (ST-33).
-    const slot = throttle.reserve(email, request.ip);
+    const slot = throttle.reserve(email, clientIpOf(request));
     if (!slot.allowed) {
       reply.header("Retry-After", String(slot.retryAfterSeconds));
       return reply.code(429).send({ error: "muitas tentativas de login; tente de novo em alguns minutos", code: "LOGIN_LOCKED" });
@@ -122,7 +123,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     if (!user || !passwordOk) {
       return reply.code(401).send({ error: "credenciais inválidas" });
     }
-    throttle.succeed(email, request.ip);
+    throttle.succeed(email, clientIpOf(request));
 
     reply.setCookie(SESSION_COOKIE, signSession(app, user), sessionCookieOptions());
     return { ok: true };
