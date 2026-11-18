@@ -142,6 +142,8 @@ describe("API-03 — webhook e PIX", () => {
     const o = await orderOf(orderId);
     expect({ awaiting: o?.awaitingPayment, status: o?.status, payment: o?.payment?.status }).toEqual({ awaiting: false, status: "PENDENTE", payment: "APROVADO" });
     expect(ws.count("order.created")).toBe(1);
+    expect(o?.paidAt).not.toBeNull(); // API-21: a aprovação grava o instante real em que o PIX foi recebido
+    expect(o?.paidAtApproximate).toBe(false);
   });
 
   it("não aprova quando valor, moeda ou referência do provedor divergem do que gravamos (nem quando faltam)", async () => {
