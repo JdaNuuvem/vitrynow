@@ -27,7 +27,10 @@ export const publicStore = (s: Store) => ({
 
 export const publicAdditional = (a: ProductAdditional) => ({ id: a.id, name: a.name, priceCents: a.priceCents });
 
-export const publicProduct = (p: Product & { additionals: ProductAdditional[] }) => ({
+// `soldOutUntil` NAO entra no tipo: a rota ja o consumiu ao calcular o `soldOut` efetivo (API-17) e ele nao e publico.
+type PublicProductInput = Omit<Product, "soldOutUntil"> & { additionals: ProductAdditional[] };
+
+export const publicProduct = (p: PublicProductInput) => ({
   id: p.id,
   name: p.name,
   description: p.description,
@@ -38,7 +41,7 @@ export const publicProduct = (p: Product & { additionals: ProductAdditional[] })
   additionals: p.additionals.map(publicAdditional),
 });
 
-export const publicCategory = (c: Category & { products: (Product & { additionals: ProductAdditional[] })[] }) => ({
+export const publicCategory = (c: Category & { products: PublicProductInput[] }) => ({
   id: c.id,
   name: c.name,
   icon: c.icon,
