@@ -41,7 +41,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
       - name: Instalar (lockfile congelado)
         run: pnpm install --frozen-lockfile
@@ -62,10 +62,10 @@ jobs:
           pnpm --filter '@meucardapio/api' exec tsc --noEmit
       - name: Teste de tempo (seguranca), isolado
         working-directory: apps/api
-        run: node ../../node_modules/vitest/vitest.mjs run tests/reset-email-confirmation.test.ts -t 'MESMO\stempo\snas\str.s\srecusas'
+        run: node node_modules/vitest/vitest.mjs run tests/reset-email-confirmation.test.ts -t 'MESMO\stempo\snas\str.s\srecusas'
       - name: Testes da API
         working-directory: apps/api
-        run: node ../../node_modules/vitest/vitest.mjs run -t '^((?!MESMO\stempo\snas\str.s\srecusas).)*$'
+        run: node node_modules/vitest/vitest.mjs run -t '^((?!MESMO\stempo\snas\str.s\srecusas).)*$'
 
   web:
     name: Painel e cardapio (web)
@@ -76,7 +76,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
       - name: Instalar (lockfile congelado)
         run: pnpm install --frozen-lockfile
@@ -93,3 +93,4 @@ jobs:
         run: pnpm --filter '@meucardapio/web' test
       - name: Build
         run: pnpm --filter '@meucardapio/web' run build
+
