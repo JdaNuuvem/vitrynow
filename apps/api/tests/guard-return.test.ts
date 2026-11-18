@@ -90,7 +90,7 @@ describe("SEC-40 — varredura: nenhum envio de resposta sem `return` em guarda"
   // O handler 404 do app (`setNotFoundHandler`) não é guarda: nada roda depois dele.
   const ALLOWED = new Set(["app.ts"]);
 
-  it("toda linha `reply.code(...).send(...)` começa por `return` OU é seguida de `return` (função auxiliar que devolve null/false)", () => {
+  it("toda linha `reply.code(...).send(...)` começa por `return` OU é seguida de `return null/false` (função auxiliar); quem chama o auxiliar é conferido no teste seguinte", () => {
     const offenders: string[] = [];
     for (const file of files(srcDir)) {
       if (ALLOWED.has(path.basename(file))) continue;
@@ -99,10 +99,22 @@ describe("SEC-40 — varredura: nenhum envio de resposta sem `return` em guarda"
         if (!/^\s*(?:await\s+)?reply(?:\.[a-zA-Z]+\([^)]*\))*\.send\(/.test(line)) return;
         if (/^\s*return\b/.test(line)) return;
         const next = lines.slice(i + 1).find((l) => l.trim() !== "") ?? "";
-        if (/^\s*return\b/.test(next)) return;
+        if (/^\s*return (null|false)\b/.test(next)) return; // auxiliar: devolve null/false
         offenders.push(`${path.relative(srcDir, file)}:${i + 1}: ${line.trim().slice(0, 90)}`);
       });
     }
     expect(offenders).toEqual([]);
+  });
+
+  it("chamadores dos auxiliares que enviam resposta (`guardRefund`, `findOwnedOrNotFound`) devolvem `reply`, nunca `return;` vazio (Nightingale: `undefined` + onSend lento ⇒ ERR_HTTP_HEADERS_SENT)", () => {
+    const sloppy: string[] = [];
+    for (const file of files(srcDir)) {
+      const lines = readFileSync(file, "utf8").split(/\r?\n/);
+      lines.forEach((line, i) => {
+        if (/\bguardRefund\(request/.test(line) && /\breturn;\s*(\/\/.*)?$/.test(line)) sloppy.push(`${path.relative(srcDir, file)}:${i + 1}`);
+        if (/if \(!\w+\) return;/.test(line) && lines.slice(Math.max(0, i - 6), i).join("\n").includes("findOwnedOrNotFound")) sloppy.push(`${path.relative(srcDir, file)}:${i + 1}`);
+      });
+    }
+    expect(sloppy).toEqual([]);
   });
 });

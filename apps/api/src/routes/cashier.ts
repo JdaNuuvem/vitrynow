@@ -127,7 +127,7 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
       () => prisma.cashSession.findFirst({ where: { id, storeId }, include: { movements: { orderBy: { createdAt: "desc" } } } }),
       "caixa não encontrado",
     );
-    if (!session) return;
+    if (!session) return reply; // `findOwnedOrNotFound` já enviou o 404
     // Caixa FECHADO: o OWNER recebe o retrato CONGELADO no fechamento (não recalcula; pedidos cancelados depois não mudam o histórico,
     // RN-CX-15); o STAFF recebe só abertura, fechamento, horários e papel, sem resumo nem movimentações (CA-CX-27).
     if (session.closedAt && role !== "OWNER") return { session: closedSessionView(session, role), summary: null };
