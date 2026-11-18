@@ -84,7 +84,7 @@ describe("PC-24 — alertas de dispositivo", () => {
     const codigos = (ws: string[]) => ws.filter((m) => m.includes("device.alert")).map((m) => JSON.parse(m).code);
     expect(codigos(dono)).toEqual(["NOTHING_TO_CHARGE_CONFLICT", "NOTHING_TO_CHARGE_INVALID", "EMPTY_ZERO_TICKET", "MODE_UNCONFIRMED"]);
     expect(codigos(staff)).toEqual(["MODE_UNCONFIRMED"]);
-    expect(codigos(impressora)).toEqual(["MODE_UNCONFIRMED"]);
+    expect(codigos(impressora)).toEqual([]); // API-47: a impressora so recebe print.available e ping; o alerta e do painel
     // o corpo do evento segue sendo SÓ o código
     expect(dono.filter((m) => m.includes("EMPTY_ZERO_TICKET")).map((m) => JSON.parse(m))).toEqual([{ type: "device.alert", code: "EMPTY_ZERO_TICKET" }]);
   });
@@ -421,7 +421,7 @@ describe("PC-24 — alertas de dispositivo", () => {
     expect(r.banner.needsAttention).toEqual({ queueWithoutPrinter: false, modeUnconfirmed: true, moneyAlert: true }); // e a faixa o enxerga
   });
 
-  it("A3 o QUEUE_WITHOUT_PRINTER chega ao OWNER, ao STAFF e à impressora conectados (só os códigos de DINHEIRO são do dono)", async () => {
+  it("A3 o QUEUE_WITHOUT_PRINTER chega ao OWNER e ao STAFF conectados e NAO à impressora (API-47); só os códigos de DINHEIRO são do dono", async () => {
     const ctx = await setup();
     const dono = sockets(ctx.storeId, "OWNER");
     const staff = sockets(ctx.storeId, "STAFF");
@@ -430,9 +430,11 @@ describe("PC-24 — alertas de dispositivo", () => {
     const o = await order(ctx);
     await velho(o.orderId);
     expect((await rodar()).processed).toBe(1);
-    for (const [nome, ws] of [["dono", dono], ["staff", staff], ["impressora", impressora]] as const) {
+    for (const [nome, ws] of [["dono", dono], ["staff", staff]] as const) {
       expect(ws.filter((m) => m.includes("device.alert")).map((m) => JSON.parse(m)), nome).toEqual([{ type: "device.alert", code: "QUEUE_WITHOUT_PRINTER" }]);
     }
+    // API-47 (hub por audiencia): a impressora so recebe `print.available` e `ping`, nunca o alerta do painel.
+    expect(impressora.filter((m) => m.includes("device.alert")), "impressora").toEqual([]);
   });
 
   it("LISTA DE DINHEIRO: todo código do enum com cara de dinheiro (NOTHING_TO_CHARGE_*, *ZERO*) está em DEVICE_ALERT_MONEY_CODES, e a lista só tem códigos do enum e do cliente", () => {

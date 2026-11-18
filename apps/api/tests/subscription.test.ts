@@ -112,14 +112,14 @@ describe("assinatura (integração)", () => {
   }
 
   it("loja nova começa em teste de 14 dias", async () => {
-    const { cookie } = await registerStore(app);
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
     const plan = JSON.parse((await app.inject({ method: "GET", url: "/api/store/plan", headers: { cookie: cookie! } })).body).plan;
     expect(plan.state).toBe("info");
     expect(plan.daysLeft).toBe(14);
   });
 
   it("lista só o BASICO enquanto o PRO está inativo (CA-B10-07)", async () => {
-    const { cookie } = await registerStore(app);
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
     const plans = JSON.parse((await app.inject({ method: "GET", url: "/api/plans", headers: { cookie: cookie! } })).body).plans;
     expect(plans.map((p: { code: string }) => p.code)).toEqual(["BASICO"]);
     expect(plans[0].limits).toEqual({ maxUsers: 1, maxPrinters: 1 });
@@ -129,7 +129,7 @@ describe("assinatura (integração)", () => {
     // O PRO fica inativo até lançar (ADR-0003 §2.6); aqui o ligamos só para exercitar o fluxo de pagamento.
     await prisma.plan.update({ where: { code: "PRO" }, data: { active: true } });
     onTestEnd(() => prisma.plan.update({ where: { code: "PRO" }, data: { active: false } }));
-    const { cookie } = await registerStore(app);
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
     await prisma.subscription.updateMany({ data: { trialEndsAt: new Date(Date.now() - DAY) } });
 
     // Teste vencido há 1 dia = Consulta: o portão da assinatura barra a escrita antes do recurso (RN-A-01).
@@ -156,13 +156,13 @@ describe("assinatura (integração)", () => {
   });
 
   it("recusa o checkout do PRO enquanto ele está inativo (404)", async () => {
-    const { cookie } = await registerStore(app);
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
     const checkout = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: cookie! }, payload: { planCode: "PRO" } });
     expect(checkout.statusCode).toBe(404);
   });
 
   it("plano Básico não inclui equipe, e cancelar mantém o acesso até o fim do período", async () => {
-    const { cookie } = await registerStore(app);
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
     await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: cookie! }, payload: { planCode: "BASICO" } });
     await signedWebhook("mp-sub-1");
 
@@ -175,7 +175,7 @@ describe("assinatura (integração)", () => {
   });
 
   it("não cancela durante o teste e rejeita plano inexistente", async () => {
-    const { cookie } = await registerStore(app);
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
     expect((await app.inject({ method: "POST", url: "/api/store/subscription/cancel", headers: { cookie: cookie! } })).statusCode).toBe(409);
     expect((await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: cookie! }, payload: { planCode: "NADA" } })).statusCode).toBe(404);
   });

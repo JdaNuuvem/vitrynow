@@ -27,6 +27,7 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/orders/:id/undo": "finish", // API-02: desfazer dentro da janela
   "POST /api/orders/:id/status": "finish", // legado (alias deprecated até WEB-05)
   "POST /api/orders/:id/refund": "finish",
+  "POST /api/orders/:id/payment/check": "finish", // conferir o pagamento de pedido JA recebido (PIX aguardando); nao cria pedido novo
   "POST /api/orders/:id/deliverer": "finish",
   "POST /api/orders/:id/reprint": "finish", // API-12b: 2ª via de pedido JÁ recebido (STAFF só até 24 h; a regra é da rota)
   "POST /api/orders/:id/internal-note": "blocked", // API-54: anotação da equipe é cadastro, não encerra pedido
@@ -82,6 +83,17 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "GET /api/store/plan": "billing",
   "GET /api/store/subscription": "billing",
   "GET /api/store/subscription/payments/:id": "billing",
+
+  // — Lote 1 (Atlas): rotas que apareceram quando as branches se encontraram; classe conservadora, revisar com o dono de cada uma —
+  "POST /api/orders/:id/refund/abandon": "finish", // API-61: encerrar pedido sem estorno (OWNER; encerra o que ja foi recebido)
+  "PUT /api/store/manual-discount-limit": "blocked", // SEC-15: configuracao
+  "POST /api/print-jobs/:id/print-now": "allowed", // N6: reimprimir tiquete antigo (STALE) reduz prejuizo; vale na Consulta
+  "POST /api/catalog/products/:id/sold-out": "blocked", // API-17: cadastro
+  "POST /api/delivery-zones": "blocked", // API-16: configuracao
+  "POST /api/delivery-zones/:id": "blocked",
+  "POST /api/delivery-zones/:id/delete": "blocked",
+  "POST /api/delivery-zones/import": "blocked",
+  "POST /api/delivery-zones/config": "blocked",
 };
 
 /**
