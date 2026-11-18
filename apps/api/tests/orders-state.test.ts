@@ -17,7 +17,8 @@ const getPayment = vi.mocked(mp.getPayment);
 
 type App = ReturnType<typeof makeApp>;
 
-describe("API-02 — estados do pedido", () => {
+// Folga de prazo para máquina carregada (CI, várias suítes em paralelo): testes simples chegaram a levar 19 s e estouravam os 15 s. Só o prazo muda, nenhuma asserção.
+describe("API-02 — estados do pedido", { timeout: 60_000 }, () => {
   let app: App;
   beforeEach(async () => {
     useMockedProvider(mp);
@@ -26,11 +27,11 @@ describe("API-02 — estados do pedido", () => {
     cancelPayment.mockResolvedValue(undefined);
     app = makeApp();
     await app.ready();
-  });
+  }, 60_000);
   afterEach(async () => {
     await app.close();
     await resetDb();
-  });
+  }, 60_000);
   afterAll(async () => {
     await prisma.$disconnect();
   });
