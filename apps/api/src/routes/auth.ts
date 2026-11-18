@@ -56,7 +56,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     // SEC-34 (R7): o hash vem ANTES de qualquer escrita; se a faixa estiver cheia, 503 e nenhuma loja nem usuário fica pela metade.
     let passwordHash: string;
     try {
-      passwordHash = await passwordHasher.hash(password, clientKey(request.ip));
+      passwordHash = await passwordHasher.hash(password, clientKey(clientIpOf(request)));
     } catch (error) {
       if (error instanceof ServerBusyError) return sendServerBusy(reply);
       throw error;
@@ -112,10 +112,10 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     // (ST-05, R4). Faixa cheia ⇒ 503 SEM ter testado senha alguma: devolve a tentativa reservada (R5), igual para conta existente e inexistente.
     let passwordOk: boolean;
     try {
-      passwordOk = await passwordHasher.verify(password, user?.passwordHash ?? DUMMY_HASH, clientKey(request.ip));
+      passwordOk = await passwordHasher.verify(password, user?.passwordHash ?? DUMMY_HASH, clientKey(clientIpOf(request)));
     } catch (error) {
       if (error instanceof ServerBusyError) {
-        throttle.refund(email, request.ip);
+        throttle.refund(email, clientIpOf(request));
         return sendServerBusy(reply);
       }
       throw error;
@@ -250,7 +250,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       let passwordHash: string | null = null;
       if (resetToken && sameEmail && !resetToken.usedAt && resetToken.expiresAt.getTime() >= Date.now() && resetToken.emailFailures < RESET_MAX_EMAIL_FAILURES) {
         try {
-          passwordHash = await passwordHasher.hash(parsed.data.newPassword, clientKey(request.ip));
+          passwordHash = await passwordHasher.hash(parsed.data.newPassword, clientKey(clientIpOf(request)));
         } catch (error) {
           if (error instanceof ServerBusyError) return sendServerBusy(reply);
           throw error;

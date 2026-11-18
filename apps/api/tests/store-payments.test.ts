@@ -613,6 +613,7 @@ describe("M-1: configuração de pagamentos no boot", () => {
     const saved = { ...process.env };
     try {
       process.env.NODE_ENV = "production";
+      process.env.API_INTERNAL_SECRET = "none"; // SEC-24: sem isto o boot recusa antes, por outra guarda
       delete process.env.MP_OAUTH_MODE;
       expect(() => makeApp()).toThrow(/MP_OAUTH_MODE/);
     } finally {

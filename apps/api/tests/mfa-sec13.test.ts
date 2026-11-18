@@ -85,7 +85,7 @@ describe("SEC-13: ações sensíveis exigem comprovante da FINALIDADE certa", ()
   });
 
   it("cancelar assinatura exige 'cancel_subscription' (sem comprovante nem chega à regra de negócio)", async () => {
-    const { cookie } = await registerStore(app);
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
     const without = await call("POST", "/api/store/subscription/cancel", cookie!);
     expect(without.statusCode).toBe(403);
     expect(JSON.parse(without.body)).toMatchObject({ code: "MFA_REQUIRED", purpose: "cancel_subscription" });
@@ -112,7 +112,7 @@ describe("SEC-13: ações sensíveis exigem comprovante da FINALIDADE certa", ()
 
   it("sem MFA_ENFORCED (dev/teste) nada muda: as quatro ações passam direto", async () => {
     delete process.env.MFA_ENFORCED;
-    const { cookie } = await registerStore(app);
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
     expect((await call("POST", "/api/device-tokens", cookie!, { label: "Balcão" })).statusCode).toBe(200);
     expect((await call("POST", "/api/store/subscription/cancel", cookie!)).statusCode).toBe(409);
   });

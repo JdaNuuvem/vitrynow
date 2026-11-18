@@ -45,7 +45,7 @@ describe("back-office da plataforma", () => {
     return { ...created, cookie: cookie! };
   }
   async function newStore() {
-    const { cookie, response } = await registerStore(app);
+    const { cookie, response } = await registerStore(app, { plan: "BASICO" });
     const storeId = json(response).store.id as string;
     return { cookie: cookie!, storeId, slug: json(response).store.slug as string };
   }

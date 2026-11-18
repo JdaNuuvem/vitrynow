@@ -39,7 +39,7 @@ describe("API-69 — estorno preso visível", () => {
       cookie = reg.cookie!;
       store = json(reg.response).store as { id: string; slug: string };
     }
-    const cat = json(await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie }, payload: { name: "C" } })).category.id;
+    const cat = json(await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie }, payload: { name: `C${Date.now()}${Math.random().toString(36).slice(2, 6)}` } })).category.id;
     const productId = json(await app.inject({ method: "POST", url: "/api/catalog/products", headers: { cookie }, payload: { categoryId: cat, name: "P", priceCents: 3000 } })).product.id as string;
     const res = await app.inject({ method: "POST", url: `/stores/${store.slug}/orders`, payload: { type: "BALCAO", items: [{ productId, quantity: 1 }], paymentMethod: "DINHEIRO" } });
     const orderId = json(res).orderId as string;
