@@ -90,6 +90,7 @@ describe("NG-12: eventos de reset de senha e do back-office nas rotas reais", ()
     await app.ready();
   });
   afterAll(async () => {
+    await resetDb(); // não deixa loja/usuário para o próximo arquivo (o mfa-notices só limpa DEPOIS de cada teste)
     await prisma.$disconnect();
   });
 
