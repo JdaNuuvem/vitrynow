@@ -116,6 +116,14 @@ export const techCleanupJob: Job = {
         processed += removed;
         log.info({ job: "tech.cleanup", table, removed }, "tech.cleanup.removed");
       }
+      // API-13 (LGPD, Nightingale/Atlas): a impressão digital da idempotência do pedido manual só serve por minutos; depois da retenção o valor é zerado
+      // (a janela útil acabou e o hash derivado de dados do cliente não deve ficar guardado). NÃO apaga nem altera o pedido: só esta coluna.
+      const scrubbed = await tx.$executeRaw`
+        UPDATE "Order" SET "manualBodyHash" = NULL
+         WHERE "id" IN (SELECT "id" FROM "Order" WHERE "manualBodyHash" IS NOT NULL AND "createdAt" < ${utc(cutoff)}
+                         ORDER BY "createdAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED)`;
+      if (scrubbed > 0) log.info({ job: "tech.cleanup", column: "Order.manualBodyHash", scrubbed }, "tech.cleanup.scrubbed");
+      processed += scrubbed;
       return processed;
     });
     return { processed: claimed.acquired ? claimed.value : 0 };
