@@ -1,5 +1,5 @@
 import type { WebSocket } from "ws";
-import { DEVICE_ALERT_MONEY_CODES, type WsServerMessage } from "@meucardapio/shared-types";
+import { DEVICE_ALERT_MONEY_CODES, WS_AUDIENCE, type WsServerMessage } from "@meucardapio/shared-types";
 
 // Pub/sub em memória: um canal por loja. Usado tanto pelo painel (kanban em tempo
 // real, substitui o pollSales de 60s do original) quanto pelo print-client (substitui
@@ -113,7 +113,12 @@ function deliver(storeId: string, message: WsServerMessage, ownersOnly: boolean)
   if (!set) return;
   const payload = JSON.stringify(message);
   for (const socket of set) {
-    if (ownersOnly && socketRoles.get(socket) !== "OWNER") continue;
+    const role = socketRoles.get(socket);
+    if (ownersOnly && role !== "OWNER") continue;
+    // API-47: a audiência é do TIPO da mensagem, não de quem publica. A impressora só recebe o que o tipo declara para `device`.
+    // LISTA DE PERMISSÃO (fail-closed): DEVICE só recebe tipo que declara `device`/`both`; tipo fora do mapa não chega a ninguém além do painel.
+    const audience = WS_AUDIENCE[message.type] as string | undefined;
+    if (role === "DEVICE" ? audience !== "device" && audience !== "both" : role !== "OWNER" && role !== "STAFF") continue; // papel ausente/desconhecido: nada
     if (socket.readyState === socket.OPEN) socket.send(payload);
   }
 }
@@ -121,6 +126,21 @@ function deliver(storeId: string, message: WsServerMessage, ownersOnly: boolean)
 /** Todos da loja: painel (OWNER e STAFF) e print-client. Os tipos de dono (`OWNER_ONLY_TYPES`) são entregues SÓ ao OWNER mesmo por aqui. */
 export function publishToStore(storeId: string, message: WsServerMessage): void {
   deliver(storeId, message, isOwnerOnly(message));
+}
+
+/** Só o PAINEL da loja (OWNER e STAFF); a impressora (DEVICE) nunca recebe. Para eventos de impressão do painel (N8). */
+export function publishToPanel(storeId: string, message: WsServerMessage): void {
+  const set = channels.get(storeId);
+  if (!set) return;
+  const ownersOnly = isOwnerOnly(message);
+  const payload = JSON.stringify(message);
+  for (const socket of set) {
+    const role = socketRoles.get(socket);
+    if (role !== "OWNER" && !(role === "STAFF" && !ownersOnly)) continue;
+    const audience = WS_AUDIENCE[message.type] as string | undefined;
+    if (audience !== "panel" && audience !== "both") continue; // permissão explícita; tipo fora do mapa não sai por aqui
+    if (socket.readyState === socket.OPEN) socket.send(payload);
+  }
 }
 
 /** Só as conexões de OWNER da loja (STAFF e impressoras não recebem). */

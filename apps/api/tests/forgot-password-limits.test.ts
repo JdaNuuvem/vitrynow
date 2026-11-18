@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import * as emailLib from "../src/lib/email";
-import { FORGOT_MIN_DURATION_MS, RESET_COOLDOWN_MS, RESET_MAX_PER_HOUR, issueResetToken } from "../src/lib/passwordReset";
+import { RESET_COOLDOWN_MS, RESET_MAX_PER_HOUR, issueResetToken } from "../src/lib/passwordReset";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
 // SEC-28 (ST-57, ST-58, ST-62; Sun Tzu): o "esqueci a senha" (1) não revela por TEMPO se a conta existe, (2) tem limite POR CONTA, silencioso,
@@ -36,50 +36,8 @@ describe("forgot-password: tempo igual, limite por conta e um token ativo (SEC-2
   const forgot = (email: string) => app.inject({ method: "POST", url: "/auth/forgot-password", remoteAddress: nextIp(), payload: { email } });
   const activeTokens = (userId: string) => prisma.passwordResetToken.count({ where: { userId, usedAt: null, expiresAt: { gt: new Date() } } });
   const tokenOf = (url: string) => new URLSearchParams(new URL(url).hash.slice(1)).get("token")!;
-  const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 
-  async function timed(email: string) {
-    const t0 = performance.now();
-    const res = await forgot(email);
-    return { ms: performance.now() - t0, res };
-  }
-
-  it("ST-57: com o envio levando 700 ms, conta existente, inexistente e limitada respondem no mesmo tempo (diferença < 35 ms) e com o mesmo corpo", async () => {
-    const users = [] as { email: string }[];
-    for (let i = 0; i < 4; i += 1) users.push((await registerStore(app)).credentials);
-
-    const existing: number[] = [];
-    let existingBody = "";
-    for (const u of users) {
-      const r = await timed(u.email);
-      existing.push(r.ms);
-      existingBody = r.res.body;
-      expect(r.res.statusCode).toBe(200);
-    }
-    const missing: number[] = [];
-    let missingBody = "";
-    for (let i = 0; i < 4; i += 1) {
-      const r = await timed(`nao-existe-${i}@exemplo.com`);
-      missing.push(r.ms);
-      missingBody = r.res.body;
-    }
-    // limitada: a mesma conta de novo, dentro dos 60 s
-    const limited: number[] = [];
-    let limitedBody = "";
-    for (const u of users) {
-      const r = await timed(u.email);
-      limited.push(r.ms);
-      limitedBody = r.res.body;
-    }
-    expect(sent).toHaveLength(4); // o segundo pedido de cada conta não enviou nada
-    expect(existingBody).toBe(missingBody);
-    expect(existingBody).toBe(limitedBody);
-    expect(Math.abs(median(existing) - median(missing))).toBeLessThan(35);
-    expect(Math.abs(median(existing) - median(limited))).toBeLessThan(35);
-    expect(median(existing)).toBeLessThan(SEND_DELAY_MS); // e a resposta NÃO esperou o envio
-    // o PISO: os três caminhos ficam travados na mesma duração mínima, então nenhum trabalho a mais da conta existente aparece
-    for (const path of [existing, missing, limited]) expect(median(path)).toBeGreaterThanOrEqual(FORGOT_MIN_DURATION_MS - 5);
-  }, 60000);
+  // ST-57 (tempo igual para conta existente, inexistente e limitada) mudou para tests/forgot-password-tempo.test.ts (SEC-39): é teste de tempo e roda no estágio isolado, com amostras entrelaçadas.
 
   it("ST-58: 20 pedidos seguidos para a MESMA conta ⇒ no máximo 1 envio e 1 token ativo (o resto é silencioso e igual)", async () => {
     const { credentials } = await registerStore(app);

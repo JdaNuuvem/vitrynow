@@ -51,6 +51,7 @@
 .impressoras-card input {
   box-sizing: border-box;
   width: 100%;
+  min-height: 44px;
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -60,6 +61,7 @@
 
 .impressoras__button {
   align-self: flex-start;
+  min-height: 44px;
   padding: 10px 16px;
   border: none;
   border-radius: 8px;
@@ -129,7 +131,9 @@
 
 .impressoras-row__revoke {
   flex-shrink: 0;
-  padding: 4px 8px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 4px 12px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: none;

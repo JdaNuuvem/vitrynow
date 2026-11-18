@@ -2,7 +2,8 @@
 // Critérios de aceite da Nightingale: C1 formato do orderId antes da consulta e mesma resposta/gravação; C2 corpo estrito e pequeno;
 // C3 painel por CÓDIGO do pedido; C4 MODE_RECOVERED do cliente não apaga o alerta do servidor; C5 401 sem gravar, retenção, só OWNER, sem PII.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { prisma } from "@meucardapio/db";
+import { DeviceAlertCode, prisma } from "@meucardapio/db";
+import { DEVICE_ALERT_CLIENT_CODES, DEVICE_ALERT_MONEY_CODES } from "@meucardapio/shared-types";
 import { subscribe } from "../src/realtime/hub";
 import { resetLimits } from "../src/lib/slidingLimit";
 import { queueWatchJob, QUEUE_WATCH_MINUTES } from "../src/jobs/queueWatch";
@@ -83,7 +84,7 @@ describe("PC-24 — alertas de dispositivo", () => {
     const codigos = (ws: string[]) => ws.filter((m) => m.includes("device.alert")).map((m) => JSON.parse(m).code);
     expect(codigos(dono)).toEqual(["NOTHING_TO_CHARGE_CONFLICT", "NOTHING_TO_CHARGE_INVALID", "EMPTY_ZERO_TICKET", "MODE_UNCONFIRMED"]);
     expect(codigos(staff)).toEqual(["MODE_UNCONFIRMED"]);
-    expect(codigos(impressora)).toEqual(["MODE_UNCONFIRMED"]);
+    expect(codigos(impressora)).toEqual([]); // API-47: a impressora so recebe print.available e ping; o alerta e do painel
     // o corpo do evento segue sendo SÓ o código
     expect(dono.filter((m) => m.includes("EMPTY_ZERO_TICKET")).map((m) => JSON.parse(m))).toEqual([{ type: "device.alert", code: "EMPTY_ZERO_TICKET" }]);
   });
@@ -363,6 +364,86 @@ describe("PC-24 — alertas de dispositivo", () => {
     await prisma.printJob.create({ data: { storeId: outra.storeId, kind: "TEST", createdAt: new Date(Date.now() - 3_600_000), availableAt: new Date(Date.now() - 3_600_000), maxAttempts: 3 } });
     await rodar();
     expect((await rows(outra.storeId)).length).toBe(0);
+  });
+
+  it("lagMs do detector RODA no banco de verdade (sem coluna ambígua) e mede o job mais antigo pendente em QUEUE", async () => {
+    const ctx = await setup();
+    expect(await queueWatchJob.lagMs!({ now: new Date(), db: prisma, log } as never)).toBeNull();
+    await prisma.store.update({ where: { id: ctx.storeId }, data: { printMode: "QUEUE" } });
+    const o = await order(ctx);
+    await velho(o.orderId, 30);
+    const lag = await queueWatchJob.lagMs!({ now: new Date(), db: prisma, log } as never);
+    expect(lag).toBeGreaterThanOrEqual(29 * 60_000);
+  });
+
+  it("P1 DETECTOR com 230 lojas paradas: as 230 recebem alerta (vários lotes no MESMO tick) e, com lotes curtos, o tick seguinte começa pelas que NUNCA foram alertadas", async () => {
+    const N = 230;
+    const quando = new Date(Date.now() - 30 * 60_000);
+    await prisma.store.createMany({ data: Array.from({ length: N }, (_, i) => ({ name: `Parada ${i}`, slug: `parada-${i}`, code: `P${i}`, printMode: "QUEUE" as const })) });
+    const lojas = await prisma.store.findMany({ where: { slug: { startsWith: "parada-" } }, select: { id: true } });
+    expect(lojas).toHaveLength(N);
+    await prisma.printJob.createMany({ data: lojas.map((l) => ({ storeId: l.id, kind: "ORDER_KITCHEN" as const, createdAt: quando, availableAt: quando })) });
+    const alertadas = async () => (await prisma.deviceAlert.findMany({ where: { code: "QUEUE_WITHOUT_PRINTER" }, select: { storeId: true }, distinct: ["storeId"] })).length;
+    // (a) o lote do job é 200: com um lote só, as 30 lojas de id maior ficavam sem alerta; agora o MESMO tick faz mais lotes
+    expect((await queueWatchJob.runOnce({ now: new Date(), db: prisma, log, limit: 200 })).processed).toBe(N);
+    expect(await alertadas()).toBe(N);
+    // (b) lotes curtos (40 × 5 lotes = 200 por tick): o 1º tick alerta 200; o 2º começa pelas 30 que NUNCA foram alertadas
+    await prisma.deviceAlert.deleteMany({});
+    expect((await queueWatchJob.runOnce({ now: new Date(), db: prisma, log, limit: 40 })).processed).toBe(200);
+    expect(await alertadas()).toBe(200);
+    await queueWatchJob.runOnce({ now: new Date(Date.now() + 1000), db: prisma, log, limit: 40 });
+    expect(await alertadas()).toBe(N);
+  }, 120000);
+
+  it("P2 a faixa sai do banco por código: 130 alertas mais NOVOS de outro código não escondem o MODE_UNCONFIRMED ainda válido (a lista continua com as 100 mais recentes)", async () => {
+    const ctx = await setup();
+    await alert(ctx.token, { code: "MODE_UNCONFIRMED" });
+    const base = Date.now();
+    await prisma.deviceAlert.createMany({
+      data: Array.from({ length: 130 }, (_, i) => ({
+        id: `cpad${String(i).padStart(21, "0")}`,
+        storeId: ctx.storeId,
+        tokenId: null,
+        code: "NOTHING_TO_CHARGE_INVALID" as const,
+        orderId: null,
+        orderKey: "",
+        clientVersion: null,
+        count: 1,
+        windowStart: new Date(base - (i + 1) * 600_000),
+        firstAt: new Date(base + 1000 + i),
+        lastAt: new Date(base + 1000 + i),
+        expiresAt: new Date(base + 30 * 86_400_000),
+      })),
+    });
+    const r = json(await app.inject({ method: "GET", url: "/api/device-alerts", headers: { cookie: ctx.owner } }));
+    expect(r.alerts).toHaveLength(100);
+    expect(r.alerts.every((a: { code: string }) => a.code === "NOTHING_TO_CHARGE_INVALID")).toBe(true); // o MODE_UNCONFIRMED ficou FORA da lista
+    expect(r.banner.needsAttention).toEqual({ queueWithoutPrinter: false, modeUnconfirmed: true, moneyAlert: true }); // e a faixa o enxerga
+  });
+
+  it("A3 o QUEUE_WITHOUT_PRINTER chega ao OWNER e ao STAFF conectados e NAO à impressora (API-47); só os códigos de DINHEIRO são do dono", async () => {
+    const ctx = await setup();
+    const dono = sockets(ctx.storeId, "OWNER");
+    const staff = sockets(ctx.storeId, "STAFF");
+    const impressora = sockets(ctx.storeId, "DEVICE");
+    await prisma.store.update({ where: { id: ctx.storeId }, data: { printMode: "QUEUE" } });
+    const o = await order(ctx);
+    await velho(o.orderId);
+    expect((await rodar()).processed).toBe(1);
+    for (const [nome, ws] of [["dono", dono], ["staff", staff]] as const) {
+      expect(ws.filter((m) => m.includes("device.alert")).map((m) => JSON.parse(m)), nome).toEqual([{ type: "device.alert", code: "QUEUE_WITHOUT_PRINTER" }]);
+    }
+    // API-47 (hub por audiencia): a impressora so recebe `print.available` e `ping`, nunca o alerta do painel.
+    expect(impressora.filter((m) => m.includes("device.alert")), "impressora").toEqual([]);
+  });
+
+  it("LISTA DE DINHEIRO: todo código do enum com cara de dinheiro (NOTHING_TO_CHARGE_*, *ZERO*) está em DEVICE_ALERT_MONEY_CODES, e a lista só tem códigos do enum e do cliente", () => {
+    const todos = Object.values(DeviceAlertCode) as string[];
+    for (const code of todos.filter((c) => /NOTHING_TO_CHARGE|ZERO/.test(c))) expect(DEVICE_ALERT_MONEY_CODES, `${code} é de dinheiro e ficaria visível ao STAFF`).toContain(code);
+    for (const code of DEVICE_ALERT_CLIENT_CODES.filter((c) => /NOTHING_TO_CHARGE|ZERO/.test(c))) expect(DEVICE_ALERT_MONEY_CODES, code).toContain(code);
+    for (const code of DEVICE_ALERT_MONEY_CODES) expect(todos, code).toContain(code);
+    expect(DEVICE_ALERT_MONEY_CODES).not.toContain("MODE_UNCONFIRMED");
+    expect(DEVICE_ALERT_MONEY_CODES).not.toContain("QUEUE_WITHOUT_PRINTER");
   });
 
   it("DETECTOR em 2 execuções SIMULTÂNEAS: 1 linha (lock do job + upsert atômico)", async () => {

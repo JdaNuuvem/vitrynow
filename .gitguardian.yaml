@@ -1,0 +1,12 @@
+# GitGuardian (app instalado no repositório). Triagem de 18/11 (Nightingale): os alertas "Generic Password" vieram de FIXTURES de teste (senhas de usuários
+# de teste, o banco descartável do CI e strings falsas de segredo que o teste de redação de log usa DE PROPÓSITO). Nenhum segredo real foi encontrado
+# (varredura de arquivos .env/chaves e de padrões de provedores na main e nas branches). Este arquivo ignora SÓ esses arquivos de teste e o workflow do CI;
+# o código de produção (apps/*/src, scripts, infra) continua sendo verificado. Segredo real NUNCA entra aqui: vai no cofre/variável de ambiente.
+version: 2
+secret:
+  ignored_paths:
+    - "apps/api/tests/**"
+    - "apps/api/**/*.test.ts"
+    - "apps/web/**/*.test.ts"
+    - "apps/web/**/*.test.tsx"
+    - ".github/workflows/ci.yml"

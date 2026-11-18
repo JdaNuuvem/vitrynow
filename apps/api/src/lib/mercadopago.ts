@@ -1,43 +1,36 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { MercadoPagoConfig, Payment as MpPayment, PaymentRefund } from "mercadopago";
 
-// Integração PIX via Mercado Pago. Token vem de MP_ACCESS_TOKEN (conta da plataforma,
-// não da loja — simplificação da Fase 3: todo recebimento passa por uma conta só).
-function client() {
-  const accessToken = process.env.MP_ACCESS_TOKEN;
-  if (!accessToken) throw new Error("MP_ACCESS_TOKEN não configurado");
-  return new MercadoPagoConfig({ accessToken });
+// Integração PIX via Mercado Pago. `mercadoPagoGateway(token)` é a ÚNICA porta para o SDK: o token da PLATAFORMA
+// (MP_ACCESS_TOKEN) só serve à cobrança da assinatura SaaS (`createPixPayment` e demais abaixo); o PIX dos pedidos usa o
+// token DA LOJA, obtido por `modules/storePayments/gateway.ts` (ADR-0001: nada do dinheiro das lojas passa pela plataforma).
+
+// Prazo do PIX (decisão do Atlas): CONSTANTE ÚNICA no servidor. Tela, provedor e o job que cancela pedido aguardando pagamento
+// usam ESTE número (nunca um valor solto). Pagamento aprovado depois do prazo continua valendo (o dinheiro entrou).
+export const PIX_EXPIRATION_MINUTES = 30;
+
+/** Menor entre o prazo pedido e o que o provedor devolveu; `null` só se nenhum dos dois existe (a tela não inventa hora). */
+export function effectiveExpiry(requested: Date, fromProvider: Date | null): Date {
+  return fromProvider && !Number.isNaN(fromProvider.getTime()) && fromProvider < requested ? fromProvider : requested;
 }
 
-export async function createPixPayment(input: {
+export type PixChargeInput = {
   orderId: string;
   amountCents: number;
   description: string;
   payerEmail: string;
   // Repetir a chamada com a mesma chave não cria segunda cobrança (queda entre o aceite e a gravação).
   idempotencyKey?: string;
-}) {
-  const payment = new MpPayment(client());
-  const result = await payment.create({
-    body: {
-      transaction_amount: input.amountCents / 100,
-      description: input.description,
-      payment_method_id: "pix",
-      payer: { email: input.payerEmail },
-      external_reference: input.orderId,
-    },
-    ...(input.idempotencyKey ? { requestOptions: { idempotencyKey: input.idempotencyKey } } : {}),
-  });
+};
 
-  const txData = result.point_of_interaction?.transaction_data;
-  return {
-    providerPaymentId: String(result.id),
-    status: result.status, // "pending" | "approved" | "rejected" | ...
-    pixQrCode: txData?.qr_code ?? null,
-    pixQrCodeBase64: txData?.qr_code_base64 ?? null,
-    expiresAt: result.date_of_expiration ? new Date(result.date_of_expiration) : null,
-  };
-}
+export type PixCharge = {
+  providerPaymentId: string;
+  status: string | null | undefined; // "pending" | "approved" | "rejected" | ...
+  pixQrCode: string | null;
+  pixQrCodeBase64: string | null;
+  /** SEMPRE presente em cobrança nova: o menor entre os 30 min fixados aqui e o prazo que o provedor devolver. */
+  expiresAt: Date;
+};
 
 // Visão do pagamento no provedor — única fonte da verdade (a notificação só traz o id).
 // Conferir valor, moeda e referência é obrigatório antes de aprovar qualquer coisa (ADR-0001 §3.6).
@@ -49,32 +42,110 @@ export type ProviderPayment = {
   currency?: string | null;
 };
 
-export async function getPayment(providerPaymentId: string): Promise<ProviderPayment> {
-  const payment = new MpPayment(client());
-  const result = await payment.get({ id: providerPaymentId });
+/** O provedor respondeu 404: o pagamento não existe para ESTA conta (não é de quem consultou, ou nunca existiu). Erro TIPADO: o webhook decide por ele, não por texto. */
+export class PaymentNotFoundError extends Error {
+  constructor() {
+    super("payment not found");
+    this.name = "PaymentNotFoundError";
+  }
+}
+
+const isProviderNotFound = (error: unknown): boolean => {
+  const e = error as { status?: number; statusCode?: number; cause?: { status?: number } } | null;
+  return e?.status === 404 || e?.statusCode === 404 || e?.cause?.status === 404;
+};
+
+export interface PixGateway {
+  createPixPayment(input: PixChargeInput): Promise<PixCharge>;
+  getPayment(providerPaymentId: string): Promise<ProviderPayment>;
+  /**
+   * SOMENTE LEITURA (SEC-17): pagamentos que o provedor tem para esta `external_reference` (= id do pedido). Reencontra a cobrança "órfã" sem criar nada
+   * e sem depender da janela de validade da chave de idempotência.
+   */
+  findByExternalReference(externalReference: string): Promise<ProviderPayment[]>;
+  /** Cancela um pagamento PIX ainda pendente (cliente cancelou o pedido antes de pagar). */
+  cancelPayment(providerPaymentId: string): Promise<void>;
+  /**
+   * Estorna um pagamento já aprovado (reembolso total); o MP devolve o PIX ao pagador quando aceita. `idempotencyKey`
+   * determinística (ex. "refund-<payment.id>"): repetir depois de uma queda devolve o mesmo resultado em vez de falhar.
+   */
+  refundPayment(providerPaymentId: string, idempotencyKey?: string): Promise<void>;
+}
+
+export function mercadoPagoGateway(accessToken: string): PixGateway {
+  if (!accessToken) throw new Error("token do Mercado Pago ausente");
+  const client = () => new MercadoPagoConfig({ accessToken });
   return {
-    providerPaymentId: String(result.id),
-    status: result.status,
-    externalReference: result.external_reference ?? null,
-    amountCents: typeof result.transaction_amount === "number" ? Math.round(result.transaction_amount * 100) : null,
-    currency: result.currency_id ?? null,
+    async createPixPayment(input) {
+      const payment = new MpPayment(client());
+      const requested = new Date(Date.now() + PIX_EXPIRATION_MINUTES * 60_000);
+      const result = await payment.create({
+        body: {
+          transaction_amount: input.amountCents / 100,
+          description: input.description,
+          payment_method_id: "pix",
+          payer: { email: input.payerEmail },
+          external_reference: input.orderId,
+          // NÃO VERIFICADO no sandbox (CL-13): formato e aceitação de date_of_expiration; o prazo efetivo abaixo vale de qualquer jeito.
+          date_of_expiration: requested.toISOString(),
+        },
+        ...(input.idempotencyKey ? { requestOptions: { idempotencyKey: input.idempotencyKey } } : {}),
+      });
+      const txData = result.point_of_interaction?.transaction_data;
+      return {
+        providerPaymentId: String(result.id),
+        status: result.status,
+        pixQrCode: txData?.qr_code ?? null,
+        pixQrCodeBase64: txData?.qr_code_base64 ?? null,
+        expiresAt: effectiveExpiry(requested, result.date_of_expiration ? new Date(result.date_of_expiration) : null),
+      };
+    },
+    async getPayment(providerPaymentId) {
+      const payment = new MpPayment(client());
+      const result = await payment.get({ id: providerPaymentId }).catch((error: unknown) => {
+        throw isProviderNotFound(error) ? new PaymentNotFoundError() : error;
+      });
+      return {
+        providerPaymentId: String(result.id),
+        status: result.status,
+        externalReference: result.external_reference ?? null,
+        amountCents: typeof result.transaction_amount === "number" ? Math.round(result.transaction_amount * 100) : null,
+        currency: result.currency_id ?? null,
+      };
+    },
+    async findByExternalReference(externalReference) {
+      // NÃO VERIFICADO no sandbox (CL-13): filtro `external_reference` do search e formato de `results`.
+      const found = await new MpPayment(client()).search({ options: { external_reference: externalReference, sort: "date_created", criteria: "desc" } });
+      return (found.results ?? []).map((r) => ({
+        providerPaymentId: String(r.id),
+        status: r.status,
+        externalReference: r.external_reference ?? null,
+        amountCents: typeof r.transaction_amount === "number" ? Math.round(r.transaction_amount * 100) : null,
+        currency: r.currency_id ?? null,
+      }));
+    },
+    async cancelPayment(providerPaymentId) {
+      const payment = new MpPayment(client());
+      await payment.cancel({ id: providerPaymentId });
+    },
+    async refundPayment(providerPaymentId, idempotencyKey) {
+      const refund = new PaymentRefund(client());
+      await refund.total({ payment_id: providerPaymentId, ...(idempotencyKey ? { requestOptions: { idempotencyKey } } : {}) });
+    },
   };
 }
 
-// Cancela um pagamento PIX ainda pendente (cliente cancelou o pedido antes de pagar).
-export async function cancelPayment(providerPaymentId: string) {
-  const payment = new MpPayment(client());
-  await payment.cancel({ id: providerPaymentId });
+// Conta da PLATAFORMA (assinatura SaaS). Não usar para o PIX dos pedidos das lojas.
+function platformGateway(): PixGateway {
+  const accessToken = process.env.MP_ACCESS_TOKEN;
+  if (!accessToken) throw new Error("MP_ACCESS_TOKEN não configurado");
+  return mercadoPagoGateway(accessToken);
 }
 
-// Estorna um pagamento já aprovado (reembolso total). Mercado Pago devolve o PIX pro
-// pagador automaticamente quando o estorno é aceito.
-// idempotencyKey deterministica (ex. "refund-<payment.id>"): repetir a chamada depois de uma queda
-// devolve o mesmo resultado em vez de falhar com "ja estornado".
-export async function refundPayment(providerPaymentId: string, idempotencyKey?: string) {
-  const refund = new PaymentRefund(client());
-  await refund.total({ payment_id: providerPaymentId, ...(idempotencyKey ? { requestOptions: { idempotencyKey } } : {}) });
-}
+export const createPixPayment = async (input: PixChargeInput) => platformGateway().createPixPayment(input);
+export const getPayment = async (providerPaymentId: string) => platformGateway().getPayment(providerPaymentId);
+export const cancelPayment = async (providerPaymentId: string) => platformGateway().cancelPayment(providerPaymentId);
+export const refundPayment = async (providerPaymentId: string, idempotencyKey?: string) => platformGateway().refundPayment(providerPaymentId, idempotencyKey);
 
 // Confere o header x-signature do webhook (ts=...,v1=<hmac>) contra MP_WEBHOOK_SECRET.
 // Sem isso, qualquer POST externo com um data.id válido conseguiria "confirmar" pagamento

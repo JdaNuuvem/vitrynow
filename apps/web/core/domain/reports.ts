@@ -10,6 +10,9 @@ export type ReportSummary = {
   orderCount: number;
   revenueCents: number;
   discountCents: number;
+  // A API já manda a gorjeta e a taxa de entrega somadas no período; o total (`revenueCents`) as inclui.
+  tipCents?: number;
+  deliveryFeeCents?: number;
   averageTicketCents: number;
   customerCount: number;
   byDay: ReportDay[];
