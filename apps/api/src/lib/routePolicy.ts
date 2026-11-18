@@ -55,6 +55,22 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/deliverers/:id/delete": "blocked",
   "POST /api/store/settings": "blocked",
   "POST /api/store/availability": "blocked",
+  // — Lote 2 (Nightingale): rotas que apareceram quando as branches se encontraram; classes propostas, Leonardo confirma —
+  "POST /api/tables": "blocked", // API-22: cadastro de mesa
+  "PATCH /api/tables/:id": "blocked", // API-22
+  "POST /api/tables/:id/regenerate-qr": "blocked", // API-22: trocar QR
+  "DELETE /api/tables/:id": "blocked", // API-22
+  "POST /api/store/qr-settings": "blocked", // API-22: configuracao do QR
+  "POST /api/tables/:id/receive": "finish", // API-24: receber a mesa (dinheiro de pedidos JA recebidos)
+  "POST /api/catalog/categories/reorder": "blocked", // cadastro
+  "POST /api/catalog/categories/:id/move-products": "blocked", // cadastro
+  "POST /api/catalog/products/reorder": "blocked", // cadastro
+  "POST /api/catalog/option-groups": "blocked", // API-15: grupos de opcoes
+  "POST /api/catalog/option-groups/:id": "blocked", // API-15
+  "POST /api/catalog/option-groups/:id/delete": "blocked", // API-15
+  "POST /api/catalog/products/:id/option-groups": "blocked", // API-15
+  "POST /api/media/images": "blocked", // API-18: upload de imagem e cadastro
+  "POST /api/media/images/:id/delete": "blocked", // API-18
   "POST /api/store/hours": "blocked",
   "POST /api/store/status": "blocked", // pausar/fechar por hoje: na Consulta já não há pedido novo para pausar
   "POST /api/users": "blocked",
@@ -120,14 +136,28 @@ export const PUBLIC_ROUTE_POLICY: Record<string, PublicPolicy> = {
   "POST /api/payments/webhook": "exempt",
   // Admin da plataforma por x-admin-token (some com o back-office, API-25).
   "POST /auth/verify-email": "exempt", // API-26: confirma o e-mail pelo link (publico, token no corpo)
-  "POST /api/admin/notices": "exempt",
-  "POST /api/admin/notices/:id/delete": "exempt",
   "POST /stores/:slug/orders": "public-order",
   "GET /stores/:slug/menu": "public-menu",
   "GET /stores/:slug/orders/:orderId/payment-status": "public-allowed",
   "POST /stores/:slug/orders/:orderId/cancel": "public-allowed",
   // API-19: o cliente acompanha o pedido que já fez, também com a loja em Consulta/Suspensão (decisão do Atlas).
   "GET /stores/:slug/orders/:orderId/tracking": "public-allowed",
+  "POST /stores/:slug/tables/:qrToken/orders": "public-order", // API-22: pedido pelo QR da mesa (recusa em Consulta/Suspensao)
+  "GET /stores/:slug/tables/:qrToken/menu": "public-menu", // API-22
+  "GET /stores/:slug/tables/:qrToken/my-orders": "public-allowed", // API-22: o cliente ve o que ja pediu
+  "POST /stores/:slug/tables/:qrToken/call-waiter": "public-allowed", // API-22
+  "POST /stores/:slug/tables/:qrToken/ask-bill": "public-allowed", // API-22
+  "POST /api/platform/auth/login": "exempt", // API-25: back-office, autenticacao propria (requirePlatformAdmin), independe da assinatura da loja
+  "POST /api/platform/auth/verify": "exempt", // API-25: back-office, autenticacao propria (requirePlatformAdmin), independe da assinatura da loja
+  "POST /api/platform/auth/logout": "exempt", // API-25: back-office, autenticacao propria (requirePlatformAdmin), independe da assinatura da loja
+  "POST /api/platform/mfa/challenge": "exempt", // API-25: back-office, autenticacao propria (requirePlatformAdmin), independe da assinatura da loja
+  "POST /api/platform/mfa/verify": "exempt", // API-25: back-office, autenticacao propria (requirePlatformAdmin), independe da assinatura da loja
+  "POST /api/platform/stores/:id/suspend": "exempt", // API-25: back-office, autenticacao propria (requirePlatformAdmin), independe da assinatura da loja
+  "POST /api/platform/stores/:id/reactivate": "exempt", // API-25: back-office, autenticacao propria (requirePlatformAdmin), independe da assinatura da loja
+  "POST /api/platform/stores/:id/extend-trial": "exempt", // API-25: back-office, autenticacao propria (requirePlatformAdmin), independe da assinatura da loja
+  "POST /api/platform/notices": "exempt", // API-25: back-office, autenticacao propria (requirePlatformAdmin), independe da assinatura da loja
+  "POST /api/platform/notices/:id/delete": "exempt", // API-25: back-office, autenticacao propria (requirePlatformAdmin), independe da assinatura da loja
+  "POST /api/platform/stores/:id/credits": "exempt", // API-25: back-office, autenticacao propria (requirePlatformAdmin), independe da assinatura da loja
 };
 
 export const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);

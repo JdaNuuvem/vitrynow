@@ -12,7 +12,7 @@ export const JOB_LOCK_KEYS = {
   "message.outbox": 7008n,
   "tech.cleanup": 7009n,
   "print.queue_watch": 7010n,
-  "menu.revalidate": 7010n,
+  "menu.revalidate": 7011n, // era 7010n, o MESMO de print.queue_watch (PC-24 x API-58): o runner recusa chave repetida e a API não subia
 } as const;
 
 export type JobName = keyof typeof JOB_LOCK_KEYS;

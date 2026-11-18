@@ -273,11 +273,12 @@ describe("Consulta e Suspensão por rota (integração)", () => {
   it("CA-MX-05 / reativação imediata: pagar na Consulta ou na Suspensão libera a loja na requisição seguinte", async () => {
     const subscription = await prisma.subscription.findFirstOrThrow();
 
-    for (const phase of [toReadOnly, toSuspended]) {
+    // nome ÚNICO por fase: a categoria "Liberada" da 1ª fase continua existindo na 2ª e o nome repetido agora dá 409 (regra de nome único da categoria)
+    for (const [i, phase] of [toReadOnly, toSuspended].entries()) {
       await phase();
-      expect(codeOf(await inject("POST", "/api/catalog/categories", { name: "Bloqueada" }))).toMatch(/READ_ONLY|SUSPENDED/);
+      expect(codeOf(await inject("POST", "/api/catalog/categories", { name: `Bloqueada ${i}` }))).toMatch(/READ_ONLY|SUSPENDED/);
       await activateSubscription({ subscriptionId: subscription.id, planCode: "BASICO" });
-      expect((await inject("POST", "/api/catalog/categories", { name: "Liberada" })).statusCode).toBe(201);
+      expect((await inject("POST", "/api/catalog/categories", { name: `Liberada ${i}` })).statusCode).toBe(201);
       await prisma.subscription.update({ where: { id: subscription.id }, data: { status: "TRIAL", currentPeriodEnd: null } });
     }
   });

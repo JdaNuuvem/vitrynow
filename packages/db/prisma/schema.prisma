@@ -381,6 +381,7 @@ model Order {
   @@index([storeId, deviceTokenHash])
   @@index([couponId])
   @@index([delivererId])
+  @@index([receiptId]) // API-24: o índice já existe na migração 20261117500000 (Order_receiptId_idx); sem esta linha o drift acusa
 }
 
 model OrderItem {
