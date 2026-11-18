@@ -5,6 +5,7 @@ import { ORDER_TX_OPTIONS } from "../../lib/order-code";
 import { utc } from "../../lib/sqlTime";
 import { FINAL_STATUSES } from "../../lib/orderStateMachine";
 import { maskPhone } from "../orders/orders.view";
+import { addDoNotContact, assertPrivacySaltConfigured } from "./doNotContact";
 
 type Db = typeof prismaClient;
 
@@ -101,6 +102,7 @@ export class PrivacyService {
   async anonymize(actor: PrivacyActor, input: AnonymizeCustomerInput) {
     this.assertOwner(actor);
     const target: AnonymizeTarget = { phone: input.phone, orderCode: input.orderCode };
+    assertPrivacySaltConfigured(); // falha fechada ANTES de tocar em qualquer dado
     return this.db.$transaction(async (tx) => {
       const matches = await this.find(tx as unknown as Db, actor.storeId, target, true);
       const blockers = this.blockers(matches);
@@ -110,6 +112,8 @@ export class PrivacyService {
       if (withData.length !== input.expectedOrders) throw err(409, "COUNT_CHANGED", "O número de pedidos mudou desde a prévia. Confira e confirme de novo.", { orders: withData.length });
 
       const ids = withData.map((m) => m.id);
+      // RN-PV-06: o opt-out não se perde ao anonimizar: guarda só o HASH do telefone (por loja) para nunca contatar de novo. Mesma transação.
+      const doNotContact = await addDoNotContact(tx as unknown as Db, actor.storeId, withData.map((m) => m.phoneDigits), "ANONYMIZED");
       // SQL direto de propósito: anonimizar não é atividade do pedido e não pode mexer em `updatedAt`.
       await tx.$executeRaw`UPDATE "Order" SET "customerName" = NULL, "customerPhone" = NULL, "address" = NULL, "notes" = NULL, "internalNote" = NULL, "anonymizedAt" = ${utc(this.now())} WHERE "storeId" = ${actor.storeId} AND "id" IN (${Prisma.join(ids)})`;
       await tx.orderItem.updateMany({ where: { orderId: { in: ids } }, data: { notes: null } });
@@ -128,7 +132,7 @@ export class PrivacyService {
             targetType: "Store",
             targetId: actor.storeId,
             metadata: {
-              orders: ids.length, orderIds: ids.slice(b * AUDIT_IDS_PER_ROW, (b + 1) * AUDIT_IDS_PER_ROW), batch: b + 1, batches,
+              orders: ids.length, doNotContactAdded: doNotContact, orderIds: ids.slice(b * AUDIT_IDS_PER_ROW, (b + 1) * AUDIT_IDS_PER_ROW), batch: b + 1, batches,
               by: input.phone ? "PHONE" : "ORDER_CODE", reason: input.reason, from: withData[0].createdAt.toISOString(), to: withData[withData.length - 1].createdAt.toISOString(),
             },
           },
