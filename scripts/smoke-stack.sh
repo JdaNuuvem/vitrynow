@@ -321,8 +321,10 @@ rb="$(caddy429 100 /auth/forgot-password POST)"
 cb="${rb%% *}"
 curl -s -D - -o /dev/null -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT/auth/forgot-password" | tr -d '\r' | sed 's/^/      [cabeçalhos de um 429] /' | head -6
 if [ "$cb" -ge 20 ]; then check ok "9f rajada de 100 pedidos (mais que o limite de 60/min SOZINHA, então vale mesmo se a máquina lenta deixar o uso normal sair da janela): $cb respostas 429 do CADDY (corpo vazio; a origem passou de 60/min)"; else check fail "9f a rajada não foi limitada pelo Caddy ($rb)"; fi
-rh="$(curl -s -D - -o /dev/null -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT/auth/login" | tr -d '\r')"
-[[ "$rh" == *"429"* && "$rh" == *[Rr]etry-[Aa]fter* ]] && check ok "9f a resposta 429 do Caddy traz Retry-After" || check fail "9f 429 do Caddy sem Retry-After"
+# a janela do limite é DESLIZANTE: esgota a zona em paralelo (rápido) e olha o cabeçalho logo em seguida; 429 do Caddy = sem x-ratelimit-limit (a API o emite)
+seq 1 80 | xargs -P 20 -I{} curl -s -o /dev/null -X POST -H "Content-Type: application/json" -d "{}" "http://127.0.0.1:$PORT/auth/forgot-password" >/dev/null 2>&1
+rh="$(curl -s -D - -o /dev/null -X POST -H "Content-Type: application/json" -d "{}" "http://127.0.0.1:$PORT/auth/forgot-password" | tr -d '\r')"
+[[ "$rh" == *"429"* && "$rh" == *[Rr]etry-[Aa]fter* && "${rh,,}" != *x-ratelimit-limit* ]] && check ok "9f a resposta 429 do Caddy traz Retry-After" || check fail "9f 429 do Caddy sem Retry-After"
 # /loja e /health fora desta zona (zona própria)
 lrc="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health")"
 [ "$lrc" = 200 ] && check ok "9f /health segue livre com a zona de /auth esgotada" || check fail "9f /health devolveu $lrc"
