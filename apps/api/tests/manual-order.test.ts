@@ -157,9 +157,12 @@ describe("API-13 — pedido manual", () => {
     expect(new Set(rs.map((r) => json(r).orderId)).size).toBe(1);
     expect(await orders(l)).toHaveLength(2);
     expect((await novo(l, {}, l.owner, { "idempotency-key": "curta" })).statusCode).toBe(400);
-    // CONTRATO: a chave identifica a ABERTURA do formulário; a mesma chave com corpo DIFERENTE devolve o pedido antigo
+    // CONTRATO (Leonardo): mesma chave + corpo DIFERENTE = 409 IDEMPOTENCY_KEY_REUSED com o pedido antigo em details (nada é lançado em silêncio)
     const diferente = await novo(l, { items: [{ productId: l.productId, quantity: 3 }] }, l.owner, h);
-    expect([diferente.statusCode, json(diferente).orderId, json(diferente).replay]).toEqual([200, json(a).orderId, true]);
+    expect([diferente.statusCode, json(diferente).code, json(diferente).details.orderId]).toEqual([409, "IDEMPOTENCY_KEY_REUSED", json(a).orderId]);
+    // a ORDEM dos campos do JSON não muda o conteúdo: continua replay 200
+    const mesmoOutraOrdem = await app.inject({ method: "POST", url: "/api/orders", headers: { cookie: l.owner, ...h }, payload: { paymentMethod: "DEBITO", items: [{ quantity: 1, productId: l.productId }], type: "BALCAO" } });
+    expect([mesmoOutraOrdem.statusCode, json(mesmoOutraOrdem).replay]).toEqual([200, true]);
     expect((await orders(l)).find((o) => o.id === json(a).orderId)?.totalCents).toBe(4000);
   });
 

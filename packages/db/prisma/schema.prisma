@@ -279,6 +279,7 @@ model Order {
   channel           String?
   createdByUserId   String?
   manualKey         String?
+  manualBodyHash    String? // impressão digital do corpo que usou a chave: mesma chave + corpo diferente = 409 (RN-B2-10)
   manualDiscountPercent Int?
   manualDiscountReason  String?
   createdAt     DateTime    @default(now())

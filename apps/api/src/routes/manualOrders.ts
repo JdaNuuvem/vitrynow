@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { Prisma, prisma } from "@meucardapio/db";
 import { createManualOrderSchema } from "@meucardapio/shared-types";
 import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
@@ -6,6 +6,7 @@ import { toOrderPaymentMethod } from "../lib/paymentMethod";
 import { newOrderToken } from "../lib/orderToken";
 import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { publishToStore } from "../realtime/hub";
+import { createHash } from "node:crypto";
 import { logAudit } from "../lib/audit";
 import { limited, tooMany } from "../lib/slidingLimit";
 import { CodedError, useDomainErrors } from "../shared/errors";
@@ -15,7 +16,16 @@ import { CodedError, useDomainErrors } from "../shared/errors";
 // Não cria cobrança no provedor: PIX aqui é "presencial", confirmado à mão (RN-B2-08).
 // Cada pedido imprime um tíquete (papel físico): limite por USUÁRIO, não só por IP.
 const MANUAL_ORDERS_PER_MINUTE = 60;
+// Impressão digital CANÔNICA do corpo (chaves em ordem): mesmo conteúdo = mesma impressão, qualquer que seja a ordem dos campos.
+const canonical = (v: unknown): string =>
+  Array.isArray(v) ? `[${v.map(canonical).join(",")}]` : v && typeof v === "object" ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`).join(",")}}` : JSON.stringify(v) ?? "null";
+const bodyHash = (v: unknown) => createHash("sha256").update(canonical(v)).digest("hex");
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{8,100}$/;
+
+function replayOrConflict(reply: FastifyReply, existing: { id: string; code: string; manualBodyHash: string | null }, fingerprint: string) {
+  if (existing.manualBodyHash === fingerprint) return reply.code(200).send({ orderId: existing.id, code: existing.code, replay: true });
+  return reply.code(409).send({ error: "Este pedido já foi lançado.", code: "IDEMPOTENCY_KEY_REUSED", details: { orderId: existing.id, code: existing.code } });
+}
 
 const manualOrderRoutes: FastifyPluginAsync = async (app) => {
   useDomainErrors(app);
@@ -28,15 +38,17 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
     const input = parsed.data;
 
     // RN-B2-10: cada abertura do formulário manda uma chave; duplo clique ou reenvio por rede lenta devolvem o MESMO pedido.
-    // CONTRATO: a chave identifica a ABERTURA do formulário, não o conteúdo; a mesma chave com corpo DIFERENTE devolve o pedido antigo (200 replay), sem comparar.
+    // CONTRATO: a chave identifica a ABERTURA do formulário. Mesma chave + MESMO corpo = 200 replay (duplo clique); mesma chave + corpo DIFERENTE = 409
+    // IDEMPOTENCY_KEY_REUSED com `details.orderId` (o atendente não pode achar que o pedido novo foi lançado quando a cozinha só recebeu o antigo).
+    const fingerprint = bodyHash(input);
     const rawKey = request.headers["idempotency-key"];
     const manualKey = typeof rawKey === "string" ? rawKey : undefined;
     if (manualKey !== undefined && !IDEMPOTENCY_KEY.test(manualKey)) {
       return reply.code(400).send({ error: "Idempotency-Key inválida.", code: "IDEMPOTENCY_KEY_INVALID" });
     }
     if (manualKey) {
-      const existing = await prisma.order.findUnique({ where: { storeId_manualKey: { storeId, manualKey } }, select: { id: true, code: true } });
-      if (existing) return reply.code(200).send({ orderId: existing.id, code: existing.code, replay: true });
+      const existing = await prisma.order.findUnique({ where: { storeId_manualKey: { storeId, manualKey } }, select: { id: true, code: true, manualBodyHash: true } });
+      if (existing) return replayOrConflict(reply, existing, fingerprint);
     }
 
     if (input.type === "DELIVERY") {
@@ -146,6 +158,7 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
             channel: input.channel ?? null,
             createdByUserId: userId,
             manualKey: manualKey ?? null,
+            manualBodyHash: manualKey ? fingerprint : null,
             customerName: (input.customerName ?? (input.type === "BALCAO" ? `Balcão #${code}` : undefined))?.normalize("NFC"),
             customerPhone: input.customerPhone,
             address: input.address,
@@ -182,8 +195,8 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
     } catch (error) {
       // Duas aberturas com a MESMA chave que chegaram juntas: a unicidade do banco decide, o perdedor recebe o pedido do vencedor.
       if (manualKey && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-        const existing = await prisma.order.findUnique({ where: { storeId_manualKey: { storeId, manualKey } }, select: { id: true, code: true } });
-        if (existing) return reply.code(200).send({ orderId: existing.id, code: existing.code, replay: true });
+        const existing = await prisma.order.findUnique({ where: { storeId_manualKey: { storeId, manualKey } }, select: { id: true, code: true, manualBodyHash: true } });
+        if (existing) return replayOrConflict(reply, existing, fingerprint);
       }
       throw error;
     }

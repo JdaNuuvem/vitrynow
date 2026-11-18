@@ -4,6 +4,7 @@ ALTER TABLE "Order" ADD COLUMN "source" "OrderSource" NOT NULL DEFAULT 'CLIENTE'
   ADD COLUMN "channel" TEXT,
   ADD COLUMN "createdByUserId" TEXT,
   ADD COLUMN "manualKey" TEXT,
+  ADD COLUMN "manualBodyHash" TEXT,
   ADD COLUMN "manualDiscountPercent" INTEGER,
   ADD COLUMN "manualDiscountReason" TEXT;
 CREATE UNIQUE INDEX "Order_storeId_manualKey_key" ON "Order"("storeId", "manualKey");
