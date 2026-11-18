@@ -130,6 +130,32 @@ export async function sendPaymentReconnectEmail(input: { to: string }) {
   if (error) console.error(`[email] falha ao enviar aviso de reconexão para ${input.to}:`, error);
 }
 
+// API-10 (RN-A-06): aviso de assinatura ao dono (7/3/1 dias antes do vencimento, entrada em Consulta e em Suspensão). Texto FIXO por tipo
+// (lib/subscriptionNotices.ts): sem plano, valor, pagamento nem dado da loja. Devolve `true` quando saiu (ou, só em dev, quando foi ao console)
+// e `false` quando NÃO saiu: o job só marca o aviso como enviado quando saiu, para tentar de novo no próximo ciclo.
+export async function sendSubscriptionNoticeEmail(input: { to: string; subject: string; lines: string[] }): Promise<boolean> {
+  const resend = client();
+  if (!resend) {
+    if (!mayLogEmailSecrets()) {
+      console.warn("[email] RESEND_API_KEY não configurado fora de desenvolvimento: aviso de assinatura NÃO enviado");
+      return false;
+    }
+    console.warn(`[email] RESEND_API_KEY não configurado — aviso de assinatura para ${input.to}: ${input.subject}`);
+    return true;
+  }
+  const { error } = await resend.emails.send({
+    from: FROM,
+    to: input.to,
+    subject: input.subject,
+    html: input.lines.map((line) => `<p>${line}</p>`).join(""),
+  });
+  if (error) {
+    console.error(`[email] falha ao enviar aviso de assinatura para ${maskEmail(input.to)}:`, error);
+    return false;
+  }
+  return true;
+}
+
 // API-25 (ADR-0015 §3D): aviso de concessão/ajuste de créditos. Vai ao OWNER da loja e, se PLATFORM_ALERT_EMAIL estiver definido, ao responsável
 // da plataforma. Texto escapado; sem dado de pagamento além da referência curta já sanitizada.
 function escapeHtml(text: string): string {

@@ -778,6 +778,7 @@ model Subscription {
   updatedAt        DateTime           @updatedAt
 
   payments SubscriptionPayment[]
+  notices  SubscriptionNotice[]
 }
 
 // "Quero ser avisado" (RN-B10-05): lojista tentou usar recurso que o plano não tem. Um registro por
@@ -1086,4 +1087,27 @@ model AiCreditLedger {
 
   @@unique([storeId, idempotencyKey])
   @@index([storeId, createdAt])
+}
+
+// API-10 (RN-A-06, ADR-0003 §2.4): aviso de assinatura JÁ enviado ao dono. A chave única (assinatura, tipo, `dueAt` = o vencimento a que o aviso se
+// refere) é o que garante "cada aviso UMA vez": reiniciar o job ou rodar 2 instâncias não repete; renovar o plano muda o `dueAt` e reabre os avisos.
+// Sem texto nem e-mail guardados (o e-mail sai do usuário na hora; o texto é fixo no código).
+enum SubscriptionNoticeKind {
+  D7
+  D3
+  D1
+  READ_ONLY
+  SUSPENDED
+}
+
+model SubscriptionNotice {
+  id             String                 @id @default(cuid())
+  subscriptionId String
+  subscription   Subscription           @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  kind           SubscriptionNoticeKind
+  dueAt          DateTime // o vencimento (fim do teste ou do período) a que este aviso se refere
+  sentAt         DateTime               @default(now())
+
+  @@unique([subscriptionId, kind, dueAt])
+  @@index([sentAt])
 }
