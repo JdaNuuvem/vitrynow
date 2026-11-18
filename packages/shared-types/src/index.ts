@@ -192,7 +192,7 @@ export type OrderPaymentMethod = z.infer<typeof orderPaymentMethodSchema>;
 // aprovado e verificado (webhook com valor/referência conferidos). Nenhum token, QR, e-mail nem id do provedor aqui.
 export const ticketPaymentStatusSchema = z.enum(["PAGO", "A_COBRAR", "ESTORNADO"]);
 export type TicketPaymentStatus = z.infer<typeof ticketPaymentStatusSchema>;
-export const TICKET_SCHEMA_VERSION = 3; // 1 = contrato anterior (sem os campos do B4); 2 = B4; 3 = `nothingToCharge` (API-66). O print-client antigo ignora o que não conhece
+export const TICKET_SCHEMA_VERSION = 4; // 4 = mesa: `tableLabel`, `round` e `requestedBy` preenchidos (API-23); 1 = contrato anterior (sem os campos do B4); 2 = B4; 3 = `nothingToCharge` (API-66). O print-client antigo ignora o que não conhece
 
 export const printableOrderSchema = z.object({
   orderId: z.string(),
@@ -211,7 +211,9 @@ export const printableOrderSchema = z.object({
   // ---- B4 (API-14) ----
   ticketSchemaVersion: z.number().int().optional(),
   paymentStatus: ticketPaymentStatusSchema.optional(),
-  tableLabel: z.string().nullable().optional(), // "Mesa 12" (API-22; null até existir mesa)
+  tableLabel: z.string().nullable().optional(), // "Mesa 12" (API-22/23); só em pedido de mesa
+  round: z.number().int().positive().nullable().optional(), // API-23: nº da rodada da mesa (1, 2, 3...) desde o último recebimento; só em pedido de mesa
+  requestedBy: z.string().nullable().optional(), // API-23: quem pediu — o nome informado ou "Aparelho N" (N = ordem do aparelho na mesa); nunca o token
   subtotalCents: z.number().int().optional(),
   discountCents: z.number().int().optional(),
   couponCode: z.string().nullable().optional(),

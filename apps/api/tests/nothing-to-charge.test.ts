@@ -60,7 +60,7 @@ describe("API-66 — nothingToCharge no tíquete", () => {
     await coupon(ctx, { code: "TUDO", discountType: "PERCENT", discountValue: 100, maxUses: 5 });
     const t = await ticketOf(ctx, await order(ctx, { couponCode: "TUDO", paymentMethod: "PIX" }));
     expect(t).toMatchObject({ ticketSchemaVersion: TICKET_SCHEMA_VERSION, totalCents: 0, subtotalCents: 4000, discountCents: 4000, paymentMethod: null, nothingToCharge: true });
-    expect(TICKET_SCHEMA_VERSION).toBe(3);
+    expect(TICKET_SCHEMA_VERSION).toBe(4);
     expect(vi.mocked(mp.createPixPayment)).not.toHaveBeenCalled();
   });
 
