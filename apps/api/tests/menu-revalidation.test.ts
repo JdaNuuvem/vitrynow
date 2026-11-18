@@ -1,6 +1,7 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { menuRevalidateJob } from "../src/jobs/menuRevalidate";
+import { JOB_LOCK_KEYS } from "../src/jobs/lockKeys";
 import { JobRunner } from "../src/jobs/runner";
 import { revalidateBackoffMs, revalidateConfig, scheduleMenuRevalidation, setRevalidateFetch } from "../src/lib/menuRevalidation";
 import { isMenuAffectingRoute } from "../src/plugins/menuRevalidation";
@@ -86,9 +87,13 @@ describe("revalidação da vitrine (API-58)", () => {
   it("mudança de preço pelo painel dispara a chamada ao web em ≤ 5 s, com o segredo no cabeçalho e o slug no corpo", async () => {
     const category = JSON.parse((await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie }, payload: { name: "Lanches" } })).body).category.id;
     const product = JSON.parse((await app.inject({ method: "POST", url: "/api/catalog/products", headers: { cookie }, payload: { categoryId: category, name: "X", priceCents: 2000 } })).body).product.id;
-    await waitFor(() => web.calls.length > 0);
+    // CORRIDA REAL (CI do #9: a linha ficava pendente mesmo esperando 20 s): em teste o JOB de 3 s NÃO roda (JOBS_ENABLED desligado), só o `kick`
+    // do gancho. Se a edição chega com o envio da CRIAÇÃO ainda em voo, o `kick` acha o job ocupado, desiste em ~1 s, e o envio da criação perde o
+    // `deleteMany` (o `requestedAt` já é o da edição): a linha re-armada fica sem quem a envie. Em produção o ciclo de 3 s a envia; aqui não.
+    // O ponto de partida correto é a criação ASSENTADA: chamada recebida E fila vazia (a linha só some depois do envio confirmado).
+    await vi.waitFor(() => expect(web.calls.length).toBeGreaterThan(0), { timeout: 8000, interval: 25 });
+    await vi.waitFor(async () => expect(await prisma.menuRevalidation.count()).toBe(0), { timeout: 8000, interval: 25 });
     web.calls.length = 0;
-    await prisma.menuRevalidation.deleteMany();
 
     const started = Date.now();
     const edit = await app.inject({ method: "POST", url: `/api/catalog/products/${product}`, headers: { cookie }, payload: { priceCents: 2200 } });
@@ -100,6 +105,25 @@ describe("revalidação da vitrine (API-58)", () => {
     expect(web.calls[0]).toEqual({ url: "http://web:3000/api/revalidate", secret: SECRET, body: { slug: "loja-rev" } });
     for (let i = 0; i < 400 && (await prisma.menuRevalidation.count()) > 0; i++) await new Promise((resolve) => setTimeout(resolve, 50)); // ate 20 s: sob carga o envio confirmado demora (flaky no CI); o limite de 5 s do produto e provado acima, por `elapsed`
     expect(await prisma.menuRevalidation.count()).toBe(0); // a linha some depois do envio confirmado
+  });
+
+  it("CORRIDA: com o lock da fila ocupado por outra execução, o gancho do painel NÃO desiste: envia assim que o lock solta (sem esperar o ciclo de 3 s)", async () => {
+    // `claimWithLock` usa pg_try_advisory_xact_lock (não espera): o `kick` recebia "ok" com 0 processados e parava, deixando a linha pendente.
+    let solta!: () => void;
+    const segura = prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(${JOB_LOCK_KEYS["menu.revalidate"]})`;
+        await new Promise<void>((resolve) => (solta = resolve));
+      },
+      { timeout: 20_000 },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const category = await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie }, payload: { name: "Bebidas" } });
+    expect(category.statusCode).toBe(201);
+    setTimeout(() => solta(), 600);
+    await vi.waitFor(() => expect(web.calls.length).toBeGreaterThan(0), { timeout: 4000, interval: 25 });
+    await vi.waitFor(async () => expect(await prisma.menuRevalidation.count()).toBe(0), { timeout: 4000, interval: 25 }); // e a linha some
+    await segura;
   });
 
   it("rotas que não mudam a vitrine, leituras e respostas de erro NÃO disparam", async () => {
