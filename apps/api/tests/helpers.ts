@@ -78,6 +78,7 @@ export function useMockedProvider(mp: PixGateway) {
   setGatewayMaker(() => ({
     createPixPayment: (input) => mp.createPixPayment(input),
     getPayment: (id) => mp.getPayment(id),
+    findByExternalReference: (ref) => mp.findByExternalReference(ref),
     cancelPayment: (id) => mp.cancelPayment(id),
     refundPayment: (id, key) => mp.refundPayment(id, key),
   }));
