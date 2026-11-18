@@ -11,6 +11,9 @@ vi.mock("../src/lib/email", () => ({
   sendCreditChangeEmail: vi.fn(async () => {}),
 }));
 
+// Cada teste faz vários hashes bcrypt (cadastro, login da equipe, reautenticação): em máquina carregada passa de 15 s.
+vi.setConfig({ testTimeout: 40_000 });
+
 // API-25: back-office da plataforma (RN-BKO-01..04, CA-BKO-01..08) e concessão manual de créditos (ADR-0015 §3D, RN-CRE-02/06/09).
 describe("back-office da plataforma", () => {
   let app: ReturnType<typeof makeApp>;
