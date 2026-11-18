@@ -1,133 +1,47 @@
-import type { FastifyPluginAsync } from "fastify";
-import { prisma } from "@meucardapio/db";
-import { isSale, saleRevenueCents } from "../lib/saleLines";
+import type { FastifyPluginAsync, FastifyReply } from "fastify";
+import { logAudit } from "../lib/audit";
+import { CSV_TABLES, buildReport, reportRows, resolveRange, toCsv, MAX_REPORT_DAYS, type CsvTable } from "../lib/reports";
 
-const STORE_TIMEZONE = "America/Sao_Paulo";
+const RANGE_MESSAGES = {
+  INVALID_DATE: "Datas inválidas. Use AAAA-MM-DD.",
+  FROM_AFTER_TO: "A data inicial não pode ser depois da final.",
+  PERIOD_TOO_LONG: `O período pode ter no máximo ${MAX_REPORT_DAYS} dias.`,
+} as const;
 
-// Relatório de vendas por período — autenticado pelo painel.
+// Relatórios do painel (B14): agregados no banco, no fuso da loja, com a definição única de venda (API-21).
 const reportRoutes: FastifyPluginAsync = async (app) => {
+  const rangeOrReply = (query: { from?: string; to?: string }, reply: FastifyReply) => {
+    const range = resolveRange(query);
+    if ("error" in range) {
+      void reply.code(400).send({ error: RANGE_MESSAGES[range.error], code: range.error });
+      return null;
+    }
+    return range;
+  };
+
   app.get("/api/reports/summary", { preHandler: app.requirePanelAuth }, async (request, reply) => {
-    const { storeId } = request.user;
-    const query = request.query as { from?: string; to?: string };
+    const range = rangeOrReply(request.query as { from?: string; to?: string }, reply);
+    if (!range) return reply;
+    return buildReport(request.user.storeId, range);
+  });
 
-    const from = query.from ? new Date(query.from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const to = query.to ? new Date(query.to) : new Date();
-    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
-      return reply.code(400).send({ error: "datas inválidas" });
+  // CSV de cada tabela e do resumo (B14.2). Só o dono baixa (dado financeiro completo; SEC-16); toda exportação fica na auditoria.
+  app.get("/api/reports/export.csv", { preHandler: [app.requirePanelAuth, app.requireOwner], config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request, reply) => {
+    const query = request.query as { from?: string; to?: string; table?: string };
+    const table = (query.table ?? "summary") as CsvTable;
+    if (!(CSV_TABLES as readonly string[]).includes(table)) {
+      return reply.code(400).send({ error: "Tabela inválida.", code: "INVALID_TABLE", tables: CSV_TABLES });
     }
-    // inclui o dia final inteiro
-    const toInclusive = new Date(to.getTime() + 24 * 60 * 60 * 1000);
-
-    const inPeriod = await prisma.order.findMany({
-      where: { storeId, awaitingPayment: false, createdAt: { gte: from, lt: toInclusive } },
-      include: { items: true, deliverer: true },
-    });
-    // API-21 (B14.1, mesma regra do caixa): VENDA = CONFIRMADO..CONCLUIDO (PENDENTE é "em aberto", CANCELADO é à parte); faturamento = total − gorjeta.
-    const orders = inPeriod.filter(isSale);
-    const canceled = inPeriod.filter((o) => o.status === "CANCELADO");
-    const open = inPeriod.filter((o) => o.status === "PENDENTE");
-
-    const orderCount = orders.length;
-    const revenueCents = orders.reduce((sum, o) => sum + saleRevenueCents(o), 0);
-    const discountCents = orders.reduce((sum, o) => sum + o.discountCents, 0);
-    const averageTicketCents = orderCount > 0 ? Math.round(revenueCents / orderCount) : 0;
-
-    const customerCount = new Set(
-      orders.map((o) => o.customerPhone ?? o.customerName).filter((value): value is string => Boolean(value)),
-    ).size;
-
-    const dayAgg = new Map<string, { date: string; orderCount: number; revenueCents: number }>();
-    for (const order of orders) {
-      const date = order.createdAt.toLocaleDateString("en-CA", { timeZone: STORE_TIMEZONE });
-      const entry = dayAgg.get(date) ?? { date, orderCount: 0, revenueCents: 0 };
-      entry.orderCount += 1;
-      entry.revenueCents += saleRevenueCents(order);
-      dayAgg.set(date, entry);
-    }
-    const byDay = [...dayAgg.values()].sort((a, b) => a.date.localeCompare(b.date));
-
-    const deliveryFeeCents = orders.reduce((sum, o) => sum + o.deliveryFeeCents, 0);
-    const tipCents = orders.reduce((sum, o) => sum + o.tipCents, 0);
-
-    const byPaymentMethod: Record<string, { count: number; revenueCents: number }> = {};
-    for (const order of orders) {
-      // Total zero (cupom cobriu tudo): atendido sem cobrança, em balde próprio (RN-CP-13); sem forma de pagamento e com total > 0 segue "não identificada".
-      const bucket = order.totalCents === 0 ? "SEM_COBRANCA" : (order.paymentMethod ?? "NAO_IDENTIFICADO");
-      byPaymentMethod[bucket] ??= { count: 0, revenueCents: 0 };
-      byPaymentMethod[bucket].count += 1;
-      byPaymentMethod[bucket].revenueCents += saleRevenueCents(order);
-    }
-
-    const byType: Record<string, { count: number; revenueCents: number }> = {};
-    for (const order of orders) {
-      byType[order.type] ??= { count: 0, revenueCents: 0 };
-      byType[order.type].count += 1;
-      byType[order.type].revenueCents += saleRevenueCents(order);
-    }
-
-    const productAgg = new Map<string, { productName: string; quantity: number; revenueCents: number }>();
-    for (const order of orders) {
-      for (const item of order.items) {
-        const key = item.productId ?? item.productName;
-        const entry = productAgg.get(key) ?? { productName: item.productName, quantity: 0, revenueCents: 0 };
-        entry.quantity += item.quantity;
-        entry.revenueCents += item.unitPriceCents * item.quantity;
-        productAgg.set(key, entry);
-      }
-    }
-    const topProducts = [...productAgg.values()].sort((a, b) => b.quantity - a.quantity).slice(0, 10);
-
-    const delivererAgg = new Map<string, { delivererName: string; orderCount: number; revenueCents: number }>();
-    for (const order of orders) {
-      if (!order.deliverer) continue;
-      const entry = delivererAgg.get(order.deliverer.id) ?? {
-        delivererName: order.deliverer.name,
-        orderCount: 0,
-        revenueCents: 0,
-      };
-      entry.orderCount += 1;
-      entry.revenueCents += order.totalCents;
-      delivererAgg.set(order.deliverer.id, entry);
-    }
-    const byDeliverer = [...delivererAgg.values()].sort((a, b) => b.orderCount - a.orderCount);
-
-    const cashSessions = await prisma.cashSession.findMany({
-      where: { storeId, openedAt: { gte: from, lt: toInclusive } },
-      include: { movements: true },
-    });
-    const cashSummary = cashSessions.reduce(
-      (acc, session) => {
-        acc.sessionCount += 1;
-        for (const movement of session.movements) {
-          if (movement.type === "SUPRIMENTO") acc.suprimentosCents += movement.amountCents;
-          else acc.sangriasCents += movement.amountCents;
-        }
-        return acc;
-      },
-      { sessionCount: 0, suprimentosCents: 0, sangriasCents: 0 },
-    );
-
-    return {
-      from: from.toISOString(),
-      to: to.toISOString(),
-      orderCount,
-      revenueCents,
-      discountCents,
-      averageTicketCents,
-      customerCount,
-      deliveryFeeCents,
-      tipCents,
-      byPaymentMethod,
-      byDay,
-      byType,
-      topProducts,
-      byDeliverer,
-      cashSummary,
-      canceledCount: canceled.length,
-      canceledCents: canceled.reduce((sum, o) => sum + o.totalCents, 0),
-      openCount: open.length,
-      openCents: open.reduce((sum, o) => sum + o.totalCents, 0),
-    };
+    const range = rangeOrReply(query, reply);
+    if (!range) return reply;
+    const { storeId, userId } = request.user;
+    const report = await buildReport(storeId, range);
+    logAudit({ storeId, userId, action: "report.export", targetType: "Store", targetId: storeId, metadata: { table, from: range.fromDate, to: range.toDate } });
+    return reply
+      .header("Content-Type", "text/csv; charset=utf-8")
+      .header("Content-Disposition", `attachment; filename="relatorio-${table}-${range.fromDate}-a-${range.toDate}.csv"`)
+      .header("Cache-Control", "no-store")
+      .send(toCsv(reportRows(report, table)));
   });
 };
 
