@@ -93,8 +93,6 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/delivery-zones/:id/delete": "blocked",
   "POST /api/delivery-zones/import": "blocked",
   "POST /api/delivery-zones/config": "blocked",
-  "POST /api/auth/verify-email/resend": "billing", // API-26: conta, tambem liberado na Suspensao
-  "POST /api/onboarding/steps/:step": "blocked", // API-26: cadastro guiado
 };
 
 /**
@@ -116,7 +114,6 @@ export const PUBLIC_ROUTE_POLICY: Record<string, PublicPolicy> = {
   // Webhook do Mercado Pago: segue processando em qualquer fase (é o que reativa e concilia o PIX).
   "POST /api/payments/webhook": "exempt",
   // Admin da plataforma por x-admin-token (some com o back-office, API-25).
-  "POST /auth/verify-email": "exempt", // API-26: confirma o e-mail pelo link (publico, token no corpo)
   "POST /api/admin/notices": "exempt",
   "POST /api/admin/notices/:id/delete": "exempt",
   "POST /stores/:slug/orders": "public-order",
