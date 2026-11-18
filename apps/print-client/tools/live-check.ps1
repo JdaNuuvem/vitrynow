@@ -12,6 +12,7 @@ param(
   [int]$Seconds = 20,
   [string]$Fault = "",
   [switch]$StartLegacy,
+  [int]$PollMs = 1500,   # polling de reserva; use 60000 para provar que o pedido chega pelo WebSocket (tempo real)
   [string]$ClientDir = "",
   [string]$RoslynDir = ""
 )
@@ -44,8 +45,8 @@ if ($LASTEXITCODE -ne 0) { Write-Error "csc falhou:`n$o"; exit 1 }
 [Reflection.Assembly]::LoadFrom($json) | Out-Null
 $a = [Reflection.Assembly]::Load([IO.File]::ReadAllBytes($dll))
 $t = $a.GetType("MeuCardapio.PrintClient.LiveCheck")
-$args2 = New-Object object[] 7
-$args2[0] = $BaseUrl; $args2[1] = $Token; $args2[2] = $OutDir; $args2[3] = $Ledger; $args2[4] = $Seconds; $args2[5] = $Fault; $args2[6] = [bool]$StartLegacy
+$args2 = New-Object object[] 8
+$args2[0] = $BaseUrl; $args2[1] = $Token; $args2[2] = $OutDir; $args2[3] = $Ledger; $args2[4] = $Seconds; $args2[5] = $Fault; $args2[6] = [bool]$StartLegacy; $args2[7] = $PollMs
 $res = $t.GetMethod("Run").Invoke($null, $args2)
 Write-Output $res
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
