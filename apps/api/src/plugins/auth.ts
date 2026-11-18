@@ -107,7 +107,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
   // Encadear depois de requirePanelAuth: `{ preHandler: [app.requirePanelAuth, app.requireOwner] }`.
   app.decorate("requireOwner", async (request: FastifyRequest, reply: FastifyReply) => {
     if (request.user.role !== "OWNER") {
-      reply.code(403).send({ error: "ação restrita ao dono da loja" });
+      return reply.code(403).send({ error: "ação restrita ao dono da loja" });
     }
   });
 
@@ -116,8 +116,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     const header = request.headers.authorization;
     const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
     if (!token) {
-      reply.code(401).send({ error: "token de dispositivo ausente" });
-      return;
+      return reply.code(401).send({ error: "token de dispositivo ausente" });
     }
     // NG-06: o banco guarda só o hash; busca por índice único do hash do que chegou.
     // O modo de impressão da loja vem na MESMA consulta (sem ida extra ao banco) para o cabeçalho abaixo.
@@ -126,8 +125,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
       include: { store: { select: { printMode: true } } },
     });
     if (!deviceToken || deviceToken.revokedAt) {
-      reply.code(401).send({ error: "token de dispositivo inválido" });
-      return;
+      return reply.code(401).send({ error: "token de dispositivo inválido" });
     }
     request.deviceStoreId = deviceToken.storeId;
     request.deviceTokenId = deviceToken.id;

@@ -119,7 +119,7 @@ export function requireFeature(feature: Feature) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const view = resolveSubscription(await getStoreSubscription(request.user.storeId));
     if (!hasFeature(view, feature)) {
-      reply.code(402).send({ error: "Este recurso não está disponível no seu plano.", code: "FEATURE_LOCKED", feature });
+      return reply.code(402).send({ error: "Este recurso não está disponível no seu plano.", code: "FEATURE_LOCKED", feature });
     }
   };
 }
