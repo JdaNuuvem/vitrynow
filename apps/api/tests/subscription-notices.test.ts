@@ -154,6 +154,67 @@ describe("job subscription.notices (integração)", () => {
     expect(send).toHaveBeenCalledTimes(2); // agora sim, uma vez
   });
 
+  it("e-mail que LANÇA (rede/provedor): a reserva é desfeita e o próximo ciclo reenvia; o job não quebra", async () => {
+    clock = base;
+    const a = await loja(2 * DAY);
+    send.mockRejectedValueOnce(new Error("ECONNRESET"));
+    const r1 = await runner().run("subscription.notices");
+    expect(r1.status).toBe("ok");
+    expect(await prisma.subscriptionNotice.count(), "a reserva NÃO pode ficar presa").toBe(0);
+    await runner().run("subscription.notices");
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(sent()[1]).toEqual({ to: a.ownerEmail, subject: NOTICE_TEXT.D3.subject });
+    expect(await prisma.subscriptionNotice.count()).toBe(1);
+    await runner().run("subscription.notices");
+    expect(send).toHaveBeenCalledTimes(2); // agora enviado: uma vez
+  });
+
+  it("2 OWNERs e o 2º envio lança: basta UM ter recebido para contar como enviado (não reenvia ao que já recebeu)", async () => {
+    clock = base;
+    const a = await loja(2 * DAY);
+    await prisma.user.create({ data: { storeId: a.storeId, email: "dono2-av@t.com", passwordHash: "x", role: "OWNER" } });
+    send.mockResolvedValueOnce(true).mockRejectedValueOnce(new Error("timeout"));
+    await runner().run("subscription.notices");
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(await prisma.subscriptionNotice.count()).toBe(1); // registrado
+    await runner().run("subscription.notices");
+    expect(send, "nenhum reenvio ao dono que já recebeu").toHaveBeenCalledTimes(2);
+  });
+
+  it("falha DEPOIS da reserva (consulta dos donos): a reserva também é desfeita e o ciclo seguinte envia", async () => {
+    clock = base;
+    await loja(2 * DAY);
+    // `db` embrulhado SÓ neste teste: a 1ª consulta de donos falha (o delegate do Prisma não aceita spy/restore com segurança)
+    let falhou = false;
+    const quebrado = new Proxy(prisma, {
+      get(target, prop, receiver) {
+        if (prop === "user") {
+          return new Proxy(target.user, {
+            get(user, method, r) {
+              if (method === "findMany" && !falhou) {
+                falhou = true;
+                return async () => {
+                  throw new Error("banco indisponível");
+                };
+              }
+              return Reflect.get(user, method, r);
+            },
+          });
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    const r = new JobRunner({ db: quebrado as typeof prisma, log: silent, now: () => clock });
+    r.register(subscriptionNoticesJob);
+    await r.run("subscription.notices");
+    expect(falhou).toBe(true);
+    expect(await prisma.subscriptionNotice.count(), "a reserva não pode ficar presa").toBe(0);
+    expect(send).not.toHaveBeenCalled();
+    await runner().run("subscription.notices");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(await prisma.subscriptionNotice.count()).toBe(1);
+  });
+
   it("2 execuções simultâneas (duas instâncias) enviam UMA vez só (a chave única decide)", async () => {
     clock = base;
     await loja(2 * DAY);
