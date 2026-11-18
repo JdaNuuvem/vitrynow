@@ -1,10 +1,12 @@
 import type { FastifyPluginAsync } from "fastify";
 import { nanoid } from "nanoid";
 import { prisma } from "@meucardapio/db";
-import { loginSchema, registerStoreSchema, forgotPasswordSchema,
+import { isReservedSlug, loginSchema, registerStoreSchema, forgotPasswordSchema,
   inspectResetTokenSchema, resetPasswordSchema } from "@meucardapio/shared-types";
 import { maskEmail, sendLoginAlertEmail, sendPasswordResetEmail } from "../lib/email";
 import { newTrialEndsAt } from "../lib/subscription";
+import { sendVerificationEmail } from "../lib/emailVerification";
+import { generateStoreCode } from "../lib/storeCode";
 import { SESSION_COOKIE, revokeSession, sessionCookieOptions, signSession } from "../lib/session";
 import { disconnectSession, disconnectUser } from "../realtime/hub";
 import { hashToken } from "../lib/tokenHash";
@@ -37,7 +39,10 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    const { storeName, slug, code, email, password } = parsed.data;
+    const { storeName, slug, email, password } = parsed.data;
+    // RN-ONB-02: endereço reservado da plataforma. RN-ONB-01: o código da loja não é pedido; o servidor gera.
+    if (isReservedSlug(slug)) return reply.code(400).send({ error: "este endereço é reservado; escolha outro", code: "SLUG_RESERVED" });
+    const code = parsed.data.code ?? (await generateStoreCode());
 
     const existing = await prisma.store.findFirst({ where: { OR: [{ slug }, { code }] } });
     if (existing) {
@@ -77,6 +82,8 @@ const authRoutes: FastifyPluginAsync = async (app) => {
 
     const user = store.users[0];
     reply.setCookie(SESSION_COOKIE, signSession(app, user), sessionCookieOptions());
+    // RN-ONB-03: o cardápio já pode ser montado sem verificar; o e-mail de confirmação sai em segundo plano (falha não derruba o cadastro).
+    void sendVerificationEmail({ id: user.id, email: user.email }).catch((error) => request.log.warn({ err: error }, "falha ao enviar o e-mail de verificação"));
     return reply.code(201).send({ store: { id: store.id, name: store.name, slug: store.slug } });
   });
 

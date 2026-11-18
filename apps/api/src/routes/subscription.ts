@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { checkoutPlanSchema } from "@meucardapio/shared-types";
+import { requireVerifiedEmail } from "../lib/emailVerification";
 import { logAudit } from "../lib/audit";
 import { createPixPayment } from "../lib/mercadopago";
 import { getStoreSubscription, resolveSubscription } from "../lib/subscription";
@@ -24,7 +25,7 @@ const subscriptionRoutes: FastifyPluginAsync = async (app) => {
 
   app.post(
     "/api/store/subscription/checkout",
-    { preHandler: [app.requirePanelAuth, app.requireOwner], config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    { preHandler: [app.requirePanelAuth, app.requireOwner, requireVerifiedEmail], config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const { storeId, userId } = request.user;
       const parsed = checkoutPlanSchema.safeParse(request.body);

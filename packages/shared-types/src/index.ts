@@ -98,7 +98,7 @@ export const registerStoreSchema = z.object({
     .min(1)
     .max(80)
     .regex(/^[a-z0-9-]+$/, "use apenas letras minúsculas, números e hífen"),
-  code: z.string().min(1).max(30),
+  code: z.string().min(1).max(30).optional(), // RN-ONB-01: não é pedido ao usuário; o servidor gera quando ausente
   email: emailField,
   password: newPasswordField,
 });
@@ -407,3 +407,20 @@ export type PrintAckInput = z.infer<typeof printAckSchema>;
 export const printModeSchema = z.enum(["LEGACY", "QUEUE"]);
 export type PrintModeValue = z.infer<typeof printModeSchema>;
 export const setPrintModeSchema = z.object({ mode: printModeSchema });
+
+// ---- Onboarding e verificação de e-mail (API-26 / ONB) ----
+// RN-ONB-02: endereços do cardápio que a plataforma usa para ela mesma (lista inicial; a final fecha com o Atlas).
+export const RESERVED_SLUGS = [
+  "admin", "api", "app", "loja", "lojas", "dashboard", "painel", "login", "logout", "cadastro", "registro", "register", "auth",
+  "www", "mail", "suporte", "ajuda", "help", "status", "health", "static", "assets", "public", "pedido", "pedidos", "mesa",
+  "cardapio", "meucardapio", "plataforma", "termos", "privacidade", "planos", "preco", "precos", "blog", "docs", "webhook", "webhooks",
+] as const;
+export const isReservedSlug = (slug: string): boolean => (RESERVED_SLUGS as readonly string[]).includes(slug.toLowerCase()) || slug.startsWith("_");
+
+export const verifyEmailSchema = z.object({ token: z.string().min(1).max(200) });
+export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>;
+
+export const ONBOARDING_STEPS = ["STORE_DATA", "HOURS", "FIRST_PRODUCT", "DELIVERY", "PAYMENTS", "PRINTER", "TEST_ORDER", "SHARE"] as const;
+export type OnboardingStepId = (typeof ONBOARDING_STEPS)[number];
+export const onboardingStepStatusSchema = z.object({ status: z.enum(["DONE", "SKIPPED", "PENDING"]) });
+export type OnboardingStepStatusInput = z.infer<typeof onboardingStepStatusSchema>;

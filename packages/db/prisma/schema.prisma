@@ -118,6 +118,8 @@ model Store {
   subscription Subscription?
   counter      StoreCounter?
   printJobs    PrintJob[]
+  onboardingSteps OnboardingStep[]
+  activationEvents ActivationEvent[]
   printMode    PrintMode @default(LEGACY) // modo de impressão decidido pelo SERVIDOR por loja (ADR-0004 §8.12)
   cashStaffWithdrawalLimitCents Int @default(0) // limite de sangria do STAFF por lançamento (RN-CX-09); 0 = toda sangria exige o dono
 }
@@ -142,6 +144,8 @@ model User {
   tokenVersion Int      @default(0)
   createdAt    DateTime @default(now())
   noticeDismissals UserNoticeDismissal[]
+  emailVerifiedAt DateTime? // API-26: e-mail confirmado (RN-ONB-03); nulo = ainda não verificado
+  emailVerificationTokens EmailVerificationToken[]
 
   @@index([storeId])
 }
@@ -629,4 +633,43 @@ model PrintJob {
   @@unique([id, storeId])
   @@index([storeId, status, availableAt, createdAt])
   @@index([orderId])
+}
+
+// API-26 (RN-ONB-03): token de verificação de e-mail. Só o hash SHA-256 vai ao banco (NG-06); uso único; um ativo por usuário.
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+enum OnboardingStepStatus {
+  DONE
+  SKIPPED
+}
+
+// API-26 (ONB.2): passo do checklist marcado pelo dono (feito ou pulado). Passo sem linha = pendente (ou concluído pelos dados da loja).
+model OnboardingStep {
+  storeId   String
+  store     Store                @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  step      String
+  status    OnboardingStepStatus
+  updatedAt DateTime             @updatedAt
+
+  @@id([storeId, step])
+}
+
+// API-26 (RN-ONB-06, CA-ONB-07): evento de ativação por loja, no máximo um de cada tipo.
+model ActivationEvent {
+  storeId    String
+  store      Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  kind       String
+  occurredAt DateTime
+
+  @@id([storeId, kind])
 }

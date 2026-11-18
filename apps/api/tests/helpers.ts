@@ -68,7 +68,7 @@ let storeSeq = 0;
 
 export async function registerStore(
   app: ReturnType<typeof makeApp>,
-  overrides: Partial<{ storeName: string; slug: string; code: string; email: string; password: string }> = {},
+  overrides: Partial<{ storeName: string; slug: string; code: string; email: string; password: string; unverified: boolean }> = {},
 ) {
   storeSeq += 1;
   const body = {
@@ -81,6 +81,8 @@ export async function registerStore(
   const response = await app.inject({ method: "POST", url: "/auth/register", payload: body });
   // Diagnóstico do flake de cadastro (QA-14): se vier 5xx ou 429, registra o corpo para achar a causa.
   if (response.statusCode >= 500 || response.statusCode === 429) console.error("[registerStore] resposta inesperada", response.statusCode, response.body.slice(0, 300));
+  // API-26: os testes partem de dono com e-mail JÁ verificado (o portão de assinatura exige); `unverified: true` testa o caminho novo.
+  if (response.statusCode === 201 && !overrides.unverified) await prisma.user.updateMany({ where: { email: body.email }, data: { emailVerifiedAt: new Date() } });
   const cookie = (response.headers["set-cookie"] as string | undefined)?.split(";")[0];
   return { response, cookie, credentials: body };
 }
