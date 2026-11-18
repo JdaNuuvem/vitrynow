@@ -1,4 +1,5 @@
 import { prisma } from "@meucardapio/db";
+import { activateSubscription } from "../src/lib/subscription";
 import { buildApp } from "../src/app";
 import { encryptSecret } from "../src/lib/paymentCrypto";
 import { setGatewayMaker } from "../src/modules/storePayments/gateway";
@@ -105,7 +106,7 @@ export async function connectPixAccount(storeId: string, seller = `vendedor-${st
 
 export async function registerStore(
   app: ReturnType<typeof makeApp>,
-  overrides: Partial<{ storeName: string; slug: string; code: string; email: string; password: string; pix: boolean; unverified: boolean }> = {},
+  overrides: Partial<{ storeName: string; slug: string; code: string; email: string; password: string; pix: boolean; unverified: boolean; plan: "BASICO" | "PRO" }> = {},
 ) {
   storeSeq += 1;
   const body = {
@@ -124,6 +125,11 @@ export async function registerStore(
   if (overrides.pix !== false && response.statusCode === 201) {
     const storeId = (JSON.parse(response.body) as { store?: { id?: string } }).store?.id;
     if (storeId) await connectPixAccount(storeId);
+  }
+  // API-08 (lote 1): a loja de teste nasce em PRO, pois `multi_user` e trancado no BASICO (402); `plan: "BASICO"` testa os limites.
+  if (overrides.plan !== "BASICO" && response.statusCode === 201) {
+    const sid = (JSON.parse(response.body) as { store?: { id?: string } }).store?.id;
+    if (sid) await activateSubscription({ subscriptionId: (await prisma.subscription.findFirstOrThrow({ where: { storeId: sid } })).id, planCode: "PRO" });
   }
   return { response, cookie, credentials: body };
 }
