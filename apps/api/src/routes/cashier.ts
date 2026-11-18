@@ -161,17 +161,16 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: "Informe o valor contado.", code: "CASH_COUNTED_REQUIRED" });
     }
 
-    const open = await prisma.cashSession.findFirst({ where: { storeId, closedAt: null }, select: { id: true } });
-    if (!open) return reply.code(404).send({ error: "não há caixa aberto", code: "CASH_REQUIRED" });
-
-    // Fechamento ATÔMICO e ÚNICO: trava a linha do caixa; quem chega depois do primeiro fechamento vê `closedAt` preenchido ⇒ 409.
+    // Fechamento ATÔMICO e ÚNICO e DETERMINÍSTICO: a decisão sai de UMA leitura travada (`FOR UPDATE`) da sessão MAIS RECENTE da loja, dentro da
+    // transação, nunca de uma leitura solta antes dela. Aberta ⇒ fecha; já fechada ⇒ 409 CASH_ALREADY_CLOSED (quem perdeu a corrida e quem clicou
+    // de novo recebem a MESMA resposta, qualquer que seja a ordem em que as requisições chegaram); a loja nunca ter tido caixa ⇒ 404 CASH_REQUIRED.
     // O retrato do resumo é calculado e gravado DENTRO da mesma transação (nenhuma movimentação entra no meio).
     const result = await prisma.$transaction(
       async (tx) => {
-        const rows = await tx.$queryRaw<{ closedAt: Date | null }[]>`SELECT "closedAt" FROM "CashSession" WHERE "id" = ${open.id} AND "storeId" = ${storeId} FOR UPDATE`;
+        const rows = await tx.$queryRaw<{ id: string; closedAt: Date | null }[]>`SELECT "id", "closedAt" FROM "CashSession" WHERE "storeId" = ${storeId} ORDER BY "openedAt" DESC, "id" DESC LIMIT 1 FOR UPDATE`;
         if (!rows[0]) throw new CodedError(404, "CASH_REQUIRED", "não há caixa aberto");
         if (rows[0].closedAt) throw new CodedError(409, "CASH_ALREADY_CLOSED", "Este caixa já foi fechado.");
-        const session = await tx.cashSession.findUniqueOrThrow({ where: { id: open.id }, include: { movements: true } });
+        const session = await tx.cashSession.findUniqueOrThrow({ where: { id: rows[0].id }, include: { movements: true } });
         const closedAt = new Date();
         const summary = await summarizeSession(tx, storeId, { ...session, closedAt });
         const differenceCents = counted - summary.expectedCents;
