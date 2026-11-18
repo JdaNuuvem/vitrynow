@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "@meucardapio/db";
-import { anonymizeCustomerSchema, anonymizeTargetSchema } from "@meucardapio/shared-types";
+import { anonymizeTargetSchema, anonymizeCustomerSchema, exportCustomerSchema } from "@meucardapio/shared-types";
 import { ServerBusyError, sendServerBusy, useDomainErrors } from "../../shared/errors";
 import { DUMMY_HASH, bcryptPasswordHasher as passwordHasher } from "../../shared/passwordHasher";
 import { clientKey } from "../../lib/clientKey";
@@ -20,14 +20,21 @@ const actorOf = (request: FastifyRequest): PrivacyActor => ({ storeId: request.u
  * Não bloqueamos o direito do titular por o dono não ter MFA. A senha errada conta numa trava no mesmo molde da do login (por conta e
  * IP, bloqueio progressivo, em memória por instância; mover ao banco antes de 2+ instâncias) e NUNCA é registrada.
  */
+/**
+ * Chave geral das ações de privacidade que mexem em dado real (ADR-0014): DESLIGADA por padrão. Só liga em DEV/teste até o parecer
+ * jurídico (LGPD P1-P17). Lida a cada requisição. Desligada: 404 FEATURE_DISABLED (a rota "não existe").
+ */
+export const privacyActionsEnabled = () => process.env.PRIVACY_ACTIONS_ENABLED === "true";
+const featureOff = (reply: FastifyReply) => reply.code(404).send({ error: "Recurso indisponível.", code: "FEATURE_DISABLED" });
+
 const reauthThrottle = new LoginThrottle();
 // E um teto por CONTA, de qualquer IP: a ameaça é sessão roubada, e quem a tem troca de IP (10 tentativas por 15 min).
 const reauthAccountCap = new AccountAttemptCap(10, 15 * 60 * 1000);
 
-async function reauthorize(request: FastifyRequest, reply: FastifyReply, currentPassword: string | undefined): Promise<boolean> {
+async function reauthorize(request: FastifyRequest, reply: FastifyReply, currentPassword: string | undefined, purpose: "anonymize_customer" | "export_customer" = "anonymize_customer"): Promise<boolean> {
   if (mfaEnforced()) {
-    if (await mfaProofAccepted(request, "anonymize_customer")) return true;
-    reply.code(403).send({ error: "Confirmação de segurança necessária.", code: "MFA_REQUIRED", purpose: "anonymize_customer" });
+    if (await mfaProofAccepted(request, purpose)) return true;
+    reply.code(403).send({ error: "Confirmação de segurança necessária.", code: "MFA_REQUIRED", purpose });
     return false;
   }
   // Senha AUSENTE não gasta tentativa (RN-PV-28): só a senha ERRADA conta. A tela nem envia sem o campo preenchido.
@@ -76,6 +83,9 @@ async function reauthorize(request: FastifyRequest, reply: FastifyReply, current
 // (routePolicy.ts, API-09) deve classificar estas rotas como liberadas na Consulta e bloqueadas na Suspensão.
 const privacyRoutes: FastifyPluginAsync = async (app) => {
   useDomainErrors(app);
+  app.addHook("preHandler", async (_request, reply) => {
+    if (!privacyActionsEnabled()) return featureOff(reply);
+  });
   const limit = { rateLimit: { max: 10, timeWindow: "1 minute" } };
 
   // Prévia: quantos pedidos, período e o que bloqueia. Não devolve nome, telefone nem endereço.
@@ -84,6 +94,16 @@ const privacyRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.code(400).send({ error: "Informe o telefone OU o código do pedido.", code: "VALIDATION_ERROR" });
     // `reauth`: qual confirmação a execução vai pedir (a tela mostra só a certa): código MFA quando a MFA está ativa, senão a senha atual.
     return { ...(await privacyService.preview(actorOf(request), parsed.data)), reauth: mfaEnforced() ? ("MFA" as const) : ("PASSWORD" as const) };
+  });
+
+  // Exportação dos dados de um titular (JSON). OWNER + reautenticação (MFA ou senha) + auditoria sem o conteúdo. Não é descartável: sem cache.
+  app.post("/api/privacy/export", { preHandler: [app.requirePanelAuth, app.requireOwner], config: limit }, async (request, reply) => {
+    const parsed = exportCustomerSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Informe o telefone OU o código do pedido.", code: "VALIDATION_ERROR" });
+    const { currentPassword, ...target } = parsed.data;
+    if (!(await reauthorize(request, reply, currentPassword, "export_customer"))) return reply;
+    reply.header("Cache-Control", "no-store");
+    return privacyService.exportData(actorOf(request), target);
   });
 
   // Execução: irreversível. OWNER, reautenticação (MFA ou senha), motivo por código e a confirmação repete o efeito (`expectedOrders`).

@@ -138,6 +138,41 @@ export class PrivacyService {
     }, ORDER_TX_OPTIONS);
   }
 
+  /**
+   * Exportação dos dados de UM titular (LGPD art. 18, API-52b): JSON com o que a loja guarda dele nos pedidos ainda NÃO anonimizados.
+   * Só OWNER; a rota exige reautenticação. Grava auditoria na MESMA transação (falha fechada: sem rastro, nada sai) e o rastro NÃO leva
+   * o conteúdo exportado, só quantidade e período.
+   */
+  async exportData(actor: PrivacyActor, target: AnonymizeTarget) {
+    this.assertOwner(actor);
+    return this.db.$transaction(async (tx) => {
+      const matches = await this.find(tx as unknown as Db, actor.storeId, target, false);
+      const orders = matches.length
+        ? await tx.order.findMany({
+            where: { storeId: actor.storeId, id: { in: matches.map((m) => m.id) } },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+            select: {
+              code: true, type: true, status: true, createdAt: true, canceledAt: true,
+              customerName: true, customerPhone: true, address: true, notes: true, internalNote: true,
+              subtotalCents: true, discountCents: true, deliveryFeeCents: true, tipCents: true, totalCents: true, paymentMethod: true,
+              items: { select: { productName: true, quantity: true, unitPriceCents: true, notes: true }, orderBy: { id: "asc" } },
+              statusHistory: { select: { status: true, createdAt: true, reasonCode: true, reasonText: true, customerMessage: true }, orderBy: { seq: "asc" } },
+            },
+          })
+        : [];
+      await tx.auditLog.create({
+        data: {
+          storeId: actor.storeId, userId: actor.userId, action: "privacy.export_customer", targetType: "Store", targetId: actor.storeId,
+          metadata: {
+            orders: orders.length, by: target.phone ? "PHONE" : "ORDER_CODE",
+            from: orders[0]?.createdAt.toISOString() ?? null, to: orders[orders.length - 1]?.createdAt.toISOString() ?? null,
+          },
+        },
+      });
+      return { format: "privacy-export-v1" as const, exportedAt: this.now().toISOString(), storeId: actor.storeId, orders };
+    }, ORDER_TX_OPTIONS);
+  }
+
   private assertOwner(actor: PrivacyActor) {
     if (actor.role !== "OWNER") throw err(403, "FORBIDDEN_ROLE", "Só o dono da loja pode fazer isso.");
   }
