@@ -396,7 +396,7 @@ describe("FUNC-01/02 — cupom e total zero", () => {
     for (const to of ["CONFIRMADO", "EM_PREPARO", "PRONTO", "CONCLUIDO"]) {
       await app.inject({ method: "POST", url: `/api/orders/${id}/transition`, headers: { cookie: ctx.owner }, payload: { to } });
     }
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+    const today = new Date().toISOString().slice(0, 10); // o relatório lê from/to como dia UTC: a data do teste tem de ser a UTC, qualquer que seja a hora
     const rep = json(await app.inject({ method: "GET", url: `/api/reports/summary?from=${today}&to=${today}`, headers: { cookie: ctx.owner } }));
     const text = JSON.stringify(rep);
     expect(text).toContain("SEM_COBRANCA");
