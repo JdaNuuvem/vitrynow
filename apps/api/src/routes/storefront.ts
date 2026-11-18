@@ -13,8 +13,8 @@ import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { customerMessageFor, messageActorFor, moneyLineFor } from "../lib/cancelMessages";
 import { DomainError } from "../shared/errors";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
+import { buildMenuView } from "../lib/menuView";
 import { newOrderToken, orderTokenMatches, ORDER_TOKEN_HEADER } from "../lib/orderToken";
-import { publicCategory, publicStore } from "../lib/publicDto";
 
 const COUPON_EXHAUSTED_MESSAGE = "Esse cupom acabou.";
 class CouponExhaustedError extends Error {}
@@ -26,30 +26,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     const store = await prisma.store.findUnique({ where: { slug } });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });
 
-    const categories = await prisma.category.findMany({
-      where: { storeId: store.id },
-      orderBy: { position: "asc" },
-      include: {
-        products: {
-          // SEC-11: nunca confiar só na categoria — o produto precisa ser DESTA loja.
-          where: { active: true, storeId: store.id },
-          orderBy: { position: "asc" },
-          include: { additionals: true },
-        },
-      },
-    });
-
-    // API-17 (B11): esgotado vira o campo `soldOut` (efetivo agora); com "esconder esgotados" o produto nem aparece.
-    const now = new Date();
-    const visibleCategories = categories.map(({ products, ...category }) => ({
-      ...category,
-      products: products
-        .map(({ soldOut, soldOutUntil, ...product }) => ({ ...product, soldOut: isSoldOutNow({ soldOut, soldOutUntil }, now) }))
-        .filter((product) => !(store.hideSoldOutProducts && product.soldOut)),
-    }));
-
-    // SEC-18: resposta so pela lista de permissao (lib/publicDto.ts); `soldOut` ja e o valor EFETIVO calculado acima (API-17).
-    return { store: publicStore(store), categories: visibleCategories.map(publicCategory) };
+    return buildMenuView(store);
   });
 
   app.post(
@@ -59,6 +36,9 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     const { slug } = request.params as { slug: string };
     const store = await prisma.store.findUnique({ where: { slug } });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });
+    if (store.platformSuspendedAt) {
+      return reply.code(409).send({ error: "A loja não está aceitando pedidos no momento.", code: "STORE_SUSPENDED" });
+    }
     if (!store.acceptingOrders) {
       return reply.code(409).send({ error: "A loja não está aceitando pedidos no momento.", code: "STORE_CLOSED" });
     }

@@ -1,4 +1,4 @@
--- Conferência da 20261117130000_api56_categoria_obrigatoria sobre os dados de pre-20261117130000_api56_categoria_obrigatoria.sql.
+-- Conferência da 20261117340000_api56_categoria_obrigatoria sobre os dados de pre-20261117340000_api56_categoria_obrigatoria.sql.
 -- A categoria "Sem categoria" é procurada POR NOME (não pelo id), para valer para qualquer implementação da migração.
 CREATE TEMP TABLE _r (name text, ok boolean, det text);
 CREATE TEMP VIEW _sc AS SELECT "id", "storeId", "position", "createdAt" FROM "Category" WHERE "name" = 'Sem categoria' AND "storeId" LIKE 'ct\_%';

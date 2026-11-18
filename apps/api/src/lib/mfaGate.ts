@@ -7,7 +7,7 @@ import { mfaEnforced, spendProof } from "./mfa";
 export function requireMfa(purpose: MfaPurpose) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     if (!(await mfaProofAccepted(request, purpose))) {
-      reply.code(403).send({ error: "Confirmação de segurança necessária.", code: "MFA_REQUIRED", purpose });
+      return reply.code(403).send({ error: "Confirmação de segurança necessária.", code: "MFA_REQUIRED", purpose });
     }
   };
 }

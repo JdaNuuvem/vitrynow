@@ -20,7 +20,7 @@ export const publicStore = (s: Store) => ({
   minOrderCents: s.minOrderCents,
   deliveryEnabled: s.deliveryEnabled,
   pickupEnabled: s.pickupEnabled,
-  acceptingOrders: s.acceptingOrders,
+  acceptingOrders: s.acceptingOrders && !s.platformSuspendedAt, // API-25: loja suspensa pela plataforma nao recebe pedido (cardapio publico)
   deliveryFeeCents: s.deliveryFeeCents,
   hideSoldOutProducts: s.hideSoldOutProducts, // API-17
 });

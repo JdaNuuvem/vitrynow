@@ -10,6 +10,7 @@ import {
   type PublicPolicy,
 } from "../lib/routePolicy";
 import { getEntitlements, getRequestEntitlements } from "../lib/subscription";
+import { storeHoursService } from "../modules/storeHours/storeHours.module";
 
 // Portão central da assinatura (ADR-0003 §2.3, B17, CA-B17-08): impõe Consulta e Suspensão a TODA rota
 // pela tabela de `lib/routePolicy.ts`, sem `if` espalhado. Funciona no `onRoute`: cada rota com
@@ -90,14 +91,20 @@ const publicOrderGate = async (request: FastifyRequest, reply: FastifyReply) => 
   const store = await prisma.store.findUnique({ where: { slug }, select: { id: true } });
   if (!store) return undefined; // a rota responde 404
   const { access } = await getEntitlements(store.id);
+  // RN-B5-01: a assinatura (Consulta/Suspensão) vence todos os outros motivos.
   if (!access.publicOrders) return reply.code(409).send({ error: INACTIVE_MESSAGE, code: "SUBSCRIPTION_INACTIVE" });
+  const hours = await storeHoursService.publicStatus(slug);
+  if (hours && hours.status.status !== "ABERTO") {
+    const { reason, nextOpenAt, message } = hours.status;
+    return reply.code(409).send({ error: message, code: "STORE_CLOSED", details: { reason, nextOpenAt } });
+  }
   return undefined;
 };
 
 // Cardápio: Suspensão ⇒ 503 neutro sem dados da loja; Consulta ⇒ `acceptingOrders:false`. A resposta
 // ganha `store.accepting` (a loja recebe pedido AGORA = interruptor da loja E assinatura em dia): a vitrine
 // usa só isso e nunca fica sabendo de plano nem de cobrança (RN-A-02).
-const menuAccess = new WeakMap<FastifyRequest, boolean>();
+const menuAccess = new WeakMap<FastifyRequest, { publicOrders: boolean; hours: Awaited<ReturnType<typeof storeHoursService.publicStatus>> }>();
 const publicMenuGate = async (request: FastifyRequest, reply: FastifyReply) => {
   const { slug } = request.params as { slug?: string };
   if (!slug) return undefined;
@@ -107,16 +114,19 @@ const publicMenuGate = async (request: FastifyRequest, reply: FastifyReply) => {
   if (access.storefront === "unavailable") {
     return reply.code(503).send({ error: "Loja indisponível no momento.", code: "STORE_UNAVAILABLE" });
   }
-  menuAccess.set(request, access.publicOrders);
+  menuAccess.set(request, { publicOrders: access.publicOrders, hours: await storeHoursService.publicStatus(slug) });
   return undefined;
 };
 const publicMenuSerializer = async (request: FastifyRequest, _reply: FastifyReply, payload: unknown) => {
-  const publicOrders = menuAccess.get(request);
-  if (publicOrders !== undefined && payload && typeof payload === "object") {
+  const state = menuAccess.get(request);
+  if (state && payload && typeof payload === "object") {
     const body = payload as { store?: { acceptingOrders?: boolean } & Record<string, unknown> };
     if (body.store) {
-      const accepting = publicOrders && body.store.acceptingOrders !== false;
-      return { ...body, store: { ...body.store, acceptingOrders: accepting, accepting } };
+      const hours = state.hours?.status;
+      // `hours` (RN-B5-04): status, motivo, próxima abertura e mensagem pronta; nada de assinatura.
+      const switchedOn = state.publicOrders && body.store.acceptingOrders !== false;
+      const accepting = switchedOn && (hours ? hours.status === "ABERTO" : true);
+      return { ...body, store: { ...body.store, acceptingOrders: switchedOn, accepting, hours: hours ?? null } };
     }
   }
   return payload;
