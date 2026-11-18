@@ -144,6 +144,14 @@ for i in $(seq 1 14); do
 done
 if [ "$got429" = 1 ]; then check ok "14 logins, cada um com X-Forwarded-For diferente, bateram no limite (429): cabeçalho forjado não burla o rate limit"
 else check fail "nenhum 429 em 14 logins com XFF forjado: o limite pode ser burlado (B04)"; fi
+# INF-08/NG-12b: os 14 logins falhos do MESMO IP (o X-Forwarded-For forjado não conta) passam de 10 em 5 min: a API tem de EMITIR o security_alert, e o saude.sh de REPORTÁ-LO
+sleep 2; sa="$("${DC[@]}" logs --no-color api 2>&1 | grep '"msg":"security_alert"' | grep -o '"securityAlert":"[A-Z_]*"' | cut -d'"' -f4 | sort -u | tr '
+' ' ')"
+[[ "$sa" == *LOGIN_FAILURES_PER_IP* ]] && check ok "NG-12b: a API emitiu security_alert LOGIN_FAILURES_PER_IP depois de 14 logins falhos do mesmo IP ($sa)" || check fail "NG-12b: nenhum security_alert LOGIN_FAILURES_PER_IP no log da API (regras vistas: '$sa')"
+sd="$(cd "$ROOT/infra" && ENV_FILE=.smoke.env COMPOSE_PROJECT_NAME="$PROJ" COMPOSE_PATH_SEPARATOR="|" COMPOSE_FILE="docker-compose.yml|docker-compose.smoke.yml" bash ./saude.sh --minutos 30 2>&1)"; src=$?
+[[ "$sd" == *"[ALERTA]"*"LOGIN_FAILURES_PER_IP"* ]] && check ok "INF-08: o saude.sh (na stack real) reporta o security_alert com o nome da regra" || check fail "INF-08: o saude.sh não reportou LOGIN_FAILURES_PER_IP: $(echo "$sd" | tail -4 | tr '
+' '|')"
+[[ "$sd" != *"$(printf '%s' "127.0.0.1")"* ]] && check ok "INF-08: a saída do saude.sh não traz IP" || check fail "INF-08: o saude.sh imprimiu um IP"
 
 echo "== 6c Postgres em UTC (colunas TIMESTAMP sem fuso; API-12 usa AT TIME ZONE 'UTC')"
 tz="$("${DC[@]}" exec -T postgres psql -U meucardapio -d meucardapio -At -c "show timezone" | tr -d '\r')"
