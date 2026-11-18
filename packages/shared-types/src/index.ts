@@ -334,11 +334,7 @@ export const createProductSchema = z.object({
   categoryId: z.string().min(1), // obrigatório (RN-CT-07, API-56): produto sem categoria nunca aparece na vitrine
   name: textField({ max: 80, min: 1 }), // API-49: sanitiza e limita (o 150 era o limite antigo, anterior a API-49)
   description: textField({ max: 300, multiline: true }).optional(),
-  imageUrl: z.string().url().max(500).optional().or(z.literal("")),
-  categoryId: z.string().min(1).optional(),
-  name: z.string().min(1).max(150),
-  description: z.string().max(1000).optional(),
-  imageUrl: httpsUrl.optional().or(z.literal("")),
+  imageUrl: httpsUrl.optional().or(z.literal("")), // SEC-14: so https
   priceCents: z.number().int().nonnegative().max(100_000_000),
   active: z.boolean().optional(),
   // `featured` não é aceito: a coluna existe, mas nenhuma tela a usa (RN-CT-14).
@@ -462,9 +458,6 @@ export type UpdateCouponInput = z.infer<typeof updateCouponSchema>;
 
 export const updateStoreSettingsSchema = z.object({
   name: textField({ max: 150, min: 1 }).optional(),
-  logoUrl: z.string().url().max(500).optional().or(z.literal("")),
-  coverImageUrl: z.string().url().max(500).optional().or(z.literal("")),
-  name: z.string().min(1).max(150).optional(),
   logoUrl: httpsUrl.optional().or(z.literal("")),
   coverImageUrl: httpsUrl.optional().or(z.literal("")),
   primaryColor: z
@@ -472,10 +465,8 @@ export const updateStoreSettingsSchema = z.object({
     .regex(/^#[0-9a-fA-F]{6}$/, "use um hex de cor, ex. #16a34a")
     .optional()
     .or(z.literal("")),
-  customDomain: z.string().max(200).optional().or(z.literal("")),
-  address: textField({ max: 300, multiline: true }).optional(),
-  customDomain: customDomainSchema.optional().or(z.literal("")),
-  address: z.string().max(300).optional().or(z.literal("")),
+  customDomain: customDomainSchema.optional().or(z.literal("")), // SEC-14
+  address: textField({ max: 300, multiline: true }).optional(), // API-49
   whatsapp: z
     .string()
     .regex(/^[0-9]{10,15}$/, "use só números com DDI, ex. 5521999999999")
@@ -566,10 +557,7 @@ export type CheckoutPlanInput = z.infer<typeof checkoutPlanSchema>;
 export const createNoticeSchema = z.object({
   title: textField({ max: 150, min: 1 }),
   body: textField({ max: 2000, min: 1, multiline: true }),
-  imageUrl: z.string().url().max(500).optional(),
-  title: z.string().trim().min(1).max(150),
-  body: z.string().trim().min(1).max(2000),
-  imageUrl: httpsUrl.optional(),
+  imageUrl: httpsUrl.optional(), // SEC-14: so https
   expiresAt: z.string().datetime().optional(),
 });
 export type CreateNoticeInput = z.infer<typeof createNoticeSchema>;

@@ -36,7 +36,6 @@ import platformRoutes from "./routes/platform";
 import mfaRoutes from "./routes/mfa";
 import deliveryZoneRoutes from "./routes/deliveryZones";
 import onboardingRoutes from "./routes/onboarding";
-import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
 import { clientKey } from "./lib/clientKey";
 import { isPrismaError, loggerOptions, redactLogUrl } from "./lib/logging";
 import { ORDER_TOKEN_HEADER } from "./lib/orderToken";
@@ -53,7 +52,6 @@ import optionGroupRoutes from "./modules/optionGroups/optionGroups.module";
 import menuRevalidationPlugin from "./plugins/menuRevalidation";
 
 export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = {}) {
-export function buildApp() {
   const serviceSecrets = internalServiceSecrets(); // SEC-24: em produção, sem segredo de serviço válido a API nem sobe
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
   // e o rate limit deixa de contar o IP do proxy. Vazio = ignora X-Forwarded-For (não forjável).
