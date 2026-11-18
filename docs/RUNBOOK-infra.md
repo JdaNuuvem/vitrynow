@@ -123,3 +123,8 @@ Aprovada para DEV e merge; estas 4 valem **antes do primeiro cliente real**. Mex
 
 ## 14. Ainda NÃO documentado (sem prova)
 Suspensão/reativação de loja (depende de API-09), restauração em servidor de produção, observabilidade/alertas (INF-08), `deploy.sh` com backup obrigatório antes de migrar (rascunho em `hopper/inf11/deploy.sh.rascunho`, nunca executado).
+
+## 15. Atualizar a imagem base do Node (INF-26; Nightingale: base fixa por digest)
+As imagens da API e do web partem de `node:24-alpine@sha256:116b800c…` (Node 24.22.3, Alpine), nos DOIS estágios de cada Dockerfile. O digest é do índice multi-arquitetura. Sem o digest, a tag `node:24-alpine` anda sozinha: o binário do `bcrypt` compilado (INF-24), os cabeçalhos do Node e o OpenSSL mudariam sem revisão (mesma lógica do pin do pnpm, INF-22).
+**Regra:** a base só muda DE PROPÓSITO, num PR próprio que (1) troca o digest nos 4 `FROM` (api e web, build e final), (2) roda `scripts/smoke-stack.sh` completo (confere `bcrypt` compilado, sem compilador na imagem final, login, SSR), (3) cita no PR a versão do Node e o motivo (correção de segurança do Node/Alpine, ou versão nova combinada). Para ler o digest atual: `docker buildx imagetools inspect node:24-alpine` (linha `Digest:`). Fazer isso ao menos a cada correção de segurança do Node; não esperar o CI quebrar.
+**Limites:** o digest fixa a base, mas `apk add` (python3/make/g++ só no estágio de build) continua sem versão fixa; o estágio é descartado, porém o binário compilado depende deles. O `COPY --from=build /repo` do estágio final ainda leva o repositório inteiro (otimização à parte, INF baixo).
