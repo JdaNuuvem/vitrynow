@@ -39,6 +39,7 @@ const toRow = (group: GroupWithOptions, position?: number): GroupRow => ({
   maxSelect: group.maxSelect,
   maxPerOption: group.maxPerOption,
   priceMode: group.priceMode,
+  source: group.source,
   position,
   options: [...group.options].sort((a, b) => a.position - b.position).map((o) => ({ id: o.id, name: o.name, priceCents: o.priceCents, active: o.active, position: o.position })),
 });
