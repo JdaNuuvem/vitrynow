@@ -80,3 +80,42 @@ describe("SEC-16 - /api/reports/summary com limites", { timeout: 60_000 }, () =>
     expect((await app.inject({ method: "GET", url: "/api/reports/summary" })).statusCode).toBe(401);
   });
 });
+
+describe("SEC-16 / RN-R-06 - STAFF so ve contagens no resumo", { timeout: 60_000 }, () => {
+  let app: ReturnType<typeof makeApp>;
+  beforeEach(async () => {
+    app = makeApp();
+    await app.ready();
+  });
+  afterEach(async () => {
+    await app.close();
+    await resetDb();
+  });
+  afterAll(async () => {
+    await prisma.$disconnect();
+  });
+  const json = (r: { body: string }) => JSON.parse(r.body);
+
+  it("OWNER ve o dinheiro; STAFF recebe os mesmos totais de contagem SEM nenhum campo em reais (ausentes, nao zerados)", async () => {
+    const { cookie, response } = await registerStore(app);
+    const store = json(response).store as { slug: string };
+    const cat = json(await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie: cookie! }, payload: { name: "C" } })).category.id;
+    const productId = json(await app.inject({ method: "POST", url: "/api/catalog/products", headers: { cookie: cookie! }, payload: { categoryId: cat, name: "Pizza", priceCents: 3000 } })).product.id as string;
+    const email = `s-${Math.random().toString(36).slice(2, 8)}@t.com`;
+    await app.inject({ method: "POST", url: "/api/users", headers: { cookie: cookie! }, payload: { email, password: "provisoria-12" } });
+    const staff = ((await app.inject({ method: "POST", url: "/auth/login", payload: { email, password: "provisoria-12" } })).headers["set-cookie"] as string).split(";")[0];
+    const created = await app.inject({ method: "POST", url: `/stores/${store.slug}/orders`, payload: { type: "BALCAO", items: [{ productId, quantity: 2 }], paymentMethod: "DINHEIRO" } });
+    await app.inject({ method: "POST", url: `/api/orders/${json(created).orderId}/transition`, headers: { cookie: cookie! }, payload: { to: "CONFIRMADO" } });
+
+    const dono = json(await app.inject({ method: "GET", url: "/api/reports/summary", headers: { cookie: cookie! } }));
+    expect(dono.revenueCents).toBe(6000);
+    const sr = await app.inject({ method: "GET", url: "/api/reports/summary", headers: { cookie: staff } });
+    expect(sr.statusCode).toBe(200);
+    const st = json(sr);
+    expect([st.orderCount, st.topProducts[0].quantity, st.topProducts[0].productName]).toEqual([1, 2, "Pizza"]);
+    for (const k of ["revenueCents", "discountCents", "averageTicketCents", "deliveryFeeCents", "tipCents", "cashSummary", "canceledCents", "openCents", "ruleChangedAt"]) {
+      expect(Object.keys(st), k).not.toContain(k);
+    }
+    expect(sr.body).not.toMatch(/Cents"/); // nenhum valor em reais em lugar nenhum da resposta do STAFF
+  });
+});

@@ -13,6 +13,29 @@ export const REPORT_MAX_ORDERS = 20_000;
 export const reportLimits = { maxOrders: REPORT_MAX_ORDERS };
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+type Counted = { count: number; revenueCents: number };
+/** Visão do STAFF: contagens operacionais e ranking por QUANTIDADE; nenhum valor em reais (RN-R-06). */
+export function staffReportView(r: {
+  from: string; to: string; orderCount: number; customerCount: number; canceledCount: number; openCount: number;
+  byType: Record<string, Counted>; byPaymentMethod: Record<string, Counted>;
+  byDay: { date: string; orderCount: number }[]; topProducts: { productName: string; quantity: number }[]; byDeliverer: { delivererName: string; orderCount: number }[];
+}) {
+  const counts = (m: Record<string, Counted>) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, { count: v.count }]));
+  return {
+    from: r.from,
+    to: r.to,
+    orderCount: r.orderCount,
+    customerCount: r.customerCount,
+    canceledCount: r.canceledCount,
+    openCount: r.openCount,
+    byType: counts(r.byType),
+    byPaymentMethod: counts(r.byPaymentMethod),
+    byDay: r.byDay.map((d) => ({ date: d.date, orderCount: d.orderCount })),
+    topProducts: r.topProducts.map((p) => ({ productName: p.productName, quantity: p.quantity })),
+    byDeliverer: r.byDeliverer.map((d) => ({ delivererName: d.delivererName, orderCount: d.orderCount })),
+  };
+}
+
 // Relatório de vendas por período — autenticado pelo painel.
 const reportRoutes: FastifyPluginAsync = async (app) => {
   app.get("/api/reports/summary", { preHandler: app.requirePanelAuth }, async (request, reply) => {
@@ -131,7 +154,7 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
       { sessionCount: 0, suprimentosCents: 0, sangriasCents: 0 },
     );
 
-    return {
+    const full = {
       from: from.toISOString(),
       to: to.toISOString(),
       orderCount,
@@ -153,6 +176,8 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
       openCount: open.length,
       openCents: open.reduce((sum, o) => sum + o.totalCents, 0),
     };
+    // RN-R-06 / CA-R-15: dinheiro é do OWNER. O STAFF recebe só CONTAGENS (campos em reais AUSENTES, não zerados).
+    return request.user.role === "OWNER" ? full : staffReportView(full);
   });
 };
 
