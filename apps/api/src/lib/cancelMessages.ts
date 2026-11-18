@@ -20,6 +20,7 @@ const STORE_MESSAGES: Record<string, string> = {
   DUPLICADO_OU_ERRO: "Pedido cancelado pela loja.", // o motivo real fica só no painel
   OUTRO: "Pedido cancelado pela loja.", // a nota do dono é interna
   AGENDAMENTO_NAO_ATENDIDO: "A loja não conseguiu atender no horário agendado.",
+  ESTORNO_MANUAL: "Pedido cancelado pela loja.", // API-65: a linha de dinheiro diz que foi estornado
 };
 
 const SYSTEM_MESSAGES: Record<string, string> = {

@@ -109,6 +109,7 @@ export function toPanelOrder(
       amountCents: order.payment.amountCents,
       expiresAt: order.payment.expiresAt,
       refundPending: order.payment.status === "ESTORNO_PENDENTE",
+      refundManual: !!order.payment.refundManualAt, // "Estornado direto no app do Mercado Pago" (RN-B1-08)
       reconcileRequired: !!order.payment.reconcileNote,
     },
     allowedTransitions: extras.allowedTransitions,

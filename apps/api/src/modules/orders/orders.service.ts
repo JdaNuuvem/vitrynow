@@ -37,6 +37,8 @@ export type PanelActor = { storeId: string; userId: string; role: Role };
 // Sem campo editável ao cliente (GRW-15): o texto que o cliente vê é derivado de (código, ator) em lib/cancelMessages.
 export type CancelReason = { code: string; text?: string };
 export type RefundOutcome = "NONE" | "DONE" | "PENDING";
+export const MANUAL_REFUND_CODES = ["DEVOLVIDO_NO_APP_MP", "CONTA_ANTIGA", "OUTRO"] as const;
+export type ManualRefundCode = (typeof MANUAL_REFUND_CODES)[number];
 
 // Quem origina o cancelamento (persistido em Payment.refundContext para concluir depois do estorno).
 type CancelOrigin = {
@@ -662,6 +664,43 @@ export class OrderService {
     if (order.payment?.status !== "ESTORNO_PENDENTE") throw err(409, "NOT_REFUND_PENDING", "Este pedido não tem estorno pendente.");
     const refund = await this.attemptRefund(order.payment.id);
     return { order: await this.get(actor, orderId), refund };
+  }
+
+  // API-65 (RN-B1-08/16): "Registrar estorno feito no Mercado Pago". O dono JÁ devolveu pelo app do MP: o pagamento vira REEMBOLSADO
+  // (marcado como manual) e o pedido é cancelado. O provedor NÃO é chamado. Só OWNER (+MFA na rota), motivo por código, auditoria na mesma
+  // transação. Ordem de locks: loja -> pedido -> pagamento. Idempotente: repetir devolve 200 sem novo registro.
+  async registerManualRefund(actor: PanelActor, orderId: string, code: ManualRefundCode) {
+    if (actor.role !== "OWNER") throw err(403, "FORBIDDEN_ROLE", "Só o dono da loja pode registrar o estorno.");
+    const first = await this.load(actor.storeId, orderId);
+    const origin: CancelOrigin = { source: "PANEL", userId: actor.userId, actor: "OWNER", reason: { code: "ESTORNO_MANUAL" } };
+    const sink = { noticeQueued: false };
+    const done = await this.runTx(async (tx) => {
+      await lockPrintMode(tx, actor.storeId);
+      await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId} AND "storeId" = ${actor.storeId} FOR UPDATE`;
+      const payment = await tx.payment.findUnique({ where: { orderId } });
+      if (payment?.refundManualAt) return null; // já registrado: inofensivo
+      if (!payment || !["ESTORNO_PENDENTE", "APROVADO"].includes(payment.status)) {
+        throw err(409, "NOT_REFUND_PENDING", "Este pedido não tem estorno a registrar.");
+      }
+      const flipped = await tx.payment.updateMany({
+        where: { id: payment.id, status: { in: ["ESTORNO_PENDENTE", "APROVADO"] }, refundManualAt: null },
+        data: { status: "REEMBOLSADO", refundManualAt: this.now(), refundManualCode: code, refundLastError: null },
+      });
+      if (flipped.count !== 1) throw STATE_CHANGED();
+      const cancelled = await this.applyCancel(tx, first, origin, { expected: "ANY_ACTIVE", sink });
+      if (!cancelled) {
+        const current = await tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { status: true } });
+        if (current.status !== "CANCELADO") throw STATE_CHANGED(); // pedido já concluído: não mexe (conciliação é outro fluxo)
+      }
+      await tx.order.update({ where: { id: orderId }, data: { refundLockedAt: null } });
+      await tx.auditLog.create({
+        data: { storeId: actor.storeId, userId: actor.userId, action: "order.refund_manual", targetType: "Order", targetId: orderId, metadata: { code, amountCents: payment.amountCents } },
+      });
+      return cancelled;
+    });
+    if (done) await this.afterCancelCommitted(first, origin, sink.noticeQueued);
+    if (done !== null) this.publish(actor.storeId, { type: "payment.refund_done", orderId });
+    return { order: await this.get(actor, orderId) };
   }
 
   private async load(storeId: string, orderId: string): Promise<OrderWithPayment> {
