@@ -150,6 +150,26 @@ export const wsServerMessageSchema = z.discriminatedUnion("type", [
 ]);
 export type WsServerMessage = z.infer<typeof wsServerMessageSchema>;
 
+// API-47 / ADR-0009 §2: CADA tipo declara a audiência. `device` (print-client) recebe SÓ `print.available` e `ping`; o resto é do painel.
+// Record completo: tipo novo sem audiência não compila (e o teste de contrato confere o runtime).
+export type WsAudience = "panel" | "device" | "both";
+export const WS_AUDIENCE: Record<WsServerMessage["type"], WsAudience> = {
+  "order.created": "panel",
+  "order.updated": "panel",
+  "order.cancel_notice": "panel",
+  "payment.refund_pending": "panel",
+  "payment.refund_done": "panel",
+  "payment.reconcile_needed": "panel",
+  "print.available": "both",
+  "print.job_failed": "panel",
+  "print.claimed": "panel",
+  "print.printed": "panel",
+  "print.stale": "panel",
+  "cashier.difference_over_tolerance": "panel",
+  "device.alert": "panel",
+  ping: "both",
+};
+
 // PC-24: alertas que o CLIENTE de impressão pode mandar (lista FECHADA). `QUEUE_WITHOUT_PRINTER` é só do servidor: o cliente nunca o envia.
 export const DEVICE_ALERT_CLIENT_CODES = [
   "NOTHING_TO_CHARGE_CONFLICT",
