@@ -1,40 +1,87 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
+import { prisma } from "@meucardapio/db";
 import { logAudit } from "../lib/audit";
-import { CSV_TABLES, buildReport, reportRows, resolveRange, toCsv, MAX_REPORT_DAYS, type CsvTable } from "../lib/reports";
+import { CSV_TABLES, MAX_REPORT_DAYS, buildReport, reportRows, resolveRange, toCsv, type CsvTable } from "../lib/reports";
+import { REPORT_RULE_CHANGED_AT } from "../lib/saleLines";
 
-const RANGE_MESSAGES = {
-  INVALID_DATE: "Datas inválidas. Use AAAA-MM-DD.",
-  FROM_AFTER_TO: "A data inicial não pode ser depois da final.",
-  PERIOD_TOO_LONG: `O período pode ter no máximo ${MAX_REPORT_DAYS} dias.`,
+// SEC-16 — janela máxima e teto de pedidos por consulta; passou disso, 400/422 com a instrução de reduzir o período (nunca resposta parcial silenciosa).
+// A agregação agora é no banco (API-20), mas o teto continua: ele limita também o CSV. O resumo só traz agregados e nomes de produto/entregador:
+// nenhum telefone, nome de cliente ou endereço sai daqui (teste trava).
+export const REPORT_MAX_WINDOW_DAYS = MAX_REPORT_DAYS;
+export const REPORT_MAX_ORDERS = 20_000;
+/** Só para teste: baixa o teto sem criar 20 mil pedidos. */
+export const reportLimits = { maxOrders: REPORT_MAX_ORDERS };
+
+type Counted = { count: number; revenueCents: number };
+/** Visão do STAFF: contagens operacionais e ranking por QUANTIDADE; nenhum valor em reais (RN-R-06). */
+export function staffReportView(r: {
+  from: string; to: string; orderCount: number; customerCount: number; canceledCount: number; openCount: number;
+  byType: Record<string, Counted>; byPaymentMethod: Record<string, Counted>;
+  byDay: { date: string; orderCount: number }[]; topProducts: { productName: string; quantity: number }[]; byDeliverer: { delivererName: string; orderCount: number }[];
+}) {
+  const counts = (m: Record<string, Counted>) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, { count: v.count }]));
+  return {
+    from: r.from,
+    to: r.to,
+    orderCount: r.orderCount,
+    customerCount: r.customerCount,
+    canceledCount: r.canceledCount,
+    openCount: r.openCount,
+    byType: counts(r.byType),
+    byPaymentMethod: counts(r.byPaymentMethod),
+    byDay: r.byDay.map((d) => ({ date: d.date, orderCount: d.orderCount })),
+    topProducts: r.topProducts.map((p) => ({ productName: p.productName, quantity: p.quantity })),
+    byDeliverer: r.byDeliverer.map((d) => ({ delivererName: d.delivererName, orderCount: d.orderCount })),
+  };
+}
+
+
+const RANGE_REPLY = {
+  INVALID_DATE: { error: "datas inválidas", code: undefined },
+  FROM_AFTER_TO: { error: "A data inicial é depois da final.", code: "REPORT_RANGE_INVALID" },
+  PERIOD_TOO_LONG: { error: `Escolha um período de no máximo ${REPORT_MAX_WINDOW_DAYS} dias.`, code: "REPORT_WINDOW_TOO_LARGE", details: { maxDays: REPORT_MAX_WINDOW_DAYS } },
 } as const;
 
 // Relatórios do painel (B14): agregados no banco, no fuso da loja, com a definição única de venda (API-21).
 const reportRoutes: FastifyPluginAsync = async (app) => {
-  const rangeOrReply = (query: { from?: string; to?: string }, reply: FastifyReply) => {
-    const range = resolveRange(query);
+  // Devolve o período válido ou já responde 400/422 e devolve null.
+  async function periodOrReply(storeId: string, query: { from?: unknown; to?: unknown }, reply: FastifyReply) {
+    if ((query.from !== undefined && typeof query.from !== "string") || (query.to !== undefined && typeof query.to !== "string")) {
+      void reply.code(400).send({ error: "datas inválidas" });
+      return null;
+    }
+    const range = resolveRange({ from: query.from as string | undefined, to: query.to as string | undefined });
     if ("error" in range) {
-      void reply.code(400).send({ error: RANGE_MESSAGES[range.error], code: range.error });
+      void reply.code(400).send(RANGE_REPLY[range.error]);
+      return null;
+    }
+    const total = await prisma.order.count({ where: { storeId, awaitingPayment: false, createdAt: { gte: range.fromUtc, lt: range.toExclusiveUtc } } });
+    if (total > reportLimits.maxOrders) {
+      void reply.code(422).send({ error: "Há pedidos demais nesse período. Escolha um intervalo menor.", code: "REPORT_TOO_LARGE", details: { maxOrders: reportLimits.maxOrders } });
       return null;
     }
     return range;
-  };
+  }
 
   app.get("/api/reports/summary", { preHandler: app.requirePanelAuth }, async (request, reply) => {
-    const range = rangeOrReply(request.query as { from?: string; to?: string }, reply);
+    const { storeId } = request.user;
+    const range = await periodOrReply(storeId, request.query as { from?: unknown; to?: unknown }, reply);
     if (!range) return reply;
-    return buildReport(request.user.storeId, range);
+    const full = { ...(await buildReport(storeId, range)), ruleChangedAt: REPORT_RULE_CHANGED_AT };
+    // RN-R-06 / CA-R-15: dinheiro é do OWNER. O STAFF recebe só CONTAGENS (campos em reais AUSENTES, não zerados).
+    return request.user.role === "OWNER" ? full : staffReportView(full);
   });
 
   // CSV de cada tabela e do resumo (B14.2). Só o dono baixa (dado financeiro completo; SEC-16); toda exportação fica na auditoria.
   app.get("/api/reports/export.csv", { preHandler: [app.requirePanelAuth, app.requireOwner], config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request, reply) => {
-    const query = request.query as { from?: string; to?: string; table?: string };
+    const query = request.query as { from?: unknown; to?: unknown; table?: string };
     const table = (query.table ?? "summary") as CsvTable;
     if (!(CSV_TABLES as readonly string[]).includes(table)) {
       return reply.code(400).send({ error: "Tabela inválida.", code: "INVALID_TABLE", tables: CSV_TABLES });
     }
-    const range = rangeOrReply(query, reply);
-    if (!range) return reply;
     const { storeId, userId } = request.user;
+    const range = await periodOrReply(storeId, query, reply);
+    if (!range) return reply;
     const report = await buildReport(storeId, range);
     logAudit({ storeId, userId, action: "report.export", targetType: "Store", targetId: storeId, metadata: { table, from: range.fromDate, to: range.toDate } });
     return reply

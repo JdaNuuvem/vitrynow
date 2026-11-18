@@ -6,6 +6,9 @@
 //  - DINHEIRO NA GAVETA (caixa): só dinheiro efetivamente RECEBIDO dentro da sessão (pedido: `paidAt`; mesa: `receivedAt`), mais suprimentos, menos
 //    sangrias e devoluções. O troco é irrelevante para a gaveta (o valor que conta é o aplicado à conta, não o entregue pelo cliente).
 
+/** Quando a definição de venda do relatório mudou (API-21: PENDENTE saiu do faturamento; faturamento = total − gorjeta). A tela não deve comparar períodos antes e depois como a mesma conta. */
+export const REPORT_RULE_CHANGED_AT = "2026-11-18T00:00:00.000Z";
+
 export const SALE_STATUSES = ["CONFIRMADO", "EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA", "CONCLUIDO"] as const;
 const isSaleStatus = (status: string) => (SALE_STATUSES as readonly string[]).includes(status);
 

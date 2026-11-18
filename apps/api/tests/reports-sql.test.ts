@@ -94,9 +94,12 @@ describe("relatórios (rotas)", () => {
     });
   }
   const summary = async (cookie: string, qs: string) => json(await app.inject({ method: "GET", url: `/api/reports/summary?${qs}`, headers: { cookie } }));
-  const staffCookie = async (owner: string) => {
-    const invite = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: owner }, payload: { email: `s-${Math.random().toString(36).slice(2, 8)}@t.com`, password: "provisoria1" } });
-    const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: json(invite).user.email, password: "provisoria1" } });
+  // STAFF criado direto no banco (o convite pela API depende do plano; aqui só importa o papel). Reusa a senha do dono da loja.
+  const staffCookie = async (storeId: string) => {
+    const owner = await prisma.user.findFirstOrThrow({ where: { storeId, role: "OWNER" } });
+    const email = `staff-${Math.random().toString(36).slice(2, 8)}@t.com`;
+    await prisma.user.create({ data: { storeId, email, passwordHash: owner.passwordHash, role: "STAFF" } });
+    const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email, password: "senha12345" } });
     return (login.headers["set-cookie"] as string).split(";")[0];
   };
 
@@ -181,10 +184,10 @@ describe("relatórios (rotas)", () => {
   it("período: datas inválidas, invertidas ou acima de 366 dias => 400 com código; sem parâmetros traz os últimos 30 dias", async () => {
     const { cookie, storeId } = await setup("rel-h", "RH1");
     const get = (qs: string) => app.inject({ method: "GET", url: `/api/reports/summary?${qs}`, headers: { cookie } });
-    expect(json(await get("from=2026-13-01&to=2026-13-02")).code).toBe("INVALID_DATE");
-    expect(json(await get("from=2026-11-10&to=2026-11-01")).code).toBe("FROM_AFTER_TO");
+    expect((await get("from=2026-13-01&to=2026-13-02")).statusCode).toBe(400);
+    expect(json(await get("from=2026-11-10&to=2026-11-01")).code).toBe("REPORT_RANGE_INVALID");
     const long = await get("from=2024-01-01&to=2026-11-01");
-    expect([long.statusCode, json(long).code]).toEqual([400, "PERIOD_TOO_LONG"]);
+    expect([long.statusCode, json(long).code]).toEqual([400, "REPORT_WINDOW_TOO_LARGE"]);
     await seed(storeId, { subtotal: 1000, createdAt: new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString() });
     await seed(storeId, { subtotal: 1000, createdAt: new Date(Date.now() - 40 * 24 * 3600 * 1000).toISOString() });
     const def = json(await get(""));
@@ -205,7 +208,7 @@ describe("relatórios (rotas)", () => {
     const { cookie, storeId } = await setup("rel-k", "RK1");
     await seed(storeId, { subtotal: 4000, discount: 400, createdAt: "2026-11-10T15:00:00Z", items: [{ name: "=Açaí; \"G\"", qty: 2, unit: 1500, extras: [800] }] });
     const url = (qs: string) => `/api/reports/export.csv?from=2026-11-10&to=2026-11-10&${qs}`;
-    const staff = await staffCookie(cookie);
+    const staff = await staffCookie(storeId);
     expect((await app.inject({ method: "GET", url: url("table=summary"), headers: { cookie: staff } })).statusCode).toBe(403);
     expect((await app.inject({ method: "GET", url: url("table=summary") })).statusCode).toBe(401);
     const bad = await app.inject({ method: "GET", url: url("table=outra"), headers: { cookie } });

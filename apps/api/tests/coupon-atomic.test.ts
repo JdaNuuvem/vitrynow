@@ -2,7 +2,7 @@
 // (leonardo\regras-cupom-e-total-zero.md, CA-CP-01..11).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { makeApp, registerStore, resetDb, useMockedProvider } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -14,6 +14,7 @@ import { storeToday } from "../src/lib/storeDay";
 describe("FUNC-01/02 — cupom e total zero", () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     app = makeApp();
     await app.ready();
@@ -396,7 +397,7 @@ describe("FUNC-01/02 — cupom e total zero", () => {
     for (const to of ["CONFIRMADO", "EM_PREPARO", "PRONTO", "CONCLUIDO"]) {
       await app.inject({ method: "POST", url: `/api/orders/${id}/transition`, headers: { cookie: ctx.owner }, payload: { to } });
     }
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+    const today = new Date().toISOString().slice(0, 10); // o relatório lê from/to como dia UTC: a data do teste tem de ser a UTC, qualquer que seja a hora
     const rep = json(await app.inject({ method: "GET", url: `/api/reports/summary?from=${today}&to=${today}`, headers: { cookie: ctx.owner } }));
     const text = JSON.stringify(rep);
     expect(text).toContain("SEM_COBRANCA");

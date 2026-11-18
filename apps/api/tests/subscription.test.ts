@@ -42,11 +42,12 @@ function sub(overrides: Record<string, unknown>) {
 const plan = (features: string[]) => ({ id: "p", code: "X", name: "X", priceCents: 1000, features, active: true, position: 1, createdAt: NOW });
 
 describe("resolveSubscription", () => {
-  it("teste em andamento libera todos os recursos e avisa quando faltam 3 dias ou menos", () => {
-    const view = resolveSubscription(sub({}), NOW);
+  it("teste em andamento vale o que o BASICO tem (sem equipe) e avisa quando faltam 3 dias ou menos", () => {
+    const view = resolveSubscription(sub({}), NOW, plan([]));
     expect(view.state).toBe("trial");
+    expect(view.phase).toBe("TRIAL");
     expect(view.daysLeft).toBe(10);
-    expect(view.features).toContain("multi_user");
+    expect(view.features).toEqual([]);
     expect(bannerStateOf(view)).toBe("info");
 
     const soon = resolveSubscription(sub({ trialEndsAt: new Date(NOW.getTime() + 2 * DAY) }), NOW);
@@ -85,9 +86,12 @@ describe("assinatura (integração)", () => {
     app = makeApp();
     await app.ready();
   });
+  const cleanups: Array<() => Promise<unknown>> = [];
+  const onTestEnd = (fn: () => Promise<unknown>) => cleanups.push(fn);
   afterEach(async () => {
     await app.close();
     await resetDb();
+    for (const fn of cleanups.splice(0)) await fn();
   });
   afterAll(async () => {
     await prisma.$disconnect();
@@ -114,19 +118,24 @@ describe("assinatura (integração)", () => {
     expect(plan.daysLeft).toBe(14);
   });
 
-  it("lista os planos padrão", async () => {
+  it("lista só o BASICO enquanto o PRO está inativo (CA-B10-07)", async () => {
     const { cookie } = await registerStore(app);
     const plans = JSON.parse((await app.inject({ method: "GET", url: "/api/plans", headers: { cookie: cookie! } })).body).plans;
-    expect(plans.map((p: { code: string }) => p.code)).toEqual(["BASICO", "PRO"]);
+    expect(plans.map((p: { code: string }) => p.code)).toEqual(["BASICO"]);
+    expect(plans[0].limits).toEqual({ maxUsers: 1, maxPrinters: 1 });
   });
 
   it("bloqueia equipe (multi_user) com o teste vencido e libera ao assinar o plano Pro via webhook", async () => {
+    // O PRO fica inativo até lançar (ADR-0003 §2.6); aqui o ligamos só para exercitar o fluxo de pagamento.
+    await prisma.plan.update({ where: { code: "PRO" }, data: { active: true } });
+    onTestEnd(() => prisma.plan.update({ where: { code: "PRO" }, data: { active: false } }));
     const { cookie } = await registerStore(app);
     await prisma.subscription.updateMany({ data: { trialEndsAt: new Date(Date.now() - DAY) } });
 
+    // Teste vencido há 1 dia = Consulta: o portão da assinatura barra a escrita antes do recurso (RN-A-01).
     const locked = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: cookie! }, payload: staffPayload });
-    expect(locked.statusCode).toBe(402);
-    expect(JSON.parse(locked.body).code).toBe("FEATURE_LOCKED");
+    expect(locked.statusCode).toBe(403);
+    expect(JSON.parse(locked.body).code).toBe("READ_ONLY");
 
     const checkout = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: cookie! }, payload: { planCode: "PRO" } });
     expect(checkout.statusCode).toBe(201);
@@ -144,6 +153,12 @@ describe("assinatura (integração)", () => {
 
     const allowed = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: cookie! }, payload: staffPayload });
     expect(allowed.statusCode).toBe(201);
+  });
+
+  it("recusa o checkout do PRO enquanto ele está inativo (404)", async () => {
+    const { cookie } = await registerStore(app);
+    const checkout = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: cookie! }, payload: { planCode: "PRO" } });
+    expect(checkout.statusCode).toBe(404);
   });
 
   it("plano Básico não inclui equipe, e cancelar mantém o acesso até o fim do período", async () => {

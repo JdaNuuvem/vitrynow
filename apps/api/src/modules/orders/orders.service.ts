@@ -2,7 +2,7 @@ import { type Prisma, type prisma as prismaClient, type Order, type OrderStatus,
 import type { WsServerMessage } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
 import type { AuditLogger } from "../../shared/audit";
-import { cancelPayment, getPayment, refundPayment } from "../../lib/mercadopago";
+import { gatewayOfPayment } from "../storePayments/gateway";
 import { ORDER_TX_OPTIONS } from "../../lib/order-code";
 import { cancelPendingTickets, enqueueCancelNoticeIfPrinted, lockPrintMode } from "../printJobs/printJobs.queue";
 import { customerMessageFor, messageActorFor, moneyLineFor } from "../../lib/cancelMessages";
@@ -37,6 +37,8 @@ export type PanelActor = { storeId: string; userId: string; role: Role };
 // Sem campo editável ao cliente (GRW-15): o texto que o cliente vê é derivado de (código, ator) em lib/cancelMessages.
 export type CancelReason = { code: string; text?: string };
 export type RefundOutcome = "NONE" | "DONE" | "PENDING";
+export const ABANDON_CODES = ["MP_RECUSA", "PAGAMENTO_ANTIGO", "CONTA_DESCONECTADA", "ACERTADO_COM_CLIENTE", "OUTRO"] as const;
+export type AbandonCode = (typeof ABANDON_CODES)[number];
 
 // Quem origina o cancelamento (persistido em Payment.refundContext para concluir depois do estorno).
 type CancelOrigin = {
@@ -420,7 +422,7 @@ export class OrderService {
     // Fora da transação: cobrança aberta no MP (melhor esforço; o pedido já está cancelado — RN-B3-02).
     if (order.payment?.status === "PENDENTE" && order.payment.providerPaymentId) {
       try {
-        await cancelPayment(order.payment.providerPaymentId);
+        await (await gatewayOfPayment(order.payment, order.storeId)).cancelPayment(order.payment.providerPaymentId);
         await this.db.payment.updateMany({ where: { id: order.payment.id, status: "PENDENTE" }, data: { status: "CANCELADO" } });
       } catch {
         await this.db.payment.updateMany({ where: { id: order.payment.id }, data: { lastRawStatus: "cancel_failed" } });
@@ -531,12 +533,13 @@ export class OrderService {
     const payment = await this.db.payment.findUnique({ where: { id: paymentId }, include: { order: true } });
     if (!payment) return "NONE";
     if (payment.status !== "ESTORNO_PENDENTE" || !payment.providerPaymentId) return payment.status === "REEMBOLSADO" ? "DONE" : "NONE";
+    if (payment.refundAbandonedAt) return "NONE"; // API-61: o dono encerrou o estorno; nada de chamar o provedor de novo
     const order = payment.order;
     const origin = payment.refundContext as unknown as CancelOrigin | null;
     if (!origin) throw err(409, "NOT_REFUND_PENDING", "Estorno sem contexto de cancelamento.");
 
     if (!origin.providerRefundedAt) {
-      if (!(await this.providerRefund(payment.id, payment.providerPaymentId))) {
+      if (!(await this.providerRefund(payment, order.storeId, payment.providerPaymentId))) {
         await this.noteRefundFailure(payment.id, order, origin, "Não foi possível estornar no Mercado Pago. Tentaremos novamente.");
         this.publish(order.storeId, { type: "payment.refund_pending", orderId: order.id });
         return "PENDING";
@@ -613,6 +616,8 @@ export class OrderService {
        WHERE "id" = ${paymentId} AND "status" = 'ESTORNO_PENDENTE'
    RETURNING "refundAttempts"`;
     if (rows[0]?.refundAttempts === MAX_REFUND_AUTO_ATTEMPTS) {
+      // Atenção (parecer do Deming): o alerta de auditoria NÃO é estrito (`audit.log` sem await). Se a gravação falhar, só o
+      // `console.error` abaixo (e o do próprio audit) fica; o contador já passou do teto, então o alerta não é reemitido.
       console.error(`[estorno] pagamento ${paymentId} atingiu ${MAX_REFUND_AUTO_ATTEMPTS} tentativas sem concluir: precisa de atenção`);
       this.audit.log({
         storeId: order.storeId,
@@ -625,14 +630,16 @@ export class OrderService {
     }
   }
 
-  private async providerRefund(paymentId: string, providerPaymentId: string): Promise<boolean> {
+  private async providerRefund(payment: { id: string; paymentAccountId: string | null }, storeId: string, providerPaymentId: string): Promise<boolean> {
+    const paymentId = payment.id;
     try {
-      await refundPayment(providerPaymentId, `refund-${paymentId}`);
+      const gateway = await gatewayOfPayment(payment, storeId);
+      await gateway.refundPayment(providerPaymentId, `refund-${paymentId}`);
       return true;
     } catch (refundError) {
       console.error(`[estorno] provedor recusou o estorno do pagamento ${paymentId}: ${providerErrorCode(refundError)}`);
       try {
-        return (await getPayment(providerPaymentId)).status === "refunded";
+        return (await (await gatewayOfPayment(payment, storeId)).getPayment(providerPaymentId)).status === "refunded";
       } catch (lookupError) {
         console.error(`[estorno] não consegui consultar o pagamento ${paymentId} no provedor: ${providerErrorCode(lookupError)}`);
         return false;
@@ -660,6 +667,52 @@ export class OrderService {
     if (order.payment?.status !== "ESTORNO_PENDENTE") throw err(409, "NOT_REFUND_PENDING", "Este pedido não tem estorno pendente.");
     const refund = await this.attemptRefund(order.payment.id);
     return { order: await this.get(actor, orderId), refund };
+  }
+
+  // API-61 (RN-ABD): "Encerrar sem estorno". Só OWNER, só com estorno preso (>= teto de tentativas automáticas). Cancela o pedido e
+  // marca o pagamento como encerrado SEM virar REEMBOLSADO (o dinheiro continua como recebido). Auditoria na MESMA transação.
+  // Ordem de locks: loja -> pedido -> pagamento. Sem chamada ao provedor. Idempotente (2ª chamada = 200 sem novo registro).
+  async abandonRefund(actor: PanelActor, orderId: string, code: AbandonCode, note?: string) {
+    if (actor.role !== "OWNER") throw err(403, "FORBIDDEN_ROLE", "Só o dono da loja pode encerrar o estorno.");
+    const first = await this.load(actor.storeId, orderId);
+    if (!first.payment || (first.payment.status !== "ESTORNO_PENDENTE")) throw err(409, "NOT_REFUND_PENDING", "Este pedido não tem estorno pendente.");
+    if (!first.payment.refundAbandonedAt && refundAutoRetryable(first.payment)) {
+      throw err(409, "REFUND_STILL_POSSIBLE", "O estorno ainda pode ser concluído. Tente de novo.");
+    }
+    const origin: CancelOrigin = { source: "PANEL", userId: actor.userId, actor: "OWNER", reason: { code: "ESTORNO_NAO_CONCLUIDO", text: note } };
+    const sink = { noticeQueued: false };
+    const done = await this.runTx(async (tx) => {
+      await lockPrintMode(tx, actor.storeId);
+      await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId} AND "storeId" = ${actor.storeId} FOR UPDATE`;
+      const payment = await tx.payment.findUnique({ where: { orderId } });
+      if (!payment || payment.status !== "ESTORNO_PENDENTE") throw err(409, "NOT_REFUND_PENDING", "Este pedido não tem estorno pendente.");
+      if (payment.refundAbandonedAt) return false; // já encerrado: inofensivo
+      if (refundAutoRetryable(payment)) throw err(409, "REFUND_STILL_POSSIBLE", "O estorno ainda pode ser concluído. Tente de novo.");
+      const closed = await tx.payment.updateMany({
+        where: { id: payment.id, status: "ESTORNO_PENDENTE", refundAbandonedAt: null },
+        data: { refundAbandonedAt: this.now(), refundAbandonCode: code },
+      });
+      if (closed.count !== 1) throw STATE_CHANGED();
+      const cancelled = await this.applyCancel(tx, first, origin, { expected: "ANY_ACTIVE", sink });
+      if (!cancelled) {
+        const current = await tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { status: true } });
+        if (current.status !== "CANCELADO") throw STATE_CHANGED(); // pedido já finalizado de outro jeito: desfaz tudo
+      }
+      await tx.order.update({ where: { id: orderId }, data: { refundLockedAt: null } });
+      await tx.auditLog.create({
+        data: {
+          storeId: actor.storeId,
+          userId: actor.userId,
+          action: "order.refund_abandoned",
+          targetType: "Order",
+          targetId: orderId,
+          metadata: { code, amountCents: payment.amountCents },
+        },
+      });
+      return cancelled;
+    });
+    if (done) await this.afterCancelCommitted(first, origin, sink.noticeQueued);
+    return { order: await this.get(actor, orderId) };
   }
 
   private async load(storeId: string, orderId: string): Promise<OrderWithPayment> {

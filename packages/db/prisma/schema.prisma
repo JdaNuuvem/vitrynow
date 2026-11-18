@@ -11,6 +11,31 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// API-16 (B9): o que fazer com bairro fora da lista (só vale quando a loja tem bairros cadastrados).
+enum DeliveryOutsideMode {
+  REFUSE
+  DEFAULT_FEE
+}
+
+// API-16 (B9): bairro atendido, com taxa e prazo. Único por loja (nameKey = nome sem acento/caixa).
+model DeliveryZone {
+  id            String   @id @default(cuid())
+  storeId       String
+  store         Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  name          String
+  nameKey       String
+  feeCents      Int
+  etaMinMinutes Int?
+  etaMaxMinutes Int?
+  freeFromCents Int?
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  @@unique([id, storeId])
+  @@unique([storeId, nameKey])
+  @@index([storeId])
+}
+
 enum UserRole {
   OWNER
   STAFF
@@ -62,6 +87,11 @@ enum HistorySource {
   WEBHOOK
 }
 
+enum OrderSource {
+  CLIENTE
+  PAINEL
+}
+
 enum HistoryKind {
   ADVANCE
   UNDO
@@ -101,6 +131,10 @@ model Store {
   deliveryEnabled Boolean @default(true)
   pickupEnabled   Boolean @default(true)
   acceptingOrders Boolean @default(true) // interruptor "Disponível" do painel: false = cardápio público recusa pedidos
+  hideSoldOutProducts Boolean @default(false) // API-17 (RN-B11-03): esconde produtos esgotados no cardápio público
+  deliveryZones   DeliveryZone[]
+  deliveryOutsideMode   DeliveryOutsideMode @default(REFUSE) // API-16: bairro fora da lista (só com bairros cadastrados)
+  freeShippingFromCents Int?                                 // API-16: frete grátis geral a partir do subtotal líquido
   deliveryFeeCents Int    @default(0) // taxa de entrega fixa somada a pedidos DELIVERY
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -116,10 +150,13 @@ model Store {
   auditLogs    AuditLog[]
   deviceAlerts DeviceAlert[]
   subscription Subscription?
+  paymentAccounts PaymentAccount[]
   counter      StoreCounter?
   printJobs    PrintJob[]
   printMode    PrintMode @default(LEGACY) // modo de impressão decidido pelo SERVIDOR por loja (ADR-0004 §8.12)
+  manualDiscountStaffLimitPercent Int @default(10) // desconto manual do pedido lançado no painel: STAFF até este %, acima só o OWNER (RN-B2-06)
   cashStaffWithdrawalLimitCents Int @default(0) // limite de sangria do STAFF por lançamento (RN-CX-09); 0 = toda sangria exige o dono
+  featureInterests FeatureInterest[]
 }
 
 // Contador atômico por loja (hoje: sequência do código do pedido). Incrementado com
@@ -217,6 +254,8 @@ model Product {
   active      Boolean      @default(true)
   featured    Boolean      @default(false)
   position    Int          @default(0)
+  soldOut      Boolean     @default(false) // API-17 (B11): esgotado; vale até soldOutUntil (null = até reativar)
+  soldOutUntil DateTime?
   additionals ProductAdditional[]
   orderItems  OrderItem[]
   createdAt   DateTime     @default(now())
@@ -261,6 +300,9 @@ model Order {
   paymentMethod  OrderPaymentMethod? // null = forma de pagamento não identificada
   changeForCents Int? // "troco para" informado pelo cliente (só DINHEIRO)
   deliveryFeeCents Int      @default(0) // snapshot da taxa de entrega — já incluída em totalCents
+  deliveryZoneName String?  // API-16: cópia do nome/prazo do bairro na hora do pedido (RN-B9-04)
+  deliveryEtaMinMinutes Int?
+  deliveryEtaMaxMinutes Int?
   tipCents       Int        @default(0) // gorjeta — já incluída em totalCents
   awaitingPayment Boolean   @default(false) // true enquanto espera confirmação de pagamento online (ex. PIX) — não entra no kanban/impressão até confirmar
   printedAt     DateTime?
@@ -268,6 +310,14 @@ model Order {
   couponReleasedAt  DateTime? // idempotência da devolução do cupom (ADR-0007)
   refundLockedAt    DateTime? // estorno em curso: congela o pedido NA PRÓPRIA linha (ver ADR-0007 §11); nula = livre
   internalNote      String? // observação interna da loja (API-54): nunca vai ao cliente, ao tíquete nem a lista; só ao detalhe do painel
+  // API-13 (pedido manual, RN-B2-09/10): quem lançou e por onde; a chave de idempotência da abertura do formulário (única por loja)
+  source            OrderSource @default(CLIENTE)
+  channel           String?
+  createdByUserId   String?
+  manualKey         String?
+  manualBodyHash    String? // impressão digital do corpo que usou a chave: mesma chave + corpo diferente = 409 (RN-B2-10)
+  manualDiscountPercent Int?
+  manualDiscountReason  String?
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
@@ -277,6 +327,7 @@ model Order {
   printJobs        PrintJob[]
 
   @@unique([storeId, code])
+  @@unique([storeId, manualKey])
   @@unique([id, storeId]) // alvo da FK composta de PrintJob (ADR-0009: o banco recusa referência entre lojas)
   @@index([storeId, status])
   @@index([storeId, createdAt]) // histórico e kanban por período (API-54)
@@ -310,6 +361,53 @@ model OrderItemAdditional {
   priceCents  Int
 
   @@index([orderItemId])
+}
+
+// ---- API-07 (ADR-0001): PIX por loja via OAuth do Mercado Pago. Tokens SEMPRE cifrados (lib/paymentCrypto.ts). ----
+
+enum PaymentAccountStatus {
+  CONNECTED
+  NEEDS_RECONNECT // renovação falhou ou o provedor revogou: o PIX some do checkout e o dono é avisado
+  DISCONNECTED // histórico: SEM tokens. Pagamentos pendentes/em estorno impedem desconectar ou trocar de vendedor; os já ENCERRADOS ficam presos a esta conta, então um estorno tardio deles só sai pelo app do próprio Mercado Pago
+}
+
+// Uma conta ativa (CONNECTED/NEEDS_RECONNECT) por loja e um vendedor do provedor em uma só loja: índices únicos PARCIAIS
+// na migração (o Prisma não os expressa). A conta anterior vira DISCONNECTED e fica no histórico (D1-2).
+model PaymentAccount {
+  id              String               @id @default(cuid())
+  storeId         String
+  store           Store                @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  provider        String               @default("mercadopago")
+  sellerUserId    String // id do vendedor no provedor (nunca vai a resposta, log ou auditoria sem máscara)
+  status          PaymentAccountStatus @default(CONNECTED)
+  accessTokenEnc  String? // `v1.<keyId>.<iv>.<tag>.<ct>`; null depois de desconectar (apagado, não só marcado)
+  refreshTokenEnc String?
+  expiresAt       DateTime? // fim do access_token
+  connectedAt     DateTime             @default(now())
+  disconnectedAt  DateTime?
+  lastRefreshAt   DateTime?
+  lastRefreshAttemptAt DateTime? // última tentativa (certa ou errada): o job conta no máximo uma falha por dia
+  refreshFailures Int                  @default(0)
+  lastError       String? // texto curto, sem dado sensível
+  payments        Payment[]
+
+  @@unique([id, storeId])
+  @@index([storeId, status])
+  @@index([status, expiresAt])
+}
+
+// `state` do OAuth: só o HASH fica no banco, uso único, expira em minutos, preso à loja, ao usuário e à sessão (D1-1).
+model PaymentOAuthState {
+  id        String    @id @default(cuid())
+  storeId   String
+  userId    String
+  sid       String // sessão que iniciou a conexão
+  stateHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([expiresAt])
 }
 
 model OrderStatusHistory {
@@ -412,6 +510,10 @@ model Payment {
   lastRawStatus     String?
   lastCheckedAt     DateTime?
   reconcileNote     String? // estorno feito mas o pedido já estava finalizado: conciliação manual (nunca silencioso)
+  refundAbandonedAt DateTime? // API-61: dono encerrou o estorno SEM devolver por aqui (o dinheiro continua como recebido); nulo = em curso
+  refundAbandonCode String? // API-61: código fechado do motivo (MP_RECUSA|PAGAMENTO_ANTIGO|CONTA_DESCONECTADA|ACERTADO_COM_CLIENTE|OUTRO); sem texto livre
+  paymentAccountId  String? // conta do vendedor que criou a cobrança (API-07); pagamento antigo/da plataforma = null
+  paymentAccount    PaymentAccount? @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
@@ -487,7 +589,8 @@ model Plan {
   code       String   @unique // ex.: "BASICO", "PRO"
   name       String
   priceCents Int // cobrança mensal
-  features   String[] // chaves de recurso liberadas (ver lib/subscription.ts)
+  features   String[] // chaves de recurso liberadas (só chaves "entregues": lib/features.ts)
+  limits     Json     @default("{}") // { maxUsers, maxPrinters }; null = sem limite (ADR-0003 §2.1)
   active     Boolean  @default(true)
   position   Int      @default(0)
   createdAt  DateTime @default(now())
@@ -509,6 +612,19 @@ model Subscription {
   updatedAt        DateTime           @updatedAt
 
   payments SubscriptionPayment[]
+}
+
+// "Quero ser avisado" (RN-B10-05): lojista tentou usar recurso que o plano não tem. Um registro por
+// loja e recurso; só mede demanda, não promete data nem preço.
+model FeatureInterest {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  feature   String
+  createdAt DateTime @default(now())
+
+  @@unique([storeId, feature])
+  @@unique([id, storeId]) // ADR-0009: base das FKs compostas por loja
 }
 
 // Cobrança PIX de uma assinatura (conta Mercado Pago da plataforma).
@@ -600,6 +716,7 @@ enum PrintJobStatus {
   PRINTED
   FAILED
   CANCELED
+  STALE // N6/RN-IMP-20: mais velho que a janela de retomada (12 h); não sai sozinho, o painel oferece "Imprimir agora"
 }
 
 model PrintJob {
@@ -612,6 +729,7 @@ model PrintJob {
   status           PrintJobStatus @default(PENDING)
   attempts         Int            @default(0)
   maxAttempts      Int            @default(3)
+  resumedAt        DateTime? // "Imprimir agora" (N6): a janela de 12 h passa a contar daqui, não da criação
   availableAt      DateTime       @default(now()) // só é entregue com availableAt <= agora (recuo por falha)
   claimedAt        DateTime?
   leaseUntil       DateTime? // vence pelo relógio do banco; vencida = pode ser reclamada por outro

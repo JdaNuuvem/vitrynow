@@ -1,4 +1,5 @@
-import type { CreateCategoryInput, CreateProductInput, UpdateProductInput } from "@meucardapio/shared-types";
+import type { CreateCategoryInput, CreateProductInput, SetSoldOutInput, UpdateProductInput } from "@meucardapio/shared-types";
+import { nextSoldOutReset } from "../../lib/soldOut";
 import type { Actor, AuditLogger } from "../../shared/audit";
 import { ConflictError, NotFoundError } from "../../shared/errors";
 import { AdditionalNotInProductError, type CatalogRepository } from "./catalog.repository";
@@ -56,6 +57,22 @@ export class CatalogService {
       if (error instanceof AdditionalNotInProductError) throw new NotFoundError("adicional não encontrado neste produto");
       throw error;
     }
+  }
+
+  // API-17: liga/desliga "esgotado". TODAY volta às 04:00 do fuso da loja; MANUAL só volta quando reativado.
+  async setSoldOut(actor: Actor, id: string, input: SetSoldOutInput) {
+    const product = await this.requireProduct(actor.storeId, id);
+    const duration = input.duration ?? "TODAY";
+    const soldOutUntil = input.soldOut && duration === "TODAY" ? nextSoldOutReset() : null;
+    const updated = await this.repo.updateProduct(id, { soldOut: input.soldOut, soldOutUntil });
+    this.audit.log({
+      ...actor,
+      action: input.soldOut ? "product.sold_out" : "product.sold_out_cleared",
+      targetType: "Product",
+      targetId: id,
+      metadata: { name: product.name, duration: input.soldOut ? duration : null, until: soldOutUntil },
+    });
+    return updated;
   }
 
   async deleteProduct(actor: Actor, id: string) {
