@@ -64,6 +64,7 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   // LGPD (API-52a, RN-PV-10): anonimizar é obrigação legal e NÃO pode depender de pagamento: liberada na Consulta e, na Suspensão, só para OWNER.
   "POST /api/privacy/anonymize/preview": "export",
   "POST /api/privacy/anonymize": "export",
+  "POST /api/privacy/export": "export",
   "POST /api/store/payments/mercadopago/connect": "blocked", // API-07: conectar a conta de PIX é configuração (sem loja ativa não conecta)
   "POST /api/store/payments/mercadopago/disconnect": "blocked", // API-07: idem
   "POST /api/delivery-zones": "blocked", // API-16: bairro/taxa de entrega é cadastro

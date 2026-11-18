@@ -28,11 +28,13 @@ describe("privacidade: anonimizar cliente", { timeout: 60_000 }, () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
     vi.clearAllMocks();
+    process.env.PRIVACY_ACTIONS_ENABLED = "true"; // a chave geral nasce DESLIGADA (ADR-0014); os testes ligam
     app = makeApp();
     await app.ready();
   });
   afterEach(async () => {
     delete process.env.MFA_ENFORCED;
+    delete process.env.PRIVACY_ACTIONS_ENABLED;
     await app.close();
     await resetDb();
   });

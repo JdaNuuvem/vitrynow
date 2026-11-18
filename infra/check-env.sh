@@ -57,6 +57,8 @@ https_url WEB_ORIGIN; https_url NEXT_PUBLIC_API_URL
 [[ "$(get CADDY_IP)" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ || -z "$(get CADDY_IP)" ]] || bad "CADDY_IP inválido"
 [ -n "$(get TRUST_PROXY_CIDR)" ] && bad "TRUST_PROXY_CIDR não deve ser definido: o compose o deriva de CADDY_IP (mudar só um dos dois reabre o ST-02c)"
 [ "$(get APP_VERSION)" = "local" ] && warn "APP_VERSION=local: sem versão fixa não há como voltar para a imagem anterior"
+# LGPD (ADR-0014, API-52b): as ações de privacidade só ligam em produção com a confirmação jurídica explícita (parecer P1-P17)
+[ "$(get PRIVACY_ACTIONS_ENABLED)" = "true" ] && [ "$(get PRIVACY_ACTIONS_LEGAL_OK)" != "true" ] && bad "PRIVACY_ACTIONS_ENABLED=true exige PRIVACY_ACTIONS_LEGAL_OK=true (parecer jurídico LGPD); sem ele, deixe desligada"
 [ "$(get MFA_ENFORCED)" != "true" ] && warn "MFA_ENFORCED não é true: ligue antes do primeiro cliente real (SEC-13)"
 
 # --- PIX por loja (API-07)
