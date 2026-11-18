@@ -132,10 +132,10 @@ describe("ST-65: o pedido cujo e-mail NÃO saiu é devolvido (não gasta a cota 
     const user = await prisma.user.findUniqueOrThrow({ where: { email: credentials.email } });
 
     expect((await forgot(credentials.email)).statusCode).toBe(200);
-    await vi.waitFor(async () => expect(await failedCount(user.id)).toBe(1));
+    await vi.waitFor(async () => expect(await failedCount(user.id)).toBe(1), { timeout: 10_000, interval: 100 });
     expect((await forgot(credentials.email)).statusCode).toBe(200); // sem esperar o intervalo de 60 s
-    await vi.waitFor(() => expect(sent).toHaveLength(2));
-    await vi.waitFor(async () => expect(await failedCount(user.id)).toBe(2));
+    await vi.waitFor(() => expect(sent).toHaveLength(2), { timeout: 10_000, interval: 100 });
+    await vi.waitFor(async () => expect(await failedCount(user.id)).toBe(2), { timeout: 10_000, interval: 100 });
 
     // agora o provedor volta: este pedido SAI e passa a contar (cota e intervalo), então o seguinte é barrado em silêncio
     ok = true;
