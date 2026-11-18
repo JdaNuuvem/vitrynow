@@ -102,6 +102,19 @@ describe("API-14 — payload do tíquete", () => {
     expect(soma).toBe(t.subtotalCents);
   });
 
+  it("API-52c: pedido anonimizado ⇒ customerRemoved=true e SEM nome/telefone/endereço/observações; pedido normal ⇒ false; aviso de cancelamento não leva a flag", async () => {
+    const ctx = await setup();
+    const id = await place(ctx, { customerName: "Maria Silva", customerPhone: "11987654321", notes: "sem cebola" });
+    expect((await buildPrintableOrder(id))!).toMatchObject({ customerRemoved: false, customerName: "Maria Silva" });
+    await prisma.order.update({ where: { id }, data: { customerName: null, customerPhone: null, address: null, notes: null, anonymizedAt: new Date() } });
+    const t = (await buildPrintableOrder(id))!;
+    expect(printableOrderSchema.safeParse(t).success).toBe(true);
+    expect(t).toMatchObject({ customerRemoved: true, customerName: null, customerPhone: null, address: null, notes: null });
+    expect(JSON.stringify(t)).not.toMatch(/Maria|98765/);
+    expect(t.totalCents).toBeGreaterThan(0); // o financeiro fica
+    expect((await buildPrintableOrder(id, { cancelNotice: true }))!.customerRemoved).toBeUndefined();
+  });
+
   it("sem cupom e sem troco os campos vêm nulos/zerados (não ausentes)", async () => {
     const ctx = await setup();
     const t = (await buildPrintableOrder(await place(ctx)))!;
