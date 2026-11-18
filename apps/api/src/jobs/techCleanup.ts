@@ -79,6 +79,21 @@ const TARGETS = {
       return (await tx.deviceAlert.aggregate({ _min: { expiresAt: true } }))._min.expiresAt;
     },
   },
+  // API-07 / ADR-0011 §4: `state` do OAuth do Mercado Pago (só o hash; uso único; vale 10 min). Vencido ou usado é lixo técnico.
+  PaymentOAuthState: {
+    async claim(tx, cutoff, limit) {
+      const rows = await tx.$queryRaw<{ id: string }[]>`
+        SELECT "id" FROM "PaymentOAuthState" WHERE "expiresAt" < ${utc(cutoff)}
+        ORDER BY "expiresAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED`;
+      return rows.map((row) => row.id);
+    },
+    async remove(tx, ids) {
+      return (await tx.paymentOAuthState.deleteMany({ where: { id: { in: ids } } })).count;
+    },
+    async oldestExpiry(tx) {
+      return (await tx.paymentOAuthState.aggregate({ _min: { expiresAt: true } }))._min.expiresAt;
+    },
+  },
 } satisfies Record<string, Target>;
 
 export type TechTable = keyof typeof TARGETS;
