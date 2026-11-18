@@ -1,7 +1,8 @@
 import type { prisma as prismaClient, Payment, PaymentStatus, SubscriptionPayment } from "@meucardapio/db";
 import type { WsServerMessage } from "@meucardapio/shared-types";
 import type { AuditLogger } from "../../shared/audit";
-import { getPayment, mapMpStatus, type ProviderPayment } from "../../lib/mercadopago";
+import { getPayment as platformGetPayment, mapMpStatus, type ProviderPayment } from "../../lib/mercadopago";
+import { gatewayForStore, gatewayOfPayment } from "../storePayments/gateway";
 import { canMovePayment, originsFor } from "../../lib/paymentStateMachine";
 import { activateSubscription } from "../../lib/subscription";
 import type { OrderService } from "../orders/orders.service";
@@ -29,12 +30,43 @@ export class PaymentService {
     private readonly publish: (storeId: string, message: WsServerMessage) => void,
   ) {}
 
-  async handleNotification(providerPaymentId: string): Promise<WebhookOutcome> {
+  /**
+   * `storeHint` é a loja que a NOSSA `notification_url` carrega (`?store=`): uma DICA, nunca autorização (a assinatura já foi conferida antes).
+   * Qual token consulta o provedor: 1) o `Payment` local achado por `providerPaymentId` usa a conta DELE; 2) sem ele (notificação antes de
+   * gravarmos o id), a conta da loja da dica; 3) sem nenhum dos dois, a plataforma (assinatura SaaS). Depois da consulta, o pagamento de
+   * PEDIDO só vale se a referência apontar para um pedido DA MESMA loja usada na consulta; senão é ignorado sem efeito.
+   */
+  async handleNotification(providerPaymentId: string, storeHint?: string): Promise<WebhookOutcome> {
+    const known = await this.db.payment.findUnique({ where: { providerPaymentId }, include: { order: { select: { storeId: true } } } });
     // Falha de rede/provedor aqui propaga ⇒ 5xx ⇒ o provedor reenvia (§6.1 item 6).
-    const remote = await getPayment(providerPaymentId);
+    let remote: ProviderPayment;
+    let queriedStore: string | null = null;
+    if (known) {
+      queriedStore = known.order.storeId;
+      remote = await (await gatewayOfPayment(known, known.order.storeId)).getPayment(providerPaymentId);
+    } else if (storeHint) {
+      const store = await this.db.store.findUnique({ where: { id: storeHint }, select: { id: true } });
+      if (!store) return "UNKNOWN_PAYMENT"; // dica inexistente: 200 sem efeito, nunca 4xx que vire oráculo
+      queriedStore = store.id;
+      try {
+        remote = await (await gatewayForStore(store.id)).getPayment(providerPaymentId);
+      } catch (error) {
+        if (error instanceof Error && /not found|PIX_UNAVAILABLE|indispon/i.test(error.message + (error as { code?: string }).code)) return "UNKNOWN_PAYMENT";
+        throw error;
+      }
+    } else {
+      remote = await platformGetPayment(providerPaymentId);
+    }
 
     const orderPayment = await this.findOrderPayment(providerPaymentId, remote);
-    if (orderPayment) return this.applyOrderPayment(orderPayment, remote);
+    if (orderPayment) {
+      // Consultamos com o token de UMA loja: o pedido tem que ser dessa mesma loja (sem cruzar lojas por uma dica forjada).
+      if (queriedStore) {
+        const owner = await this.db.order.findUnique({ where: { id: orderPayment.orderId }, select: { storeId: true } });
+        if (!owner || owner.storeId !== queriedStore) return "UNKNOWN_PAYMENT";
+      }
+      return this.applyOrderPayment(orderPayment, remote);
+    }
 
     const subscriptionPayment = await this.findSubscriptionPayment(providerPaymentId, remote);
     if (subscriptionPayment) return this.applySubscriptionPayment(subscriptionPayment, remote);
