@@ -183,6 +183,9 @@ export const printableOrderSchema = z.object({
   // API-66: o SERVIDOR diz se não há nada a cobrar (fonte única; o cliente não decide sozinho). true só com total = 0 E nenhuma cobrança possível
   // (sem pagamento aprovado, pendente ou estornado). Em pedido real nunca sai ausente; no aviso de cancelamento e no teste é false.
   nothingToCharge: z.boolean().optional(),
+  // API-52c (LGPD): true = os dados do cliente foram removidos a pedido (`Order.anonymizedAt`). O tíquete imprime a linha fixa
+  // "Dados do cliente removidos" no lugar de nome/telefone/endereço. Aditivo: o print-client antigo ignora e imprime só o que vier (nada).
+  customerRemoved: z.boolean().optional(),
   items: z.array(
     z.object({
       productName: z.string(),
