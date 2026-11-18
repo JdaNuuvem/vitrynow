@@ -77,6 +77,13 @@ case "$(uname -s 2>/dev/null)" in
      if [ -n "$modo" ] && [[ ! "$modo" =~ ^[0-7]?[0-7]00$ ]]; then warn "$ENVF com modo $modo: outros usuários do servidor conseguem ler os segredos (chmod 600 $ENVF)"; fi ;;
 esac
 
+# --- storage S3 das imagens (API-18): em produção a API recusa subir sem estas 5 (assertStorageBootConfig); a URL pública precisa ser https
+falt=""; for n in STORAGE_S3_ENDPOINT STORAGE_S3_BUCKET STORAGE_S3_ACCESS_KEY_ID STORAGE_S3_SECRET_ACCESS_KEY STORAGE_PUBLIC_BASE_URL; do [ -n "$(get $n)" ] || falt="$falt $n"; done
+if [ -n "$falt" ]; then risco "storage S3 das imagens incompleto: faltam$falt (a API NÃO sobe em produção sem elas)"; else
+  ok "storage S3 das imagens configurado (5 variáveis)"
+  [[ "$(get STORAGE_PUBLIC_BASE_URL)" =~ ^https:// ]] || bad "STORAGE_PUBLIC_BASE_URL deve começar com https:// (a API recusa subir com outro valor)"
+fi
+
 # --- PIX por loja (API-07)
 mode="$(get MP_OAUTH_MODE)"; mode="${mode:-off}"
 case "$mode" in

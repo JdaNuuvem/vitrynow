@@ -26,6 +26,12 @@ NEXT_PUBLIC_API_URL=http://localhost:$PORT
 DOMAIN=:80
 ACME_EMAIL=smoke@exemplo.invalid
 APP_VERSION=smoke
+# storage S3 FICTÍCIO: a API fora de dev recusa subir sem estas 5 (assertStorageBootConfig); o smoke não faz upload, então nada conecta a esse endereço
+STORAGE_S3_ENDPOINT=https://s3.smoke.invalid
+STORAGE_S3_BUCKET=smoke
+STORAGE_S3_ACCESS_KEY_ID=smoke
+STORAGE_S3_SECRET_ACCESS_KEY=smoke-nao-e-segredo
+STORAGE_PUBLIC_BASE_URL=https://cdn.smoke.invalid/smoke
 EOF
 ROOTW="$(cygpath -m "$ROOT")"   # docker.exe (Windows) precisa de C:/...
 DC=(docker compose -p "$PROJ" -f "$ROOTW/infra/docker-compose.yml" -f "$ROOTW/infra/docker-compose.smoke.yml" --env-file "$ROOTW/infra/.smoke.env")

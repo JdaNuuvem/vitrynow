@@ -104,6 +104,14 @@ services:
       TRIAL_DAYS: ${TRIAL_DAYS:-7}
       # SEC-13: em produção a API NÃO sobe com MFA_ENFORCED diferente de "true" (guarda de partida em lib/mfaBoot.ts). Padrão SEGURO: true.
       MFA_ENFORCED: ${MFA_ENFORCED:-true}
+      # API-18/INF-10: storage S3 das imagens. Em produção a API NÃO sobe sem estas 5 (assertStorageBootConfig: nada de Fake em memória silencioso) e a
+      # URL pública tem de ser https. Vazias aqui de propósito: quem valida é o check-env.sh --prod (o deploy.sh o usa), com mensagem clara.
+      STORAGE_S3_ENDPOINT: ${STORAGE_S3_ENDPOINT:-}
+      STORAGE_S3_BUCKET: ${STORAGE_S3_BUCKET:-}
+      STORAGE_S3_ACCESS_KEY_ID: ${STORAGE_S3_ACCESS_KEY_ID:-}
+      STORAGE_S3_SECRET_ACCESS_KEY: ${STORAGE_S3_SECRET_ACCESS_KEY:-}
+      STORAGE_S3_REGION: ${STORAGE_S3_REGION:-us-east-1}
+      STORAGE_PUBLIC_BASE_URL: ${STORAGE_PUBLIC_BASE_URL:-}
     expose:
       - "3001"
     cap_drop: [ALL]
