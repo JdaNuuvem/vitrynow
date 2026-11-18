@@ -222,6 +222,8 @@ desenvolvimento (padrão `false` = começa no legado). Contrato conferido contra
 
 Os avisos do cliente (`nothingToCharge` incoerente, tíquete sem itens e total zero, modo da loja que não consigo confirmar) também vão ao servidor: `POST /api/device/alerts` com **só** `code` (lista fechada de 5), `orderId` opcional (cuid) e `clientVersion`; sem texto livre e sem dado do cliente. É melhor esforço e nunca atrasa impressão nem ack (segundo plano, 3 s, no máximo 5 em voo, dedupe de 10 min, falha descartada). Detalhes e testes em `docs\contrato-printjob-cliente.md`.
 
+**Alertas de modo que se perdem são reenviados (PC-24d).** `MODE_UNCONFIRMED` e `MODE_RECOVERED` descrevem um ESTADO: se o envio falhar (rede, timeout de 3 s, 5xx, 404, 401/403), o cliente desfaz a marca "já enviei" e tenta de novo na próxima falha/resposta da configuração, com intervalo mínimo de 60 s entre tentativas; depois de entregue (2xx) não repete. Os outros códigos (dinheiro, tíquete) seguem em melhor esforço, sem reenvio, com dedupe de 10 min.
+
 ## Confiabilidade e segredos (PC-02)
 
 - **Dedupe e ack persistido** (`Services/PrintLedger.cs`, arquivo `%LOCALAPPDATA%\MeuCardapioPrintClient\printed.json`): polling e WS passam pelo mesmo portão, um pedido nunca é impresso duas vezes, e se o aviso à API falhar o ack é repetido sem reimprimir. Falha de impressão volta com recuo (15 s até 5 min) e sem novo alerta sonoro.
