@@ -27,6 +27,8 @@ export const createOrderItemSchema = z.object({
   quantity: z.number().int().positive().max(100),
   notes: textField({ max: 150, multiline: true }).optional(), // RN-TXT-02: observação do item
   additionalIds: z.array(z.string().min(1)).max(50).optional(),
+  // API-15 parte 2 (B8): opções escolhidas por id, com quantidade (padrão 1). O servidor é a ÚNICA fonte do preço (RN-B8-03).
+  options: z.array(z.object({ optionId: z.string().min(1), quantity: z.number().int().positive().max(20).optional() })).max(60).optional(),
 });
 
 // "CARTAO" é o valor legado do checkout antigo e vale como CREDITO.
