@@ -11,5 +11,34 @@ services:
     volumes:
       - postgres_dev_data:/var/lib/postgresql/data
 
+  # INF-10 / ADR-0010: storage S3-compativel LOCAL para exercitar o upload (API-18). SO dev: as credenciais abaixo
+  # sao descartaveis e o servico escuta apenas em 127.0.0.1. Producao usa outro provedor (decisao do Claudio).
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: dev-minio
+      MINIO_ROOT_PASSWORD: dev-minio-secret
+    ports:
+      - "127.0.0.1:59000:9000"
+      - "127.0.0.1:59001:9001"
+    volumes:
+      - minio_dev_data:/data
+
+  # Cria o bucket de dev e libera LEITURA anonima (imagens de cardapio sao publicas); escrita so com chave.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    restart: "no"
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 dev-minio dev-minio-secret; do sleep 1; done;
+      mc mb --ignore-existing local/cardapio-media;
+      mc anonymous set download local/cardapio-media;
+      exit 0;"
+
 volumes:
   postgres_dev_data:
+  minio_dev_data:
