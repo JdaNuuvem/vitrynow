@@ -69,7 +69,8 @@ describe("prazo de preparo por loja (API-57)", () => {
 
   it("só o OWNER configura; sem login é 401; na Consulta é 403 READ_ONLY", async () => {
     expect((await app.inject({ method: "POST", url: "/api/store/prep-times", payload: { deliveryMinutes: 30, pickupMinutes: 20 } })).statusCode).toBe(401);
-    await prisma.subscription.updateMany({ data: { trialEndsAt: new Date(Date.now() - 24 * 60 * 60 * 1000) } });
+    // a loja de teste nasce PRO (helper); aqui volta ao teste grátis VENCIDO para entrar em Consulta/Suspensão
+    await prisma.subscription.updateMany({ data: { status: "TRIAL", planId: null, currentPeriodEnd: null, trialEndsAt: new Date(Date.now() - 24 * 60 * 60 * 1000) } });
     const refused = await save({ deliveryMinutes: 30, pickupMinutes: 20 });
     expect(refused.statusCode).toBe(403);
     expect(json(refused).code).toBe("READ_ONLY");
@@ -77,7 +78,8 @@ describe("prazo de preparo por loja (API-57)", () => {
 
   it("a vitrine em Suspensão não vaza o prazo (503 neutro)", async () => {
     await save({ deliveryMinutes: 30, pickupMinutes: 20 });
-    await prisma.subscription.updateMany({ data: { trialEndsAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000) } });
+    // a loja de teste nasce PRO (helper); aqui volta ao teste grátis VENCIDO para entrar em Consulta/Suspensão
+    await prisma.subscription.updateMany({ data: { status: "TRIAL", planId: null, currentPeriodEnd: null, trialEndsAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000) } });
     const menu = await app.inject({ method: "GET", url: "/stores/loja-prep/menu" });
     expect(menu.statusCode).toBe(503);
     expect(menu.body).not.toContain("prepMinutes");
