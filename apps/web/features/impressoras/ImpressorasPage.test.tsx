@@ -10,6 +10,10 @@ import { ImpressorasPage } from "./ImpressorasPage";
 // Objeto estável: um novo a cada render refaria o `reload` do hook em laço.
 const router = { push: vi.fn() };
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
+// runProtected real faz o passo de MFA (testado em features/seguranca); aqui basta repassar a ação.
+vi.mock("@/features/seguranca/SecurityConfirmProvider", () => ({
+  useSecurityConfirm: () => ({ runProtected: async (_purpose: string, action: (options?: unknown) => Promise<unknown>) => action() }),
+}));
 
 const balcao: DeviceToken = { id: "t1", label: "Balcao", revokedAt: null, lastSeenAt: null, online: false, tokenPreview: "uIQA" };
 const cozinha: DeviceToken = { id: "t2", label: "Cozinha", revokedAt: null, lastSeenAt: null, online: true, tokenPreview: "k9Zx" };
@@ -60,7 +64,7 @@ describe("Impressoras: revogar com janela de confirmação (WEB-20b, A1)", () =>
     const { deviceTokens } = setup({});
     await userEvent.click(await screen.findByRole("button", { name: "Revogar chave Cozinha" }));
     await userEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Revogar chave" }));
-    await waitFor(() => expect(deviceTokens.revoke).toHaveBeenCalledWith("t2"));
+    await waitFor(() => expect(deviceTokens.revoke).toHaveBeenCalledWith("t2", undefined));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(deviceTokens.list).toHaveBeenCalledTimes(2);
   });

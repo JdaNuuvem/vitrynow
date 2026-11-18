@@ -294,7 +294,7 @@ describe("API-27 — caixa: regras do servidor", () => {
       if (c.statusCode === 200) {
         const incluida = session.movements.length === 1;
         expect(m.statusCode, `rodada ${i}`).toBe(incluida ? 201 : 409);
-        expect(session.expectedClosingCents, `rodada ${i}: esperado do retrato`).toBe(incluida ? 11000 : 10000);
+        expect(Number(session.expectedClosingCents), `rodada ${i}: esperado do retrato`).toBe(incluida ? 11000 : 10000);
       }
       if (c.statusCode !== 200) await close(ctx.owner, { closingBalanceCents: 10000, reason: "NAO_SEI" });
     }
