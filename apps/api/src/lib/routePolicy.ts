@@ -99,6 +99,7 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "GET /api/store/subscription/payments/:id": "billing",
 
   // — Lote 1 (Atlas): rotas que apareceram quando as branches se encontraram; classe conservadora, revisar com o dono de cada uma —
+  "POST /api/orders/:id/refund/manual": "finish", // API-65: registrar estorno feito no app do Mercado Pago (OWNER+MFA; encerra o que ja foi recebido)
   "POST /api/auth/verify-email/resend": "billing", // API-26: conta, tambem liberado na Suspensao
   "POST /api/onboarding/steps/:step": "blocked", // API-26: cadastro guiado
   // — Lote 2 (Atlas): rotas das branches integradas; classes conservadoras, a revisar com cada dono (Nightingale/Leonardo) —

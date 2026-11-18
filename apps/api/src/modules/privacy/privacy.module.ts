@@ -4,6 +4,7 @@ import { anonymizeCustomerSchema, anonymizeTargetSchema } from "@meucardapio/sha
 import { ServerBusyError, sendServerBusy, useDomainErrors } from "../../shared/errors";
 import { DUMMY_HASH, bcryptPasswordHasher as passwordHasher } from "../../shared/passwordHasher";
 import { clientKey } from "../../lib/clientKey";
+import { clientIpOf } from "../../lib/clientIp";
 import { AccountAttemptCap } from "../../lib/accountAttemptCap";
 import { LoginThrottle } from "../../lib/loginThrottle";
 import { mfaEnforced } from "../../lib/mfa";
@@ -37,6 +38,8 @@ async function reauthorize(request: FastifyRequest, reply: FastifyReply, current
   }
   const user = await prisma.user.findUnique({ where: { id: request.user.userId }, select: { email: true, passwordHash: true } });
   const key = user?.email ?? request.user.userId;
+  // SEC-24: UM só valor para o par, a faixa de hash e as devoluções (o IP do visitante quando a chamada vem do web interno; senão `request.ip`).
+  const ip = clientIpOf(request);
   // Duas reservas SÍNCRONAS, antes do bcrypt: por (conta, IP) e por CONTA (qualquer IP). Negada ⇒ 429 SEM testar a senha, mesmo certa.
   const accountKey = `reauth:${request.user.userId}`;
   const cap = reauthAccountCap.reserve(accountKey);
@@ -44,7 +47,7 @@ async function reauthorize(request: FastifyRequest, reply: FastifyReply, current
     reply.header("Retry-After", String(cap.retryAfterSeconds)).code(429).send({ error: "Muitas tentativas. Aguarde um pouco e tente de novo.", code: "RATE_LIMITED" });
     return false;
   }
-  const slot = reauthThrottle.reserve(key, request.ip);
+  const slot = reauthThrottle.reserve(key, ip);
   if (!slot.allowed) {
     reauthAccountCap.succeed(accountKey); // a tentativa negada pelo par não consome o teto da conta
     reply.header("Retry-After", String(slot.retryAfterSeconds)).code(429).send({ error: "Muitas tentativas. Aguarde um pouco e tente de novo.", code: "RATE_LIMITED" });
@@ -53,10 +56,10 @@ async function reauthorize(request: FastifyRequest, reply: FastifyReply, current
   // Pela MESMA faixa do login (SEC-34): `DUMMY_HASH` se a conta não existe. Faixa cheia (503) ⇒ nenhuma senha foi testada: devolve as DUAS reservas.
   let ok: boolean;
   try {
-    ok = await passwordHasher.verify(currentPassword, user?.passwordHash ?? DUMMY_HASH, clientKey(request.ip));
+    ok = await passwordHasher.verify(currentPassword, user?.passwordHash ?? DUMMY_HASH, clientKey(ip));
   } catch (error) {
     if (error instanceof ServerBusyError) {
-      reauthThrottle.refund(key, request.ip);
+      reauthThrottle.refund(key, ip);
       reauthAccountCap.succeed(accountKey);
       sendServerBusy(reply);
       return false;
@@ -67,7 +70,7 @@ async function reauthorize(request: FastifyRequest, reply: FastifyReply, current
     reply.code(403).send({ error: "Senha incorreta.", code: "PASSWORD_INVALID" });
     return false;
   }
-  reauthThrottle.succeed(key, request.ip);
+  reauthThrottle.succeed(key, ip);
   reauthAccountCap.succeed(accountKey);
   return true;
 }
