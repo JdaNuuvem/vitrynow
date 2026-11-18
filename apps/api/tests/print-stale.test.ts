@@ -132,7 +132,7 @@ describe("N6/N8 — janela de 12 h e eventos de impressão", () => {
     expect(json(a).job.status === "PENDING" || json(a).job.status === "CLAIMED").toBe(true);
     expect(owner("print.available")).toHaveLength(1);
     expect(device("print.available")).toHaveLength(1);
-    expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "print.print_now", targetId: job.id } })).toBe(1);
+    await vi.waitFor(async () => expect(await prisma.auditLog.count({ where: { storeId: ctx.storeId, action: "print.print_now", targetId: job.id } })).toBe(1), { timeout: 10_000, interval: 100 }); // auditoria é gravada sem esperar (corrida sob carga)
 
     const got = json(await claim(ctx.token)).job; // createdAt tem 20 h, mas resumedAt recomeçou a janela
     expect(got.id).toBe(job.id);
