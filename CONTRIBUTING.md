@@ -24,3 +24,8 @@ Veja o README (seção "Rodando localmente"). Postgres de teste: `scripts/test-d
 - Proteção da `main` (PR obrigatório, CI obrigatório, sem force-push).
 - Adicionar o sócio como colaborador e definir `CODEOWNERS` com os dois usuários.
 - Configurar o CI no GitHub Actions (hoje o CI é um script local).
+
+## Senhas e segredos em testes (GitGuardian)
+- Senha de usuário de teste e string falsa de segredo ficam SÓ em arquivos de teste (`apps/api/tests/**`, `*.test.ts`) e são sempre fictícias.
+- O banco do CI é descartável (container do job, só em `localhost`); a senha dele não protege nada. Segredo REAL nunca entra no repositório: cofre ou variável de ambiente.
+- `.gitguardian.yaml` ignora só esses arquivos de teste e o `ci.yml`; o código de produção continua verificado. Se o GitGuardian alertar fora deles, trate como real: pare e avise a Nightingale.
