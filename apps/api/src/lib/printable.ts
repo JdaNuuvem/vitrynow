@@ -59,7 +59,7 @@ export type PrintableOptions = {
 export async function buildPrintableOrder(orderId: string, options: PrintableOptions = {}): Promise<PrintableOrder | null> {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
-    include: { store: true, payment: true, coupon: true, table: { select: { label: true } }, items: { include: { additionals: true } } },
+    include: { store: true, payment: true, coupon: true, table: { select: { label: true } }, items: { include: { additionals: true, options: { orderBy: { id: "asc" } } } } },
   });
   if (!order) return null;
 
@@ -120,13 +120,25 @@ export async function buildPrintableOrder(orderId: string, options: PrintableOpt
     cancelNotice: options.cancelNotice ?? false,
     customerRemoved: order.anonymizedAt !== null,
     createdAt: order.createdAt.toISOString(),
-    items: order.items.map((item) => ({
-      productName: clean(item.productName) ?? "",
-      quantity: item.quantity,
-      unitPriceCents: item.unitPriceCents,
-      notes: clean(item.notes, true),
-      additionals: item.additionals.map((a) => ({ name: clean(a.name) ?? "", priceCents: a.priceCents })),
-    })),
+    items: order.items.map((item) => {
+      // API-15/API-14b: item com GRUPOS DE OPÇÕES guarda as escolhas em `OrderItemOption` (cópias) e `additionals` fica vazio. O contrato do tíquete NÃO muda
+      // (o cliente soma `additionals` ao preço unitário e multiplica pela quantidade): as opções saem como linhas "Grupo: opção" e o preço unitário do tíquete é a BASE
+      // (o `unitPriceCents` do item já é base + extras). Opção BASE: linha com R$ 0 (o preço dela já é a base); opção SOMA: extra = preço × quantidade da opção.
+      const extras = item.options.filter((o) => o.priceMode === "SUM").reduce((sum, o) => sum + o.priceCents * o.quantity, 0);
+      return {
+        productName: clean(item.productName) ?? "",
+        quantity: item.quantity,
+        unitPriceCents: item.options.length > 0 ? item.unitPriceCents - extras : item.unitPriceCents,
+        notes: clean(item.notes, true),
+        additionals: [
+          ...item.additionals.map((a) => ({ name: clean(a.name) ?? "", priceCents: a.priceCents })),
+          ...item.options.map((o) => ({
+            name: `${clean(o.groupName) ?? ""}: ${clean(o.name) ?? ""}${o.quantity > 1 ? ` x${o.quantity}` : ""}`,
+            priceCents: o.priceMode === "SUM" ? o.priceCents * o.quantity : 0,
+          })),
+        ],
+      };
+    }),
   });
 }
 
