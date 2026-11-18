@@ -221,7 +221,7 @@ describe("grupos de opções (API-15)", () => {
   });
 });
 
-describe("migração 20261117140000 (adicionais atuais → grupo 'Adicionais', CA-B8-06)", () => {
+describe("migração 20261117350000 (adicionais atuais → grupo 'Adicionais', CA-B8-06)", () => {
   afterAll(async () => {
     await resetDb();
     await prisma.$disconnect();
@@ -240,7 +240,7 @@ describe("migração 20261117140000 (adicionais atuais → grupo 'Adicionais', C
     await prisma.productOptionGroup.deleteMany();
     await prisma.option.deleteMany();
     await prisma.optionGroup.deleteMany();
-    const sql = readFileSync(join(__dirname, "../../../packages/db/prisma/migrations/20261117140000_api15_grupos_de_opcoes/migration.sql"), "utf-8");
+    const sql = readFileSync(join(__dirname, "../../../packages/db/prisma/migrations/20261117350000_api15_grupos_de_opcoes/migration.sql"), "utf-8");
     const dataPart = sql.slice(sql.indexOf("INSERT INTO"));
     for (const statement of dataPart.split(/;\s*\n/).map((s) => s.replace(/--.*$/gm, "").trim()).filter(Boolean)) await prisma.$executeRawUnsafe(statement);
 
