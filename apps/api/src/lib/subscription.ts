@@ -1,12 +1,24 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { prisma, type Plan, type Subscription } from "@meucardapio/db";
+import {
+  resolveEntitlements,
+  type Access,
+  type Entitlements,
+  type LimitKey,
+  type Phase,
+  type PlanLimits,
+} from "./entitlements";
+import type { Feature } from "./features";
+
+export { FEATURES, type Feature } from "./features";
+export type { Access, Entitlements, LimitKey, Phase, PlanLimits } from "./entitlements";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WARNING_THRESHOLD_DAYS = 3;
 export const PERIOD_DAYS = 30;
 
-export const FEATURES = ["multi_user"] as const;
-export type Feature = (typeof FEATURES)[number];
+/** Plano cujo conteúdo vale durante o teste (D2/CA-B10-03). */
+export const TRIAL_PLAN_CODE = "BASICO";
 
 export type SubscriptionState = "trial" | "active" | "canceled" | "past_due" | "expired";
 
@@ -18,6 +30,11 @@ export type SubscriptionView = {
   trialEndsAt: string;
   currentPeriodEnd: string | null;
   daysLeft: number;
+  /** Fase do ADR-0003 (TRIAL/ACTIVE/READ_ONLY/SUSPENDED); `state` acima é o formato legado do banner. */
+  phase: Phase;
+  readOnlyEndsAt: string | null;
+  limits: PlanLimits;
+  access: Access;
 };
 
 export type BannerState = "info" | "warning" | "expired" | "active";
@@ -33,36 +50,43 @@ function daysUntil(target: Date, now: Date): number {
 
 type SubscriptionWithPlan = Subscription & { plan: Plan | null };
 
-function planFeatures(plan: Plan | null): Feature[] {
-  return (plan?.features ?? []).filter((feature): feature is Feature => (FEATURES as readonly string[]).includes(feature));
-}
-
-export function resolveSubscription(subscription: SubscriptionWithPlan, now: Date = new Date()): SubscriptionView {
+// `basicPlan` é o plano BASICO lido do banco: vale durante o teste. Sem ele, o teste não libera
+// recurso algum e usa os limites padrão do BASICO (o mais restritivo).
+export function resolveSubscription(
+  subscription: SubscriptionWithPlan,
+  now: Date = new Date(),
+  basicPlan: Plan | null = null,
+): SubscriptionView {
+  const entitlements = resolveEntitlements(subscription, basicPlan, now);
   const base = {
     planCode: subscription.plan?.code ?? null,
     planName: subscription.plan?.name ?? null,
     trialEndsAt: subscription.trialEndsAt.toISOString(),
     currentPeriodEnd: subscription.currentPeriodEnd?.toISOString() ?? null,
+    features: entitlements.features,
+    phase: entitlements.phase,
+    readOnlyEndsAt: entitlements.readOnlyEndsAt,
+    limits: entitlements.limits,
+    access: entitlements.access,
   };
   const periodEnd = subscription.currentPeriodEnd;
   const periodRunning = periodEnd !== null && periodEnd > now;
 
   if (subscription.status === "TRIAL") {
-    if (subscription.trialEndsAt > now) {
-      return { ...base, state: "trial", features: [...FEATURES], daysLeft: daysUntil(subscription.trialEndsAt, now) };
-    }
-    return { ...base, state: "expired", features: [], daysLeft: 0 };
+    return subscription.trialEndsAt > now
+      ? { ...base, state: "trial", daysLeft: daysUntil(subscription.trialEndsAt, now) }
+      : { ...base, state: "expired", daysLeft: 0 };
   }
 
   if (subscription.status === "ACTIVE") {
     return periodRunning
-      ? { ...base, state: "active", features: planFeatures(subscription.plan), daysLeft: daysUntil(periodEnd, now) }
-      : { ...base, state: "past_due", features: [], daysLeft: 0 };
+      ? { ...base, state: "active", daysLeft: daysUntil(periodEnd, now) }
+      : { ...base, state: "past_due", daysLeft: 0 };
   }
 
   return periodRunning
-    ? { ...base, state: "canceled", features: planFeatures(subscription.plan), daysLeft: daysUntil(periodEnd, now) }
-    : { ...base, state: "expired", features: [], daysLeft: 0 };
+    ? { ...base, state: "canceled", daysLeft: daysUntil(periodEnd, now) }
+    : { ...base, state: "expired", daysLeft: 0 };
 }
 
 // Estado que o banner do painel entende: durante o teste avisa; em dia, some.
@@ -114,13 +138,122 @@ export async function activateSubscription(
   });
 }
 
-// preHandler: encadear depois de requirePanelAuth. Recurso fora do plano → 402.
+async function loadBasicPlan(): Promise<Plan | null> {
+  return prisma.plan.findUnique({ where: { code: TRIAL_PLAN_CODE } });
+}
+
+/** Assinatura da loja já resolvida (fase, recursos, limites e acesso). Nada em cache: reativar libera na hora. */
+export async function getSubscriptionView(storeId: string, now: Date = new Date()): Promise<SubscriptionView> {
+  const [subscription, basicPlan] = await Promise.all([getStoreSubscription(storeId), loadBasicPlan()]);
+  return resolveSubscription(subscription, now, basicPlan);
+}
+
+/** Fonte única de verdade do que a loja pode usar agora (ADR-0003 §2.1). */
+export async function getEntitlements(storeId: string, now: Date = new Date()): Promise<Entitlements> {
+  const view = await getSubscriptionView(storeId, now);
+  return { phase: view.phase, readOnlyEndsAt: view.readOnlyEndsAt, features: view.features, limits: view.limits, access: view.access };
+}
+
+// preHandler: encadear depois de requirePanelAuth. Recurso fora do plano → 402 FEATURE_LOCKED.
 export function requireFeature(feature: Feature) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    const view = resolveSubscription(await getStoreSubscription(request.user.storeId));
-    if (!hasFeature(view, feature)) {
-      reply.code(402).send({ error: "Este recurso não está disponível no seu plano.", code: "FEATURE_LOCKED", feature });
+    const entitlements = await getEntitlements(request.user.storeId);
+    if (!entitlements.features.includes(feature)) {
+      reply
+        .code(402)
+        .send({ error: "Este recurso não está disponível no seu plano.", code: "FEATURE_LOCKED", feature, details: { feature } });
     }
+  };
+}
+
+// ── Limite do plano sem corrida (SEC-21 / ST-35) ──────────────────────────────────────────
+// Contar e criar precisa acontecer numa janela exclusiva por loja+limite; senão 8 pedidos paralelos
+// passam todos pela contagem. Duas camadas:
+//  1) fila em memória por (loja, limite): quem espera NÃO ocupa conexão do banco (evita esgotar o pool);
+//  2) `pg_advisory_xact_lock` numa transação mantida aberta até a resposta terminar: vale entre várias
+//     instâncias da API.
+// A janela só fecha quando a resposta acaba (a criação já foi gravada), e uma transação-guarda com
+// prazo (LIMIT_LOCK_TIMEOUT_MS) solta o lock sozinha se algo travar.
+const LIMIT_LOCK_TIMEOUT_MS = 20_000;
+const limitQueues = new Map<string, Promise<void>>();
+
+async function enterLimitQueue(key: string): Promise<() => void> {
+  const previous = limitQueues.get(key) ?? Promise.resolve();
+  let leave!: () => void;
+  const mine = new Promise<void>((resolve) => (leave = resolve));
+  const tail = previous.then(() => mine);
+  limitQueues.set(key, tail);
+  void tail.then(() => {
+    if (limitQueues.get(key) === tail) limitQueues.delete(key);
+  });
+  await previous;
+  return leave;
+}
+
+function holdDbLimitLock(key: string): Promise<() => void> {
+  return new Promise((resolveLock, rejectLock) => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    prisma
+      .$transaction(
+        async (tx) => {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+          resolveLock(() => release());
+          await held;
+        },
+        { timeout: LIMIT_LOCK_TIMEOUT_MS, maxWait: 10_000 },
+      )
+      .catch(rejectLock); // depois de resolveLock vira no-op (ex.: prazo estourou e o lock já caiu)
+  });
+}
+
+async function acquireLimitWindow(storeId: string, limit: LimitKey): Promise<() => void> {
+  const key = `limit:${storeId}:${limit}`;
+  const leaveQueue = await enterLimitQueue(key);
+  try {
+    const releaseDb = await holdDbLimitLock(key);
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      releaseDb();
+      leaveQueue();
+    };
+  } catch (error) {
+    leaveQueue();
+    throw error;
+  }
+}
+
+/**
+ * preHandler de limite do plano (maxUsers, maxPrinters): `countCurrent` devolve quantos já existem
+ * (só os ativos). Ao atingir o máximo → 402 LIMIT_REACHED. Sem limite (`null`) nunca bloqueia.
+ * Contagem e criação são serializadas por loja+limite (ver acima): o preHandler só devolve o
+ * controle com a janela aberta e a fecha quando a resposta termina.
+ */
+export function requireLimit(limit: LimitKey, countCurrent: (request: FastifyRequest) => Promise<number>) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const { storeId } = request.user;
+    const max = (await getEntitlements(storeId)).limits[limit];
+    if (max === null) return;
+
+    const release = await acquireLimitWindow(storeId, limit);
+    let current: number;
+    try {
+      current = await countCurrent(request);
+    } catch (error) {
+      release();
+      throw error;
+    }
+    if (current >= max) {
+      release();
+      return reply
+        .code(402)
+        .send({ error: "Você atingiu o limite do seu plano.", code: "LIMIT_REACHED", details: { limit, max, current } });
+    }
+    // Janela aberta até o fim da resposta (sucesso, erro ou conexão derrubada).
+    reply.raw.once("close", release);
+    return undefined;
   };
 }
 
