@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
+import { isSale, saleRevenueCents } from "../lib/saleLines";
 
 const STORE_TIMEZONE = "America/Sao_Paulo";
 
@@ -17,18 +18,17 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
     // inclui o dia final inteiro
     const toInclusive = new Date(to.getTime() + 24 * 60 * 60 * 1000);
 
-    const orders = await prisma.order.findMany({
-      where: {
-        storeId,
-        awaitingPayment: false,
-        status: { not: "CANCELADO" },
-        createdAt: { gte: from, lt: toInclusive },
-      },
+    const inPeriod = await prisma.order.findMany({
+      where: { storeId, awaitingPayment: false, createdAt: { gte: from, lt: toInclusive } },
       include: { items: true, deliverer: true },
     });
+    // API-21 (B14.1, mesma regra do caixa): VENDA = CONFIRMADO..CONCLUIDO (PENDENTE é "em aberto", CANCELADO é à parte); faturamento = total − gorjeta.
+    const orders = inPeriod.filter(isSale);
+    const canceled = inPeriod.filter((o) => o.status === "CANCELADO");
+    const open = inPeriod.filter((o) => o.status === "PENDENTE");
 
     const orderCount = orders.length;
-    const revenueCents = orders.reduce((sum, o) => sum + o.totalCents, 0);
+    const revenueCents = orders.reduce((sum, o) => sum + saleRevenueCents(o), 0);
     const discountCents = orders.reduce((sum, o) => sum + o.discountCents, 0);
     const averageTicketCents = orderCount > 0 ? Math.round(revenueCents / orderCount) : 0;
 
@@ -41,7 +41,7 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
       const date = order.createdAt.toLocaleDateString("en-CA", { timeZone: STORE_TIMEZONE });
       const entry = dayAgg.get(date) ?? { date, orderCount: 0, revenueCents: 0 };
       entry.orderCount += 1;
-      entry.revenueCents += order.totalCents;
+      entry.revenueCents += saleRevenueCents(order);
       dayAgg.set(date, entry);
     }
     const byDay = [...dayAgg.values()].sort((a, b) => a.date.localeCompare(b.date));
@@ -55,14 +55,14 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
       const bucket = order.totalCents === 0 ? "SEM_COBRANCA" : (order.paymentMethod ?? "NAO_IDENTIFICADO");
       byPaymentMethod[bucket] ??= { count: 0, revenueCents: 0 };
       byPaymentMethod[bucket].count += 1;
-      byPaymentMethod[bucket].revenueCents += order.totalCents;
+      byPaymentMethod[bucket].revenueCents += saleRevenueCents(order);
     }
 
     const byType: Record<string, { count: number; revenueCents: number }> = {};
     for (const order of orders) {
       byType[order.type] ??= { count: 0, revenueCents: 0 };
       byType[order.type].count += 1;
-      byType[order.type].revenueCents += order.totalCents;
+      byType[order.type].revenueCents += saleRevenueCents(order);
     }
 
     const productAgg = new Map<string, { productName: string; quantity: number; revenueCents: number }>();
@@ -123,6 +123,10 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
       topProducts,
       byDeliverer,
       cashSummary,
+      canceledCount: canceled.length,
+      canceledCents: canceled.reduce((sum, o) => sum + o.totalCents, 0),
+      openCount: open.length,
+      openCents: open.reduce((sum, o) => sum + o.totalCents, 0),
     };
   });
 };

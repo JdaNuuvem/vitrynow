@@ -94,7 +94,7 @@ describe("QA privacidade das respostas de pedido (API-54a)", () => {
     const cat = JSON.parse((await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie: cookie! }, payload: { name: "C" } })).body).category.id;
     const productId = JSON.parse((await app.inject({ method: "POST", url: "/api/catalog/products", headers: { cookie: cookie! }, payload: { categoryId: cat, name: "P", priceCents: 2500 } })).body).product.id as string;
     const socket = { readyState: 1, OPEN: 1, send: vi.fn(), on: vi.fn() };
-    subscribe(store.id, socket as never);
+    subscribe(store.id, socket as never, "OWNER");
     await app.inject({ method: "POST", url: `/stores/${store.slug}/orders`, payload: { type: "DELIVERY", customerName: "Cliente Sigiloso", customerPhone: PHONE, address: ADDRESS, paymentMethod: "DINHEIRO", items: [{ productId, quantity: 1 }] } });
     expect(socket.send.mock.calls.length).toBeGreaterThan(0);
     for (const [raw] of socket.send.mock.calls) {

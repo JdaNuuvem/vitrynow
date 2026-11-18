@@ -116,6 +116,7 @@ model Store {
   auditLogs    AuditLog[]
   deviceAlerts DeviceAlert[]
   subscription Subscription?
+  paymentAccounts PaymentAccount[]
   counter      StoreCounter?
   printJobs    PrintJob[]
   printMode    PrintMode @default(LEGACY) // modo de impressão decidido pelo SERVIDOR por loja (ADR-0004 §8.12)
@@ -141,8 +142,19 @@ model User {
   // "sair de todos os dispositivos". JWT com `tv` diferente é recusado (SESSION_REVOKED).
   tokenVersion Int      @default(0)
   createdAt    DateTime @default(now())
+  noticeDismissals UserNoticeDismissal[]
 
   @@index([storeId])
+}
+
+// Avisos de mudança de regra que o usuário já dispensou (RN-MIG-04b): uma linha por (usuário, aviso); dispensar de novo não muda nada.
+model UserNoticeDismissal {
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  noticeId    String
+  dismissedAt DateTime @default(now())
+
+  @@id([userId, noticeId])
 }
 
 // Token de recuperação de senha. Entrega por e-mail via Resend (lib/email.ts) — sem
@@ -228,6 +240,9 @@ model Order {
   id            String      @id @default(cuid())
   // NG-16: SHA-256 do token de acesso do cliente (cardápio público). O token em si só existe na resposta da criação.
   publicTokenHash String? @unique
+  // API-21 (RN-CX-01/02): quando o dinheiro deste pedido foi RECEBIDO. O caixa conta dinheiro só a partir daqui; null = ainda não recebido.
+  paidAt        DateTime?
+  paidAtApproximate Boolean @default(false) // true = `paidAt` estimado pela migração (sem o instante real); novos pedidos gravam o real
   storeId       String
   store         Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
   code          String // sequencial legível por loja, ex. "0007"
@@ -298,6 +313,53 @@ model OrderItemAdditional {
   @@index([orderItemId])
 }
 
+// ---- API-07 (ADR-0001): PIX por loja via OAuth do Mercado Pago. Tokens SEMPRE cifrados (lib/paymentCrypto.ts). ----
+
+enum PaymentAccountStatus {
+  CONNECTED
+  NEEDS_RECONNECT // renovação falhou ou o provedor revogou: o PIX some do checkout e o dono é avisado
+  DISCONNECTED // histórico: SEM tokens. Pagamentos pendentes/em estorno impedem desconectar ou trocar de vendedor; os já ENCERRADOS ficam presos a esta conta, então um estorno tardio deles só sai pelo app do próprio Mercado Pago
+}
+
+// Uma conta ativa (CONNECTED/NEEDS_RECONNECT) por loja e um vendedor do provedor em uma só loja: índices únicos PARCIAIS
+// na migração (o Prisma não os expressa). A conta anterior vira DISCONNECTED e fica no histórico (D1-2).
+model PaymentAccount {
+  id              String               @id @default(cuid())
+  storeId         String
+  store           Store                @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  provider        String               @default("mercadopago")
+  sellerUserId    String // id do vendedor no provedor (nunca vai a resposta, log ou auditoria sem máscara)
+  status          PaymentAccountStatus @default(CONNECTED)
+  accessTokenEnc  String? // `v1.<keyId>.<iv>.<tag>.<ct>`; null depois de desconectar (apagado, não só marcado)
+  refreshTokenEnc String?
+  expiresAt       DateTime? // fim do access_token
+  connectedAt     DateTime             @default(now())
+  disconnectedAt  DateTime?
+  lastRefreshAt   DateTime?
+  lastRefreshAttemptAt DateTime? // última tentativa (certa ou errada): o job conta no máximo uma falha por dia
+  refreshFailures Int                  @default(0)
+  lastError       String? // texto curto, sem dado sensível
+  payments        Payment[]
+
+  @@unique([id, storeId])
+  @@index([storeId, status])
+  @@index([status, expiresAt])
+}
+
+// `state` do OAuth: só o HASH fica no banco, uso único, expira em minutos, preso à loja, ao usuário e à sessão (D1-1).
+model PaymentOAuthState {
+  id        String    @id @default(cuid())
+  storeId   String
+  userId    String
+  sid       String // sessão que iniciou a conexão
+  stateHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([expiresAt])
+}
+
 model OrderStatusHistory {
   id        String      @id @default(cuid())
   orderId   String
@@ -334,6 +396,7 @@ model CashSession {
   closeReasonText    String? // texto livre SÓ quando o código é OUTRO (1 a 200); nunca vai para a auditoria
   closedByRole       String? // papel de quem fechou (OWNER/STAFF); nunca o e-mail
   summarySnapshot    Json? // retrato CONGELADO do resumo no instante do fechamento (RN-CX-15)
+  cashRuleVersion    Int       @default(2) // 1 = caixa aberto antes da regra do dinheiro RECEBIDO (API-21); 2 = regra atual
 
   movements CashMovement[]
 
@@ -397,6 +460,8 @@ model Payment {
   lastRawStatus     String?
   lastCheckedAt     DateTime?
   reconcileNote     String? // estorno feito mas o pedido já estava finalizado: conciliação manual (nunca silencioso)
+  paymentAccountId  String? // conta do vendedor que criou a cobrança (API-07); pagamento antigo/da plataforma = null
+  paymentAccount    PaymentAccount? @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 

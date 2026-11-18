@@ -72,6 +72,8 @@ if (-not $ciLock) {
   if (-not $ciLock) { Write-Host "Desisti após $WaitMinutes min sem vaga. Tente de novo mais tarde." -ForegroundColor Red; exit 3 }
 }
 foreach ($tool in 'node', 'pnpm', 'docker') { if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "$tool não encontrado no PATH" } }
+$nodeMajor = [int](((node -v) -replace '^v', '') -split '\.')[0]
+if ($nodeMajor -lt 24) { throw "Node $nodeMajor no PATH: o projeto exige Node 24 (engines em package.json, .nvmrc, Dockerfiles e CI usam 24)" }
 
 $continue = $true
 if ($continue) { $continue = Step 'install (lockfile congelado)' { pnpm install --frozen-lockfile } }
@@ -104,7 +106,8 @@ if ($continue) {
 # no piso). É teste de SEGURANÇA: não se silencia nem se afrouxa. Mede tempo ABSOLUTO e por isso falha com a máquina ocupada (medido: em repouso 0 de 5; com 12 laços
 # de CPU 1 de 4, diferença de 484 ms; no CI de 1023 s, 143 ms). Roda SOZINHO, ANTES da suíte, e a suíte principal o PULA (-t negativo), para não ser medido em paralelo.
 # Regra: passa de 1ª => ok. Falhou => 1 repetição automática (o valor da 1ª falha fica registrado). Passou na repetição => ok com aviso. Falhou nas duas:
-#   * em REPOUSO (CPU < 60% e nenhuma outra suíte rodando) => BLOQUEIA;
+#   * em REPOUSO (CPU < 60%) => mais 3 rodadas; BLOQUEIA se >= 2 das 3 falharem OU se o MESMO ramo foi o mais afastado da mediana em TODAS as falhas (INF-20b: o teste
+#     tem ~7% de ruído por rodada nesta máquina compartilhada; defeito real é sempre o mesmo ramo). Valores, ramos e CPU de cada tentativa ficam impressos;
 #   * sob carga CONHECIDA => espera 20 s e roda mais 3 vezes: 3 de 3 => não bloqueia (aviso com os números); senão BLOQUEIA.
 # Padrão do nome em ASCII (. no lugar de ê): sem BOM o PowerShell 5.1 lê o .ps1 como ANSI e o acento viraria lixo.
 $timingFile = 'tests/reset-email-confirmation.test.ts'
@@ -119,36 +122,75 @@ function Get-CargaConhecida {  # devolve @{ Cpu=<int|-1>; Outras=<n suítes vite
   # (o 60% é conservador, não demonstrado); outros agentes mudam a carga sem aviso. Reavalie se o estágio falhar com CPU < 60% ou passar com folga acima de 60%.
   [pscustomobject]@{ Cpu = $cpu; Outras = $outras; Alta = ($cpu -ge 60) }
 }
-function Invoke-TimingTest {  # roda SÓ o teste de tempo; devolve @{ Ok; Valor }
+function Get-CpuAgora { try { [int](Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average } catch { -1 } }
+function Get-RamoAfastado($ramos) {  # ramo mais afastado da MEDIANA dos ramos: defeito real = sempre o MESMO ramo; ruído = ramos variados
+  if (-not $ramos -or $ramos.Count -lt 3) { return $null }
+  $v = @($ramos.Values | Sort-Object); $med = $v[[int][math]::Floor($v.Count / 2)]
+  $pior = $ramos.GetEnumerator() | Sort-Object { [math]::Abs($_.Value - $med) } -Descending | Select-Object -First 1
+  [pscustomobject]@{ Nome = $pior.Key; Delta = [math]::Round($pior.Value - $med, 0) }
+}
+function Invoke-TimingTest {  # roda SÓ o teste de tempo; devolve @{ Ok; Valor; Tipo; Texto; Cpu; Lista; Ramo; DeltaTxt }
+  $cpu = Get-CpuAgora
   Push-Location (Join-Path $repo 'apps/api')
   try {
     $env:TEST_DATABASE_URL = $testUrl
     $out = node node_modules/vitest/vitest.mjs run $timingFile -t $timingPattern 2>&1 | ForEach-Object { $_ -replace "\x1b\[[0-9;]*m", '' }
     $rc = $LASTEXITCODE
   } finally { Pop-Location }
-  $m = $out | Select-String -Pattern 'expected ([0-9.]+) to be less than' | Select-Object -First 1
+  # Dois jeitos de falhar COM valor medido: diferença acima do limite ("less than 35") ou tempo ABAIXO do piso ("greater than or equal to <piso>"). Sem nenhum dos
+  # dois o teste nem chegou a medir (banco desatualizado, erro de setup): Valor fica vazio e a mensagem final NÃO acusa defeito de segurança.
+  $m = $out | Select-String -Pattern 'expected ([0-9.]+) to be (less than|greater than or equal to)' | Select-Object -First 1
   $valor = if ($m) { $m.Matches[0].Groups[1].Value } else { '' }
+  $tipo = if ($m -and $m.Matches[0].Groups[2].Value -like 'greater*') { 'piso' } else { 'limite' }
   # "nenhum teste casou" NÃO pode contar como passou: exige 1 teste passado
   $passou = ($rc -eq 0) -and [bool]($out | Select-String -Pattern 'Tests\s+1 passed' -Quiet)
   if (-not $passou -and -not $valor) { $out | Select-Object -Last 12 | ForEach-Object { Write-Host "   $_" } }
-  [pscustomobject]@{ Ok = $passou; Valor = $valor }
+  # Medianas por ramo (linha TEMPO_RAMOS que o teste imprime): diz QUAL ramo ficou afastado.
+  $ramos = @{}
+  $lr = $out | Select-String -Pattern 'TEMPO_RAMOS (\{.*\})' | Select-Object -First 1
+  if ($lr) { try { $o = $lr.Matches[0].Groups[1].Value | ConvertFrom-Json; foreach ($p in $o.PSObject.Properties) { $ramos[$p.Name] = [double]$p.Value } } catch { $ramos = @{} } }
+  $af = Get-RamoAfastado $ramos
+  $lista = if ($ramos.Count) { (($ramos.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$([math]::Round($_.Value))" }) -join ' ') + ' (ms)' } else { 'ramos não medidos' }
+  # Texto = como mostrar o valor: "diferença X ms (limite 35)", "tempo X ms ABAIXO do piso" ou "não medido".
+  $texto = if (-not $valor) { 'não medido' } elseif ($tipo -eq 'piso') { "tempo $valor ms ABAIXO do piso" } else { "diferença $valor ms (limite 35)" }
+  [pscustomobject]@{ Ok = $passou; Valor = $valor; Tipo = $tipo; Texto = $texto; Cpu = $cpu; Lista = $lista; Ramo = $(if ($af) { $af.Nome } else { '' }); DeltaTxt = $(if ($af) { '{0:+#;-#;0}' -f $af.Delta } else { '' }) }
+}
+function Format-Tentativa([int]$n, $r) {
+  "   tentativa ${n}: CPU $($r.Cpu)% | $(if ($r.Ok) { 'passou' } else { 'FALHOU' }) | $($r.Lista) | $(if ($r.Ramo) { "ramo mais afastado da mediana: $($r.Ramo) ($($r.DeltaTxt) ms)" } else { 'ramo: n/d' })"
 }
 if ($continue -and -not $SkipTests) {
   $continue = Step 'teste de tempo (SEGURANÇA), isolado, antes da suíte' {
     $carga = Get-CargaConhecida
     Write-Host "   carga antes: CPU $($carga.Cpu)%, outras suítes vitest: $($carga.Outras) => $(if ($carga.Alta) { 'CARGA CONHECIDA (CPU >= 60%)' } else { 'repouso (CPU < 60%)' })"
-    $r1 = Invoke-TimingTest
+    $tent = New-Object System.Collections.Generic.List[object]
+    $r1 = Invoke-TimingTest; $tent.Add($r1); Write-Host (Format-Tentativa 1 $r1)
     if ($r1.Ok) { Write-Host '   passou de primeira'; $global:LASTEXITCODE = 0; return }
-    Write-Host "   1ª tentativa FALHOU (diferença medida: $($r1.Valor) ms; limite 35). Repetindo automaticamente 1 vez."
-    $r2 = Invoke-TimingTest
-    if ($r2.Ok) { Write-Host "   AVISO: falhou na 1ª ($($r1.Valor) ms) e passou na repetição: confira a carga da máquina."; $global:LASTEXITCODE = 0; return }
-    Write-Host "   a repetição também FALHOU (diferença medida: $($r2.Valor) ms)."
-    if (-not $carga.Alta) { throw "teste de tempo falhou 2 vezes EM REPOUSO ($($r1.Valor) e $($r2.Valor) ms; limite 35): é defeito (SEGURANÇA, o tempo de resposta distingue contas); não afrouxe o limite" }
-    Write-Host '   carga conhecida: esperando 20 s e repetindo 3 vezes; só 3 de 3 libera.'
-    Start-Sleep -Seconds 20
-    $vals = @(); for ($i = 0; $i -lt 3; $i++) { $r = Invoke-TimingTest; $vals += $(if ($r.Ok) { 'ok' } else { "falhou($($r.Valor) ms)" }) }
-    if (($vals | Where-Object { $_ -eq 'ok' }).Count -eq 3) { Write-Host "   AVISO: falhas sob carga ($($r1.Valor) e $($r2.Valor) ms), mas 3 de 3 passaram depois: não bloqueia. Rode o CI com a máquina em repouso." ; $global:LASTEXITCODE = 0; return }
-    throw "teste de tempo falhou sob carga E não passou 3 de 3 depois ($($vals -join ', ')): trate como defeito"
+    Write-Host "   1ª tentativa FALHOU ($($r1.Texto)). Repetindo automaticamente 1 vez."
+    $r2 = Invoke-TimingTest; $tent.Add($r2); Write-Host (Format-Tentativa 2 $r2)
+    if ($r2.Ok) { Write-Host "   AVISO: falhou na 1ª ($($r1.Texto)) e passou na repetição: confira a carga da máquina."; $global:LASTEXITCODE = 0; return }
+    Write-Host "   a repetição também FALHOU ($($r2.Texto))."
+    # Sem valor nas DUAS falhas = o teste nem mediu (banco de teste desatualizado, migração faltando, erro de setup). Isso não prova defeito de segurança: diga a causa provável.
+    if (-not $r1.Valor -and -not $r2.Valor) { throw "teste de tempo falhou 2 vezes SEM valor medido: banco de teste desatualizado ou erro de setup. Rode as migrações (.\scripts\test-db.ps1 -Agent <agente> -Port <porta>) e leia a saída do teste acima; isto NÃO é, por si só, defeito de segurança" }
+    if ($carga.Alta) {
+      Write-Host '   carga conhecida: esperando 20 s e repetindo 3 vezes; só 3 de 3 libera.'
+      Start-Sleep -Seconds 20
+      for ($i = 3; $i -le 5; $i++) { $r = Invoke-TimingTest; $tent.Add($r); Write-Host (Format-Tentativa $i $r) }
+      if (@($tent | Select-Object -Skip 2 | Where-Object { $_.Ok }).Count -eq 3) { Write-Host "   AVISO: falhas sob carga ($($r1.Texto) e $($r2.Texto)), mas 3 de 3 passaram depois: não bloqueia. Rode o CI com a máquina em repouso." ; $global:LASTEXITCODE = 0; return }
+      throw "teste de tempo falhou sob carga E não passou 3 de 3 depois: trate como defeito"
+    }
+    # REPOUSO (INF-20b, decisão do Atlas 17/11): o teste falha ~7% das rodadas por RUÍDO com a máquina compartilhada (medido: CPU do host 0-49%, picos de 400-1159 ms que
+    # estouram o piso), então 2 falhas seguidas NÃO bastam. Mais 3 rodadas; BLOQUEIA se >= 2 das 3 falharem, OU se o MESMO ramo foi o mais afastado em TODAS as falhas (um
+    # defeito real é sempre o mesmo ramo; ruído cai em ramos variados). Todas as tentativas (valores e CPU) ficam impressas. O Atlas revê a regra se o bloqueio por ruído passar de 1 em 20 CIs.
+    Write-Host '   repouso, 2 falhas seguidas: rodando mais 3 vezes. Bloqueia se >= 2 das 3 falharem OU se o mesmo ramo for o mais afastado em todas as falhas.'
+    for ($i = 3; $i -le 5; $i++) { $r = Invoke-TimingTest; $tent.Add($r); Write-Host (Format-Tentativa $i $r) }
+    $falhasDepois = @($tent | Select-Object -Skip 2 | Where-Object { -not $_.Ok }).Count
+    $falhas = @($tent | Where-Object { -not $_.Ok })
+    $ramosFalha = @($falhas | ForEach-Object { $_.Ramo } | Select-Object -Unique)
+    $mesmoRamo = ($ramosFalha.Count -eq 1 -and [bool]$ramosFalha[0])
+    if ($falhasDepois -ge 2) { throw "teste de tempo falhou 2 vezes seguidas E $falhasDepois das 3 rodadas seguintes (em repouso, CPU $($carga.Cpu)%): é defeito (SEGURANÇA, o tempo de resposta distingue contas); não afrouxe o limite nem o piso. Valores acima" }
+    if ($mesmoRamo) { throw "teste de tempo: o MESMO ramo ($($ramosFalha[0])) foi o mais afastado em todas as $($falhas.Count) falhas, mesmo com $falhasDepois de 3 falhando depois: tem cara de defeito real (SEGURANÇA); valores acima" }
+    Write-Host "   AVISO: $($falhas.Count) falhas em $($tent.Count) rodadas, mas só $falhasDepois das 3 últimas e em ramos diferentes ($(($falhas | ForEach-Object { if ($_.Ramo) { $_.Ramo } else { 'n/d' } }) -join ', ')): ruído provável, NÃO bloqueia. Conte este aviso: o Atlas revê a regra se o ruído bloquear mais de 1 CI em 20."
+    $global:LASTEXITCODE = 0
   }
 }
 

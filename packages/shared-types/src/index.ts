@@ -115,7 +115,7 @@ export const wsServerMessageSchema = z.discriminatedUnion("type", [
   // Fila de impressão (ADR-0004): só "acorde e peça job"; nenhum dado de pedido ou cliente no canal.
   z.object({ type: z.literal("print.available") }),
   z.object({ type: z.literal("print.job_failed"), jobId: z.string() }),
-  // Caixa (CA-CX-28): o STAFF fechou com diferença ACIMA da tolerância. Só o id do caixa, o papel e o valor em centavos; nunca o texto do motivo.
+  // Caixa (CA-CX-28): o STAFF fechou com diferença ACIMA da tolerância. SÓ o id do caixa (sem valor, papel nem motivo; o dono busca o detalhe na tela do caixa fechado). Entregue só a conexões de OWNER (realtime/hub.ts).
   z.object({ type: z.literal("cashier.difference_over_tolerance"), sessionId: z.string() }),
   // PC-24: alerta de dispositivo para o painel do dono. Só o CÓDIGO (a frase sai do código no painel); nada de pedido, cliente ou texto livre.
   z.object({ type: z.literal("device.alert"), code: z.string() }),
@@ -380,7 +380,7 @@ export type CreateNoticeInput = z.infer<typeof createNoticeSchema>;
 
 // ---- Confirmação de segurança (MFA por e-mail) ----
 
-export const MFA_PURPOSES = ["refund", "change_password", "delete_user"] as const;
+export const MFA_PURPOSES = ["refund", "change_password", "delete_user", "connect_payment", "disconnect_payment"] as const;
 export const mfaPurposeSchema = z.enum(MFA_PURPOSES);
 export type MfaPurpose = z.infer<typeof mfaPurposeSchema>;
 

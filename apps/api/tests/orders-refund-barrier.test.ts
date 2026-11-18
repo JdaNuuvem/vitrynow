@@ -7,7 +7,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { subscribe } from "../src/realtime/hub";
-import { makeApp, registerStore, resetDb, orderTokenHeader } from "./helpers";
+import { makeApp, registerStore, resetDb, orderTokenHeader, useMockedProvider } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -27,6 +27,7 @@ vi.setConfig({ testTimeout: 120_000 });
 describe("C5 — estorno × pedido, com barreira de linha", () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     refundPayment.mockResolvedValue(undefined);
     app = makeApp();
@@ -220,7 +221,7 @@ describe("C5 — estorno × pedido, com barreira de linha", () => {
     const l = await loja();
     const id = await pedidoPago(l, "PRONTO");
     const sent: string[] = [];
-    subscribe(l.store.id, { readyState: 1, OPEN: 1, send: (m: string) => sent.push(m), on: vi.fn() } as never);
+    subscribe(l.store.id, { readyState: 1, OPEN: 1, send: (m: string) => sent.push(m), on: vi.fn() } as never, "OWNER");
     // Durante a chamada ao provedor, algo fora do fluxo normal conclui o pedido (a trava impede isso pelas rotas).
     refundPayment.mockImplementationOnce(async () => {
       await prisma.order.update({ where: { id }, data: { status: "CONCLUIDO" } });

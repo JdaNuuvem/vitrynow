@@ -1,3 +1,78 @@
+﻿# VitryNow (nome provisório: MeuCardapio)
+
+Plataforma de pedidos para restaurantes e lojas: cardápio online para o cliente, painel de gestão (pedidos, catálogo, caixa, cupons, equipe), impressão de tíquetes no balcão e pagamento por PIX.
+
+> Estado: **em desenvolvimento, só ambiente de DEV**. Nada em produção. Nome, domínio e marca ainda não definidos.
+
+## Stack
+
+| Camada | Tecnologia |
+|---|---|
+| Monorepo | pnpm workspaces (`apps/*`, `packages/*`, `infra`) |
+| API | Node 24, Fastify, Zod, WebSocket, jobs no processo |
+| Banco | PostgreSQL 16, Prisma 5.22 (migrações em `packages/db/prisma/migrations`) |
+| Painel e cardápio | Next.js 14 (React), SSR/ISR no cardápio público |
+| Impressão | C# / .NET Framework (WinForms), `apps/print-client` |
+| Testes | Vitest (API e web), Testing Library (web), selftest próprio no print-client |
+| Infra | Docker Compose, Caddy (HTTPS e limite de requisições), backup do Postgres |
+| Integrações | Mercado Pago (PIX, hoje só mock/sandbox), Resend (e-mail, mock), WhatsApp/Meta (planejado) |
+
+**Pré-requisitos:** Node **24** (`.nvmrc`; as imagens Docker e o CI usam a mesma versão), pnpm 12.8.1 (fixado em `packageManager`; `corepack enable` instala a versão certa), Docker. O Postgres de teste sobe por `scripts/test-db.ps1`.
+
+## Páginas atuais (`apps/web/app`)
+
+Estado visual: **v2** = redesenhada; **antigo** = ainda no desenho original (só correções de segurança/comportamento).
+
+### Públicas (cliente)
+
+| Rota | O que é | Estado visual |
+|---|---|---|
+| `/loja/[slug]` | Cardápio público: capa, logo, categorias fixas, itens, carrinho, checkout, resultado do PIX, acompanhar/cancelar pedido | **v2 (Fatia 1: estrutura)**. Movimento (Fatia 2) e detalhe/carrinho/checkout novos (Fatia 3) pendentes |
+
+### Acesso
+
+| Rota | O que é | Estado visual |
+|---|---|---|
+| `/` | Entrada / cadastro de loja | antigo |
+| `/login` | Entrar no painel | antigo |
+| `/esqueci-senha` | Pedir link de redefinição | antigo (backend endurecido) |
+| `/reset-senha` | Definir nova senha (exige e-mail da conta) | antigo (backend endurecido) |
+
+### Painel (`/dashboard`, requer login)
+
+| Rota | O que é | Estado visual |
+|---|---|---|
+| `/dashboard` | Início: resumo, checklist de primeiros passos | antigo |
+| `/dashboard/pedidos` | Kanban de pedidos: aceitar, recusar, cancelar com motivo, estorno, desfazer | **v2** |
+| `/dashboard/pedidos/historico` | Histórico com busca e filtro "Em aberto" | **v2** |
+| `/dashboard/catalogo` | Categorias e produtos (excluir pede confirmação; "Ocultar" é o padrão) | antigo |
+| `/dashboard/caixa` | Abrir/fechar caixa, movimentos, resumo | antigo |
+| `/dashboard/cupons` | Cupons de desconto (teto de funcionário: 50% ou R$ 50) | antigo |
+| `/dashboard/entregadores` | Cadastro de entregadores | antigo |
+| `/dashboard/equipe` | Usuários da loja (dono e funcionário) | antigo |
+| `/dashboard/impressoras` | Chaves de impressora (token só com hash, exibido uma vez) | antigo |
+| `/dashboard/conta` | Conta e personalização da loja | antigo |
+| `/dashboard/planos` | Plano, assinatura e trial | antigo |
+| `/dashboard/relatorios` | Relatório de vendas (resumo) | antigo |
+| `/dashboard/auditoria` | Log de ações sensíveis | antigo |
+
+### Páginas planejadas (ainda sem tela)
+
+Pedido manual, acompanhamento do pedido pelo cliente, conexão do Mercado Pago por loja, mesas e QR, estados de consulta/suspensão da assinatura, onboarding guiado, back-office da plataforma. Planos PRO: agendamento, WhatsApp, comanda e pagamento dividido, relatórios avançados.
+
+## Divisão de trabalho
+
+- **Frontend** (`apps/web`, telas, design): responsável o sócio.
+- **Backend** (`apps/api`, `packages/db`, `infra`, `apps/print-client`): responsável Claudio.
+- Contrato entre os dois: tipos em `packages/shared-types` e rotas listadas em `docs/` (ver `CONTRIBUTING.md`).
+
+## Fluxo de código
+
+`main` protegida, trabalho em branches, mudança entra só por Pull Request com CI verde e revisão. Detalhes em [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
+# Documentação técnica (original)
 # MeuCardapio (placeholder) — plataforma própria
 
 Plataforma própria de pedidos (painel + cardápio online + impressão local), construída a partir dos
@@ -172,3 +247,4 @@ genérico — preencha antes de ativar PIX/e-mail de verdade.
 - Healthcheck em todos os serviços do compose (`postgres`, `api`, `web`) — sem isso, `depends_on` só
   checava se o container tinha subido, não se a aplicação dentro dele respondia.
 - Postgres não fica mais exposto em `0.0.0.0:5432` (só `127.0.0.1`).
+

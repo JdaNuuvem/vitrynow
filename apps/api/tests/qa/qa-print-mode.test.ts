@@ -91,7 +91,7 @@ describe("QA-25 modo de impressão (API-12b)", () => {
   it("M3 em LEGACY, cancelar um pedido já impresso NÃO cria job de aviso, mas o evento order.cancel_notice (o aviso do legado) continua saindo", async () => {
     const c = await setup();
     const eventos: string[] = [];
-    subscribe(c.storeId, { readyState: 1, OPEN: 1, send: (m: string) => eventos.push(JSON.parse(m).type), on: vi.fn() } as never);
+    subscribe(c.storeId, { readyState: 1, OPEN: 1, send: (m: string) => eventos.push(JSON.parse(m).type), on: vi.fn() } as never, "OWNER");
     const o = await novoPedido(c);
     expect((await legacyPrinted(c.token, o)).statusCode).toBe(200);
     expect((await cancelar(c, o)).statusCode).toBe(200);
