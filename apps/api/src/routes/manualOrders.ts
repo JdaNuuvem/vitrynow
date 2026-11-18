@@ -46,7 +46,7 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
 
     // RN-B2-06: desconto manual do STAFF até o limite da loja; acima disso só o OWNER.
     if (input.discount && role !== "OWNER" && input.discount.percent > store.manualDiscountStaffLimitPercent) {
-      return reply.code(403).send({ error: "Desconto acima do limite: peça ao dono para autorizar.", code: "DISCOUNT_NEEDS_OWNER", limitPercent: store.manualDiscountStaffLimitPercent });
+      return reply.code(403).send({ error: "Desconto acima do seu limite. Peça ao dono.", code: "DISCOUNT_ABOVE_LIMIT", limitPercent: store.manualDiscountStaffLimitPercent });
     }
     if (input.forceCoupon && role !== "OWNER") {
       return reply.code(403).send({ error: "Só o dono pode forçar um cupom esgotado.", code: "FORBIDDEN_ROLE" });

@@ -103,11 +103,11 @@ describe("API-13 — pedido manual", () => {
     expect([semForma.statusCode, json(semForma).code]).toEqual([400, "PAYMENT_METHOD_REQUIRED"]);
   });
 
-  it("CA-B2-05/RN-B2-06: desconto manual: STAFF até 10% passa, 15% ⇒ 403 DISCOUNT_NEEDS_OWNER; OWNER 15% passa e fica na auditoria com o motivo; motivo é obrigatório", async () => {
+  it("CA-B2-05/RN-B2-06: desconto manual: STAFF até 10% passa, 15% ⇒ 403 DISCOUNT_ABOVE_LIMIT; OWNER 15% passa e fica na auditoria com o motivo; motivo é obrigatório", async () => {
     const l = await loja();
     expect((await novo(l, { discount: { percent: 10, reason: "cliente antigo" } }, l.staff)).statusCode).toBe(201);
     const alto = await novo(l, { discount: { percent: 15, reason: "x" } }, l.staff);
-    expect([alto.statusCode, json(alto).code, json(alto).limitPercent]).toEqual([403, "DISCOUNT_NEEDS_OWNER", 10]);
+    expect([alto.statusCode, json(alto).code, json(alto).limitPercent]).toEqual([403, "DISCOUNT_ABOVE_LIMIT", 10]);
     const dono = await novo(l, { discount: { percent: 15, reason: "reclamação" } });
     expect(dono.statusCode, dono.body).toBe(201);
     const o = await prisma.order.findUniqueOrThrow({ where: { id: json(dono).orderId } });
