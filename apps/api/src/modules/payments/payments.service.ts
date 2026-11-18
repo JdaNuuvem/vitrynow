@@ -1,7 +1,8 @@
 import type { prisma as prismaClient, Payment, PaymentStatus, SubscriptionPayment } from "@meucardapio/db";
 import type { WsServerMessage } from "@meucardapio/shared-types";
 import type { AuditLogger } from "../../shared/audit";
-import { getPayment as platformGetPayment, mapMpStatus, type ProviderPayment } from "../../lib/mercadopago";
+import { PaymentNotFoundError, getPayment as platformGetPayment, mapMpStatus, type ProviderPayment } from "../../lib/mercadopago";
+import { PixUnavailableError } from "../storePayments/storePayments.service";
 import { gatewayForStore, gatewayOfPayment } from "../storePayments/gateway";
 import { canMovePayment, originsFor } from "../../lib/paymentStateMachine";
 import { activateSubscription } from "../../lib/subscription";
@@ -51,11 +52,18 @@ export class PaymentService {
       try {
         remote = await (await gatewayForStore(store.id)).getPayment(providerPaymentId);
       } catch (error) {
-        if (error instanceof Error && /not found|PIX_UNAVAILABLE|indispon/i.test(error.message + (error as { code?: string }).code)) return "UNKNOWN_PAYMENT";
+        // Erro TIPADO (nunca regex sobre texto): conta da dica sem PIX ou pagamento que não é dela ⇒ 200 sem efeito, nunca 5xx (o MP repetiria).
+        if (error instanceof PaymentNotFoundError || error instanceof PixUnavailableError) return "UNKNOWN_PAYMENT";
         throw error;
       }
     } else {
-      remote = await platformGetPayment(providerPaymentId);
+      // Sem dica e sem pagamento conhecido: conta da plataforma (assinatura SaaS). 404 do provedor = não é nosso: 200, nunca 5xx.
+      try {
+        remote = await platformGetPayment(providerPaymentId);
+      } catch (error) {
+        if (error instanceof PaymentNotFoundError) return "UNKNOWN_PAYMENT";
+        throw error;
+      }
     }
 
     const orderPayment = await this.findOrderPayment(providerPaymentId, remote);

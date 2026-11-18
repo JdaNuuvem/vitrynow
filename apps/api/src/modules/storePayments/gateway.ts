@@ -1,4 +1,4 @@
-import { PIX_EXPIRATION_MINUTES, cancelPayment as platformCancel, getPayment as platformGet, mercadoPagoGateway, refundPayment as platformRefund, type PixCharge, type PixChargeInput, type PixGateway, type ProviderPayment } from "../../lib/mercadopago";
+import { PIX_EXPIRATION_MINUTES, PaymentNotFoundError, cancelPayment as platformCancel, getPayment as platformGet, mercadoPagoGateway, refundPayment as platformRefund, type PixCharge, type PixChargeInput, type PixGateway, type ProviderPayment } from "../../lib/mercadopago";
 import { oauthProvider } from "./oauth";
 import { AccountChangedError, NeedsReconnectError, PixUnavailableError } from "./storePayments.service";
 import { storePaymentsService } from "./storePayments.module";
@@ -58,7 +58,7 @@ export class FakePixGateway implements PixGateway {
   }
   private own(id: string): FakeEntry {
     const entry = FakePixGateway.ledger.get(id);
-    if (!entry || entry.owner !== this.owner) throw new Error("payment not found"); // 404 do provedor: não revela de quem é
+    if (!entry || entry.owner !== this.owner) throw new PaymentNotFoundError(); // 404 do provedor: não revela de quem é
     return entry;
   }
 

@@ -130,4 +130,24 @@ describe("PIX por loja no checkout (P-1)", () => {
     expect(done.status).toBe("APROVADO");
     expect(done.providerPaymentId).toBe(providerId);
   });
+
+  it("sem dica e sem pagamento conhecido: o 404 do provedor na conta da PLATAFORMA vira 200 (UNKNOWN_PAYMENT), nunca 5xx (o MP repetiria); falha de rede segue 503", async () => {
+    const mp = await import("../src/lib/mercadopago");
+    const spy = vi.spyOn(mp, "getPayment");
+    try {
+      spy.mockRejectedValueOnce(new mp.PaymentNotFoundError());
+      expect((await assinado("pagamento-que-nao-e-nosso-1")).statusCode).toBe(200);
+      spy.mockRejectedValueOnce(new Error("rede caiu"));
+      expect((await assinado("pagamento-que-nao-e-nosso-2")).statusCode).toBe(503); // falha transitória: o provedor reenvia
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("dica de loja SEM conta de PIX: 200 sem efeito (erro tipado, não regex); o 404 do SDK real vira PaymentNotFoundError", async () => {
+    const semConta = await loja({ pix: false });
+    expect((await assinado("qualquer-pagamento-1", semConta.storeId)).statusCode).toBe(200);
+    const { PaymentNotFoundError } = await import("../src/lib/mercadopago");
+    expect(new PaymentNotFoundError()).toMatchObject({ name: "PaymentNotFoundError", message: "payment not found" });
+  });
 });

@@ -42,6 +42,19 @@ export type ProviderPayment = {
   currency?: string | null;
 };
 
+/** O provedor respondeu 404: o pagamento não existe para ESTA conta (não é de quem consultou, ou nunca existiu). Erro TIPADO: o webhook decide por ele, não por texto. */
+export class PaymentNotFoundError extends Error {
+  constructor() {
+    super("payment not found");
+    this.name = "PaymentNotFoundError";
+  }
+}
+
+const isProviderNotFound = (error: unknown): boolean => {
+  const e = error as { status?: number; statusCode?: number; cause?: { status?: number } } | null;
+  return e?.status === 404 || e?.statusCode === 404 || e?.cause?.status === 404;
+};
+
 export interface PixGateway {
   createPixPayment(input: PixChargeInput): Promise<PixCharge>;
   getPayment(providerPaymentId: string): Promise<ProviderPayment>;
@@ -84,7 +97,9 @@ export function mercadoPagoGateway(accessToken: string): PixGateway {
     },
     async getPayment(providerPaymentId) {
       const payment = new MpPayment(client());
-      const result = await payment.get({ id: providerPaymentId });
+      const result = await payment.get({ id: providerPaymentId }).catch((error: unknown) => {
+        throw isProviderNotFound(error) ? new PaymentNotFoundError() : error;
+      });
       return {
         providerPaymentId: String(result.id),
         status: result.status,
