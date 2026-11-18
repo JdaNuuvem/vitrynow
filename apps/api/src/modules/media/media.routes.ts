@@ -21,6 +21,8 @@ export function buildMediaRoutes(service: MediaService): FastifyPluginAsync {
       async (request, reply) => {
         const kind = (request.query as { kind?: string }).kind as Kind;
         if (!KINDS.includes(kind)) return reply.code(400).send({ error: "kind deve ser PRODUCT, LOGO ou COVER", code: "INVALID_KIND" });
+        // Logo e capa mudam a identidade da loja: só o dono (foto de produto: OWNER ou STAFF).
+        if (kind !== "PRODUCT" && request.user.role !== "OWNER") return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
         if (!request.isMultipart()) return reply.code(415).send({ error: "envie multipart/form-data", code: "UNSUPPORTED_TYPE" });
 
         const file = await request.file();
@@ -33,7 +35,7 @@ export function buildMediaRoutes(service: MediaService): FastifyPluginAsync {
       },
     );
 
-    app.post("/api/media/images/:id/delete", auth, async (request) => {
+    app.post("/api/media/images/:id/delete", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request) => {
       const { id } = request.params as { id: string };
       await service.remove(request.user.storeId, id);
       return { ok: true };
