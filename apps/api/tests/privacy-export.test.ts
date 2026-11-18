@@ -129,9 +129,16 @@ describe("privacidade: exportar dados do titular", { timeout: 60_000 }, () => {
   });
 
   it("chave desligada (padrão) ⇒ 404 FEATURE_DISABLED, também na anonimização", async () => {
-    delete process.env.PRIVACY_ACTIONS_ENABLED;
+    // A chave é lida no BOOT: sobe-se outra instância com ela desligada.
     const ctx = await setup();
-    const r = await exp(ctx.owner, { phone: PHONE });
+    await app.close();
+    delete process.env.PRIVACY_ACTIONS_ENABLED;
+    app = makeApp();
+    await app.ready();
+    // Sem oráculo: nem sem login (401), nem com senha errada (403) — sempre 404, antes de qualquer leitura.
+    const anon = await app.inject({ method: "POST", url: "/api/privacy/export", payload: { phone: PHONE } });
+    expect(anon.statusCode).toBe(404);
+    const r = await exp(ctx.owner, { phone: PHONE, currentPassword: "errada-12345" });
     expect(r.statusCode).toBe(404);
     expect(json(r).code).toBe("FEATURE_DISABLED");
     const a = await app.inject({ method: "POST", url: "/api/privacy/anonymize", headers: { cookie: ctx.owner }, payload: { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1, currentPassword: SENHA } });
