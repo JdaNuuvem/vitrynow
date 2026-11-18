@@ -5,6 +5,8 @@ import { useCallback, useEffect, useState } from "react";
 import type { DeviceToken } from "@/core/domain/deviceTokens";
 import { usePanelServices } from "@/core/services/PanelServices";
 
+export type RevokeOutcome = { status: "done" } | { status: "forbidden" } | { status: "error"; message: string };
+
 export type CreateOutcome = { status: "created"; token: string } | { status: "error"; message: string } | { status: "forbidden" };
 
 export function useImpressoras() {
@@ -53,11 +55,19 @@ export function useImpressoras() {
   );
 
   const revoke = useCallback(
-    async (id: string) => {
-      const result = await deviceTokens.revoke(id);
-      if (!result.ok && result.status === 403) return setActionForbidden(true);
+    async (id: string): Promise<RevokeOutcome> => {
       setActionForbidden(false);
+      const result = await deviceTokens.revoke(id);
+      if (!result.ok) {
+        if (result.status === 403) {
+          setActionForbidden(true);
+          return { status: "forbidden" };
+        }
+        // Antes só o 403 era tratado e qualquer outra falha sumia em silêncio: a chave seguia na lista sem explicação.
+        return { status: "error", message: result.error || "Não foi possível revogar a chave agora. Tente de novo." };
+      }
       reload();
+      return { status: "done" };
     },
     [deviceTokens, reload],
   );

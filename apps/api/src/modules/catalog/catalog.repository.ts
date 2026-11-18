@@ -15,6 +15,8 @@ export type ProductData = {
   active?: boolean;
   featured?: boolean;
   position?: number;
+  soldOut?: boolean;
+  soldOutUntil?: Date | null;
 };
 // Adicional informado que não pertence ao produto (id de outro produto/loja ou inexistente).
 export class AdditionalNotInProductError extends Error {

@@ -258,6 +258,11 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       // anteriores. (a) e-mail certo: marca `usedAt` (consome o token); (b) e-mail errado: soma a falha e, na 5ª, invalida o token.
       // Para token que não existe, a mesma instrução roda sobre 0 linhas (mesmo trabalho em todos os ramos).
       const outcome = await prisma.$transaction(async (tx) => {
+        // SEC-38 (mesma ideia do SEC-35): só o ramo "e-mail errado" GRAVA (soma `emailFailures`) e por isso espera o fsync do commit, o que o torna mais lento que as
+        // outras recusas quando o disco está disputado. Na RECUSA (e-mail que não bate ou token que não existe) o commit não espera o disco (`set_config(..., true)` =
+        // SET LOCAL, só nesta transação; perder a contagem de uma falha num crash de ~200 ms é aceitável). Com o e-mail CERTO a troca de senha e o consumo do token
+        // seguem DURÁVEIS (`on`): nunca se confirma ao dono uma senha nova que um crash desfaria. É a 1ª instrução em TODOS os ramos que chegam ao banco.
+        await tx.$executeRaw`SELECT set_config('synchronous_commit', ${sameEmail ? "on" : "off"}, true)`;
         const claimed = await tx.$queryRaw<{ id: string }[]>`
           UPDATE "PasswordResetToken"
              SET "usedAt" = CASE WHEN ${sameEmail}::boolean THEN ${NOW} ELSE "usedAt" END,

@@ -1,4 +1,4 @@
-FROM node:20-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /repo
 RUN corepack enable
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
@@ -23,7 +23,7 @@ RUN pnpm --filter @meucardapio/shared-types build
 # node_modules da raiz do monorepo na imagem final.
 RUN pnpm --filter @meucardapio/web build
 
-FROM node:20-alpine
+FROM node:24-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build --chown=node:node /repo/apps/web/.next/standalone ./

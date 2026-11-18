@@ -20,7 +20,8 @@ export function useInicioData() {
       reports.getSummary(weekRange(now)),
       ordersGateway.list(),
     ]);
-    if (month.ok && week.ok) setMetrics(buildInicioMetrics(month.data, week.data, now));
+    // A lista de pedidos separa o "Aguardando aceite" do faturamento (B14.1); sem ela o número segue, com aviso na tela.
+    if (month.ok && week.ok) setMetrics(buildInicioMetrics(month.data, week.data, now, orders.ok ? orders.data.orders : null));
     if (orders.ok) setCurrentOrders(selectCurrentOrders(orders.data.orders));
   }, [reports, ordersGateway]);
 
