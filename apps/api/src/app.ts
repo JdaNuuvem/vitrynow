@@ -10,6 +10,7 @@ import healthRoutes from "./routes/health";
 import authRoutes from "./routes/auth";
 import storefrontRoutes from "./routes/storefront";
 import orderRoutes from "./modules/orders/orders.module";
+import manualOrderRoutes from "./routes/manualOrders";
 import deviceRoutes from "./routes/device";
 import printJobRoutes from "./modules/printJobs/printJobs.module";
 import deviceAlertRoutes from "./modules/deviceAlerts/deviceAlerts.module";
@@ -114,6 +115,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(authRoutes);
   app.register(storefrontRoutes);
   app.register(orderRoutes);
+  app.register(manualOrderRoutes);
   app.register(deviceRoutes);
   app.register(printJobRoutes);
   app.register(deviceAlertRoutes);
