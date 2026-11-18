@@ -113,6 +113,7 @@ export function toPanelOrder(
       expiresAt: order.payment.expiresAt,
       refundPending: order.payment.status === "ESTORNO_PENDENTE" && !order.payment.refundAbandonedAt,
       refundAbandoned: !!order.payment.refundAbandonedAt,
+      refundManual: !!order.payment.refundManualAt, // "Estornado direto no app do Mercado Pago" (RN-B1-08)
       // API-69 (RN-REF-02): selo "Estorno preso" para OWNER e STAFF; nunca o contador nem o texto do erro.
       refundStuck: order.payment.status === "ESTORNO_PENDENTE" && !order.payment.refundAbandonedAt && order.payment.refundAttempts >= MAX_REFUND_AUTO_ATTEMPTS,
       reconcileRequired: !!order.payment.reconcileNote,

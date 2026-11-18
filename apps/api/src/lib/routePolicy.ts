@@ -88,6 +88,7 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
 
   // — Lote 1 (Atlas): rotas que apareceram quando as branches se encontraram; classe conservadora, revisar com o dono de cada uma —
   "POST /api/orders/:id/refund/abandon": "finish", // API-61: encerrar pedido sem estorno (OWNER; encerra o que ja foi recebido)
+  "POST /api/orders/:id/refund/manual": "finish", // API-65: registrar estorno feito no app do Mercado Pago (OWNER+MFA; encerra o que ja foi recebido)
   "PUT /api/store/manual-discount-limit": "blocked", // SEC-15: configuracao
   "POST /api/print-jobs/:id/print-now": "allowed", // N6: reimprimir tiquete antigo (STALE) reduz prejuizo; vale na Consulta
   "POST /api/catalog/products/:id/sold-out": "blocked", // API-17: cadastro

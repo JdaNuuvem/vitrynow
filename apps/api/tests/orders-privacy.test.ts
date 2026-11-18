@@ -121,7 +121,7 @@ describe("API-54a — lista, ações e detalhe", () => {
         expect(o).toMatchObject({ hasPhone: true, hasAddress: true, contactMasked: true });
       }
       const paid = orders.find((o: { payment: unknown }) => o.payment);
-      expect(Object.keys(paid.payment).sort()).toEqual(["amountCents", "expiresAt", "reconcileRequired", "refundAbandoned", "refundPending", "refundStuck", "status"]);
+      expect(Object.keys(paid.payment).sort()).toEqual(["amountCents", "expiresAt", "reconcileRequired", "refundAbandoned", "refundManual", "refundPending", "refundStuck", "status"]);
     }
   });
 

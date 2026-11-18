@@ -645,6 +645,8 @@ model Payment {
   lastRawStatus     String?
   lastCheckedAt     DateTime?
   reconcileNote     String? // estorno feito mas o pedido já estava finalizado: conciliação manual (nunca silencioso)
+  refundManualAt    DateTime? // API-65: dono registrou que devolveu direto no app do Mercado Pago (o provedor NÃO foi chamado)
+  refundManualCode  String? // API-65: código fechado do motivo; sem texto livre
   refundAbandonedAt DateTime? // API-61: dono encerrou o estorno SEM devolver por aqui (o dinheiro continua como recebido); nulo = em curso
   refundAbandonCode String? // API-61: código fechado do motivo (MP_RECUSA|PAGAMENTO_ANTIGO|CONTA_DESCONECTADA|ACERTADO_COM_CLIENTE|OUTRO); sem texto livre
   paymentAccountId  String? // conta do vendedor que criou a cobrança (API-07); pagamento antigo/da plataforma = null
