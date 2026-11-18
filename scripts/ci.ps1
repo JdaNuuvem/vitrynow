@@ -15,6 +15,8 @@
   4. typecheck de db, shared-types, api e web (script "typecheck" do pacote, ou tsc --noEmit)
   5. testes da API contra o SEU banco (TEST_DATABASE_URL), nunca o de dev
   6. (-Images) valida o compose de produção e constrói as imagens api e web
+  7. SONDA DE FUSO (INF-19/ST-77): arquivos de reset/token/login/sessão/cursor do histórico contra cópias do banco de teste em
+     America/Sao_Paulo e Asia/Tokyo (o banco de teste e o do compose são UTC e isso escondeu um bug). -SkipTzProbe pula.
   Sai com código != 0 se qualquer etapa falhar e imprime um resumo no fim.
 #>
 param(
@@ -22,6 +24,7 @@ param(
   [Parameter(Mandatory = $true)][ValidateRange(55440, 55459)][int]$Port,
   [switch]$SkipTests,
   [switch]$Images,
+  [switch]$SkipTzProbe,    # pula a sonda de fuso (etapa 7); só para depurar, a CI de entrega roda ela
   [int]$WaitMinutes = 30,   # quanto esperar por uma vaga se a máquina já estiver cheia
   [int]$MaxSuites = 3,      # suítes completas simultâneas na máquina (regra do BOARD §0)
   [string]$MigrationBase = 'main',   # base para detectar migrações novas (INF-15)
@@ -273,6 +276,43 @@ if ($continue -and -not $SkipTests) {
     $continue = Step 'testes do web' { pnpm --filter '@meucardapio/web' test }
   }
 }
+# 7) SONDA DE FUSO (INF-19 / ST-77, Sun Tzu): o banco de teste e o do compose são UTC, e isso escondeu um bug que gravava a hora LOCAL da sessão do
+# Postgres (token de reset nascia vencido com timezone=America/Sao_Paulo). Roda uma lista EXPLÍCITA de arquivos (reset/token/login/sessão/token do
+# pedido/cursor do histórico) contra CÓPIAS do banco de teste com o fuso mudado. NÃO prova ausência de bug de fuso: só pega os dos fluxos listados.
+# O arquivo canário tz-probe-canary.test.ts é o CONTROLE POSITIVO (a sessão do Prisma enxerga o fuso pedido).
+$tzFiles = @('tests/auth.test.ts', 'tests/tokens-hash.test.ts', 'tests/login-throttle.test.ts', 'tests/session.test.ts',
+             'tests/order-token.test.ts', 'tests/orders-history-kanban.test.ts', 'tests/jobs/tech-cleanup.test.ts', 'tests/device-alerts.test.ts', 'tests/tz-probe-canary.test.ts')
+$tzProbes = @(@{ Tz = 'America/Sao_Paulo'; Db = 'meucardapio_test71' }, @{ Tz = 'Asia/Tokyo'; Db = 'meucardapio_test72' })
+if ($continue -and -not $SkipTests -and -not $SkipTzProbe) {
+  $ct = "mc-test-$Agent-$Port"
+  foreach ($p in $tzProbes) {
+    if (-not $continue) { break }
+    $tz = $p.Tz; $db = $p.Db
+    $continue = Step "sonda de fuso: $tz ($($tzFiles.Count) arquivos da API)" {
+      foreach ($f in $tzFiles) { if (-not (Test-Path (Join-Path $repo "apps/api/$f"))) { throw "arquivo da sonda não existe: apps/api/$f (renomeado? atualize a lista `$tzFiles em scripts/ci.ps1)" } }
+      docker exec -e PGPASSWORD=meucardapio $ct psql -U meucardapio -d postgres -q -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS $db" -c "CREATE DATABASE $db TEMPLATE meucardapio_test" -c "ALTER DATABASE $db SET timezone = '$tz'"
+      if ($LASTEXITCODE -ne 0) { throw "não consegui criar o banco da sonda $db (alguém com o meucardapio_test aberto? CREATE ... TEMPLATE exige zero conexões nele)" }
+      $got = (docker exec -e PGPASSWORD=meucardapio $ct psql -U meucardapio -d $db -At -c 'show timezone' | Out-String).Trim()
+      if ($got -ne $tz) { throw "controle da sonda: show timezone = '$got', esperado '$tz'" }
+      $env:TEST_DATABASE_URL = "postgresql://meucardapio:meucardapio@127.0.0.1:${Port}/${db}?schema=public"
+      $env:TZ_PROBE_EXPECT = $tz
+      $rc = 1
+      # NÃO usar `pnpm exec vitest run $tzFiles`: no PowerShell 5.1 o shim do pnpm junta o array num ÚNICO argumento com espaços (medido) e o
+      # vitest diz 'No test files found'. O node direto recebe um argumento por arquivo.
+      Push-Location (Join-Path $repo 'apps/api')
+      try { node node_modules/vitest/vitest.mjs run $tzFiles; $rc = $LASTEXITCODE }
+      finally {
+        Pop-Location
+        Remove-Item Env:\TZ_PROBE_EXPECT -ErrorAction SilentlyContinue
+        $env:TEST_DATABASE_URL = $testUrl
+        docker exec -e PGPASSWORD=meucardapio $ct psql -U meucardapio -d postgres -q -c "DROP DATABASE IF EXISTS $db" | Out-Null
+      }
+      # o docker do finally sobrescreve $LASTEXITCODE: restaura o código do vitest para o Step não enxergar 0 numa falha
+      $global:LASTEXITCODE = $rc
+    }
+  }
+}
+
 if ($continue -and $Images) {
   $continue = Step 'compose de produção: validar e construir imagens' {
     # valores FALSOS só para validar a sintaxe; nada disto é segredo real
