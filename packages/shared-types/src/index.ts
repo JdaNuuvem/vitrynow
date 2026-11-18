@@ -44,6 +44,8 @@ export const createOrderSchema = z.object({
   paymentMethod: paymentMethodSchema.optional(),
   changeForCents: z.number().int().positive().max(100_000_000).optional(),
   tipCents: z.number().int().nonnegative().max(10_000_000).optional(),
+  neighborhoodId: z.string().min(1).max(50).optional(), // API-16: bairro escolhido (só entrega)
+  expectedDeliveryFeeCents: z.number().int().nonnegative().max(10_000_000).optional(), // taxa que o cliente viu (RN-B9-03)
 });
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
 
@@ -463,3 +465,35 @@ export type PrintAckInput = z.infer<typeof printAckSchema>;
 export const printModeSchema = z.enum(["LEGACY", "QUEUE"]);
 export type PrintModeValue = z.infer<typeof printModeSchema>;
 export const setPrintModeSchema = z.object({ mode: printModeSchema });
+
+// ---- Taxa de entrega por bairro (API-16 / B9) ----
+export const DELIVERY_ZONE_LIMIT = 300; // RN-B9-09
+const zoneMinutes = z.number().int().min(1).max(1440);
+export const deliveryZoneFieldsSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  feeCents: z.number().int().nonnegative().max(10_000_000),
+  etaMinMinutes: zoneMinutes.nullable().optional(),
+  etaMaxMinutes: zoneMinutes.nullable().optional(),
+  freeFromCents: z.number().int().positive().max(100_000_000).nullable().optional(),
+  active: z.boolean().optional(),
+});
+export const createDeliveryZoneSchema = deliveryZoneFieldsSchema.refine(
+  (v) => v.etaMinMinutes == null || v.etaMaxMinutes == null || v.etaMinMinutes <= v.etaMaxMinutes,
+  { message: "o prazo mínimo não pode passar do máximo", path: ["etaMinMinutes"] },
+);
+export type CreateDeliveryZoneInput = z.infer<typeof createDeliveryZoneSchema>;
+export const updateDeliveryZoneSchema = deliveryZoneFieldsSchema.partial();
+export type UpdateDeliveryZoneInput = z.infer<typeof updateDeliveryZoneSchema>;
+
+export const importDeliveryZonesSchema = z.object({
+  text: z.string().max(60_000), // uma linha por bairro: "nome; taxa"
+  dryRun: z.boolean().optional(), // true = só pré-visualiza (nada é gravado)
+});
+export type ImportDeliveryZonesInput = z.infer<typeof importDeliveryZonesSchema>;
+
+export const DELIVERY_OUTSIDE_MODES = ["REFUSE", "DEFAULT_FEE"] as const;
+export const deliveryZonesConfigSchema = z.object({
+  outsideMode: z.enum(DELIVERY_OUTSIDE_MODES).optional(),
+  freeShippingFromCents: z.number().int().positive().max(100_000_000).nullable().optional(),
+});
+export type DeliveryZonesConfigInput = z.infer<typeof deliveryZonesConfigSchema>;

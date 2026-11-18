@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { createOrderSchema } from "@meucardapio/shared-types";
+import { applyFreeShipping } from "../lib/deliveryZones";
 import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
 import { publishToStore } from "../realtime/hub";
 import { gatewayForStore } from "../modules/storePayments/gateway";
@@ -181,9 +182,38 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       discountCents = Math.min(discountCents, subtotalCents);
     }
 
-    const deliveryFeeCents = input.type === "DELIVERY" ? store.deliveryFeeCents : 0;
+    // API-16 (B9): taxa por bairro, recalculada AQUI (o cliente só informa o bairro e a taxa que viu). Retirada nunca tem taxa.
+    let deliveryFeeCents = 0;
+    let zoneSnapshot: { name: string; etaMin: number | null; etaMax: number | null } | null = null;
+    if (input.type === "DELIVERY") {
+      const zoneCount = await prisma.deliveryZone.count({ where: { storeId: store.id } });
+      let baseFee = store.deliveryFeeCents; // sem bairros cadastrados: taxa única, como sempre (CA-B9-09)
+      let zoneFreeFrom: number | null = null;
+      if (zoneCount > 0) {
+        const activeZones = () => prisma.deliveryZone.findMany({ where: { storeId: store.id, active: true }, orderBy: { name: "asc" }, select: { id: true, name: true, feeCents: true } });
+        if (input.neighborhoodId) {
+          const zone = await prisma.deliveryZone.findFirst({ where: { id: input.neighborhoodId, storeId: store.id } });
+          if (!zone) return reply.code(400).send({ error: "Bairro não atendido por esta loja.", code: "NEIGHBORHOOD_NOT_FOUND" });
+          if (!zone.active) {
+            // bairro desativado enquanto o cliente montava o pedido: recusa com a lista atual, carrinho mantido
+            return reply.code(400).send({ error: "Este bairro não está mais disponível para entrega.", code: "NEIGHBORHOOD_UNAVAILABLE", details: { zones: await activeZones() } });
+          }
+          baseFee = zone.feeCents;
+          zoneFreeFrom = zone.freeFromCents;
+          zoneSnapshot = { name: zone.name, etaMin: zone.etaMinMinutes, etaMax: zone.etaMaxMinutes };
+        } else if (store.deliveryOutsideMode !== "DEFAULT_FEE") {
+          return reply.code(400).send({ error: "Escolha o bairro da entrega.", code: "NEIGHBORHOOD_REQUIRED", details: { zones: await activeZones() } });
+        }
+      }
+      // Frete grátis sobre o subtotal LÍQUIDO (itens menos desconto), RN-B9-05.
+      deliveryFeeCents = applyFreeShipping(baseFee, subtotalCents - discountCents, zoneFreeFrom, store.freeShippingFromCents);
+    }
     const tipCents = input.tipCents ?? 0;
     const totalCents = subtotalCents - discountCents + deliveryFeeCents + tipCents;
+    // RN-B9-03: a taxa mudou desde que o cliente viu (ou é outra): 409 com o novo valor; a tela pede confirmação.
+    if (input.expectedDeliveryFeeCents !== undefined && input.expectedDeliveryFeeCents !== deliveryFeeCents) {
+      return reply.code(409).send({ error: "A taxa de entrega mudou. Confira o novo total.", code: "DELIVERY_FEE_CHANGED", details: { deliveryFeeCents, totalCents } });
+    }
 
     // Total ZERO (cupom cobriu todos os itens e não há taxa nem gorjeta): pedido normal, SEM cobrança. A forma de pagamento
     // informada (inclusive PIX e "troco para") é IGNORADA, não existe PIX de R$ 0,00 e o provedor nunca é chamado (RN-CP-10/11).
@@ -231,6 +261,9 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         subtotalCents,
         discountCents,
         deliveryFeeCents,
+        deliveryZoneName: zoneSnapshot?.name,
+        deliveryEtaMinMinutes: zoneSnapshot?.etaMin,
+        deliveryEtaMaxMinutes: zoneSnapshot?.etaMax,
         tipCents,
         totalCents,
         paymentMethod,
