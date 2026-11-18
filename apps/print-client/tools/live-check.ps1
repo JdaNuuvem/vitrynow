@@ -12,6 +12,7 @@ param(
   [int]$Seconds = 20,
   [string]$Fault = "",
   [switch]$StartLegacy,
+  [string]$AlertOrderIds = "",   # "proprio,outraLoja,inexistente": em vez de rodar o ciclo, manda os 5 alertas do PC-24 com o cliente REAL
   [string]$ClientDir = "",
   [string]$RoslynDir = ""
 )
@@ -44,6 +45,13 @@ if ($LASTEXITCODE -ne 0) { Write-Error "csc falhou:`n$o"; exit 1 }
 [Reflection.Assembly]::LoadFrom($json) | Out-Null
 $a = [Reflection.Assembly]::Load([IO.File]::ReadAllBytes($dll))
 $t = $a.GetType("MeuCardapio.PrintClient.LiveCheck")
+if ($AlertOrderIds) {
+  $ids = $AlertOrderIds.Split(",")
+  $res = $t.GetMethod("Alerts").Invoke($null, [object[]]@($BaseUrl, $Token, $ids[0], $ids[1], $ids[2]))
+  Write-Output $res
+  Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+  exit 0
+}
 $args2 = New-Object object[] 7
 $args2[0] = $BaseUrl; $args2[1] = $Token; $args2[2] = $OutDir; $args2[3] = $Ledger; $args2[4] = $Seconds; $args2[5] = $Fault; $args2[6] = [bool]$StartLegacy
 $res = $t.GetMethod("Run").Invoke($null, $args2)

@@ -82,3 +82,12 @@ O servidor diz se **não há nada a cobrar** (`totalCents == 0` E nenhuma cobran
 | `true` | ≠ 0 ou AUSENTE | **regra normal (cobra)** + AVISO no log (servidor incoerente) |
 | PRESENTE e **não booleano** (`1`, `0`, `"true"`, `"false"`, `"lixo"`, lista, objeto) | qualquer | **regra normal (cobra)** + AVISO no log ("o campo nothingToCharge chegou com valor que nao e booleano"); dado corrompido, não é campo ausente: a aritmética NÃO decide; o valor não é coagido nem derruba a leitura do tíquete |
 | ausente/`null` (API antiga) | — | aritmética do PC-19: total PRESENTE e 0, desconto = itens, sem taxa/gorjeta, subtotal batendo |
+
+
+## Alerta central (PC-24, `POST /api/device/alerts`)
+Os avisos que antes só existiam no log e na tela do PC da loja também vão ao servidor, para o dono e o suporte verem no painel. **Telemetria não confiável: nunca decide nada** (não troca de modo, não libera cobrança).
+- **Corpo estrito:** `{ "code": "<da lista>", "orderId": "<cuid, opcional>", "clientVersion": "1.0.0" }`; nenhuma chave a mais; menos de 200 bytes. **Sem texto livre e sem PII** (nem nome, telefone, endereço, itens, loja ou valores); hora e loja vêm do servidor. `Authorization: Bearer <chave da impressora>`.
+- **Lista FECHADA de 5 códigos:** `NOTHING_TO_CHARGE_CONFLICT`, `NOTHING_TO_CHARGE_INVALID`, `EMPTY_ZERO_TICKET`, `MODE_UNCONFIRMED`, `MODE_RECOVERED`. `QUEUE_WITHOUT_PRINTER` é só do detector do **servidor** e nunca sai do cliente (o servidor responde 400 se vier).
+- **`orderId`** só vai se casar **localmente** com `^c[a-z0-9]{24}$` (≤ 30); senão o alerta sai sem ele (no modo fila vai o id REAL do pedido, nunca a chave `job:<id>`). O servidor responde o mesmo `204` com id da loja, de outra loja ou inexistente; o cliente **nunca lê o corpo da resposta**.
+- **Quando sai:** tíquete com `nothingToCharge=true` mas total ≠ 0 ou ausente (CONFLICT); campo `nothingToCharge` não booleano (INVALID); tíquete sem itens e total zero (EMPTY_ZERO_TICKET); 5 falhas seguidas da configuração do dispositivo (MODE_UNCONFIRMED, **uma vez** até recuperar); a configuração voltou a responder (MODE_RECOVERED, só depois de um MODE_UNCONFIRMED enviado).
+- **Nunca atrapalha:** envio em segundo plano, timeout de 3 s, no máximo 5 em voo (a rajada excedente é descartada), **dedupe de 10 min** por (código, pedido); falha de rede ou 5xx/429 **descartada** (sem fila em disco); `404` (API sem a rota) suprime os alertas por 10 min; `401/403` seguem a regra de chave recusada; chave pausada não envia. Aviso de cancelamento e tíquete de teste não geram alerta.
