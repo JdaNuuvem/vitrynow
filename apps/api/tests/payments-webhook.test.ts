@@ -6,7 +6,7 @@ import { prisma } from "@meucardapio/db";
 import { mapMpStatus } from "../src/lib/mercadopago";
 import { PAYMENT_STATUSES, canMovePayment, isFinalPayment, originsFor } from "../src/lib/paymentStateMachine";
 import { subscribe } from "../src/realtime/hub";
-import { makeApp, registerStore, resetDb, orderTokenHeader } from "./helpers";
+import { makeApp, registerStore, resetDb, orderTokenHeader, useMockedProvider } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -65,6 +65,7 @@ describe("máquina de estados do pagamento", () => {
 describe("API-03 — webhook e PIX", () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     refundPayment.mockResolvedValue(undefined);
     cancelPayment.mockResolvedValue(undefined);
@@ -127,7 +128,7 @@ describe("API-03 — webhook e PIX", () => {
   const orderOf = (id: string) => prisma.order.findUnique({ where: { id }, include: { payment: true } });
   const wsSocket = (storeId: string) => {
     const sent: string[] = [];
-    subscribe(storeId, { readyState: 1, OPEN: 1, send: (m: string) => sent.push(m), on: vi.fn() } as never);
+    subscribe(storeId, { readyState: 1, OPEN: 1, send: (m: string) => sent.push(m), on: vi.fn() } as never, "OWNER");
     return { count: (type: string) => sent.filter((m) => m.includes(type)).length };
   };
 
@@ -142,6 +143,8 @@ describe("API-03 — webhook e PIX", () => {
     const o = await orderOf(orderId);
     expect({ awaiting: o?.awaitingPayment, status: o?.status, payment: o?.payment?.status }).toEqual({ awaiting: false, status: "PENDENTE", payment: "APROVADO" });
     expect(ws.count("order.created")).toBe(1);
+    expect(o?.paidAt).not.toBeNull(); // API-21: a aprovação grava o instante real em que o PIX foi recebido
+    expect(o?.paidAtApproximate).toBe(false);
   });
 
   it("não aprova quando valor, moeda ou referência do provedor divergem do que gravamos (nem quando faltam)", async () => {

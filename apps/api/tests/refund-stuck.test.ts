@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { prisma } from "@meucardapio/db";
 import { MAX_REFUND_AUTO_ATTEMPTS, providerErrorCode, refundAutoRetryable } from "../src/modules/orders/orders.service";
 import { orderService } from "../src/modules/orders/orders.module";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { makeApp, registerStore, resetDb, useMockedProvider } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -17,6 +17,7 @@ const getPayment = vi.mocked(mp.getPayment);
 describe("API-06a — estorno travado", () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     app = makeApp();
     await app.ready();

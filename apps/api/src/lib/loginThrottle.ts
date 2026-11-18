@@ -101,6 +101,16 @@ export class LoginThrottle {
     if (account && account.attempts > 0) account.attempts -= 1;
   }
 
+  // SEC-34 (R5): a faixa de hash recusou (503) e NENHUMA senha foi testada: devolve a reserva do par e da conta. Um 503 nunca soma tentativa (o
+  // atacante com a faixa cheia não ganha nem perde palpites) e nunca zera as já gastas.
+  refund(email: string, ip: string): void {
+    const acc = LoginThrottle.key(email);
+    const pair = this.pairs.get(`${acc}|${clientKey(ip)}`);
+    if (pair && pair.attempts > 0) pair.attempts -= 1;
+    const account = this.accounts.get(acc);
+    if (account && account.attempts > 0) account.attempts -= 1;
+  }
+
   // Memória limitada: e-mails inventados não crescem o mapa sem fim.
   private sweep(t: number): void {
     for (const [k, p] of this.pairs) if (p.blockedUntil <= t && t - p.windowStart > WINDOW_MS) this.pairs.delete(k);

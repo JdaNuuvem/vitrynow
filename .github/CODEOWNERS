@@ -1,0 +1,8 @@
+﻿# Responsaveis por area. Revisao obrigatoria do dono da area (ver CONTRIBUTING.md).
+*                    @JdaNuuvem
+/apps/web/           @victorsampontes
+/apps/api/           @JdaNuuvem
+/packages/           @JdaNuuvem
+/infra/              @JdaNuuvem
+/apps/print-client/  @JdaNuuvem
+/.github/            @JdaNuuvem

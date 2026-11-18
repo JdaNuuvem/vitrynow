@@ -3,7 +3,7 @@
 // porque as correções estão na branch. O Mercado Pago é sempre simulado.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { makeApp, registerStore, resetDb } from "../helpers";
+import { makeApp, registerStore, resetDb , useMockedProvider } from "../helpers";
 
 vi.mock("../../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/lib/mercadopago")>();
@@ -14,7 +14,7 @@ import * as mp from "../../src/lib/mercadopago";
 
 describe("QA cupom: limite de uso, cadastro e pedido de total zero (CA-CP)", () => {
   let app: ReturnType<typeof makeApp>;
-  beforeEach(async () => { vi.clearAllMocks(); app = makeApp(); await app.ready(); });
+  beforeEach(async () => { vi.clearAllMocks(); useMockedProvider(mp); app = makeApp(); await app.ready(); });
   afterEach(async () => {
     await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS qa_falha_item ON "OrderItem"`);
     await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS qa_falha_item_fn()`);

@@ -9,6 +9,7 @@ import { publishToOwners } from "../realtime/hub";
 import { CodedError, useDomainErrors } from "../shared/errors";
 
 const STALE_AFTER_HOURS = 20;
+const CASH_RULE_NOTICE = { id: "CASH_RECEIVED_V1", text: "O cálculo do caixa mudou: agora só conta o dinheiro já recebido." } as const;
 
 type Db = Prisma.TransactionClient;
 type SessionWithMovements = Prisma.CashSessionGetPayload<{ include: { movements: true } }>;
@@ -20,11 +21,15 @@ async function summarizeSession(db: Db | typeof prisma, storeId: string, session
     where: {
       storeId,
       awaitingPayment: false,
-      createdAt: { gte: session.openedAt, ...(session.closedAt ? { lte: session.closedAt } : {}) },
+      // criados no turno OU com dinheiro recebido no turno (entrega pedida antes e paga agora, RN-CX-01)
+      OR: [
+        { createdAt: { gte: session.openedAt, ...(session.closedAt ? { lte: session.closedAt } : {}) } },
+        { paidAt: { gte: session.openedAt, ...(session.closedAt ? { lte: session.closedAt } : {}) } },
+      ],
     },
-    select: { type: true, status: true, totalCents: true, deliveryFeeCents: true, tipCents: true, paymentMethod: true },
+    select: { type: true, status: true, totalCents: true, deliveryFeeCents: true, tipCents: true, paymentMethod: true, createdAt: true, paidAt: true, awaitingPayment: true },
   });
-  return computeCashSummary(session, orders);
+  return computeCashSummary(session, orders, session.closedAt ?? new Date());
 }
 
 // A API devolve a movimentação com TIPO, valor, motivo, PAPEL e HORA de quem lançou: nunca o id do usuário nem o e-mail (CA-CX-22).
@@ -83,12 +88,23 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
     });
     const store = await prisma.store.findUnique({ where: { id: storeId }, select: { cashStaffWithdrawalLimitCents: true } });
     const rules = { toleranceCents: CASH_TOLERANCE_CENTS, staffWithdrawalLimitCents: role === "OWNER" ? (store?.cashStaffWithdrawalLimitCents ?? 0) : undefined };
-    if (!session) return { session: null, ...rules };
+    if (!session) return { session: null, ruleChangeNotice: null, ...rules };
 
     const summary = await summarizeSession(prisma, storeId, session);
     const openForHours = (Date.now() - session.openedAt.getTime()) / (1000 * 60 * 60);
     const stale = openForHours > STALE_AFTER_HOURS;
-    return { session: sessionView(session), summary, expectedBalanceCents: summary.expectedCents, openForHours, stale, ...rules };
+    // RN-MIG-04b: caixa aberto ANTES da mudança de regra mostra o aviso uma vez por usuário; a frase vem do servidor.
+    const dismissed = session.cashRuleVersion < 2 ? await prisma.userNoticeDismissal.findUnique({ where: { userId_noticeId: { userId: request.user.userId, noticeId: CASH_RULE_NOTICE.id } } }) : null;
+    const ruleChangeNotice = session.cashRuleVersion < 2 && !dismissed ? CASH_RULE_NOTICE : null;
+    return { session: sessionView(session), summary, expectedBalanceCents: summary.expectedCents, openForHours, stale, ruleChangeNotice, ...rules };
+  });
+
+  // Dispensar o aviso de mudança de regra (por usuário; idempotente). Só existe o aviso conhecido; qualquer outro id é 404.
+  app.post("/api/cashier/notices/:id/dismiss", { preHandler: app.requirePanelAuth }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (id !== CASH_RULE_NOTICE.id) return reply.code(404).send({ error: "aviso não encontrado", code: "NOT_FOUND" });
+    await prisma.userNoticeDismissal.createMany({ data: [{ userId: request.user.userId, noticeId: id }], skipDuplicates: true });
+    return { ok: true };
   });
 
   // Prévia do fechamento: a tela mostra "Sobrou/Faltou" e se o motivo é obrigatório SEM duplicar a regra (CA-CX-19).
@@ -161,17 +177,16 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: "Informe o valor contado.", code: "CASH_COUNTED_REQUIRED" });
     }
 
-    const open = await prisma.cashSession.findFirst({ where: { storeId, closedAt: null }, select: { id: true } });
-    if (!open) return reply.code(404).send({ error: "não há caixa aberto", code: "CASH_REQUIRED" });
-
-    // Fechamento ATÔMICO e ÚNICO: trava a linha do caixa; quem chega depois do primeiro fechamento vê `closedAt` preenchido ⇒ 409.
+    // Fechamento ATÔMICO e ÚNICO e DETERMINÍSTICO: a decisão sai de UMA leitura travada (`FOR UPDATE`) da sessão MAIS RECENTE da loja, dentro da
+    // transação, nunca de uma leitura solta antes dela. Aberta ⇒ fecha; já fechada ⇒ 409 CASH_ALREADY_CLOSED (quem perdeu a corrida e quem clicou
+    // de novo recebem a MESMA resposta, qualquer que seja a ordem em que as requisições chegaram); a loja nunca ter tido caixa ⇒ 404 CASH_REQUIRED.
     // O retrato do resumo é calculado e gravado DENTRO da mesma transação (nenhuma movimentação entra no meio).
     const result = await prisma.$transaction(
       async (tx) => {
-        const rows = await tx.$queryRaw<{ closedAt: Date | null }[]>`SELECT "closedAt" FROM "CashSession" WHERE "id" = ${open.id} AND "storeId" = ${storeId} FOR UPDATE`;
+        const rows = await tx.$queryRaw<{ id: string; closedAt: Date | null }[]>`SELECT "id", "closedAt" FROM "CashSession" WHERE "storeId" = ${storeId} ORDER BY "openedAt" DESC, "id" DESC LIMIT 1 FOR UPDATE`;
         if (!rows[0]) throw new CodedError(404, "CASH_REQUIRED", "não há caixa aberto");
         if (rows[0].closedAt) throw new CodedError(409, "CASH_ALREADY_CLOSED", "Este caixa já foi fechado.");
-        const session = await tx.cashSession.findUniqueOrThrow({ where: { id: open.id }, include: { movements: true } });
+        const session = await tx.cashSession.findUniqueOrThrow({ where: { id: rows[0].id }, include: { movements: true } });
         const closedAt = new Date();
         const summary = await summarizeSession(tx, storeId, { ...session, closedAt });
         const differenceCents = counted - summary.expectedCents;

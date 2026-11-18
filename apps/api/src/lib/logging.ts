@@ -178,10 +178,11 @@ const isSecretKey = (key: string) => SECRET_KEY.test(key) || SECRET_KEY_EXACT.te
 // segredo dentro de texto, em passes separados (a ordem importa):
 //  1) linha de cabeçalho inteira: `Authorization: Digest …`, `Cookie: a=b; c=d`, `Set-Cookie: …` (vai até o fim da linha)
 const HEADER_LINE = /\b(proxy-authorization|authorization|set-cookie|cookie)(\s*:\s*)[^\r\n]+/gi;
+//  Sem `\b` antes do NOME de propósito (SEC-33e): `currentPassword`, `newPassword`, `userToken`, `apiSecret` (camelCase) também têm o valor redigido em texto.
 //  1b) senha SEM aspas e com espaço (`password=ab cd ef`): vai até o fim da linha ou do parâmetro (`&`, `,`, `;`, `}`); redige a mais de propósito (SEC-33d)
-const PASSWORD_UNQUOTED = /\b((?:password|passwd|pwd|senha)\s*[:=]\s*)([^\s"'\r\n&,};][^\r\n&,};"']*)/gi;
+const PASSWORD_UNQUOTED = /((?:password|passwd|pwd|senha)\s*[:=]\s*)([^\s"'\r\n&,};][^\r\n&,};"']*)/gi;
 //  2) `nome=valor` / `"nome":"valor"` com valor entre aspas (aceita espaço e aspas ESCAPADAS dentro) ou sem aspas; inclui `token=`, `secret=` e `"cookie":"…"` soltos em texto
-const NAMED_VALUE = /\b((?:access_token|refresh_token|client_secret|id_token|api[-_]?key|password|passwd|pwd|senha|token|secret|cookie|set-cookie|authorization|x-order-token|x-mfa-challenge|x-admin-token)\\?["']?\s*[:=]\s*)(\\"(?:(?!\\").)*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|(?:(?:bearer|basic|digest)\s+)?[^\s"'&,}]+)/gi;
+const NAMED_VALUE = /((?:access_token|refresh_token|client_secret|id_token|api[-_]?key|password|passwd|pwd|senha|token|secret|cookie|set-cookie|authorization|x-order-token|x-mfa-challenge|x-admin-token)\\?["']?\s*[:=]\s*)(\\"(?:(?!\\").)*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|(?:(?:bearer|basic|digest)\s+)?[^\s"'&,}]+)/gi;
 //  2a) JSON serializado DUAS vezes (`{\"access_token\":\"X\"}`, o que um erro de biblioteca produz ao pôr o corpo em texto): a barra antes da aspa do nome e a do valor
 //      (`\"…\"`) entram no padrão acima (SEC-33d, resto (a) do Sun Tzu). Escape de 3 ou mais níveis fica como resíduo aceito.
 //  2b) credencial na URL (`postgres://usuario:SENHA@host`): é o que um erro de conexão do banco coloca em texto (SEC-33d)
