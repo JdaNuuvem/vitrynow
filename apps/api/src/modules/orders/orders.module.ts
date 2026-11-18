@@ -5,7 +5,7 @@ import { prismaAuditLogger } from "../../shared/audit";
 import { CodedError, useDomainErrors } from "../../shared/errors";
 import { publishToStore } from "../../realtime/hub";
 import { mfaProofAccepted, requireMfa } from "../../lib/mfaGate";
-import { OrderService, type CancelReason, type PanelActor } from "./orders.service";
+import { ABANDON_CODES, OrderService, type CancelReason, type PanelActor } from "./orders.service";
 import { assertHistoryRate } from "./orders.history";
 
 export const orderService = new OrderService(prisma, prismaAuditLogger, publishToStore);
@@ -95,6 +95,22 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
     }
     const result = await orderService.retryRefund(actorOf(request), id);
     return reply.code(result.refund === "PENDING" ? 202 : 200).send(result);
+  });
+
+  // API-61: encerra o estorno preso SEM devolver por aqui (RN-ABD). OWNER + MFA; motivo por código (+ nota 1..200 fora da auditoria).
+  app.post("/api/orders/:id/refund/abandon", auth, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (request.user.role !== "OWNER") return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
+    const body = (request.body ?? {}) as { code?: unknown; note?: unknown };
+    const code = ABANDON_CODES.find((c) => c === body.code);
+    const note = typeof body.note === "string" ? body.note.trim() : undefined;
+    if (!code || (body.note !== undefined && (note === undefined || note.length < 1 || note.length > 200))) {
+      return reply.code(400).send({ error: "Informe o motivo.", code: "VALIDATION_ERROR" });
+    }
+    if (!(await mfaProofAccepted(request, "refund"))) {
+      return reply.code(403).send({ error: "Confirmação de segurança necessária.", code: "MFA_REQUIRED", purpose: "refund" });
+    }
+    return orderService.abandonRefund(actorOf(request), id, code, note);
   });
 
   app.post("/api/orders/:id/undo", auth, async (request) => {

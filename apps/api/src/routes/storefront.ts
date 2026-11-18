@@ -359,7 +359,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     const { slug, orderId } = request.params as { slug: string; orderId: string };
     const store = await prisma.store.findUnique({ where: { slug }, select: { id: true, name: true } });
     const order = store
-      ? await prisma.order.findFirst({ where: { id: orderId, storeId: store.id }, include: { payment: { select: { status: true, amountCents: true } } } })
+      ? await prisma.order.findFirst({ where: { id: orderId, storeId: store.id }, include: { payment: { select: { status: true, amountCents: true, refundAbandonedAt: true } } } })
       : null;
     if (!store || !order || !orderTokenMatches(request.headers[ORDER_TOKEN_HEADER], order.publicTokenHash)) {
       return reply.code(404).send({ error: "pedido não encontrado" });

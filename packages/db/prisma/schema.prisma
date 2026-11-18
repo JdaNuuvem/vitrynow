@@ -479,6 +479,8 @@ model Payment {
   lastRawStatus     String?
   lastCheckedAt     DateTime?
   reconcileNote     String? // estorno feito mas o pedido já estava finalizado: conciliação manual (nunca silencioso)
+  refundAbandonedAt DateTime? // API-61: dono encerrou o estorno SEM devolver por aqui (o dinheiro continua como recebido); nulo = em curso
+  refundAbandonCode String? // API-61: código fechado do motivo (MP_RECUSA|PAGAMENTO_ANTIGO|CONTA_DESCONECTADA|ACERTADO_COM_CLIENTE|OUTRO); sem texto livre
   paymentAccountId  String? // conta do vendedor que criou a cobrança (API-07); pagamento antigo/da plataforma = null
   paymentAccount    PaymentAccount? @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
   createdAt         DateTime      @default(now())
