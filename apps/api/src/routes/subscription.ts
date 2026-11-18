@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { checkoutPlanSchema } from "@meucardapio/shared-types";
 import { logAudit } from "../lib/audit";
+import { requireMfa } from "../lib/mfaGate";
 import { createPixPayment } from "../lib/mercadopago";
 import { getStoreSubscription, resolveSubscription } from "../lib/subscription";
 
@@ -86,7 +87,7 @@ const subscriptionRoutes: FastifyPluginAsync = async (app) => {
     return { status: payment.status, subscription: resolveSubscription(subscription) };
   });
 
-  app.post("/api/store/subscription/cancel", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request, reply) => {
+  app.post("/api/store/subscription/cancel", { preHandler: [app.requirePanelAuth, app.requireOwner, requireMfa("cancel_subscription")] }, async (request, reply) => {
     const { storeId, userId } = request.user;
     const subscription = await getStoreSubscription(storeId);
     if (subscription.status !== "ACTIVE") {

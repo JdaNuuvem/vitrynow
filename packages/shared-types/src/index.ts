@@ -380,7 +380,8 @@ export type CreateNoticeInput = z.infer<typeof createNoticeSchema>;
 
 // ---- Confirmação de segurança (MFA por e-mail) ----
 
-export const MFA_PURPOSES = ["refund", "change_password", "delete_user"] as const;
+// SEC-13: ações irreversíveis ou de controle de acesso. Cada uma exige um código de uso único com ESTA finalidade (MFA_ENFORCED).
+export const MFA_PURPOSES = ["refund", "change_password", "delete_user", "device_token_create", "device_token_revoke", "cancel_subscription", "invite_owner"] as const;
 export const mfaPurposeSchema = z.enum(MFA_PURPOSES);
 export type MfaPurpose = z.infer<typeof mfaPurposeSchema>;
 

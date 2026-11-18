@@ -8,6 +8,10 @@ const PURPOSE_LABELS: Record<MfaPurpose, string> = {
   refund: "estorno de pagamento",
   change_password: "troca de senha",
   delete_user: "remoção de usuário",
+  device_token_create: "criação de chave de impressora",
+  device_token_revoke: "revogação de chave de impressora",
+  cancel_subscription: "cancelamento da assinatura",
+  invite_owner: "convite de um novo dono",
 };
 
 const mfaRoutes: FastifyPluginAsync = async (app) => {
