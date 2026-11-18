@@ -433,6 +433,7 @@ describe("QA probes — API", () => {
     expect(r.orderCount).toBe(2);
     expect(r.revenueCents).toBe(3000 + 1500); // o 2º pedido tem R$ 2,00 de gorjeta: fica fora do faturamento
     expect(r.tipCents).toBe(200);
+    expect(r.ruleChangedAt).toBe("2026-11-18T00:00:00.000Z"); // a tela sabe a partir de quando a conta mudou
     expect([r.canceledCount, r.canceledCents, r.openCount, r.openCents]).toEqual([1, 1500, 1, 1500]);
     expect(r.byPaymentMethod.DINHEIRO).toEqual({ count: 1, revenueCents: 3000 });
     expect(r.byPaymentMethod.CREDITO).toEqual({ count: 1, revenueCents: 1500 });

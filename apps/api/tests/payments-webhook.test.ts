@@ -62,7 +62,8 @@ describe("máquina de estados do pagamento", () => {
 });
 
 // ───────────── Integração ─────────────
-describe("API-03 — webhook e PIX", () => {
+// Folga para máquina carregada (CI, suíte em paralelo): um timeout de 15 s num teste derrubava os seguintes em cascata. Só o prazo muda, nenhuma asserção.
+describe("API-03 — webhook e PIX", { timeout: 60_000 }, () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -70,11 +71,11 @@ describe("API-03 — webhook e PIX", () => {
     cancelPayment.mockResolvedValue(undefined);
     app = makeApp();
     await app.ready();
-  });
+  }, 60_000);
   afterEach(async () => {
     await app.close();
     await resetDb();
-  });
+  }, 60_000);
   afterAll(async () => {
     await prisma.$disconnect();
   });
