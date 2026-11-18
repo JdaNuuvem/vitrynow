@@ -1,7 +1,7 @@
 // API-55 — PIX aguardando pagamento visível (RN-PP-01..04): lista somente leitura + "Conferir pagamento" (1 consulta, 1 por minuto por pedido).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { makeApp, registerStore, resetDb, useMockedProvider } from "./helpers";
+import { makeApp, registerStore, resetDb, useMockedProvider, enablePro } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -49,6 +49,7 @@ describe("API-55 — PIX aguardando pagamento", { timeout: 60_000 }, () => {
   }
   async function staffCookie(owner: string) {
     const email = `staff-${Math.random().toString(36).slice(2, 8)}@t.com`;
+    await enablePro(app, owner);
     await app.inject({ method: "POST", url: "/api/users", headers: { cookie: owner }, payload: { email, password: "provisoria1" } });
     const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email, password: "provisoria1" } });
     return (login.headers["set-cookie"] as string).split(";")[0]!;

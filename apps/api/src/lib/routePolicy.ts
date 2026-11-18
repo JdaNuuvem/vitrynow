@@ -27,6 +27,8 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/orders/:id/undo": "finish", // API-02: desfazer dentro da janela
   "POST /api/orders/:id/status": "finish", // legado (alias deprecated até WEB-05)
   "POST /api/orders/:id/refund": "finish",
+  "POST /api/orders/:id/refund/abandon": "finish", // API-61: encerrar estorno preso SEM devolver (OWNER+MFA): encerra o que já foi recebido (RN-A-01)
+  "POST /api/orders/:id/payment/check": "allowed", // API-55: "Conferir pagamento" = 1 consulta ao provedor (a aprovação é a mesma do webhook); Consulta ok, Suspensão 402
   "POST /api/orders/:id/deliverer": "finish",
   "POST /api/orders/:id/reprint": "finish", // API-12b: 2ª via de pedido JÁ recebido (STAFF só até 24 h; a regra é da rota)
   "POST /api/orders/:id/internal-note": "blocked", // API-54: anotação da equipe é cadastro, não encerra pedido
@@ -59,6 +61,14 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/store/payments/mercadopago/connect": "blocked", // API-07: conectar a conta de PIX é configuração (sem loja ativa não conecta)
   "POST /api/store/payments/mercadopago/disconnect": "blocked", // API-07: idem
   "PUT /api/store/print-mode": "blocked", // API-12b: modo de impressão é configuração
+  "PUT /api/store/manual-discount-limit": "blocked", // SEC-15: limite de desconto manual do STAFF é configuração
+  "POST /api/print-jobs/:id/print-now": "finish", // N6/N8: "Imprimir agora" reimprime pedido JÁ recebido (como a 2ª via)
+  "POST /api/catalog/products/:id/sold-out": "blocked", // API-17: esgotado hoje é cadastro; na Consulta a loja nem recebe pedido
+  "POST /api/delivery-zones": "blocked", // API-16: taxa por bairro é cadastro
+  "POST /api/delivery-zones/:id": "blocked",
+  "POST /api/delivery-zones/:id/delete": "blocked",
+  "POST /api/delivery-zones/import": "blocked",
+  "POST /api/delivery-zones/config": "blocked",
   "POST /api/print-jobs/test": "blocked", // API-12: teste de impressora é configuração
   "POST /api/device-tokens": "blocked",
   // Matriz do Leonardo (leonardo/matriz-rotas-por-fase.md): revogar chave é "cadastro" ⇒ bloqueado na

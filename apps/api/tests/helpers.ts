@@ -1,5 +1,6 @@
 import { prisma } from "@meucardapio/db";
 import { buildApp } from "../src/app";
+import { activateSubscription } from "../src/lib/subscription";
 import { encryptSecret } from "../src/lib/paymentCrypto";
 import { setGatewayMaker } from "../src/modules/storePayments/gateway";
 import type { PixGateway } from "../src/lib/mercadopago";
@@ -130,4 +131,12 @@ export async function login(app: ReturnType<typeof makeApp>, email: string, pass
   const response = await app.inject({ method: "POST", url: "/auth/login", payload: { email, password } });
   const cookie = (response.headers["set-cookie"] as string | undefined)?.split(";")[0];
   return { response, cookie };
+}
+
+// Equipe (convidar STAFF) é recurso do PRO desde a API-08; o BASICO limita a 1 usuário. Testes que convidam STAFF ativam o PRO da loja do dono antes.
+export async function enablePro(app: ReturnType<typeof makeApp>, ownerCookie: string) {
+  const me = await app.inject({ method: "GET", url: "/auth/me", headers: { cookie: ownerCookie } });
+  const storeId = JSON.parse(me.body).user.storeId as string;
+  const subscription = await prisma.subscription.findFirstOrThrow({ where: { storeId } });
+  await activateSubscription({ subscriptionId: subscription.id, planCode: "PRO" });
 }

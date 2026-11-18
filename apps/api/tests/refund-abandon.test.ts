@@ -2,7 +2,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { MAX_REFUND_AUTO_ATTEMPTS } from "../src/modules/orders/orders.service";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { makeApp, registerStore, resetDb, enablePro } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -52,6 +52,7 @@ describe("API-61 — encerrar estorno preso sem devolver por aqui", () => {
   }
   async function staffCookie(owner: string) {
     const email = `staff-${Math.random().toString(36).slice(2, 8)}@t.com`;
+    await enablePro(app, owner);
     await app.inject({ method: "POST", url: "/api/users", headers: { cookie: owner }, payload: { email, password: "provisoria1" } });
     const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email, password: "provisoria1" } });
     return (login.headers["set-cookie"] as string).split(";")[0]!;

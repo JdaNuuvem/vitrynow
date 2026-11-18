@@ -1,7 +1,7 @@
 // SEC-15 / RN-B2-06: o limite de desconto manual do STAFF e configurado so pelo OWNER, dentro de 0..100, com auditoria, e vale no pedido manual.
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { makeApp, registerStore, resetDb, enablePro } from "./helpers";
 
 describe("SEC-15 - limite de desconto manual do STAFF", { timeout: 60_000 }, () => {
   let app: ReturnType<typeof makeApp>;
@@ -24,6 +24,7 @@ describe("SEC-15 - limite de desconto manual do STAFF", { timeout: 60_000 }, () 
     const cat = json(await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie: cookie! }, payload: { name: "C" } })).category.id;
     const productId = json(await app.inject({ method: "POST", url: "/api/catalog/products", headers: { cookie: cookie! }, payload: { categoryId: cat, name: "Pizza", priceCents: 4000 } })).product.id as string;
     const email = `s-${Math.random().toString(36).slice(2, 8)}@t.com`;
+    await enablePro(app, cookie!);
     await app.inject({ method: "POST", url: "/api/users", headers: { cookie: cookie! }, payload: { email, password: "provisoria-12" } });
     const staff = ((await app.inject({ method: "POST", url: "/auth/login", payload: { email, password: "provisoria-12" } })).headers["set-cookie"] as string).split(";")[0];
     return { owner: cookie!, staff, store, productId };

@@ -2,7 +2,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { isSoldOutNow, nextSoldOutReset } from "../src/lib/soldOut";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { makeApp, registerStore, resetDb, enablePro } from "./helpers";
 
 const json = (r: { body: string }) => JSON.parse(r.body);
 
@@ -27,6 +27,7 @@ describe("esgotado hoje (B11)", () => {
     return { cookie: cookie!, slug, productId: product.id as string };
   }
   const staffCookie = async (owner: string) => {
+    await enablePro(app, owner);
     const invite = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: owner }, payload: { email: `staff-${Math.random().toString(36).slice(2, 8)}@t.com`, password: "provisoria1" } });
     const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: json(invite).user.email, password: "provisoria1" } });
     return (login.headers["set-cookie"] as string).split(";")[0];

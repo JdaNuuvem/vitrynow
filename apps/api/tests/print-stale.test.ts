@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { prisma } from "@meucardapio/db";
 import { staleWindowSeconds } from "../src/lib/printJobs";
 import { subscribe } from "../src/realtime/hub";
-import { makeApp, registerStore, resetDb, useMockedProvider } from "./helpers";
+import { makeApp, registerStore, resetDb, useMockedProvider, enablePro } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -62,6 +62,7 @@ describe("N6/N8 — janela de 12 h e eventos de impressão", () => {
     return (type: string) => sent.filter((m) => JSON.parse(m).type === type).map((m) => JSON.parse(m));
   };
   async function staffCookie(ctx: Ctx) {
+    await enablePro(app, ctx.owner);
     const invite = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: ctx.owner }, payload: { email: `staff-${Math.random().toString(36).slice(2, 8)}@t.com`, password: "provisoria1" } });
     const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: json(invite).user.email, password: "provisoria1" } });
     return (login.headers["set-cookie"] as string).split(";")[0];
