@@ -25,6 +25,8 @@ async function summarizeSession(db: Db | typeof prisma, storeId: string, session
       OR: [
         { createdAt: { gte: session.openedAt, ...(session.closedAt ? { lte: session.closedAt } : {}) } },
         { paidAt: { gte: session.openedAt, ...(session.closedAt ? { lte: session.closedAt } : {}) } },
+        // caixa ABERTO: pedido em dinheiro em andamento, de qualquer data, ainda a receber (informativo, RN-CX-03); o caixa fechado usa só o retrato
+        ...(session.closedAt ? [] : [{ paymentMethod: "DINHEIRO" as const, paidAt: null, status: { in: ["CONFIRMADO", "EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA"] as ("CONFIRMADO" | "EM_PREPARO" | "PRONTO" | "SAIU_PARA_ENTREGA")[] } }]),
       ],
     },
     select: { type: true, status: true, totalCents: true, deliveryFeeCents: true, tipCents: true, paymentMethod: true, createdAt: true, paidAt: true, awaitingPayment: true },

@@ -78,6 +78,9 @@ services:
       TRUST_PROXY_CIDR: ${CADDY_IP:-172.29.250.10}/32   # derivado do IP fixo do Caddy: não há como divergir
       SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
       SESSION_ABSOLUTE_DAYS: ${SESSION_ABSOLUTE_DAYS:-14}
+      # SEC-34: a faixa de hash (hashLane) dimensiona as vagas em voo por min(UV_THREADPOOL_SIZE / 2, núcleos − 1). O padrão do Node é 4; fica EXPLÍCITO aqui para o
+      # dimensionamento não depender do padrão e aparecer no `compose config`. Subir só junto com mais núcleos (cada hash de senha ocupa 1 thread por ~45 ms).
+      UV_THREADPOOL_SIZE: ${UV_THREADPOOL_SIZE:-4}
       # Segredo de serviço (SEC-24), o MESMO do web. Rotação sem queda: ponha o novo em API_INTERNAL_SECRET e o antigo em
       # API_INTERNAL_SECRET_PREVIOUS (a API aceita os dois), suba api e web, e depois esvazie o PREVIOUS.
       API_INTERNAL_SECRET: ${API_INTERNAL_SECRET:?defina API_INTERNAL_SECRET no .env (32+ caracteres; openssl rand -hex 32)}
