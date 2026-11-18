@@ -43,6 +43,7 @@ describe("NG-11: nenhum segredo (canário) chega ao log", () => {
   });
   afterAll(async () => {
     await app.close();
+    await resetDb(); // não deixa loja/usuário para o próximo arquivo (o mfa-notices só limpa DEPOIS de cada teste)
     await prisma.$disconnect();
   });
 

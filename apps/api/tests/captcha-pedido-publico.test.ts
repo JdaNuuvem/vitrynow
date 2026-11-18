@@ -35,6 +35,7 @@ describe("NG-08: captcha no pedido público", () => {
     delete process.env.CAPTCHA_MODE;
   });
   afterAll(async () => {
+    await resetDb(); // não deixa loja/usuário para o próximo arquivo (o mfa-notices só limpa DEPOIS de cada teste)
     await prisma.$disconnect();
   });
   const json = (r: { body: string }) => JSON.parse(r.body);
