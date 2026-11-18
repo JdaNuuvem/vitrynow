@@ -2,7 +2,7 @@ import { type Prisma, type prisma as prismaClient, type Order, type OrderStatus,
 import type { WsServerMessage } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
 import type { AuditLogger } from "../../shared/audit";
-import { cancelPayment, getPayment, refundPayment } from "../../lib/mercadopago";
+import { gatewayOfPayment } from "../storePayments/gateway";
 import { ORDER_TX_OPTIONS } from "../../lib/order-code";
 import { cancelPendingTickets, enqueueCancelNoticeIfPrinted, lockPrintMode } from "../printJobs/printJobs.queue";
 import { customerMessageFor, messageActorFor, moneyLineFor } from "../../lib/cancelMessages";
@@ -420,7 +420,7 @@ export class OrderService {
     // Fora da transação: cobrança aberta no MP (melhor esforço; o pedido já está cancelado — RN-B3-02).
     if (order.payment?.status === "PENDENTE" && order.payment.providerPaymentId) {
       try {
-        await cancelPayment(order.payment.providerPaymentId);
+        await (await gatewayOfPayment(order.payment, order.storeId)).cancelPayment(order.payment.providerPaymentId);
         await this.db.payment.updateMany({ where: { id: order.payment.id, status: "PENDENTE" }, data: { status: "CANCELADO" } });
       } catch {
         await this.db.payment.updateMany({ where: { id: order.payment.id }, data: { lastRawStatus: "cancel_failed" } });
@@ -536,7 +536,7 @@ export class OrderService {
     if (!origin) throw err(409, "NOT_REFUND_PENDING", "Estorno sem contexto de cancelamento.");
 
     if (!origin.providerRefundedAt) {
-      if (!(await this.providerRefund(payment.id, payment.providerPaymentId))) {
+      if (!(await this.providerRefund(payment, order.storeId, payment.providerPaymentId))) {
         await this.noteRefundFailure(payment.id, order, origin, "Não foi possível estornar no Mercado Pago. Tentaremos novamente.");
         this.publish(order.storeId, { type: "payment.refund_pending", orderId: order.id });
         return "PENDING";
@@ -625,14 +625,16 @@ export class OrderService {
     }
   }
 
-  private async providerRefund(paymentId: string, providerPaymentId: string): Promise<boolean> {
+  private async providerRefund(payment: { id: string; paymentAccountId: string | null }, storeId: string, providerPaymentId: string): Promise<boolean> {
+    const paymentId = payment.id;
     try {
-      await refundPayment(providerPaymentId, `refund-${paymentId}`);
+      const gateway = await gatewayOfPayment(payment, storeId);
+      await gateway.refundPayment(providerPaymentId, `refund-${paymentId}`);
       return true;
     } catch (refundError) {
       console.error(`[estorno] provedor recusou o estorno do pagamento ${paymentId}: ${providerErrorCode(refundError)}`);
       try {
-        return (await getPayment(providerPaymentId)).status === "refunded";
+        return (await (await gatewayOfPayment(payment, storeId)).getPayment(providerPaymentId)).status === "refunded";
       } catch (lookupError) {
         console.error(`[estorno] não consegui consultar o pagamento ${paymentId} no provedor: ${providerErrorCode(lookupError)}`);
         return false;

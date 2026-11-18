@@ -9,13 +9,15 @@ Plataforma de pedidos para restaurantes e lojas: cardápio online para o cliente
 | Camada | Tecnologia |
 |---|---|
 | Monorepo | pnpm workspaces (`apps/*`, `packages/*`, `infra`) |
-| API | Node 20, Fastify, Zod, WebSocket, jobs no processo |
+| API | Node 24, Fastify, Zod, WebSocket, jobs no processo |
 | Banco | PostgreSQL 16, Prisma 5.22 (migrações em `packages/db/prisma/migrations`) |
 | Painel e cardápio | Next.js 14 (React), SSR/ISR no cardápio público |
 | Impressão | C# / .NET Framework (WinForms), `apps/print-client` |
 | Testes | Vitest (API e web), Testing Library (web), selftest próprio no print-client |
 | Infra | Docker Compose, Caddy (HTTPS e limite de requisições), backup do Postgres |
 | Integrações | Mercado Pago (PIX, hoje só mock/sandbox), Resend (e-mail, mock), WhatsApp/Meta (planejado) |
+
+**Pré-requisitos:** Node **24** (`.nvmrc`; as imagens Docker e o CI usam a mesma versão), pnpm 12.8.1 (fixado em `packageManager`; `corepack enable` instala a versão certa), Docker. O Postgres de teste sobe por `scripts/test-db.ps1`.
 
 ## Páginas atuais (`apps/web/app`)
 

@@ -2,7 +2,7 @@
 // Mercado Pago é SEMPRE mockado.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { login, makeApp, registerStore, resetDb, orderTokenHeader } from "./helpers";
+import { login, makeApp, registerStore, resetDb, orderTokenHeader, useMockedProvider } from "./helpers";
 import { subscribe } from "../src/realtime/hub";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
@@ -19,6 +19,7 @@ type App = ReturnType<typeof makeApp>;
 describe("API-02 — estados do pedido", () => {
   let app: App;
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     refundPayment.mockResolvedValue(undefined);
     cancelPayment.mockResolvedValue(undefined);
