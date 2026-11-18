@@ -15,6 +15,9 @@ import { DomainError } from "../shared/errors";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
 import { buildMenuView } from "../lib/menuView";
 import { limited, tooMany } from "../lib/slidingLimit";
+import { CAPTCHA_HEADER, captchaVerifier } from "../lib/captcha";
+import { clientIpOf } from "../lib/clientIp";
+import { clientKey } from "../lib/clientKey";
 import { newOrderToken, orderTokenMatches, ORDER_TOKEN_HEADER } from "../lib/orderToken";
 
 const COUPON_EXHAUSTED_MESSAGE = "Esse cupom acabou.";
@@ -24,6 +27,7 @@ class CouponExhaustedError extends Error {}
 // NG-08: tetos do pedido público (por loja e por telefone); ver o comentário no uso.
 export const PUBLIC_ORDERS_PER_STORE_PER_MINUTE = 60;
 export const MAX_PENDING_PER_PHONE = 3;
+export const CAPTCHA_AT_PENDING = 2; // com captcha ligado, a partir do 2º pedido pendente do telefone
 const PENDING_WINDOW_MS = 30 * 60 * 1000;
 
 const storefrontRoutes: FastifyPluginAsync = async (app) => {
@@ -62,6 +66,14 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         where: { storeId: store.id, customerPhone: input.customerPhone, status: "PENDENTE", source: "CLIENTE", createdAt: { gte: new Date(Date.now() - PENDING_WINDOW_MS) } },
       });
       if (pendingOfPhone >= MAX_PENDING_PER_PHONE) return tooMany(reply);
+      // Captcha SÓ com risco (NG-08): o 2º pedido pendente do mesmo telefone já pede a prova; cliente normal nunca vê. Provedor desligado (`off`) = nada muda.
+      const captcha = captchaVerifier();
+      if (captcha.mode !== "off" && pendingOfPhone >= CAPTCHA_AT_PENDING) {
+        const header = request.headers[CAPTCHA_HEADER];
+        const token = typeof header === "string" && header.length <= 2000 ? header : undefined;
+        const ok = await captcha.verify(token, clientKey(clientIpOf(request))).catch(() => false); // erro do provedor = recusa (fail-closed)
+        if (!ok) return reply.code(403).send({ error: "Confirme que você não é um robô para continuar.", code: "CAPTCHA_REQUIRED" });
+      }
     }
 
     // Mesa só entra por QR/comanda (API-22). Esta rota genérica não tem mesa: recusa até lá (API-60).
