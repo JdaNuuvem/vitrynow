@@ -420,6 +420,8 @@ model PaymentOAuthState {
   createdAt DateTime  @default(now())
 
   @@index([expiresAt])
+}
+
 // ---- B8: grupos de opções e variações (API-15, ADR-0009: FKs compostas por loja) ----
 
 enum OptionPriceMode {
@@ -489,6 +491,8 @@ model OrderItemOption {
   priceMode   OptionPriceMode @default(SUM)
 
   @@index([orderItemId])
+}
+
 // Pedidos de "refaça a vitrine desta loja" para o web (API-58, ADR-0013 §2.4). Uma linha pendente por slug: várias
 // mudanças seguidas viram uma só chamada. O job `menu.revalidate` envia e reenvia com recuo; o TTL do ISR cobre o intervalo.
 model MenuRevalidation {
@@ -879,6 +883,8 @@ model ActivationEvent {
   occurredAt DateTime
 
   @@id([storeId, kind])
+}
+
 // API-18 / ADR-0010: imagem processada (WebP em larguras fixas) guardada no ObjectStorage sob stores/<storeId>/.
 // PENDING = em quarentena (objetos sendo gravados; nunca exposta); READY = publicada. PENDING velha é varrida.
 enum ImageKind {
