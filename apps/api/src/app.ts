@@ -31,6 +31,8 @@ import auditRoutes from "./modules/audit/audit.module";
 import feedbackRoutes from "./routes/feedback";
 import subscriptionRoutes from "./routes/subscription";
 import noticeRoutes from "./routes/notices";
+import platformAuthPlugin from "./plugins/platformAuth";
+import platformRoutes from "./routes/platform";
 import mfaRoutes from "./routes/mfa";
 import deliveryZoneRoutes from "./routes/deliveryZones";
 import onboardingRoutes from "./routes/onboarding";
@@ -110,6 +112,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(rateLimit, { max: 300, timeWindow: "1 minute", keyGenerator: (request) => clientKey(request.ip) });
   app.register(websocket);
   app.register(authPlugin);
+  app.register(platformAuthPlugin);
   app.register(jobsPlugin);
   // Portão da assinatura (Consulta/Suspensão): precisa vir ANTES de qualquer rota, pois age no `onRoute`.
   app.register(subscriptionGate);
@@ -156,6 +159,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(storePaymentRoutes);
   app.register(storeHoursRoutes);
   app.register(noticeRoutes);
+  app.register(platformRoutes);
   app.register(mfaRoutes);
   app.register(deliveryZoneRoutes);
   app.register(onboardingRoutes);

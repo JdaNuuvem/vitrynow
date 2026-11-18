@@ -101,7 +101,6 @@ services:
       MP_WEBHOOK_SECRET: ${MP_WEBHOOK_SECRET:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAIL_FROM: ${EMAIL_FROM:-MeuCardapio <onboarding@resend.dev>}
-      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       TRIAL_DAYS: ${TRIAL_DAYS:-7}
       MFA_ENFORCED: ${MFA_ENFORCED:-false}
     expose:

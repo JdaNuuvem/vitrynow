@@ -1,7 +1,6 @@
 import { randomInt, timingSafeEqual } from "node:crypto";
 import { nanoid } from "nanoid";
 import { prisma } from "@meucardapio/db";
-import type { MfaPurpose } from "@meucardapio/shared-types";
 import { mfaHmac } from "./securityConfig";
 
 export const CODE_TTL_MS = 10 * 60 * 1000;
@@ -27,7 +26,7 @@ export function maskEmail(email: string): string {
   return `${name.slice(0, 2)}${"*".repeat(Math.max(name.length - 2, 1))}@${domain}`;
 }
 
-export async function createChallenge(userId: string, purpose: MfaPurpose, now: Date = new Date()) {
+export async function createChallenge(userId: string, purpose: string, now: Date = new Date()) {
   const id = nanoid(24);
   const code = generateCode();
   const challenge = await prisma.mfaChallenge.create({
@@ -56,7 +55,7 @@ export async function verifyChallenge(userId: string, challengeId: string, code:
 
 // Consome (uso único) um comprovante verificado há menos de PROOF_TTL_MS. O updateMany
 // condicional garante que duas requisições simultâneas não gastem o mesmo comprovante.
-export async function spendProof(userId: string, challengeId: string, purpose: MfaPurpose, now: Date = new Date()): Promise<boolean> {
+export async function spendProof(userId: string, challengeId: string, purpose: string, now: Date = new Date()): Promise<boolean> {
   const result = await prisma.mfaChallenge.updateMany({
     where: {
       id: challengeId,
