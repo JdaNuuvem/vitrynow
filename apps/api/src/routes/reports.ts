@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
-import { isSale, saleRevenueCents } from "../lib/saleLines";
+import { REPORT_RULE_CHANGED_AT, isSale, saleRevenueCents } from "../lib/saleLines";
 
 const STORE_TIMEZONE = "America/Sao_Paulo";
 
@@ -149,6 +149,7 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
       cashSummary,
       canceledCount: canceled.length,
       canceledCents: canceled.reduce((sum, o) => sum + o.totalCents, 0),
+      ruleChangedAt: REPORT_RULE_CHANGED_AT,
       openCount: open.length,
       openCents: open.reduce((sum, o) => sum + o.totalCents, 0),
     };
