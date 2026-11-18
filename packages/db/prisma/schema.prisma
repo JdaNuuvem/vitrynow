@@ -141,8 +141,19 @@ model User {
   // "sair de todos os dispositivos". JWT com `tv` diferente é recusado (SESSION_REVOKED).
   tokenVersion Int      @default(0)
   createdAt    DateTime @default(now())
+  noticeDismissals UserNoticeDismissal[]
 
   @@index([storeId])
+}
+
+// Avisos de mudança de regra que o usuário já dispensou (RN-MIG-04b): uma linha por (usuário, aviso); dispensar de novo não muda nada.
+model UserNoticeDismissal {
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  noticeId    String
+  dismissedAt DateTime @default(now())
+
+  @@id([userId, noticeId])
 }
 
 // Token de recuperação de senha. Entrega por e-mail via Resend (lib/email.ts) — sem
@@ -228,6 +239,9 @@ model Order {
   id            String      @id @default(cuid())
   // NG-16: SHA-256 do token de acesso do cliente (cardápio público). O token em si só existe na resposta da criação.
   publicTokenHash String? @unique
+  // API-21 (RN-CX-01/02): quando o dinheiro deste pedido foi RECEBIDO. O caixa conta dinheiro só a partir daqui; null = ainda não recebido.
+  paidAt        DateTime?
+  paidAtApproximate Boolean @default(false) // true = `paidAt` estimado pela migração (sem o instante real); novos pedidos gravam o real
   storeId       String
   store         Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
   code          String // sequencial legível por loja, ex. "0007"
@@ -334,6 +348,7 @@ model CashSession {
   closeReasonText    String? // texto livre SÓ quando o código é OUTRO (1 a 200); nunca vai para a auditoria
   closedByRole       String? // papel de quem fechou (OWNER/STAFF); nunca o e-mail
   summarySnapshot    Json? // retrato CONGELADO do resumo no instante do fechamento (RN-CX-15)
+  cashRuleVersion    Int       @default(2) // 1 = caixa aberto antes da regra do dinheiro RECEBIDO (API-21); 2 = regra atual
 
   movements CashMovement[]
 

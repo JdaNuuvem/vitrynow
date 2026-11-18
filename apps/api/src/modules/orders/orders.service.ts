@@ -47,6 +47,8 @@ type CancelOrigin = {
   // Preenchido quando o PROVEDOR já devolveu o dinheiro mas a Tx 2 (cancelar o pedido) ainda não concluiu: a retentativa
   // não chama o provedor de novo, só refaz a Tx 2 (estorno chamado UMA só vez).
   providerRefundedAt?: string;
+  // Expiração do PIX (API-06): se o pagamento aparecer APROVADO (webhook que chegou no meio), NÃO cancela nem estorna: o pedido segue pago.
+  skipIfPaid?: boolean;
 };
 
 // Teto de tentativas AUTOMÁTICAS de estorno (o job de conciliação da API-06 para aqui; o "Tentar estorno" manual do dono segue valendo).
@@ -288,7 +290,8 @@ export class OrderService {
     await this.runTx(async (tx) => {
       const moved = await tx.order.updateMany({
         where: { id: order.id, storeId: actor.storeId, status: order.status, refundLockedAt: null },
-        data: { status: to },
+        // RN-CX-02(b): pedido pago na entrega/retirada em DINHEIRO só vira dinheiro recebido ao ser CONCLUIDO (quem vence a corrida grava `paidAt`)
+        data: { status: to, ...(to === "CONCLUIDO" && order.paymentMethod === "DINHEIRO" && !order.paidAt && order.totalCents > 0 ? { paidAt: this.now() } : {}) },
       });
       if (moved.count !== 1) throw STATE_CHANGED();
       await tx.orderStatusHistory.create({ data: { orderId: order.id, status: to, userId: actor.userId, source: "PANEL", kind: "ADVANCE" } });
@@ -378,6 +381,13 @@ export class OrderService {
     });
   }
 
+  // Expiração do PIX (job payment.expire): cancela pelo SISTEMA só se o pagamento ainda NÃO foi aprovado; pago dentro do prazo nunca perde o pedido.
+  async cancelExpiredPix(storeId: string, orderId: string): Promise<RefundOutcome> {
+    const order = await this.load(storeId, orderId);
+    if (FINAL_STATUSES.includes(order.status)) return "NONE";
+    return this.cancelOrder(order, { source: "SYSTEM", userId: null, actor: "SYSTEM", reason: { code: "PAGAMENTO_NAO_APROVADO" }, skipIfPaid: true });
+  }
+
   private refundState(payment: Payment | null): RefundOutcome {
     if (payment?.status === "REEMBOLSADO") return "DONE";
     if (payment?.status === "ESTORNO_PENDENTE") return "PENDING";
@@ -385,7 +395,7 @@ export class OrderService {
   }
 
   private async cancelOrder(order: OrderWithPayment, origin: CancelOrigin): Promise<RefundOutcome> {
-    if (holdsMoney(order.payment)) return this.refundSaga(order, origin);
+    if (holdsMoney(order.payment)) return origin.skipIfPaid ? "NONE" : this.refundSaga(order, origin);
 
     const sink = { noticeQueued: false };
     const completed = await this.runTx(async (tx) => {
@@ -396,6 +406,7 @@ export class OrderService {
       // Perdeu a corrida: ou o pagamento foi aprovado agora (vira saga) ou o status mudou (outro chegou antes).
       const fresh = await this.load(order.storeId, order.id);
       if (fresh.status === "CANCELADO") return this.refundState(fresh.payment);
+      if (holdsMoney(fresh.payment) && origin.skipIfPaid) return "NONE"; // a decisão foi tomada no banco (UPDATE condicional), não numa leitura
       if (holdsMoney(fresh.payment) && canCancel(fresh, origin.actor)) return this.refundSaga(fresh, origin);
       if (origin.actor === "CUSTOMER") throw err(409, "ORDER_ALREADY_ACCEPTED", "A loja já aceitou o pedido. Fale com ela.");
       throw STATE_CHANGED();

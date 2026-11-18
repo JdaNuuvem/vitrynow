@@ -122,7 +122,7 @@ export class PaymentService {
         const announced = await this.db.$transaction(async (tx) => {
           const moved = await tx.order.updateMany({
             where: { id: order.id, awaitingPayment: true, status: { not: "CANCELADO" } },
-            data: { awaitingPayment: false },
+            data: { awaitingPayment: false, paidAt: new Date() }, // o dinheiro (PIX) foi RECEBIDO agora (RN-CX-01)
           });
           if (moved.count !== 1) return null;
           return { queued: await enqueueOrderTicket(tx, { id: order.id, storeId: order.storeId }) };
