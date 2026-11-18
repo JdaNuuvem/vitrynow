@@ -1,9 +1,15 @@
 import { createHmac } from "node:crypto";
+import { assertTrustProxyList } from "./trustProxyPolicy";
 
 // Configuração de segurança lida do ambiente (ADR-0008). Tudo aqui falha ALTO no boot em vez de
 // cair em padrão inseguro: segredo conhecido = qualquer um forja sessão de qualquer loja.
 
-const isTest = () => process.env.NODE_ENV === "test";
+// O segredo público de teste só vale DENTRO do vitest (ST-04b): um NODE_ENV=test esquecido num servidor
+// real não pode cair no valor que está no repositório.
+const inVitest = () => process.env.VITEST !== undefined && process.env.VITEST !== "";
+const TEST_JWT_SECRET = "test-secret-nao-use-em-producao";
+const TEST_MFA_KEY = "test-mfa-key-nao-use-em-producao";
+const REPO_TEST_VALUES = new Set([TEST_JWT_SECRET, TEST_MFA_KEY]);
 
 // Valores que já circularam em .env.example / código — nunca aceitos como segredo real.
 const KNOWN_PLACEHOLDERS = new Set(["dev-secret-change-me", "troque-este-segredo-em-producao", "changeme", "secret"]);
@@ -11,9 +17,12 @@ const KNOWN_PLACEHOLDERS = new Set(["dev-secret-change-me", "troque-este-segredo
 const MIN_SECRET_LENGTH = 32;
 
 function requireSecret(name: string, value: string | undefined, testFallback: string): string {
-  if (isTest()) return value || testFallback;
+  if (inVitest()) return value || testFallback;
   if (!value) {
-    throw new Error(`${name} não configurado — obrigatório fora de NODE_ENV=test. Gere um com: node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"`);
+    throw new Error(`${name} não configurado. Gere um com: pnpm --filter @meucardapio/api gen:secrets (ou node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))")`);
+  }
+  if (REPO_TEST_VALUES.has(value)) {
+    throw new Error(`${name} é o valor de teste do repositório: não pode ser usado fora dos testes (mesmo com NODE_ENV=test).`);
   }
   if (value.length < MIN_SECRET_LENGTH || KNOWN_PLACEHOLDERS.has(value)) {
     throw new Error(`${name} fraco ou de exemplo — use ao menos ${MIN_SECRET_LENGTH} caracteres aleatórios (nunca o valor do .env.example).`);
@@ -22,13 +31,13 @@ function requireSecret(name: string, value: string | undefined, testFallback: st
 }
 
 export function getJwtSecret(): string {
-  return requireSecret("JWT_SECRET", process.env.JWT_SECRET, "test-secret-nao-use-em-producao");
+  return requireSecret("JWT_SECRET", process.env.JWT_SECRET, TEST_JWT_SECRET);
 }
 
 // Chave própria do MFA: nunca reaproveita o JWT_SECRET (vazamento de uma não compromete a outra).
 export function getMfaKey(): string {
-  const key = requireSecret("MFA_HMAC_KEY", process.env.MFA_HMAC_KEY, "test-mfa-key-nao-use-em-producao");
-  if (!isTest() && key === process.env.JWT_SECRET) {
+  const key = requireSecret("MFA_HMAC_KEY", process.env.MFA_HMAC_KEY, TEST_MFA_KEY);
+  if (!inVitest() && key === process.env.JWT_SECRET) {
     throw new Error("MFA_HMAC_KEY deve ser diferente de JWT_SECRET.");
   }
   return key;
@@ -64,11 +73,52 @@ export function cookieSecure(): boolean {
 
 // Rede(s) do proxy reverso (Caddy) em que se confia para ler X-Forwarded-For. Vazio = ninguém:
 // o IP do rate limit é o do socket. Lista separada por vírgula de IPs/CIDRs.
+//  - Em produção a variável é OBRIGATÓRIA (ST-02c): sem ela todos os clientes atrás do Caddy dividiriam
+//    um único limite de login. `none` declara, de propósito, "sem proxy" (fica false).
 export function trustProxySetting(): string[] | false {
   const raw = process.env.TRUST_PROXY_CIDR?.trim();
-  if (!raw) return false;
+  if (process.env.NODE_ENV === "production" && !raw) {
+    throw new Error('TRUST_PROXY_CIDR não configurado em produção: informe a rede do Caddy (ex.: "172.18.0.0/16") ou "none" se não há proxy.');
+  }
+  if (!raw || raw.toLowerCase() === "none") return false;
   const list = raw.split(",").map((item) => item.trim()).filter(Boolean);
+  // SEC-22 (ST-36): só rede privada/loopback e faixa estreita (nada de 0.0.0.0/1, 8.0.0.0/8…). A política vale em TODO
+  // ambiente que não seja explicitamente `test` ou `development` (NODE_ENV=prod, staging, vazio…): um NODE_ENV escrito
+  // diferente de "production" não pode desligar a defesa. (A OBRIGATORIEDADE da variável continua só em production.)
+  const relaxed = process.env.NODE_ENV === "test" || process.env.NODE_ENV === "development";
+  if (!relaxed && list.length > 0) assertTrustProxyList(list);
   return list.length > 0 ? list : false;
+}
+
+// SEC-24: segredo de SERVIÇO entre o web (SSR) e a API. Quem o conhece pode informar o IP do visitante em `x-visitor-ip`
+// (sem ele, todo o tráfego do SSR chegaria como UM cliente e dividiria o limite de 300 req/min). Vale só de origem interna
+// (ver clientIp.ts). Rotação sem derrubar o site: durante a troca a API aceita o valor novo e o anterior.
+//  - API_INTERNAL_SECRET: obrigatório em produção; `none` declara, de propósito, "o web não repassa o IP" (desliga).
+//  - API_INTERNAL_SECRET_PREVIOUS: opcional, só durante a rotação.
+// Mesmas exigências dos demais segredos: >= 32 caracteres, nunca valor de exemplo, nunca igual ao JWT_SECRET/MFA_HMAC_KEY.
+function assertServiceSecret(name: string, value: string): void {
+  if (REPO_TEST_VALUES.has(value) || KNOWN_PLACEHOLDERS.has(value) || value.length < MIN_SECRET_LENGTH) {
+    throw new Error(`${name} fraco ou de exemplo: use ao menos ${MIN_SECRET_LENGTH} caracteres aleatórios (gen:secrets).`);
+  }
+  if (value === process.env.JWT_SECRET || value === process.env.MFA_HMAC_KEY) {
+    throw new Error(`${name} deve ser diferente do JWT_SECRET e do MFA_HMAC_KEY.`);
+  }
+}
+
+export function internalServiceSecrets(): string[] {
+  const current = process.env.API_INTERNAL_SECRET?.trim();
+  const previous = process.env.API_INTERNAL_SECRET_PREVIOUS?.trim();
+  if (!current) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error('API_INTERNAL_SECRET não configurado em produção: gere um segredo forte (gen:secrets) ou use "none" se o web não chama a API pelo servidor.');
+    }
+    return [];
+  }
+  if (current.toLowerCase() === "none") return [];
+  assertServiceSecret("API_INTERNAL_SECRET", current);
+  if (!previous) return [current];
+  assertServiceSecret("API_INTERNAL_SECRET_PREVIOUS", previous);
+  return previous === current ? [current] : [current, previous];
 }
 
 export function allowedOrigin(): string {

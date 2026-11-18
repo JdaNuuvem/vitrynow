@@ -1,0 +1,20 @@
+              Hamburgueria Central
+                  PEDIDO #4100
+                    ENTREGA
+                16/11/2026 22:31
+------------------------------------------------
+Cliente: Paulo Souza
+Telefone: (31) 98888-7777
+Endereço: Av. Brasil, 500 - Centro
+------------------------------------------------
+2x X-Burger                             R$ 40,00
+1x Batata P                             R$ 10,00
+------------------------------------------------
+Subtotal                                R$ 50,00
+Desconto                                -R$ 4,00
+Taxa de entrega                          R$ 6,00
+Gorjeta                                  R$ 2,00
+TOTAL                                   R$ 54,00
+------------------------------------------------
+             PIX - CONFERIR NA HORA
+------------------------------------------------

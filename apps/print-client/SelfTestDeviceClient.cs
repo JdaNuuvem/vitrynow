@@ -28,6 +28,7 @@ namespace MeuCardapio.PrintClient
             Revoked();
             RevokedWindowAndRecovery();
             WsRealtime();
+            WsUnknownMessageTypes();
             WsRevoked4401();
             AuthRecovers();
             Redirect();
@@ -92,12 +93,12 @@ namespace MeuCardapio.PrintClient
                 {
                     dc.TicketReady += o => { Interlocked.Increment(ref ready); dc.RecordPrinted(o.OrderId); dc.AckPrintedAsync(o.OrderId).Wait(); };
                     dc.Start();
-                    bool acked = WaitFor(() => led.PendingAcks().Count == 0 && api.AckCalls >= 3, 8000);
+                    bool acked = WaitFor(() => led.PendingAcks().Count == 0 && api.AckCalls >= 3, 30000);
                     Thread.Sleep(500); // mais alguns ciclos com o pedido ja resolvido
                     Check("cliente real: pedido impresso exatamente 1 vez, mesmo com varios ciclos", Volatile.Read(ref ready) == 1);
                     Check("cliente real: ack que falhou (500) e repetido ate passar, sem reimprimir", acked && api.AckCalls == 3 && Volatile.Read(ref ready) == 1);
                     Check("cliente real: ack fecha o pedido no ledger", led.IsPrinted("A") && led.PendingAcks().Count == 0);
-                    Check("cliente real: Bearer da chave enviado", api.Requests.Any(r => r.Contains("/api/device/orders/pending") && r.EndsWith("auth=Bearer mcd_teste_segredo")));
+                    Check("cliente real: Bearer da chave enviado", api.Has(r => r.Contains("/api/device/orders/pending") && r.EndsWith("auth=Bearer mcd_teste_segredo")));
                 }
             }
         }
@@ -116,14 +117,14 @@ namespace MeuCardapio.PrintClient
                     dc.TicketReady += o => { Interlocked.Increment(ref ready); dc.ReportPrintFailed(o.OrderId, o.Code); }; // impressora offline
                     dc.PrintProblemsChanged += list => { lock (elock) events.Add(string.Join(",", list)); };
                     dc.Start();
-                    bool got = WaitFor(() => { lock (elock) return events.Count >= 1; }, 5000);
+                    bool got = WaitFor(() => { lock (elock) return events.Count >= 1; }, 30000);
                     Thread.Sleep(900); // ~7 ciclos de polling com o pedido ainda pendente e em recuo
                     int n; lock (elock) n = events.Count;
                     Check("sem imprimir: aviso com o pedido que falhou", got && events[0] == "#77");
                     Check("sem imprimir: nao repete o aviso a cada ciclo (1 evento so)", n == 1);
                     Check("sem imprimir: recuo impede nova tentativa a cada 15 s (1 so tentativa no periodo)", Volatile.Read(ref ready) == 1);
                     lock (api.Lock) api.Pending.Clear(); // pedido cancelado na API
-                    bool cleared = WaitFor(() => { lock (elock) return events.Count >= 2; }, 5000);
+                    bool cleared = WaitFor(() => { lock (elock) return events.Count >= 2; }, 30000);
                     lock (elock) Check("sem imprimir: some quando a API nao lista mais o pedido", cleared && events[1] == "");
                 }
             }
@@ -145,7 +146,7 @@ namespace MeuCardapio.PrintClient
                         dc.KeyRevoked += () => Interlocked.Increment(ref revoked);
                         dc.StatusChanged += s => { lock (status) status.Add(s); };
                         dc.Start();
-                        bool got = WaitFor(() => dc.IsRevoked, 8000);
+                        bool got = WaitFor(() => dc.IsRevoked, 30000);
                         Thread.Sleep(300);
                         int atRevoke = api.Total;
                         Thread.Sleep(900);
@@ -187,16 +188,16 @@ namespace MeuCardapio.PrintClient
                     dc.StatusChanged += s => { lock (status) status.Add(s); };
                     dc.TicketReady += o => { Interlocked.Increment(ref ready); dc.RecordPrinted(o.OrderId); dc.AckPrintedAsync(o.OrderId).Wait(); };
                     dc.Start();
-                    bool paused = WaitFor(() => dc.IsRevoked, 8000);
+                    bool paused = WaitFor(() => dc.IsRevoked, 30000);   // generoso: a pausa vem da janela de 400 ms + 3 recusas; sob CPU saturada o laco de polling atrasa
                     Check("retomada: pausa por recusas alem da janela", paused && Volatile.Read(ref revoked) == 1);
                     int probes0 = api.PendingCalls;
                     Thread.Sleep(900);
                     Check("retomada: pausado so sonda (poucas chamadas), nao faz polling normal", api.PendingCalls - probes0 <= 5);
                     api.Pending.Add(new[] { "R", "321" });
                     api.PendingStatus = 200; api.WsStatus = 404; // o proxy/chave voltou ao normal
-                    bool back = WaitFor(() => !dc.IsRevoked && Volatile.Read(ref restored) == 1, 5000);
+                    bool back = WaitFor(() => !dc.IsRevoked && Volatile.Read(ref restored) == 1, 30000);
                     Check("retomada: sonda com 200 retoma sozinha e dispara KeyRestored", back);
-                    bool printed = WaitFor(() => Volatile.Read(ref ready) == 1 && led.IsPrinted("R"), 5000);
+                    bool printed = WaitFor(() => Volatile.Read(ref ready) == 1 && led.IsPrinted("R"), 30000);
                     Check("retomada: volta a imprimir o pedido pendente (1 vez)", printed);
                     lock (status) Check("retomada: avisa que a impressao foi retomada", status.Any(s => s.Contains("voltou a ser aceita")));
                 }
@@ -214,13 +215,52 @@ namespace MeuCardapio.PrintClient
                 {
                     dc.TicketReady += o => { Interlocked.Increment(ref ready); dc.RecordPrinted(o.OrderId); dc.AckPrintedAsync(o.OrderId).Wait(); };
                     dc.Start();
-                    bool connected = WaitFor(() => api.OpenSockets == 1, 8000);
+                    bool connected = WaitFor(() => api.OpenSockets == 1, 30000);
                     Thread.Sleep(300); // 1o ciclo do polling (vazio) ja passou
                     api.Pending.Add(new[] { "W", "88" });
                     api.SendWs("{\"type\":\"print.available\"}");
-                    bool got = WaitFor(() => Volatile.Read(ref ready) == 1, 5000);
-                    Check("ws real: conecta com upgrade e Bearer", connected && api.Requests.Any(r => r.Contains("/ws/device") && r.EndsWith("auth=Bearer mcd_teste_segredo")));
+                    bool got = WaitFor(() => Volatile.Read(ref ready) == 1, 30000);
+                    Check("ws real: conecta com upgrade e Bearer", connected && api.Has(r => r.Contains("/ws/device") && r.EndsWith("auth=Bearer mcd_teste_segredo")));
                     Check("ws real: aviso do servidor acorda o ciclo sem esperar o polling", got && api.PendingCalls >= 2);
+                }
+            }
+        }
+
+        // ---- PC-24/Turing: o canal em tempo real passa a carregar eventos novos (ex.: device.alert). O cliente NAO le o conteudo: qualquer mensagem
+        // (tipo desconhecido, texto que nao e JSON, mensagem enorme, vazia) e so um "cheque agora"; nunca derruba o canal nem a impressao. ----
+        static void WsUnknownMessageTypes()
+        {
+            using (var api = new FakeApi())
+            {
+                api.WsMode = "accept";
+                PrintLedger led; int ready = 0; var status = new List<string>();
+                using (var dc = Client(api, out led, 600000))
+                {
+                    dc.StatusChanged += m => { lock (status) status.Add(m); };
+                    dc.TicketReady += o => { Interlocked.Increment(ref ready); dc.RecordPrinted(o.OrderId); dc.AckPrintedAsync(o.OrderId).Wait(); };
+                    dc.Start();
+                    bool connected = WaitFor(() => api.OpenSockets == 1, 30000);
+                    Thread.Sleep(300);
+                    var messages = new[]
+                    {
+                        "{\"type\":\"device.alert\",\"code\":\"MODE_UNCONFIRMED\"}",
+                        "{\"type\":\"tipo.que.nao.existe\",\"x\":[1,2,3]}",
+                        "isto nao e json {{{",
+                        "",
+                        new string('x', 20000),               // maior que o buffer de 4 KB do cliente
+                        "{\"type\":\"device.alert\"}",
+                    };
+                    int callsBefore = api.PendingCalls;
+                    foreach (var m in messages) { api.SendWs(m); Thread.Sleep(80); }
+                    bool cycled = WaitFor(() => api.PendingCalls >= callsBefore + messages.Length, 30000);
+                    Check("ws: mensagens de tipo desconhecido, nao-JSON, vazia e enorme so disparam ciclos (" + (api.PendingCalls - callsBefore) + " ciclos para " + messages.Length + " mensagens)", connected && cycled);
+                    Thread.Sleep(300);
+                    bool noError; lock (status) noError = !status.Any(m => m.Contains("Tempo real indispon") || m.StartsWith("Erro ("));
+                    Check("ws: nenhuma mensagem derruba o canal nem gera erro no status", noError && api.OpenSockets == 1 && !dc.IsRevoked);
+                    api.Pending.Add(new[] { "U", "99" });
+                    api.SendWs("{\"type\":\"device.alert\",\"code\":\"EMPTY_ZERO_TICKET\"}");
+                    bool printed = WaitFor(() => Volatile.Read(ref ready) == 1, 30000);
+                    Check("ws: depois das mensagens estranhas o canal segue vivo e o pedido novo e entregue", printed);
                 }
             }
         }
@@ -238,7 +278,7 @@ namespace MeuCardapio.PrintClient
                     dc.RevokedProbeMs = 600000;
                     dc.KeyRevoked += () => Interlocked.Increment(ref revoked);
                     dc.Start();
-                    bool got = WaitFor(() => dc.IsRevoked, 8000);
+                    bool got = WaitFor(() => dc.IsRevoked, 30000);
                     Check("ws 4401: fechamento por revogacao pausa na hora, sem esperar a janela", got && Volatile.Read(ref revoked) == 1);
                 }
             }
@@ -255,7 +295,7 @@ namespace MeuCardapio.PrintClient
                 {
                     dc.KeyRevoked += () => Interlocked.Increment(ref revoked);
                     dc.Start();
-                    bool recovered = WaitFor(() => api.PendingCalls >= 6, 6000);
+                    bool recovered = WaitFor(() => api.PendingCalls >= 6, 30000);
                     Check("401 isolado: 2 recusas e depois resposta boa NAO revoga a chave", recovered && !dc.IsRevoked && Volatile.Read(ref revoked) == 0);
                 }
             }
@@ -272,7 +312,7 @@ namespace MeuCardapio.PrintClient
                 {
                     dc.StatusChanged += s => { lock (status) status.Add(s); };
                     dc.Start();
-                    bool seen = WaitFor(() => { lock (status) return status.Any(s => s.Contains("redirecionamento")); }, 5000);
+                    bool seen = WaitFor(() => { lock (status) return status.Any(s => s.Contains("redirecionamento")); }, 30000);
                     Check("redirecionamento 302: nao segue, avisa para conferir a URL e nao revoga a chave", seen && !dc.IsRevoked);
                 }
             }

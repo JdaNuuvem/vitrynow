@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { Product, ProductInput } from "@/core/domain/catalog";
+import { validateImageUrl } from "@/shared/format/imageUrl";
 import { MoneyInput } from "@/shared/ui/MoneyInput";
 import { Modal } from "@/shared/ui/Modal";
 import { Switch } from "@/shared/ui/Switch";
@@ -19,10 +20,17 @@ export function ProductForm({ categoryId, initial, onSave, onClose }: ProductFor
   const [draft, setDraft] = useState<ProductDraft>(() => draftFromProduct(initial));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const imageRef = useRef<HTMLInputElement>(null);
+  const imageErrorId = useId();
   const patch = (changes: Partial<ProductDraft>) => setDraft((prev) => ({ ...prev, ...changes }));
 
   async function submit() {
     if (!draft.name.trim()) return setError("Informe o nome do produto.");
+    // A foto só vale em https (SEC-14/ST-17): avisa no próprio campo e leva o foco até ele.
+    const invalidImage = validateImageUrl(draft.imageUrl);
+    setImageError(invalidImage);
+    if (invalidImage) return imageRef.current?.focus();
     setSaving(true);
     setError(null);
     const failure = await onSave(toProductInput(categoryId, draft), initial?.id);
@@ -48,10 +56,19 @@ export function ProductForm({ categoryId, initial, onSave, onClose }: ProductFor
           onChange={(event) => patch({ description: event.target.value })}
         />
         <input
+          ref={imageRef}
           placeholder="URL da foto do produto (opcional)"
+          aria-label="URL da foto do produto (opcional)"
+          aria-invalid={imageError ? true : undefined}
+          aria-describedby={imageError ? imageErrorId : undefined}
           value={draft.imageUrl}
           onChange={(event) => patch({ imageUrl: event.target.value })}
         />
+        {imageError && (
+          <p id={imageErrorId} role="alert" className="catalogo__error">
+            {imageError}
+          </p>
+        )}
 
         <div className="catalogo-form__toggles">
           <label>

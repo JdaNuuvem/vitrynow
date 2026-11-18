@@ -1,5 +1,6 @@
 import type { Prisma } from "@meucardapio/db";
 import { claimWithLock } from "./lock";
+import { utc } from "../lib/sqlTime";
 import { JOB_LOCK_KEYS } from "./lockKeys";
 import type { Job } from "./types";
 
@@ -22,7 +23,7 @@ const TARGETS = {
   PasswordResetToken: {
     async claim(tx, cutoff, limit) {
       const rows = await tx.$queryRaw<{ id: string }[]>`
-        SELECT "id" FROM "PasswordResetToken" WHERE "expiresAt" < ${cutoff}
+        SELECT "id" FROM "PasswordResetToken" WHERE "expiresAt" < ${utc(cutoff)}
         ORDER BY "expiresAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED`;
       return rows.map((row) => row.id);
     },
@@ -36,7 +37,7 @@ const TARGETS = {
   MfaChallenge: {
     async claim(tx, cutoff, limit) {
       const rows = await tx.$queryRaw<{ id: string }[]>`
-        SELECT "id" FROM "MfaChallenge" WHERE "expiresAt" < ${cutoff}
+        SELECT "id" FROM "MfaChallenge" WHERE "expiresAt" < ${utc(cutoff)}
         ORDER BY "expiresAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED`;
       return rows.map((row) => row.id);
     },
@@ -45,6 +46,52 @@ const TARGETS = {
     },
     async oldestExpiry(tx) {
       return (await tx.mfaChallenge.aggregate({ _min: { expiresAt: true } }))._min.expiresAt;
+    },
+  },
+  // SEC-19 / ST-30: sessões encerradas (logout de um aparelho). Linha só serve até o exp do token;
+  // depois da retenção é lixo técnico. A chave primária é o `sid`.
+  RevokedSession: {
+    async claim(tx, cutoff, limit) {
+      const rows = await tx.$queryRaw<{ sid: string }[]>`
+        SELECT "sid" FROM "RevokedSession" WHERE "expiresAt" < ${utc(cutoff)}
+        ORDER BY "expiresAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED`;
+      return rows.map((row) => row.sid);
+    },
+    async remove(tx, ids) {
+      return (await tx.revokedSession.deleteMany({ where: { sid: { in: ids } } })).count;
+    },
+    async oldestExpiry(tx) {
+      return (await tx.revokedSession.aggregate({ _min: { expiresAt: true } }))._min.expiresAt;
+    },
+  },
+  // PC-24: alertas de dispositivo (telemetria): `expiresAt` = último aviso + 30 dias. Sem PII por construção.
+  DeviceAlert: {
+    async claim(tx, cutoff, limit) {
+      const rows = await tx.$queryRaw<{ id: string }[]>`
+        SELECT "id" FROM "DeviceAlert" WHERE "expiresAt" < ${utc(cutoff)}
+        ORDER BY "expiresAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED`;
+      return rows.map((row) => row.id);
+    },
+    async remove(tx, ids) {
+      return (await tx.deviceAlert.deleteMany({ where: { id: { in: ids } } })).count;
+    },
+    async oldestExpiry(tx) {
+      return (await tx.deviceAlert.aggregate({ _min: { expiresAt: true } }))._min.expiresAt;
+    },
+  },
+  // API-07 / ADR-0011 §4: `state` do OAuth do Mercado Pago (só o hash; uso único; vale 10 min). Vencido ou usado é lixo técnico.
+  PaymentOAuthState: {
+    async claim(tx, cutoff, limit) {
+      const rows = await tx.$queryRaw<{ id: string }[]>`
+        SELECT "id" FROM "PaymentOAuthState" WHERE "expiresAt" < ${utc(cutoff)}
+        ORDER BY "expiresAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED`;
+      return rows.map((row) => row.id);
+    },
+    async remove(tx, ids) {
+      return (await tx.paymentOAuthState.deleteMany({ where: { id: { in: ids } } })).count;
+    },
+    async oldestExpiry(tx) {
+      return (await tx.paymentOAuthState.aggregate({ _min: { expiresAt: true } }))._min.expiresAt;
     },
   },
 } satisfies Record<string, Target>;
@@ -69,6 +116,14 @@ export const techCleanupJob: Job = {
         processed += removed;
         log.info({ job: "tech.cleanup", table, removed }, "tech.cleanup.removed");
       }
+      // API-13 (LGPD, Nightingale/Atlas): a impressão digital da idempotência do pedido manual só serve por minutos; depois da retenção o valor é zerado
+      // (a janela útil acabou e o hash derivado de dados do cliente não deve ficar guardado). NÃO apaga nem altera o pedido: só esta coluna.
+      const scrubbed = await tx.$executeRaw`
+        UPDATE "Order" SET "manualBodyHash" = NULL
+         WHERE "id" IN (SELECT "id" FROM "Order" WHERE "manualBodyHash" IS NOT NULL AND "createdAt" < ${utc(cutoff)}
+                         ORDER BY "createdAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED)`;
+      if (scrubbed > 0) log.info({ job: "tech.cleanup", column: "Order.manualBodyHash", scrubbed }, "tech.cleanup.scrubbed");
+      processed += scrubbed;
       return processed;
     });
     return { processed: claimed.acquired ? claimed.value : 0 };

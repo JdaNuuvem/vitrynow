@@ -39,6 +39,8 @@ namespace MeuCardapio.PrintClient
             public int Downloads(string suffix) { int n = 0; foreach (var r in Requests) if (r.EndsWith(suffix)) n++; return n; }
         }
 
+        static bool Ready(Func<bool> f) { return f(); }
+
         static string Sign(byte[] data, string privateXml)
         {
             using (var rsa = new RSACryptoServiceProvider())
@@ -61,9 +63,24 @@ namespace MeuCardapio.PrintClient
             return b;
         }
 
-        static byte[] Manifest(string version, string file, byte[] installer, string sha = null, long? size = null)
+        static readonly DateTime Now = new DateTime(2026, 11, 16, 12, 0, 0, DateTimeKind.Utc);
+        const string Issued = "2026-11-10T00:00:00Z", Until = "2027-01-09T00:00:00Z";
+
+        static byte[] Manifest(string version, string file, byte[] installer, string sha = null, long? size = null,
+            string keyId = "k1", string issued = Issued, string until = Until, string minVersion = null, string revoke = null)
         {
-            return Encoding.UTF8.GetBytes("{\"version\":\"" + version + "\",\"file\":\"" + file + "\",\"sha256\":\"" + (sha ?? Hex(installer)) + "\",\"size\":" + (size ?? installer.Length) + "}");
+            return Encoding.UTF8.GetBytes("{\"version\":\"" + version + "\",\"file\":\"" + file + "\",\"sha256\":\"" + (sha ?? Hex(installer)) + "\",\"size\":" + (size ?? installer.Length)
+                + ",\"keyId\":\"" + keyId + "\",\"issuedAt\":\"" + issued + "\",\"validUntil\":\"" + until + "\""
+                + (minVersion != null ? ",\"minVersion\":\"" + minVersion + "\"" : "")
+                + (revoke != null ? ",\"revokeKeys\":" + revoke : "") + "}");
+        }
+
+        static TrustedKey[] Keys(string pubXml) { return string.IsNullOrEmpty(pubXml) ? new TrustedKey[0] : new[] { new TrustedKey("k1", pubXml) }; }
+
+        // Atalho dos testes antigos: uma chave (k1), sem arquivo de estado, relogio fixo.
+        static UpdateResult Eval(string url, string current, string pubXml, IUpdateTransport t, string dir)
+        {
+            return Updater.Evaluate(url, current, Keys(pubXml), t, dir, null, () => Now);
         }
 
         static FakeTransport Server(byte[] manifest, string sig, string file, byte[] installer)
@@ -89,6 +106,9 @@ namespace MeuCardapio.PrintClient
                 Signatures(pubXml, privXml, otherPubXml, smallPubXml, smallPrivXml);
                 Manifests();
                 Flow(dir, pubXml, privXml);
+                string pub2, priv2;
+                using (var k = new RSACryptoServiceProvider(3072) { PersistKeyInCsp = false }) { pub2 = k.ToXmlString(false); priv2 = k.ToXmlString(true); }
+                KeysAndFreshness(dir, pubXml, privXml, pub2, priv2);
                 RealHttp(dir, pubXml, privXml);
             }
             finally { try { Directory.Delete(dir, true); } catch { } }
@@ -161,16 +181,16 @@ namespace MeuCardapio.PrintClient
             var sig = Sign(man, priv);
 
             Check("fluxo: sem URL = nao configurado, zero rede",
-                Updater.Evaluate("", "1.0.0", pub, new FakeTransport(), upd).Outcome == UpdateOutcome.NotConfigured);
+                Eval("", "1.0.0", pub, new FakeTransport(), upd).Outcome == UpdateOutcome.NotConfigured);
             var tNoKey = Server(man, sig, file, inst);
-            var rNoKey = Updater.Evaluate(baseUrl, "1.0.0", "", tNoKey, upd);
+            var rNoKey = Eval(baseUrl, "1.0.0", "", tNoKey, upd);
             Check("fluxo: build sem chave de release recusa e nao toca a rede (fecha por padrao)", rNoKey.Outcome == UpdateOutcome.Rejected && tNoKey.Requests.Count == 0);
             var tHttp = Server(man, sig, file, inst);
-            var rHttp = Updater.Evaluate("http://dl.exemplo.com/up", "1.0.0", pub, tHttp, upd);
+            var rHttp = Eval("http://dl.exemplo.com/up", "1.0.0", pub, tHttp, upd);
             Check("fluxo: http remoto recusado antes de qualquer pedido", rHttp.Outcome == UpdateOutcome.Rejected && tHttp.Requests.Count == 0);
 
             var ok = Server(man, sig, file, inst);
-            var r = Updater.Evaluate(baseUrl, "1.0.0", pub, ok, upd);
+            var r = Eval(baseUrl, "1.0.0", pub, ok, upd);
             Check("fluxo: release valido fica pronto", r.Outcome == UpdateOutcome.Ready && r.Version == "1.1.0" && File.Exists(r.InstallerPath));
             Check("fluxo: arquivo pronto tem exatamente o hash assinado", r.InstallerPath != null && UpdateVerifier.Sha256Hex(r.InstallerPath) == Hex(inst));
             Check("fluxo: instalador fica na pasta privada de updates, sem .part sobrando",
@@ -188,65 +208,203 @@ namespace MeuCardapio.PrintClient
             Check("lancamento: arquivo fica travado (sem gravar/apagar) enquanto o instalador inicia", lockedDuringStart);
             Check("lancamento: conteudo intacto depois do inicio", UpdateVerifier.Sha256Hex(r.InstallerPath) == Hex(inst));
 
-            var r2 = Updater.Evaluate(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            var r2 = Eval(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
             File.WriteAllBytes(r2.InstallerPath, Swapped(inst, false)); // trocado depois de verificado, mesmo tamanho
             int started2 = 0; var msgs2 = new List<string>();
             bool launched2 = Updater.TryLaunch(r2, p => started2++, m => msgs2.Add(m));
             Check("lancamento: arquivo trocado (mesmo tamanho) apos Evaluate => NAO executa", !launched2 && started2 == 0 && msgs2.Count > 0);
             Check("lancamento: arquivo trocado e descartado do disco", !File.Exists(r2.InstallerPath));
-            var r3 = Updater.Evaluate(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            var r3 = Eval(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
             File.WriteAllBytes(r3.InstallerPath, Swapped(inst, true)); // tamanho diferente
             int started3 = 0;
             Check("lancamento: arquivo com tamanho diferente => NAO executa", !Updater.TryLaunch(r3, p => started3++, m => { }) && started3 == 0);
-            var r4 = Updater.Evaluate(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            var r4 = Eval(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
             File.Delete(r4.InstallerPath);
             int started4 = 0;
             Check("lancamento: arquivo sumiu => NAO executa e nao estoura", !Updater.TryLaunch(r4, p => started4++, m => { }) && started4 == 0);
             Check("lancamento: resultado nao-Ready nunca executa", !Updater.TryLaunch(new UpdateResult { Outcome = UpdateOutcome.Rejected, InstallerPath = "x.exe" }, p => started4++, m => { }) && started4 == 0);
 
+            // PC-13: atualizacao verificada FICA PENDENTE e so instala depois do "sim" do lojista
+            Updater.ClearPending();
+            var rp = Eval(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            int startedP = 0;
+            Check("confirmacao: Evaluate/Stage NUNCA executam o instalador (so deixam pronto)", rp.Outcome == UpdateOutcome.Ready && Updater.Stage(rp) && Updater.Pending == rp && startedP == 0 && File.Exists(rp.InstallerPath));
+            Check("confirmacao: sem pendencia, instalar nao faz nada", Ready(() => { Updater.ClearPending(); return !Updater.InstallPending(p => startedP++, m => { }) && startedP == 0; }));
+            Updater.Stage(rp);
+            bool boom = Updater.InstallPending(p => { throw new InvalidOperationException("x"); }, m => { });
+            Check("confirmacao: instalador que falha ao iniciar volta falso e a pendencia fica (da para tentar de novo)", !boom && Updater.Pending == rp);
+            bool ok1 = Updater.InstallPending(p => startedP++, m => { });
+            Check("confirmacao: depois do 'sim', o instalador inicia 1 vez e a pendencia sai", ok1 && startedP == 1 && Updater.Pending == null);
+            Check("confirmacao: instalar de novo nao inicia segunda vez", !Updater.InstallPending(p => startedP++, m => { }) && startedP == 1);
+            var rOld = Eval(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            Check("confirmacao: resultado que nao e Ready nao fica pendente", !Updater.Stage(new UpdateResult { Outcome = UpdateOutcome.Rejected }) && !Updater.Stage(null) && Updater.Pending == null);
+            var newer = new UpdateResult { Outcome = UpdateOutcome.Ready, Version = "2.0.0", InstallerPath = rOld.InstallerPath, ExpectedSha256 = rOld.ExpectedSha256, ExpectedSize = rOld.ExpectedSize };
+            Updater.Stage(newer);
+            Check("confirmacao: versao mais nova substitui a pendente; mais antiga nao", Updater.Stage(new UpdateResult { Outcome = UpdateOutcome.Ready, Version = "3.0.0", InstallerPath = newer.InstallerPath }) && !Updater.Stage(new UpdateResult { Outcome = UpdateOutcome.Ready, Version = "1.5.0", InstallerPath = newer.InstallerPath }) && Updater.Pending.Version == "3.0.0");
+            Updater.ClearPending();
+            var rSwap = Eval(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            Updater.Stage(rSwap);
+            File.WriteAllBytes(rSwap.InstallerPath, Swapped(inst, false)); // trocado enquanto esperava o 'sim'
+            int startedS = 0;
+            Check("confirmacao: arquivo trocado enquanto a pergunta esperava => reverifica e NAO executa", !Updater.InstallPending(p => startedS++, m => { }) && startedS == 0);
+            Updater.ClearPending();
+            var rDisc = Eval(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            Updater.Stage(rDisc);
+            Updater.DiscardPending();
+            Check("confirmacao: 'nao agora' descarta a pendencia E apaga o instalador (nada executavel esperando em disco)", Updater.Pending == null && !File.Exists(rDisc.InstallerPath));
+            int startedD = 0;
+            Check("confirmacao: depois de descartar, instalar nao faz nada", !Updater.InstallPending(p => startedD++, m => { }) && startedD == 0);
+            Updater.DiscardPending(); // sem pendencia: nao estoura
+            Check("confirmacao: descartar sem pendencia e inofensivo", Updater.Pending == null);
+
+            // K3: a pendencia some do disco (verificacao posterior limpou a pasta e o download falhou, ou foi apagada)
+            Updater.ClearPending();
+            var rLost = Eval(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            Updater.Stage(rLost);
+            File.Delete(rLost.InstallerPath);
+            Check("K3: pendencia cujo arquivo sumiu NAO e mais devolvida (Pending = null)", Updater.Pending == null);
+            var lostMsgs = new List<string>(); int startedL = 0;
+            bool lostOk = Updater.InstallPending(p => startedL++, m => lostMsgs.Add(m));
+            Check("K3: instalar uma pendencia que sumiu NAO executa e explica o motivo (nao o generico 'nenhuma')", !lostOk && startedL == 0 && lostMsgs.Count == 1 && lostMsgs[0] == Updater.PendingLostMessage);
+            var lostMsgs2 = new List<string>();
+            Updater.InstallPending(p => startedL++, m => lostMsgs2.Add(m));
+            Check("K3: a explicacao aparece uma vez; depois volta a 'nenhuma atualizacao pronta'", lostMsgs2.Count == 1 && lostMsgs2[0] == "Nenhuma atualização pronta para instalar.");
+            // nova verificacao que acha a mesma versao e baixa de novo: a pendencia nova vale
+            var rAgain = Eval(baseUrl, "1.0.0", pub, Server(man, sig, file, inst), upd);
+            Updater.Stage(rAgain);
+            Check("K3: depois de preparar de novo, a pendencia volta a valer", Updater.Pending != null && Updater.Pending.Version == "1.1.0");
+            Updater.ClearPending();
+
             // mesma versao e versao menor: nada e baixado (anti-downgrade/replay de manifesto antigo)
             var tSame = Server(man, sig, file, inst);
-            Check("fluxo: mesma versao = em dia, instalador nao e baixado", Updater.Evaluate(baseUrl, "1.1.0", pub, tSame, upd).Outcome == UpdateOutcome.UpToDate && tSame.Downloads(file) == 0);
+            Check("fluxo: mesma versao = em dia, instalador nao e baixado", Eval(baseUrl, "1.1.0", pub, tSame, upd).Outcome == UpdateOutcome.UpToDate && tSame.Downloads(file) == 0);
             var tOld = Server(man, sig, file, inst);
-            Check("fluxo: manifesto mais antigo que o app (downgrade) e ignorado", Updater.Evaluate(baseUrl, "2.0.0", pub, tOld, upd).Outcome == UpdateOutcome.UpToDate && tOld.Downloads(file) == 0);
+            Check("fluxo: manifesto mais antigo que o app (downgrade) e ignorado", Eval(baseUrl, "2.0.0", pub, tOld, upd).Outcome == UpdateOutcome.UpToDate && tOld.Downloads(file) == 0);
 
             // adulteracao do manifesto (ex.: apontar para outro hash/arquivo) com a assinatura antiga
             var evilMan = Manifest("1.1.0", file, new byte[] { 9, 9, 9 });
             var tEvilMan = Server(evilMan, sig, file, inst);
-            var rEvilMan = Updater.Evaluate(baseUrl, "1.0.0", pub, tEvilMan, upd);
+            var rEvilMan = Eval(baseUrl, "1.0.0", pub, tEvilMan, upd);
             Check("fluxo: manifesto adulterado => recusado e nada baixado", rEvilMan.Outcome == UpdateOutcome.Rejected && tEvilMan.Downloads(file) == 0);
             var tNoSig = Server(man, "", file, inst);
-            Check("fluxo: sem assinatura => recusado", Updater.Evaluate(baseUrl, "1.0.0", pub, tNoSig, upd).Outcome == UpdateOutcome.Rejected && tNoSig.Downloads(file) == 0);
+            Check("fluxo: sem assinatura => recusado", Eval(baseUrl, "1.0.0", pub, tNoSig, upd).Outcome == UpdateOutcome.Rejected && tNoSig.Downloads(file) == 0);
             var tOtherSig = Server(man, Sign(man, OtherPrivate()), file, inst);
-            Check("fluxo: assinado por outra chave => recusado", Updater.Evaluate(baseUrl, "1.0.0", pub, tOtherSig, upd).Outcome == UpdateOutcome.Rejected && tOtherSig.Downloads(file) == 0);
+            Check("fluxo: assinado por outra chave => recusado", Eval(baseUrl, "1.0.0", pub, tOtherSig, upd).Outcome == UpdateOutcome.Rejected && tOtherSig.Downloads(file) == 0);
 
             // instalador trocado no servidor (manifesto e assinatura legitimos)
             var evilInst = (byte[])inst.Clone(); evilInst[100] ^= 0xFF;
             var tEvilInst = Server(man, sig, file, evilInst);
-            var rEvilInst = Updater.Evaluate(baseUrl, "1.0.0", pub, tEvilInst, upd);
+            var rEvilInst = Eval(baseUrl, "1.0.0", pub, tEvilInst, upd);
             Check("fluxo: instalador trocado (mesmo tamanho) => hash nao confere, recusado", rEvilInst.Outcome == UpdateOutcome.Rejected);
             Check("fluxo: instalador recusado nao fica no disco", Directory.GetFiles(upd).Length == 0);
             var tShort = Server(man, sig, file, new byte[10]);
-            Check("fluxo: instalador de tamanho errado => recusado", Updater.Evaluate(baseUrl, "1.0.0", pub, tShort, upd).Outcome == UpdateOutcome.Rejected && Directory.GetFiles(upd).Length == 0);
+            Check("fluxo: instalador de tamanho errado => recusado", Eval(baseUrl, "1.0.0", pub, tShort, upd).Outcome == UpdateOutcome.Rejected && Directory.GetFiles(upd).Length == 0);
 
             // manifesto legitimamente assinado, mas com nome malicioso: ainda e recusado
             var badNameMan = Manifest("1.1.0", "..\\\\evil.exe", inst);
             var tBadName = Server(badNameMan, Sign(badNameMan, priv), null, inst);
-            var rBadName = Updater.Evaluate(baseUrl, "1.0.0", pub, tBadName, upd);
+            var rBadName = Eval(baseUrl, "1.0.0", pub, tBadName, upd);
             Check("fluxo: nome de arquivo com caminho, mesmo assinado, e recusado", rBadName.Outcome == UpdateOutcome.Rejected && tBadName.Downloads(".exe") == 0);
 
             // rede
             var tDown = new FakeTransport { FailAll = true };
-            Check("fluxo: sem rede => falha limpa, nada executa", Updater.Evaluate(baseUrl, "1.0.0", pub, tDown, upd).Outcome == UpdateOutcome.Failed);
+            Check("fluxo: sem rede => falha limpa, nada executa", Eval(baseUrl, "1.0.0", pub, tDown, upd).Outcome == UpdateOutcome.Failed);
             var tCut = Server(man, sig, file, inst); tCut.FailDownload = true;
-            var rCut = Updater.Evaluate(baseUrl, "1.0.0", pub, tCut, upd);
+            var rCut = Eval(baseUrl, "1.0.0", pub, tCut, upd);
             Check("fluxo: queda no meio do download => falha e nao deixa .part", rCut.Outcome == UpdateOutcome.Failed && Directory.GetFiles(upd).Length == 0);
             var tMissing = Server(man, sig, null, inst);
-            Check("fluxo: instalador 404 => falha limpa", Updater.Evaluate(baseUrl, "1.0.0", pub, tMissing, upd).Outcome == UpdateOutcome.Failed);
+            Check("fluxo: instalador 404 => falha limpa", Eval(baseUrl, "1.0.0", pub, tMissing, upd).Outcome == UpdateOutcome.Failed);
 
             // URL do arquivo montada so a partir do host configurado
             Check("fluxo: pedidos vao so ao host configurado, por https",
                 ok.Requests.Count == 3 && ok.Requests.TrueForAll(u => u.StartsWith("https://dl.exemplo.com/up/")));
+        }
+
+        // ---- PC-11 (Nightingale R1/R2): duas chaves com keyId, revogacao, anti-replay, validade, minVersion ----
+        static void KeysAndFreshness(string root, string pub1, string priv1, string pub2, string priv2)
+        {
+            const string baseUrl = "https://dl.exemplo.com/up";
+            var inst = new byte[3000]; new Random(11).NextBytes(inst);
+            const string file = "Setup-1.2.0.exe";
+            var twoKeys = new[] { new TrustedKey("k1", pub1), new TrustedKey("k2", pub2) }; // k1 primaria, k2 reserva offline
+            Func<byte[], string, FakeTransport> srv = (man, priv) => Server(man, Sign(man, priv), file, inst);
+            Func<IList<TrustedKey>, FakeTransport, string, string, DateTime, UpdateResult> run = (keys, t, dir, st, now) =>
+                Updater.Evaluate(baseUrl, "1.0.0", keys, t, dir, st, () => now);
+            Func<string> newDir = () => Path.Combine(root, "pc11_" + Guid.NewGuid().ToString("N"));
+
+            // duas chaves: qualquer uma assina, o keyId escolhe qual conferir
+            var d = newDir();
+            Check("chaves: manifesto da primaria (k1) aceito", run(twoKeys, srv(Manifest("1.2.0", file, inst), priv1), d, null, Now).Outcome == UpdateOutcome.Ready);
+            Check("chaves: manifesto da reserva (k2) aceito", run(twoKeys, srv(Manifest("1.2.0", file, inst, null, null, "k2"), priv2), newDir(), null, Now).Outcome == UpdateOutcome.Ready);
+            var tSwap = srv(Manifest("1.2.0", file, inst, null, null, "k2"), priv1); // diz k2 mas foi assinado com k1
+            Check("chaves: keyId diz uma chave e a assinatura e de outra => recusado, nada baixado",
+                run(twoKeys, tSwap, newDir(), null, Now).Outcome == UpdateOutcome.Rejected && tSwap.Downloads(file) == 0);
+            var tUnknown = srv(Manifest("1.2.0", file, inst, null, null, "k9"), priv1);
+            Check("chaves: keyId desconhecido => recusado, nada baixado", run(twoKeys, tUnknown, newDir(), null, Now).Outcome == UpdateOutcome.Rejected && tUnknown.Downloads(file) == 0);
+            Check("chaves: lista de chaves vazia => build sem chave recusa tudo", run(new TrustedKey[0], srv(Manifest("1.2.0", file, inst), priv1), newDir(), null, Now).Outcome == UpdateOutcome.Rejected);
+            Check("chaves: chave sem XML (slot vazio) nao vale", run(new[] { new TrustedKey("k1", "") }, srv(Manifest("1.2.0", file, inst), priv1), newDir(), null, Now).Outcome == UpdateOutcome.Rejected);
+
+            // revogacao: a reserva revoga a primaria (so chaves ANTERIORES da lista)
+            var st = Path.Combine(root, "state_revoke.json");
+            var rRevoke = run(twoKeys, srv(Manifest("1.2.0", file, inst, null, null, "k2", Issued, Until, null, "[\"k1\"]"), priv2), newDir(), st, Now);
+            Check("revogacao: manifesto da reserva (k2) que revoga k1 e aceito", rRevoke.Outcome == UpdateOutcome.Ready);
+            var tAfter = srv(Manifest("1.2.0", file, inst), priv1);
+            var rAfter = run(twoKeys, tAfter, newDir(), st, Now);
+            Check("revogacao: depois disso, manifesto valido assinado com k1 e RECUSADO e nada baixado", rAfter.Outcome == UpdateOutcome.Rejected && rAfter.Message.Contains("revogada") && tAfter.Downloads(file) == 0);
+            Check("revogacao: continua valendo depois de reabrir (estado persistido)", UpdateState.Load(st).RevokedKeys.Contains("k1"));
+            Check("revogacao: k2 continua valendo", run(twoKeys, srv(Manifest("1.2.0", file, inst, null, null, "k2", "2026-11-11T00:00:00Z", Until), priv2), newDir(), st, Now).Outcome == UpdateOutcome.Ready);
+            var st2 = Path.Combine(root, "state_norevoke.json");
+            var rBad = run(twoKeys, srv(Manifest("1.2.0", file, inst, null, null, "k1", Issued, Until, null, "[\"k2\"]"), priv1), newDir(), st2, Now);
+            Check("revogacao: a primaria (k1) NAO pode revogar a reserva (k2)", rBad.Outcome == UpdateOutcome.Rejected && !UpdateState.Load(st2).RevokedKeys.Contains("k2"));
+            Check("revogacao: revogar chave desconhecida e recusado", run(twoKeys, srv(Manifest("1.2.0", file, inst, null, null, "k2", Issued, Until, null, "[\"k7\"]"), priv2), newDir(), null, Now).Outcome == UpdateOutcome.Rejected);
+            string e;
+            Check("revogacao: chave nao pode revogar a si mesma (manifesto invalido)", UpdateVerifier.ParseManifest(Manifest("1.2.0", file, inst, null, null, "k2", Issued, Until, null, "[\"k2\"]"), out e) == null);
+
+            // anti-replay: nunca aceita issuedAt menor que o ultimo aceito
+            var stR = Path.Combine(root, "state_replay.json");
+            var newer = Manifest("1.2.0", file, inst, null, null, "k1", "2026-11-12T00:00:00Z", Until);
+            var older = Manifest("1.2.0", file, inst, null, null, "k1", "2026-11-05T00:00:00Z", Until);
+            Check("replay: 1o manifesto (issuedAt 12/11) aceito", run(twoKeys, srv(newer, priv1), newDir(), stR, Now).Outcome == UpdateOutcome.Ready);
+            var tOld = srv(older, priv1);
+            var rOld = run(twoKeys, tOld, newDir(), stR, Now);
+            Check("replay: manifesto mais antigo (5/11), mesmo assinado e valido, e RECUSADO", rOld.Outcome == UpdateOutcome.Rejected && rOld.Message.Contains("mais antigo") && tOld.Downloads(file) == 0);
+            Check("replay: reenvio do mesmo manifesto (mesmo issuedAt) continua aceito", run(twoKeys, srv(newer, priv1), newDir(), stR, Now).Outcome == UpdateOutcome.Ready);
+            Check("replay: maior issuedAt fica gravado", UpdateState.Load(stR).MaxIssuedAtUtc == new DateTime(2026, 11, 12, 0, 0, 0, DateTimeKind.Utc));
+            File.WriteAllText(stR, "{{{ lixo");
+            Check("replay: arquivo de estado corrompido = estado vazio, nao trava (aceita)", run(twoKeys, srv(older, priv1), newDir(), stR, Now).Outcome == UpdateOutcome.Ready);
+
+            // validade (60 dias) e relogio
+            var man = Manifest("1.2.0", file, inst);
+            var stV = Path.Combine(root, "state_valid.json");
+            var tExp = srv(man, priv1);
+            var rExp = run(twoKeys, tExp, newDir(), stV, new DateTime(2027, 1, 10, 0, 0, 0, DateTimeKind.Utc));
+            Check("validade: manifesto vencido => 'nao consegui confirmar', nada baixado", rExp.Outcome == UpdateOutcome.Unconfirmed && rExp.Message.Contains("venceu") && tExp.Downloads(file) == 0);
+            Check("validade: vencido nao grava estado", !File.Exists(stV));
+            Check("validade: no ultimo dia ainda vale", run(twoKeys, srv(man, priv1), newDir(), null, new DateTime(2027, 1, 8, 0, 0, 0, DateTimeKind.Utc)).Outcome == UpdateOutcome.Ready);
+            var rBehind = run(twoKeys, srv(man, priv1), newDir(), null, new DateTime(2026, 11, 1, 0, 0, 0, DateTimeKind.Utc));
+            Check("relogio: PC com data muito atrasada (> 1 dia antes do issuedAt) => 'nao consegui confirmar'", rBehind.Outcome == UpdateOutcome.Unconfirmed && rBehind.Message.Contains("relógio"));
+            Check("relogio: atraso dentro da tolerancia de 1 dia e aceito", run(twoKeys, srv(man, priv1), newDir(), null, new DateTime(2026, 11, 9, 12, 0, 0, DateTimeKind.Utc)).Outcome == UpdateOutcome.Ready);
+            Check("validade: autentico + vencido NAO derruba o app (so mensagem, sem excecao)", rExp.Outcome != UpdateOutcome.Failed && rExp.InstallerPath == null);
+
+            // minVersion
+            var rReq = run(twoKeys, srv(Manifest("1.2.0", file, inst, null, null, "k1", Issued, Until, "1.1.0"), priv1), newDir(), null, Now);
+            Check("minVersion: app abaixo do minimo => atualizacao marcada obrigatoria", rReq.Outcome == UpdateOutcome.Ready && rReq.Required && rReq.Message.Contains("obrigatória"));
+            var rNotReq = run(twoKeys, srv(Manifest("1.2.0", file, inst, null, null, "k1", Issued, Until, "1.0.0"), priv1), newDir(), null, Now);
+            Check("minVersion: app no minimo => nao obrigatoria", rNotReq.Outcome == UpdateOutcome.Ready && !rNotReq.Required);
+            var tCutReq = srv(Manifest("1.2.0", file, inst, null, null, "k1", Issued, Until, "1.1.0"), priv1); tCutReq.FailDownload = true;
+            var rCutReq = run(twoKeys, tCutReq, newDir(), null, Now);
+            Check("minVersion: obrigatoria + download falhou => avisa que a versao nao e mais suportada", rCutReq.Outcome == UpdateOutcome.Failed && rCutReq.Required && rCutReq.Message.Contains("não é mais suportada"));
+
+            // forma do manifesto (campos novos)
+            Check("manifesto: keyId invalido recusado", UpdateVerifier.ParseManifest(Manifest("1.2.0", file, inst, null, null, "k 1!"), out e) == null
+                && UpdateVerifier.ParseManifest(Manifest("1.2.0", file, inst, null, null, ""), out e) == null);
+            Check("manifesto: data fora do formato yyyy-MM-ddTHH:mm:ssZ recusada", UpdateVerifier.ParseManifest(Manifest("1.2.0", file, inst, null, null, "k1", "10/11/2026", Until), out e) == null
+                && UpdateVerifier.ParseManifest(Manifest("1.2.0", file, inst, null, null, "k1", "2026-11-10T00:00:00+03:00", Until), out e) == null);
+            Check("manifesto: validUntil <= issuedAt ou janela > 400 dias recusados", UpdateVerifier.ParseManifest(Manifest("1.2.0", file, inst, null, null, "k1", Until, Issued), out e) == null
+                && UpdateVerifier.ParseManifest(Manifest("1.2.0", file, inst, null, null, "k1", "2026-01-01T00:00:00Z", "2028-01-01T00:00:00Z"), out e) == null);
+            Check("manifesto: minVersion maior que a versao ou invalida recusada", UpdateVerifier.ParseManifest(Manifest("1.2.0", file, inst, null, null, "k1", Issued, Until, "1.3.0"), out e) == null
+                && UpdateVerifier.ParseManifest(Manifest("1.2.0", file, inst, null, null, "k1", Issued, Until, "x"), out e) == null);
+            Check("manifesto: sem keyId/datas (formato antigo) recusado", UpdateVerifier.ParseManifest(Encoding.UTF8.GetBytes("{\"version\":\"1.2.0\",\"file\":\"Setup-1.2.0.exe\",\"sha256\":\"" + Hex(inst) + "\",\"size\":" + inst.Length + "}"), out e) == null);
         }
 
         static string _otherPriv;
@@ -300,11 +458,11 @@ namespace MeuCardapio.PrintClient
             {
                 var upd = Path.Combine(root, "http");
                 var tr = new HttpUpdateTransport { TimeoutMs = 5000, ReadTimeoutMs = 5000 };
-                var r = Updater.Evaluate("http://127.0.0.1:" + port + "/up", "1.0.0", pub, tr, upd);
+                var r = Eval("http://127.0.0.1:" + port + "/up", "1.0.0", pub, tr, upd);
                 Check("http real: release assinado baixa e confere pelo transporte HTTP", r.Outcome == UpdateOutcome.Ready && r.InstallerPath != null && UpdateVerifier.Sha256Hex(r.InstallerPath) == Hex(inst));
-                var rr = Updater.Evaluate("http://127.0.0.1:" + port + "/redir", "1.0.0", pub, tr, upd);
+                var rr = Eval("http://127.0.0.1:" + port + "/redir", "1.0.0", pub, tr, upd);
                 Check("http real: redirecionamento 302 NAO e seguido (falha limpa)", rr.Outcome == UpdateOutcome.Failed);
-                var r404 = Updater.Evaluate("http://127.0.0.1:" + port + "/nada", "1.0.0", pub, tr, upd);
+                var r404 = Eval("http://127.0.0.1:" + port + "/nada", "1.0.0", pub, tr, upd);
                 Check("http real: 404 => falha limpa", r404.Outcome == UpdateOutcome.Failed);
                 bool big = false;
                 try { tr.GetSmall(new Uri("http://127.0.0.1:" + port + "/up/" + file), 1000); } catch (UpdateException) { big = true; }

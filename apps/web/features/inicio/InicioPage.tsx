@@ -11,7 +11,7 @@ import { StatCard } from "./components/StatCard";
 import { TopProductsCard } from "./components/TopProductsCard";
 import { useHiddenValues } from "./hooks/useHiddenValues";
 import { useInicioData } from "./hooks/useInicioData";
-import { PROMO_CARDS } from "./promoCards";
+import { visiblePromoCards } from "./promoCards";
 import "./inicio.css";
 
 const PLANS_HREF = "/dashboard/planos";
@@ -40,7 +40,7 @@ export function InicioPage() {
           <TopProductsCard products={metrics?.topProducts ?? null} reportsHref={REPORTS_HREF} />
         </div>
         <div className="inicio__right">
-          {PROMO_CARDS.map((config) => (
+          {visiblePromoCards().map((config) => (
             <PromoCard key={config.id} config={config} />
           ))}
           <StatCard title="Pedidos - 7 dias" value={metrics ? String(metrics.week.orderCount) : null} />

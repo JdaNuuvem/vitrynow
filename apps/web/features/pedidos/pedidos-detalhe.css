@@ -1,0 +1,325 @@
+/* Detalhe do pedido (WEB-26, spec 11). Seletores com 2 classes onde há margem/padding: o reset global
+   `.panel-root p { margin: 0; padding: 0 }` anula seletor de uma classe só. Textos sobre fundo claro usam os tons -700. */
+
+/* ---------- abrir o detalhe: o número do pedido é o botão e a área de toque cobre o cartão todo ---------- */
+.pedidos-card {
+  position: relative;
+}
+
+.pedidos-card .pedidos-card__open {
+  min-height: 44px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pedidos-card .pedidos-card__open::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+}
+
+.pedidos-card .pedidos-card__open:focus-visible::after {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ações e entregador ficam POR CIMA da área de toque do cartão: tocar neles nunca abre o detalhe */
+.pedidos-card .pedidos-card__actions,
+.pedidos-card select {
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- layout com o painel lateral (desktop ≥ 1100 px) ---------- */
+.pedidos .pedidos__content {
+  min-width: 0;
+}
+
+.pedidos.pedidos--with-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 420px;
+  gap: 24px;
+  align-items: start;
+}
+
+.pedidos-detalhe {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 24px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+/* folha (celular e tablet): o Modal já dá o fundo, a altura e o recorte */
+.pedidos-detalhe.pedidos-detalhe--sheet {
+  position: static;
+  max-height: none;
+  min-height: 0;
+  flex: 1;
+  border: none;
+  border-radius: 0;
+}
+
+.pedido-detalhe__head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 12px 12px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.pedido-detalhe__head h2 {
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.pedido-detalhe__head h2:focus {
+  outline: none;
+}
+
+.pedido-detalhe__close {
+  min-width: 44px;
+  min-height: 44px;
+  border: none;
+  border-radius: 10px;
+  background: none;
+  color: var(--ink);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.pedido-detalhe__empty {
+  padding: 24px 20px;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+.pedidos-detalhe .pedidos__loading,
+.pedidos-detalhe .pedidos__notice {
+  margin: 12px 20px;
+}
+
+.pedido-detalhe {
+  display: flex;
+  flex-direction: column;
+}
+
+.pedido-detalhe section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.pedido-detalhe .pedido-detalhe__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+
+.pedido-detalhe h3 {
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 16px;
+  text-transform: uppercase;
+}
+
+.pedido-detalhe .pedido-detalhe__strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.pedido-detalhe .pedido-detalhe__phone,
+.pedido-detalhe .pedido-detalhe__address {
+  color: var(--ink);
+  user-select: text; /* telefone e endereço se copiam à mão */
+  white-space: pre-line;
+}
+
+.pedido-detalhe .pedido-detalhe__help {
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+/* aviso de contato indisponível (falha fechada do servidor): o resto do pedido segue visível */
+.pedido-detalhe .pedido-detalhe__alert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #92400e;
+  font-weight: 600;
+}
+
+.pedido-detalhe .pedido-detalhe__visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.pedido-detalhe .pedido-detalhe__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.pedido-detalhe .pedido-detalhe__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+/* observação do cliente: destaque, texto inteiro (pode ser alergia) */
+.pedido-detalhe section.pedido-detalhe__warn {
+  background: #fffbeb;
+}
+
+.pedido-detalhe__warn h3 {
+  color: #92400e;
+}
+
+.pedido-detalhe .pedido-detalhe__notes {
+  color: var(--ink);
+  font-weight: 600;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pedido-detalhe .pedido-detalhe__items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pedido-detalhe__items li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+}
+
+.pedido-detalhe .pedido-detalhe__item-note {
+  grid-column: 1 / -1;
+  color: #92400e;
+  font-size: 13px;
+}
+
+.pedido-detalhe .pedido-detalhe__values {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+}
+
+.pedido-detalhe__values div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pedido-detalhe__values dt,
+.pedido-detalhe__values dd {
+  margin: 0;
+}
+
+.pedido-detalhe__values small {
+  color: var(--ink-soft);
+}
+
+.pedido-detalhe__values .is-total {
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.pedido-detalhe .pedido-detalhe__change {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #fef3c7;
+  color: #92400e;
+  font-weight: 700;
+}
+
+.pedido-detalhe .pedido-detalhe__select {
+  min-height: 44px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+/* ações sempre à mão: rodapé fixo na rolagem do painel, respeitando a área segura do celular */
+.pedido-detalhe .pedido-detalhe__footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding: 12px 20px calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.pedido-detalhe__footer .pedidos-card__actions {
+  margin-top: 0;
+}
+
+@media (max-width: 1099px) {
+  .pedidos.pedidos--with-detail {
+    display: block;
+  }
+}

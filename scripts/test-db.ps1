@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Postgres de teste descartável, por agente (INF-01). Sobe um container na SUA porta, cria os bancos
   meucardapio e meucardapio_test e aplica as migrations do worktree em que você está.
@@ -48,23 +48,41 @@ if ($holder) { throw "porta $Port já usada por: $holder. Use a sua faixa do BOA
 if ($Fresh -and (Test-Container $name)) { docker rm -f $name | Out-Null; Write-Host "recriando $name" }
 if (-not (Test-Container $name)) {
   docker run -d --name $name -e POSTGRES_USER=meucardapio -e POSTGRES_PASSWORD=$pw -e POSTGRES_DB=meucardapio `
-    -p "127.0.0.1:${Port}:5432" --label mc-test=1 --label "mc-agent=$Agent" postgres:16-alpine | Out-Null
+    -p "127.0.0.1:${Port}:5432" --label mc-test=1 --label "mc-agent=$Agent" postgres:16-alpine postgres -c timezone=UTC -c log_timezone=UTC | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "docker run falhou" }
 } elseif (-not (Test-Running $name)) {
   docker start $name | Out-Null
 }
 
-$ready = $false
-for ($i = 0; $i -lt 60; $i++) {
-  docker exec $name pg_isready -U meucardapio -d meucardapio *> $null
-  if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+# PRONTO = ESTÁVEL. A imagem oficial do Postgres sobe um servidor TEMPORÁRIO para o init (cria o usuário e o banco), desliga e SÓ ENTÃO sobe o definitivo. O
+# servidor temporário escuta só no socket Unix e responde "ok" a `pg_isready` pelo socket; logo depois desliga ("the database system is shutting down"). Medido
+# em 17/11: 1 de 6 criações com `-Fresh` voltou exit 0 com o servidor ainda reiniciando, e as migrações rodavam sem banco (todos os testes falhavam por tabelas
+# inexistentes). Por isso: (1) checa por TCP (`-h 127.0.0.1`), que o servidor temporário NÃO atende; (2) exige 2 respostas seguidas, com 1 s entre elas.
+$ready = $false; $seguidas = 0
+for ($i = 0; $i -lt 90; $i++) {
+  docker exec $name pg_isready -h 127.0.0.1 -U meucardapio -d meucardapio *> $null
+  if ($LASTEXITCODE -eq 0) { $seguidas++ } else { $seguidas = 0 }
+  if ($seguidas -ge 2) { $ready = $true; break }
   Start-Sleep -Seconds 1
 }
-if (-not $ready) { throw "postgres de $name não ficou pronto em 60s (docker logs $name)" }
+if (-not $ready) { throw "postgres de $name não ficou pronto e estável em 90s (docker logs $name)" }
+# Fuso do banco (INF-19/ST-77): o banco de teste em UTC escondeu um bug de SQL cru que lê Date na hora LOCAL da sessão. Container NOVO sobe com
+# -c timezone=UTC explícito; um container ANTIGO só é UTC pelo padrão da imagem. AVISO (não bloqueio): a sonda de fuso do ci.ps1 cria bancos em outro
+# fuso de propósito, em cópias; o banco principal do agente deve ser UTC.
+$tzAtual = (docker exec $name psql -h 127.0.0.1 -U meucardapio -d postgres -At -c "show timezone" | Out-String).Trim()
+if ($tzAtual -ne 'UTC' -and $tzAtual -ne 'Etc/UTC') { Write-Host "AVISO: o Postgres $name está com timezone=$tzAtual (esperado UTC). Recrie com: .\scripts\test-db.ps1 -Agent $Agent -Port $Port -Fresh" -ForegroundColor Yellow }
 
 foreach ($db in $dbs) {
-  $exists = docker exec $name psql -U meucardapio -d postgres -At -c "select 1 from pg_database where datname='$db'"
-  if (-not $exists) { docker exec $name psql -U meucardapio -d postgres -c "create database $db" | Out-Null }
+  $exists = docker exec $name psql -h 127.0.0.1 -U meucardapio -d postgres -At -c "select 1 from pg_database where datname='$db'"
+  if (-not $exists) {
+    docker exec $name psql -h 127.0.0.1 -U meucardapio -d postgres -v ON_ERROR_STOP=1 -c "create database $db" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "create database $db falhou em $name (docker logs $name)" }   # antes o erro era ignorado e o script voltava exit 0
+  }
+}
+# verificação final: os bancos existem MESMO (por TCP, o servidor definitivo)
+foreach ($db in $dbs) {
+  $ok = docker exec $name psql -h 127.0.0.1 -U meucardapio -d postgres -At -c "select 1 from pg_database where datname='$db'"
+  if (-not $ok) { throw "o banco $db não existe em $name depois de criado (docker logs $name)" }
 }
 
 if (-not $SkipMigrate) {

@@ -1,8 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import type { PixPayment } from "@/core/domain/storefront";
+import { useMediaQuery } from "@/lib/useMediaQuery";
 import { formatCents } from "@/shared/format/money";
 import type { OrderSummary } from "../checkoutForm";
+import { PIX_EXPIRED_MESSAGE, PIX_PAID_REASSURANCE, PIX_RESUMED_MESSAGE, TRACKING_UNAVAILABLE_MESSAGE } from "../hooks/useOrderFlow";
 import { Sheet } from "./Sheet";
+
+// Conversa com a loja no WhatsApp, só com o código do pedido na mensagem (sem token nem dado do cliente). Sem número
+// cadastrado devolve null e a tela mostra só o texto.
+export function storeChatLink(whatsapp: string | null | undefined, code: string): string | null {
+  const digits = (whatsapp ?? "").replace(/\D/g, "");
+  return digits ? `https://wa.me/${digits}?text=${encodeURIComponent(`Pedido #${code}`)}` : null;
+}
+
+const formatClock = (ms: number) => new Date(ms).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 
 // Telas pós-pedido (spec 09 §10.2): resumo do que foi pedido, "Voltar ao cardápio" como ação
 // principal e o cancelamento numa folha que escreve o efeito (nunca confirm() nativo).
@@ -14,6 +25,11 @@ export function OrderResultScreen({
   paymentConfirmed,
   paymentFailedMessage,
   cancelError,
+  trackingUnavailable = false,
+  resume = "none",
+  pixExpiresAt = null,
+  storeName = null,
+  totalCents = null,
   summary = null,
   whatsapp = null,
   onCancel,
@@ -25,6 +41,14 @@ export function OrderResultScreen({
   paymentConfirmed: boolean;
   paymentFailedMessage: string | null;
   cancelError: string | null;
+  // NG-16: sem acesso ao pedido neste aparelho: sem acompanhar o PIX nem cancelar; o cliente fala com a loja.
+  trackingUnavailable?: boolean;
+  // WEB-33b: tela recuperada depois de recarregar (só QR) ou com o PIX vencido.
+  resume?: "none" | "valid" | "expired";
+  pixExpiresAt?: number | null;
+  // Contexto de quem volta de outra aba (A4) e o valor a pagar (A2: total com taxa e gorjeta).
+  storeName?: string | null;
+  totalCents?: number | null;
   summary?: OrderSummary | null;
   whatsapp?: string | null;
   onCancel: () => void | Promise<void>;
@@ -33,6 +57,23 @@ export function OrderResultScreen({
   const headingRef = useRef<HTMLHeadingElement>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [copyNote, setCopyNote] = useState<string | null>(null);
+  const pixCodeRef = useRef<HTMLTextAreaElement>(null);
+  const chatLink = storeChatLink(whatsapp, code);
+  // A5: no celular não se escaneia a própria tela; o QR fica recolhido (para pagar com OUTRO aparelho). Sem matchMedia = amplo.
+  const wide = useMediaQuery("(min-width: 800px)", true);
+
+  async function copyPixCode() {
+    try {
+      await navigator.clipboard.writeText(pixData?.pixQrCode ?? "");
+      setCopyNote("Código PIX copiado.");
+    } catch {
+      // sem permissão ou sem suporte: deixa o código selecionado para o cliente copiar
+      pixCodeRef.current?.focus();
+      pixCodeRef.current?.select();
+      setCopyNote("Não deu para copiar sozinho. Copie o código selecionado abaixo.");
+    }
+  }
 
   // Ao entrar na tela, o foco vai ao título: o leitor de tela anuncia o resultado.
   useEffect(() => {
@@ -48,12 +89,56 @@ export function OrderResultScreen({
     }
   }
 
+  const cancelSheet = cancelOpen && (
+        <Sheet title="Cancelar este pedido?" onClose={() => setCancelOpen(false)}>
+          <p className="loja__result-text">O pedido será cancelado e a loja será avisada.</p>
+          {cancelError && (
+            <div role="alert" className="loja__error-summary">
+              <p>{cancelError}</p>
+              {chatLink && (
+                <a href={chatLink} target="_blank" rel="noreferrer" className="loja__empty-menu-link">
+                  Falar com a loja no WhatsApp
+                </a>
+              )}
+            </div>
+          )}
+          <button type="button" onClick={confirmCancel} disabled={cancelling} className="loja__cta loja__cta--danger loja__cta--spaced">
+            {cancelling ? "Cancelando…" : "Cancelar pedido"}
+          </button>
+          <button type="button" onClick={() => setCancelOpen(false)} className="loja__result-secondary">
+            Manter pedido
+          </button>
+        </Sheet>
+      );
+
   if (cancelled) {
     return (
       <main className="loja__result">
         <h1 ref={headingRef} tabIndex={-1} className="loja__result-title">
           Pedido #{code} cancelado
         </h1>
+        <button type="button" onClick={onBack} className="loja__cta">
+          Voltar ao cardápio
+        </button>
+      </main>
+    );
+  }
+
+  if (resume === "expired") {
+    return (
+      <main className="loja__result">
+        {storeName && <p className="loja__result-store">{storeName}</p>}
+        <h1 ref={headingRef} tabIndex={-1} className="loja__result-title">
+          {`Pedido #${code}`}
+        </h1>
+        <p role="status" className="loja__result-text">
+          {PIX_EXPIRED_MESSAGE}
+        </p>
+        {chatLink && (
+          <a href={chatLink} target="_blank" rel="noreferrer" className="loja__empty-menu-link">
+            Falar com a loja no WhatsApp
+          </a>
+        )}
         <button type="button" onClick={onBack} className="loja__cta">
           Voltar ao cardápio
         </button>
@@ -78,42 +163,130 @@ export function OrderResultScreen({
   }
 
   const awaitingPix = Boolean(pixData) && !paymentConfirmed;
-  const title = paymentConfirmed ? "Pagamento confirmado" : awaitingPix ? `Pedido #${code}` : "Pedido enviado";
+  const resumedValid = resume === "valid" && awaitingPix;
+  const watchingPix = awaitingPix && !trackingUnavailable;
+  const title = paymentConfirmed ? "Pagamento confirmado" : resumedValid ? `Pedido #${code} enviado` : awaitingPix ? `Pedido #${code}` : "Pedido enviado";
+
+  if (awaitingPix && pixData) {
+    const copyPhrase = wide || !pixData.pixQrCode ? "Escaneie o QR Code ou copie o código para pagar via PIX:" : "Copie o código e pague no app do seu banco.";
+    const qrImage = pixData.pixQrCodeBase64 ? (
+      // eslint-disable-next-line @next/next/no-img-element -- QR em data: URL, não há otimização possível
+      <img src={`data:image/png;base64,${pixData.pixQrCodeBase64}`} alt={`QR Code do PIX do pedido #${code}`} className="loja__qr" />
+    ) : null;
+    return (
+      <main className="loja__result">
+        {storeName && <p className="loja__result-store">{storeName}</p>}
+        <h1 ref={headingRef} tabIndex={-1} className="loja__result-title">
+          {resumedValid ? `Pedido #${code} enviado` : `Pedido #${code}`}
+        </h1>
+        {totalCents !== null && <p className="loja__result-total">Total a pagar: {formatCents(totalCents)}</p>}
+        {resumedValid && pixExpiresAt !== null && <p className="loja__result-hint">Vale até {formatClock(pixExpiresAt)}</p>}
+
+        {watchingPix && (
+          <div role="status">
+            <p className="loja__result-hint">Aguardando confirmação do pagamento…</p>
+          </div>
+        )}
+        {!resumedValid && <p className="loja__result-warning">Não feche esta página antes de pagar.</p>}
+
+        <p className="loja__result-text">{copyPhrase}</p>
+        {pixData.pixQrCode && (
+          <>
+            <button type="button" onClick={copyPixCode} className="loja__cta">
+              Copiar código PIX
+            </button>
+            <p aria-live="polite" className="loja__result-hint">
+              {copyNote}
+            </p>
+            <label htmlFor="loja-pix-code" className="loja__label">
+              Código PIX (copia e cola)
+            </label>
+            <textarea id="loja-pix-code" ref={pixCodeRef} readOnly value={pixData.pixQrCode} className="loja__pix-code" rows={3} />
+          </>
+        )}
+        {qrImage &&
+          (wide ? (
+            qrImage
+          ) : (
+            <details className="loja__qr-box">
+              <summary>Mostrar QR Code</summary>
+              {qrImage}
+            </details>
+          ))}
+
+        {resumedValid && (
+          <div role="status" className="loja__result-notice">
+            <p className="loja__result-text">{PIX_RESUMED_MESSAGE}</p>
+          </div>
+        )}
+        {trackingUnavailable && !resumedValid && (
+          <div role="status" className="loja__result-notice">
+            <p className="loja__result-text">{TRACKING_UNAVAILABLE_MESSAGE}</p>
+            <p className="loja__result-text">{PIX_PAID_REASSURANCE}</p>
+          </div>
+        )}
+        {chatLink && (
+          <a href={chatLink} target="_blank" rel="noreferrer" className="loja__empty-menu-link">
+            Falar com a loja no WhatsApp
+          </a>
+        )}
+
+        {summary && (
+          <section className="loja__result-summary" aria-label="Resumo do pedido">
+            <ul>
+              {summary.lines.map((line, index) => (
+                <li key={index}>{line}</li>
+              ))}
+            </ul>
+            <p>
+              Total {formatCents(summary.totalCents)} · {summary.paymentLabel}
+            </p>
+            <p>
+              {summary.deliveryLabel}
+              {summary.address ? ` · ${summary.address}` : ""}
+            </p>
+          </section>
+        )}
+
+        {/* com PIX para pagar o primário é "Copiar código PIX"; voltar é secundário (contorno) */}
+        <button type="button" onClick={onBack} className="loja__cta loja__cta--outline">
+          Voltar ao cardápio
+        </button>
+        {!trackingUnavailable && (
+          <button type="button" onClick={() => setCancelOpen(true)} className="loja__result-secondary">
+            Cancelar pedido
+          </button>
+        )}
+        {cancelSheet}
+      </main>
+    );
+  }
 
   return (
     <main className="loja__result">
       <h1 ref={headingRef} tabIndex={-1} className="loja__result-title">
-        {!awaitingPix && <span aria-hidden="true">✓ </span>}
+        <span aria-hidden="true">✓ </span>
         {title}
       </h1>
-      {!awaitingPix && <p className="loja__result-code">Pedido #{code}</p>}
+      <p className="loja__result-code">Pedido #{code}</p>
 
       <div role="status">
         {paymentConfirmed ? (
           <p className="loja__result-text loja__result-text--ok">Pagamento confirmado! Seu pedido já está sendo preparado.</p>
-        ) : awaitingPix ? (
-          <p className="loja__result-hint">Aguardando confirmação do pagamento…</p>
         ) : (
           <p className="loja__result-text">A loja ainda precisa aceitar o pedido.</p>
         )}
       </div>
 
-      {awaitingPix && pixData && (
-        <>
-          <p className="loja__result-text">Escaneie o QR Code ou copie o código para pagar via PIX:</p>
-          {pixData.pixQrCodeBase64 && (
-            // eslint-disable-next-line @next/next/no-img-element -- QR em data: URL, não há otimização possível
-            <img src={`data:image/png;base64,${pixData.pixQrCodeBase64}`} alt="QR Code PIX" className="loja__qr" />
+      {trackingUnavailable && !paymentConfirmed && (
+        <div role="status" className="loja__result-notice">
+          <p className="loja__result-text">{TRACKING_UNAVAILABLE_MESSAGE}</p>
+          {chatLink && (
+            <a href={chatLink} target="_blank" rel="noreferrer" className="loja__empty-menu-link">
+              Falar com a loja no WhatsApp
+            </a>
           )}
-          {pixData.pixQrCode && (
-            <>
-              <label htmlFor="loja-pix-code" className="loja__label">
-                Código PIX (copia e cola)
-              </label>
-              <textarea id="loja-pix-code" readOnly value={pixData.pixQrCode} className="loja__pix-code" rows={3} />
-            </>
-          )}
-        </>
+        </div>
       )}
 
       {summary && (
@@ -136,33 +309,13 @@ export function OrderResultScreen({
       <button type="button" onClick={onBack} className="loja__cta">
         Voltar ao cardápio
       </button>
-      {!paymentConfirmed && (
+      {!paymentConfirmed && !trackingUnavailable && (
         <button type="button" onClick={() => setCancelOpen(true)} className="loja__result-secondary">
           Cancelar pedido
         </button>
       )}
 
-      {cancelOpen && (
-        <Sheet title="Cancelar este pedido?" onClose={() => setCancelOpen(false)}>
-          <p className="loja__result-text">O pedido será cancelado e a loja será avisada.</p>
-          {cancelError && (
-            <div role="alert" className="loja__error-summary">
-              <p>{cancelError}</p>
-              {whatsapp && (
-                <a href={`https://wa.me/${whatsapp}`} target="_blank" rel="noreferrer" className="loja__empty-menu-link">
-                  Falar com a loja
-                </a>
-              )}
-            </div>
-          )}
-          <button type="button" onClick={confirmCancel} disabled={cancelling} className="loja__cta loja__cta--danger loja__cta--spaced">
-            {cancelling ? "Cancelando…" : "Cancelar pedido"}
-          </button>
-          <button type="button" onClick={() => setCancelOpen(false)} className="loja__result-secondary">
-            Manter pedido
-          </button>
-        </Sheet>
-      )}
+      {cancelSheet}
     </main>
   );
 }

@@ -1,0 +1,468 @@
+/* Card de pedido com ações do servidor, abas do celular, toast de desfazer e folha de cancelar
+   (WEB-05, spec 02). Cores de texto sobre fundo claro usam os tons -700 (contraste >= 4,5:1). */
+
+.pedidos__count {
+  margin-left: 4px;
+  padding: 0 6px;
+  border-radius: 9999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
+}
+.pedidos__empty {
+  color: var(--ink-soft);
+  font-size: 14px;
+  line-height: 20px;
+}
+/* WEB-37: faixa fixa do teto de abertos (aviso, não erro). `.pedidos .pedidos__capped p`: o reset `.panel-root p` zera o padding de 1 classe. */
+.pedidos__capped {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid #b45309;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #92400e; /* 6,8:1 sobre o fundo */
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+.pedidos__capped-icon {
+  flex: none;
+  margin-top: 1px;
+}
+.pedidos__titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.pedidos .pedidos__titlebar h1 {
+  margin: 0;
+}
+/* Botão secundário "Histórico" ao lado do título (spec 10 §1); alvo de toque de 44 px */
+.pedidos__history-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--ink-soft);
+  border-radius: 12px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.pedidos__history-link:hover {
+  background: var(--surface-soft);
+}
+/* O caminho da frase da faixa vira link, sublinhado e na cor do texto (contraste mantido) */
+.pedidos__capped-link {
+  color: inherit;
+  text-decoration: underline;
+}
+.pedidos .pedidos__capped p {
+  margin: 0;
+  padding: 0;
+}
+.pedidos__notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--danger);
+  border-radius: 12px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 14px;
+  font-weight: 600;
+}
+.pedidos__notice button {
+  min-width: 44px;
+  min-height: 44px;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.pedidos__tabs {
+  display: none;
+}
+
+.pedidos-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.pedidos-card__chip {
+  padding: 0 8px;
+  border-radius: 9999px;
+  background: var(--surface-soft);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 20px;
+}
+.pedidos-card__age {
+  margin-left: auto;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+.pedidos-card__age--warn {
+  color: #92400e;
+  font-weight: 600;
+}
+.pedidos-card__age--danger {
+  color: #b91c1c;
+  font-weight: 700;
+}
+.pedidos-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 20px;
+}
+.pedidos-card__total {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.pedidos-card__badge {
+  padding: 0 8px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
+}
+.pedidos-card__badge--ok {
+  background: #dcfce7;
+  color: #166534;
+}
+.pedidos-card__badge--warn {
+  background: #fef3c7;
+  color: #92400e;
+}
+.pedidos-card__badge--danger {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+.pedidos-card select {
+  min-height: 44px;
+  font-size: 14px;
+}
+.pedidos-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 4px;
+}
+.pedidos-card__primary,
+.pedidos-card__secondary,
+.pedidos-card__menu-danger,
+.pedidos-card__menu summary,
+.pedidos-card__menu-list button {
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pedidos-card__primary {
+  flex: 1 1 auto;
+  border: none;
+  background: var(--color-primary);
+  color: #ffffff;
+}
+.pedidos-card__secondary,
+.pedidos-card__menu-list button {
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: var(--ink);
+}
+.pedidos-card__menu-danger {
+  border: 1px solid #fca5a5;
+  background: #ffffff;
+  color: #b91c1c;
+}
+.pedidos-card button:disabled,
+.pedidos-card button[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.pedidos-card__blocked {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pedidos-card__reason {
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 16px;
+}
+.pedidos-card__menu {
+  position: relative;
+}
+.pedidos-card__menu summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  border: 1px solid var(--line);
+  background: #ffffff;
+  list-style: none;
+}
+.pedidos-card__menu summary::-webkit-details-marker {
+  display: none;
+}
+.pedidos-card__menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 200px;
+  margin-top: 8px;
+}
+
+.pedidos-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 88px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: calc(100% - 32px);
+  padding: 8px 8px 8px 16px;
+  transform: translateX(-50%);
+  border-radius: 12px;
+  background: var(--ink);
+  color: #ffffff;
+  font-size: 14px;
+}
+.pedidos-toast button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.cancel-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 24px;
+  overflow-y: auto;
+  color: var(--ink);
+}
+.cancel-dialog h2 {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 24px;
+}
+.cancel-dialog__effect,
+.cancel-dialog__customer {
+  font-size: 14px;
+  line-height: 20px;
+}
+/* `.cancel-dialog .cancel-dialog__customer` (2 classes): o reset global `.panel-root p { padding: 0 }` tem mais
+   força que uma classe só e zerava este padding (revisão da Da Vinci, W1). */
+.cancel-dialog .cancel-dialog__customer {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+/* API-67: aviso (não erro) de que a impressora não avisa a cozinha. 2 classes: o reset `.panel-root p` zera o padding de 1. */
+.cancel-dialog .cancel-dialog__kitchen {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #b45309; /* contraste de borda ≥ 3:1 sobre o fundo; texto #92400e sobre #fffbeb = 6,8:1 */
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+.cancel-dialog__kitchen-icon {
+  flex: none;
+  margin-top: 1px;
+}
+.cancel-dialog__alert {
+  padding: 12px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 14px;
+  font-weight: 600;
+}
+.cancel-dialog__reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.cancel-dialog__reasons legend,
+.cancel-dialog__label {
+  margin-bottom: 4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.cancel-dialog__reasons label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.cancel-dialog__reasons label.is-checked {
+  border-color: var(--ink);
+  background: var(--surface-soft);
+  font-weight: 600;
+}
+.cancel-dialog textarea {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 16px;
+}
+.cancel-dialog__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.cancel-dialog__actions button {
+  min-height: 48px;
+  border: none;
+  border-radius: 12px;
+  background: var(--color-primary);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cancel-dialog__actions button.is-danger {
+  background: #b91c1c;
+}
+.cancel-dialog__actions button:disabled,
+.cancel-dialog__actions button[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.cancel-dialog__actions .cancel-dialog__back {
+  border: 1px solid var(--line);
+  background: none;
+  color: var(--ink);
+}
+.cancel-dialog__hint {
+  color: var(--ink-soft);
+  font-size: 13px;
+  text-align: center;
+}
+
+@media (max-width: 800px) {
+  .pedidos__tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding-bottom: 4px;
+    overflow-x: auto;
+  }
+  .pedidos__tabs button {
+    flex: 0 0 auto;
+    min-height: 44px;
+    padding: 0 14px;
+    border: 1px solid var(--line);
+    border-radius: 9999px;
+    background: #ffffff;
+    color: var(--ink);
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .pedidos__tabs button.is-active {
+    border-color: var(--ink);
+    background: var(--ink);
+    color: #ffffff;
+  }
+  .pedidos__tabs .pedidos__count {
+    background: rgb(0 0 0 / 0.1);
+    color: inherit;
+  }
+  .pedidos__board {
+    display: block;
+    overflow: visible;
+  }
+  /* uma coluna por vez; o título da coluna é redundante com a aba */
+  .pedidos__column {
+    display: none;
+  }
+  .pedidos__column.is-active {
+    display: block;
+  }
+  /* o título é redundante com a aba, EXCETO em "Outros", que não tem aba */
+  .pedidos__column:not(.pedidos__column--others) h2 {
+    display: none;
+  }
+}
+
+.pedidos__loading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 24px 0;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+.pedidos__spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--line);
+  border-top-color: var(--ink);
+  border-radius: 50%;
+  animation: pedidos-spin 0.8s linear infinite;
+}
+@keyframes pedidos-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pedidos__spinner {
+    animation: none;
+  }
+}
+.pedidos__retry {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid currentColor;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #b91c1c;
+  font-weight: 700;
+  cursor: pointer;
+}

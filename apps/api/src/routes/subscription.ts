@@ -1,9 +1,12 @@
 import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { checkoutPlanSchema } from "@meucardapio/shared-types";
+import { requireVerifiedEmail } from "../lib/emailVerification";
 import { logAudit } from "../lib/audit";
+import { requireMfa } from "../lib/mfaGate";
 import { createPixPayment } from "../lib/mercadopago";
-import { getStoreSubscription, resolveSubscription } from "../lib/subscription";
+import { isFeature, isProFeature } from "../lib/features";
+import { getEntitlements, getStoreSubscription, getSubscriptionView } from "../lib/subscription";
 
 // Planos e assinatura da loja. Cobrança por PIX (Mercado Pago, conta da plataforma);
 // a confirmação chega pelo webhook em routes/payments.ts, que ativa o período de 30 dias.
@@ -12,19 +15,43 @@ const subscriptionRoutes: FastifyPluginAsync = async (app) => {
     const plans = await prisma.plan.findMany({
       where: { active: true },
       orderBy: { position: "asc" },
-      select: { code: true, name: true, priceCents: true, features: true },
+      select: { code: true, name: true, priceCents: true, features: true, limits: true },
     });
     return { plans };
   });
 
   app.get("/api/store/subscription", { preHandler: app.requirePanelAuth }, async (request) => {
-    const subscription = await getStoreSubscription(request.user.storeId);
-    return { subscription: resolveSubscription(subscription) };
+    return { subscription: await getSubscriptionView(request.user.storeId) };
   });
+
+  // "Quero ser avisado" (RN-B10-05): grava o interesse da loja num recurso que o plano não tem.
+  // Idempotente (um registro por loja e recurso) e sem prometer data nem preço.
+  app.post(
+    "/api/store/feature-interest",
+    { preHandler: app.requirePanelAuth, config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const { storeId, userId } = request.user;
+      const { feature } = (request.body ?? {}) as { feature?: unknown };
+      if (typeof feature !== "string" || !isFeature(feature)) {
+        return reply.code(400).send({ error: "recurso desconhecido", code: "VALIDATION_ERROR", details: { field: "feature" } });
+      }
+      // Recurso do BASICO (ex.: QR de mesa) já é do plano do lojista: não há o que "ser avisado" sobre upgrade.
+      if (!isProFeature(feature) || (await getEntitlements(storeId)).features.includes(feature)) {
+        return reply.code(409).send({ error: "seu plano já inclui esse recurso", code: "FEATURE_ALREADY_AVAILABLE" });
+      }
+
+      const existing = await prisma.featureInterest.findUnique({ where: { storeId_feature: { storeId, feature } } });
+      if (!existing) {
+        await prisma.featureInterest.upsert({ where: { storeId_feature: { storeId, feature } }, update: {}, create: { storeId, feature } });
+        logAudit({ storeId, userId, action: "feature_interest.create", targetType: "FeatureInterest", targetId: feature });
+      }
+      return { ok: true };
+    },
+  );
 
   app.post(
     "/api/store/subscription/checkout",
-    { preHandler: [app.requirePanelAuth, app.requireOwner], config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    { preHandler: [app.requirePanelAuth, app.requireOwner, requireVerifiedEmail], config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const { storeId, userId } = request.user;
       const parsed = checkoutPlanSchema.safeParse(request.body);
@@ -70,7 +97,7 @@ const subscriptionRoutes: FastifyPluginAsync = async (app) => {
           },
         });
       } catch (error) {
-        app.log.error(error);
+        app.log.error({ err: error }, "falha ao gerar o pagamento PIX da assinatura");
         await prisma.subscriptionPayment.delete({ where: { id: payment.id } });
         return reply.code(502).send({ error: "não foi possível gerar o pagamento PIX, tente novamente" });
       }
@@ -83,10 +110,10 @@ const subscriptionRoutes: FastifyPluginAsync = async (app) => {
     const subscription = await getStoreSubscription(request.user.storeId);
     const payment = await prisma.subscriptionPayment.findFirst({ where: { id, subscriptionId: subscription.id } });
     if (!payment) return reply.code(404).send({ error: "pagamento não encontrado" });
-    return { status: payment.status, subscription: resolveSubscription(subscription) };
+    return { status: payment.status, subscription: await getSubscriptionView(request.user.storeId) };
   });
 
-  app.post("/api/store/subscription/cancel", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request, reply) => {
+  app.post("/api/store/subscription/cancel", { preHandler: [app.requirePanelAuth, app.requireOwner, requireMfa("cancel_subscription")] }, async (request, reply) => {
     const { storeId, userId } = request.user;
     const subscription = await getStoreSubscription(storeId);
     if (subscription.status !== "ACTIVE") {
@@ -95,7 +122,7 @@ const subscriptionRoutes: FastifyPluginAsync = async (app) => {
 
     await prisma.subscription.update({ where: { id: subscription.id }, data: { status: "CANCELED", canceledAt: new Date() } });
     logAudit({ storeId, userId, action: "subscription.cancel", targetType: "Subscription", targetId: subscription.id });
-    return { subscription: resolveSubscription(await getStoreSubscription(storeId)) };
+    return { subscription: await getSubscriptionView(storeId) };
   });
 };
 

@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { sendMfaCodeEmail } from "../src/lib/email";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { createPlatformAdmin, makeApp, platformLogin, registerStore, resetDb } from "./helpers";
 
 vi.mock("../src/lib/email", () => ({
   sendPasswordResetEmail: vi.fn(),
@@ -31,7 +31,7 @@ describe("confirmação de segurança (MFA)", () => {
       method: "POST",
       url: "/auth/change-password",
       headers: { cookie, ...(challengeId ? { "x-mfa-challenge": challengeId } : {}) },
-      payload: { currentPassword: "senha123", newPassword: "novasenha456" },
+      payload: { currentPassword: "senha12345", newPassword: "novasenha456" },
     });
 
   async function requestChallenge(cookie: string) {
@@ -98,14 +98,16 @@ describe("confirmação de segurança (MFA)", () => {
 
 describe("avisos da plataforma", () => {
   let app: ReturnType<typeof makeApp>;
+  let platformCookie: string;
 
   beforeEach(async () => {
-    process.env.ADMIN_TOKEN = "token-admin-de-teste";
+    vi.mocked(sendMfaCodeEmail).mockClear();
     app = makeApp();
     await app.ready();
+    const { email, password } = await createPlatformAdmin("SUPPORT");
+    platformCookie = (await platformLogin(app, email, password)).cookie!;
   });
   afterEach(async () => {
-    delete process.env.ADMIN_TOKEN;
     await app.close();
     await resetDb();
   });
@@ -113,11 +115,12 @@ describe("avisos da plataforma", () => {
     await prisma.$disconnect();
   });
 
-  const publish = (payload: Record<string, unknown>, token = "token-admin-de-teste") =>
-    app.inject({ method: "POST", url: "/api/admin/notices", headers: { "x-admin-token": token }, payload });
+  // API-25: a publicação é do back-office (sessão da equipe); o x-admin-token foi aposentado.
+  const publish = (payload: Record<string, unknown>, cookie: string | null = platformCookie) =>
+    app.inject({ method: "POST", url: "/api/platform/notices", headers: cookie ? { cookie } : {}, payload });
 
-  it("só a plataforma publica; o lojista lista, vê não lidos e marca como lido", async () => {
-    expect((await publish({ title: "Novidade", body: "Texto" }, "errado")).statusCode).toBe(401);
+  it("só a equipe publica; o lojista lista, vê não lidos e marca como lido", async () => {
+    expect((await publish({ title: "Novidade", body: "Texto" }, null)).statusCode).toBe(401);
     const created = await publish({ title: "Novidade", body: "Agora temos KDS" });
     expect(created.statusCode).toBe(201);
     const noticeId = JSON.parse(created.body).notice.id;
@@ -133,7 +136,7 @@ describe("avisos da plataforma", () => {
     expect(after.notices[0].read).toBe(true);
   });
 
-  it("aviso expirado não aparece, leitura é por usuário e sem ADMIN_TOKEN a publicação fica desligada", async () => {
+  it("aviso expirado não aparece e a leitura é por usuário", async () => {
     await publish({ title: "Velho", body: "x", expiresAt: new Date(Date.now() - 1000).toISOString() });
     await publish({ title: "Atual", body: "y" });
 
@@ -145,8 +148,15 @@ describe("avisos da plataforma", () => {
     await app.inject({ method: "POST", url: `/api/notices/${listA.notices[0].id}/read`, headers: { cookie: a.cookie! } });
     const listB = JSON.parse((await app.inject({ method: "GET", url: "/api/notices", headers: { cookie: b.cookie! } })).body);
     expect(listB.unreadCount).toBe(1);
+  });
 
-    delete process.env.ADMIN_TOKEN;
-    expect((await publish({ title: "Z", body: "z" }, "qualquer")).statusCode).toBe(401);
+  it("CA-BKO-06: o cabeçalho x-admin-token deixa de funcionar (a rota antiga não existe mais)", async () => {
+    process.env.ADMIN_TOKEN = "token-admin-de-teste";
+    try {
+      const old = await app.inject({ method: "POST", url: "/api/admin/notices", headers: { "x-admin-token": "token-admin-de-teste" }, payload: { title: "Z", body: "z" } });
+      expect(old.statusCode).toBe(404);
+    } finally {
+      delete process.env.ADMIN_TOKEN;
+    }
   });
 });

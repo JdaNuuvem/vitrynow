@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { FakePixGateway } from "../src/modules/storePayments/gateway";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
 describe("pedido no storefront + cupom", () => {
@@ -87,12 +88,13 @@ describe("pedido no storefront + cupom", () => {
       payload: { type: "BALCAO", items: [{ productId, quantity: 1 }], couponCode: "unico" },
     });
     expect(second.statusCode).toBe(400);
-    expect(JSON.parse(second.body).error).toMatch(/esgotado/);
+    expect(JSON.parse(second.body)).toMatchObject({ code: "COUPON_EXHAUSTED", error: "Esse cupom acabou." });
   });
 
-  it("falha de PIX (sem MP_ACCESS_TOKEN em teste) desfaz o pedido e o uso do cupom", async () => {
+  it("falha de PIX (sem MP_ACCESS_TOKEN em teste) cancela o pedido SEM apagá-lo e devolve o uso do cupom", async () => {
     const { cookie } = await registerStore(app, { slug: "loja-pix", code: "PIX1" });
     const productId = await setupProduct(cookie!, "loja-pix");
+    FakePixGateway.failNext = new Error("provedor fora do ar"); // PIX por loja (API-07): a falha do provedor vem do gateway fake da loja (antes: ausência de MP_ACCESS_TOKEN)
 
     await app.inject({
       method: "POST",
@@ -118,6 +120,11 @@ describe("pedido no storefront + cupom", () => {
 
     const coupons = await app.inject({ method: "GET", url: "/api/coupons", headers: { cookie: cookie! } });
     expect(JSON.parse(coupons.body).coupons[0].usedCount).toBe(0);
+
+    // B16: o pedido continua no banco (auditoria), cancelado com motivo, e a cobrança local foi fechada.
+    const kept = await prisma.order.findFirst({ where: { store: { slug: "loja-pix" } }, include: { payment: true, statusHistory: { orderBy: { seq: "desc" }, take: 1 } } });
+    expect({ status: kept?.status, payment: kept?.payment?.status }).toEqual({ status: "CANCELADO", payment: "CANCELADO" });
+    expect(kept?.statusHistory[0]).toMatchObject({ kind: "CANCEL", reasonCode: "PAGAMENTO_NAO_APROVADO", source: "SYSTEM" });
   });
 
   it("pedido aguardando pagamento PIX não aparece no kanban nem no device até confirmar", async () => {

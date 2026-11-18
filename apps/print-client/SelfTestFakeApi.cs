@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using MeuCardapio.PrintClient.Models;
+using Newtonsoft.Json;
 
 namespace MeuCardapio.PrintClient
 {
@@ -24,7 +27,7 @@ namespace MeuCardapio.PrintClient
     internal sealed class FakeApi : IDisposable
     {
         public readonly int Port;
-        readonly HttpListener _l = new HttpListener();
+        HttpListener _l;
         readonly Thread _t;
         public readonly object Lock = new object();
         public readonly List<string> Requests = new List<string>();
@@ -39,6 +42,66 @@ namespace MeuCardapio.PrintClient
         public string WsMode = "status";                           // "status" (responde WsStatus) | "accept" | "close4401"
         readonly List<WebSocket> _sockets = new List<WebSocket>();
         int _pendingCalls, _ackCalls;
+
+        // ---- Fila de PrintJob (ADR-0004 §2/§5): claim com lease, ack idempotente, 409 em lease vencida, attempts ----
+        public sealed class FakeJob
+        {
+            public string Id; public string Kind = "ORDER_KITCHEN"; public string TicketJson;
+            public string State = "PENDING";            // PENDING | CLAIMED | PRINTED | FAILED
+            public string LastCode; public string ClaimedBy; public DateTime LeaseUntilUtc; public DateTime AvailableAtUtc = DateTime.MinValue; public int Attempts; public int MaxAttempts = 3; public string LastError;
+        }
+        public readonly List<FakeJob> Jobs = new List<FakeJob>();
+        public readonly List<string> JobAcks = new List<string>();   // "id|status|erro|auth"
+        public readonly List<string> JobAckBodies = new List<string>(); // corpo CRU de cada ack (para provar o que sai do computador da loja)
+        public int LeaseMs = 120000;                                  // ADR-0004 §8: lease padrao 120 s
+        public int FailBackoffMs = 300;                               // recuo do servidor depois de FAILED (no ADR: 15 s, 60 s, 5 min); curto para o teste
+        public bool EmptyAs204;                                       // fila vazia: 204 em vez de {"job":null}
+        // Modo de impressao da loja decidido pelo servidor (ADR-0004 §8 itens 12-13): null = API antiga (sem "mode"); "LEGACY" = claim
+        // devolve {job:null, mode:"LEGACY"} e o endpoint legado funciona; "QUEUE" = claim normal com mode e o legado responde 409 MODE_QUEUE.
+        public volatile string PrintMode;
+        // POST /api/device/alerts (PC-24): corpos CRUS recebidos, status e atraso configuraveis (204 padrao, como a API).
+        public readonly List<string> AlertBodies = new List<string>();
+        public int AlertStatus = 204;
+        public int AlertDelayMs;
+        public int AlertCalls { get { lock (Lock) return AlertBodies.Count; } }
+        public string[] AlertSnapshot() { lock (Lock) return AlertBodies.ToArray(); }
+        public bool ConfigEnabled = true;                              // GET /api/device/config (API-12b); false = API antiga (404)
+        public int ConfigStatus = 200;                                 // 500 etc. para simular erro da configuracao
+        public string ConfigBody;                                      // corpo bruto no lugar de {"mode":...} (lixo, vazio)
+        public bool PendingCarriesMode = true;                         // API-12b: /pending devolve {orders, mode}; false = formato antigo {orders}
+        public bool PendingEmptyInQueue = true;                        // API-12b real: em QUEUE o /pending devolve 200 {orders:[]}; false = 409 (cinto antigo)
+        public int ConfigCalls { get { lock (Lock) return _configCalls; } }
+        int _configCalls;
+        public string Legacy409Body;                                  // corpo do 409 do legado em QUEUE (padrao: code MODE_QUEUE)
+        public volatile bool LegacyAck500;                             // /printed responde 500 SEMPRE (mesmo em QUEUE): aviso legado preso
+        public int LegacyCalls { get { lock (Lock) return _legacyCalls; } }
+        int _legacyCalls;
+        public int ClaimStatus = 200;                                 // 401/403/500 para simular falha do claim
+        public int JobAckStatus = 200; public int JobAckFailFirst;    // primeiros N acks respondem JobAckStatus sem aplicar
+        int _claimCalls, _jobAckCalls;
+        public int ClaimCalls { get { lock (Lock) return _claimCalls; } }
+        public int JobAckCalls { get { lock (Lock) return _jobAckCalls; } }
+
+        public FakeJob AddJob(string id, PrintableOrder ticket, string kind = "ORDER_KITCHEN")
+        {
+            var j = new FakeJob { Id = id, Kind = kind, TicketJson = ticket == null ? null : JsonConvert.SerializeObject(ticket) };
+            lock (Lock) Jobs.Add(j);
+            return j;
+        }
+        public string JobState(string id) { lock (Lock) { var j = Jobs.FirstOrDefault(x => x.Id == id); ExpireLeases(); return j == null ? null : j.State; } }
+        public int JobAttempts(string id) { lock (Lock) { var j = Jobs.FirstOrDefault(x => x.Id == id); return j == null ? -1 : j.Attempts; } }
+        public string JobLastCode(string id) { lock (Lock) { var j = Jobs.FirstOrDefault(x => x.Id == id); return j == null ? null : j.LastCode; } }
+        public string AllAckBodies() { lock (Lock) return string.Join("\n", JobAckBodies); }
+        public string JobLastError(string id) { lock (Lock) { var j = Jobs.FirstOrDefault(x => x.Id == id); return j == null ? null : j.LastError; } }
+        public int AcksOf(string id, string status) { lock (Lock) return JobAcks.Count(a => a.StartsWith(id + "|" + status + "|", StringComparison.Ordinal)); }
+        static string OrderIdOf(FakeJob j)
+        {
+            if (j.TicketJson == null) return null;
+            try { return (string)Newtonsoft.Json.Linq.JObject.Parse(j.TicketJson)["orderId"]; } catch { return null; }
+        }
+        void ExpireLeases() { var now = DateTime.UtcNow; foreach (var j in Jobs) if (j.State == "CLAIMED" && j.LeaseUntilUtc < now) j.State = "PENDING"; }
+        // Consulta segura: o servidor falso grava em Requests em outra thread; enumerar sem travar lanca "colecao modificada".
+        public bool Has(Func<string, bool> predicate) { lock (Lock) return Requests.Any(predicate); }
         public int Count(string needle) { lock (Lock) return Requests.Count(r => r.Contains(needle)); }
         public int AckCalls { get { lock (Lock) return _ackCalls; } }
         public int PendingCalls { get { lock (Lock) return _pendingCalls; } }
@@ -46,13 +109,22 @@ namespace MeuCardapio.PrintClient
 
         public FakeApi()
         {
-            var rnd = new Random(); int p = 0; bool ok = false;
-            for (int i = 0; i < 30 && !ok; i++)
+            var rnd = new Random(); int p = 0; bool ok = false; string last = "";
+            // A maquina divide portas com outras suites rodando ao mesmo tempo. Um HttpListener que falhou no Start fica
+            // inutilizavel: cada tentativa usa um NOVO (reusar o mesmo fazia uma colisao derrubar as 299 seguintes).
+            for (int i = 0; i < 300 && !ok; i++)
             {
+                if (i > 0 && i % 50 == 0) Thread.Sleep(100);
                 p = 20000 + rnd.Next(30000);
-                try { _l.Prefixes.Clear(); _l.Prefixes.Add("http://127.0.0.1:" + p + "/"); _l.Start(); ok = true; } catch { }
+                var candidate = new HttpListener();
+                try { candidate.Prefixes.Add("http://127.0.0.1:" + p + "/"); candidate.Start(); _l = candidate; ok = true; }
+                catch (Exception ex)
+                {
+                    try { candidate.Close(); } catch { }
+                    last = ex.GetType().Name + (ex is System.ComponentModel.Win32Exception ? " (" + ((System.ComponentModel.Win32Exception)ex).NativeErrorCode + ")" : "") + ": " + ex.Message;
+                }
             }
-            if (!ok) throw new InvalidOperationException("sem porta livre");
+            if (!ok) throw new InvalidOperationException("sem porta livre; ultimo erro do HttpListener: " + last);
             Port = p;
             _t = new Thread(Loop) { IsBackground = true };
             _t.Start();
@@ -105,6 +177,96 @@ namespace MeuCardapio.PrintClient
                 });
                 return;
             }
+            if (path == "/api/device/print-jobs/claim")
+            {
+                string auth = c.Request.Headers["Authorization"] ?? "";
+                string body = null; int status = 200;
+                lock (Lock)
+                {
+                    _claimCalls++;
+                    if (ClaimStatus != 200) status = ClaimStatus;
+                    else
+                    {
+                        ExpireLeases();
+                        var now = DateTime.UtcNow;
+                        // ADR-0004 §8: o mesmo dono com lease valida recebe o MESMO job, sem incrementar attempt; o claim so devolve
+                        // PENDING com availableAt <= agora (um job que falha sempre nao trava a fila) e nunca devolve PRINTED.
+                        var j = Jobs.FirstOrDefault(x => x.State == "CLAIMED" && x.ClaimedBy == auth && x.LeaseUntilUtc >= now)
+                                ?? Jobs.FirstOrDefault(x => x.State == "PENDING" && x.AvailableAtUtc <= now);
+                        if (PrintMode == "LEGACY") j = null;   // em LEGACY o servidor nunca entrega job
+                        if (j == null) { if (EmptyAs204 && PrintMode == null) status = 204; else body = "{\"job\":null" + (PrintMode != null ? ",\"mode\":\"" + PrintMode + "\"" : "") + "}"; }
+                        else
+                        {
+                            if (j.State != "CLAIMED") { j.State = "CLAIMED"; j.ClaimedBy = auth; j.LeaseUntilUtc = now.AddMilliseconds(LeaseMs); j.Attempts++; }
+                            body = "{\"job\":{\"id\":\"" + j.Id + "\",\"kind\":\"" + j.Kind + "\",\"attempt\":" + j.Attempts + ",\"leaseSeconds\":" + Math.Max(1, (int)Math.Ceiling(LeaseMs / 1000.0))
+                                + (j.TicketJson != null ? ",\"ticket\":" + j.TicketJson : "") + "}" + (PrintMode != null ? ",\"mode\":\"" + PrintMode + "\"" : "") + "}";
+                        }
+                    }
+                }
+                if (status == 204) { c.Response.StatusCode = 204; c.Response.Close(); return; }
+                Reply(c, status, body ?? "{}");
+                return;
+            }
+            if (path.StartsWith("/api/device/print-jobs/") && path.EndsWith("/ack"))
+            {
+                var id = path.Substring("/api/device/print-jobs/".Length).Replace("/ack", "");
+                string auth = c.Request.Headers["Authorization"] ?? "";
+                string raw; using (var rd = new StreamReader(c.Request.InputStream, Encoding.UTF8)) raw = rd.ReadToEnd();
+                var parsed = Newtonsoft.Json.Linq.JObject.Parse(string.IsNullOrWhiteSpace(raw) ? "{}" : raw);
+                string st = (string)parsed["status"], err = (string)parsed["error"], codeIn = (string)parsed["code"];
+                int reply;
+                lock (Lock)
+                {
+                    int n = ++_jobAckCalls;
+                    JobAcks.Add(id + "|" + st + "|" + err + "|" + auth);
+                    JobAckBodies.Add(raw);
+                    ExpireLeases();
+                    var j = Jobs.FirstOrDefault(x => x.Id == id);
+                    if (JobAckFailFirst > 0 && n <= JobAckFailFirst) reply = JobAckStatus;
+                    else if (JobAckStatus != 200 && JobAckFailFirst == 0) reply = JobAckStatus;
+                    else if (j == null) reply = 404;
+                    else if (j.State == "PRINTED" && st == "PRINTED" && j.ClaimedBy == auth) reply = 200;          // idempotente
+                    else if (j.State == "CLAIMED" && j.ClaimedBy == auth)                                         // lease valida e dono
+                    {
+                        if (st == "PRINTED") { j.State = "PRINTED"; var oid = OrderIdOf(j); if (oid != null) Pending.RemoveAll(x => x[0] == oid); }   // R2: o ack do job grava printedAt
+                        else { j.LastError = err; j.LastCode = codeIn; j.State = j.Attempts >= j.MaxAttempts ? "FAILED" : "PENDING"; j.AvailableAtUtc = DateTime.UtcNow.AddMilliseconds(FailBackoffMs); }
+                        reply = 200;
+                    }
+                    else reply = 409;                                                                             // lease vencida ou nao e o dono
+                }
+                Reply(c, reply, "{}");
+                return;
+            }
+            if (path == "/api/device/alerts" && c.Request.HttpMethod == "POST")
+            {
+                string raw; using (var rd = new StreamReader(c.Request.InputStream, Encoding.UTF8)) raw = rd.ReadToEnd();
+                lock (Lock) AlertBodies.Add(raw);
+                if (AlertDelayMs > 0) Thread.Sleep(AlertDelayMs);
+                Reply(c, AlertStatus, AlertStatus == 204 ? "" : "{}");
+                return;
+            }
+            if (path == "/api/device/config")
+            {
+                lock (Lock) _configCalls++;
+                if (!ConfigEnabled || PrintMode == null) { Reply(c, 404, "{}"); return; }
+                if (ConfigStatus != 200) { Reply(c, ConfigStatus, "{}"); return; }
+                Reply(c, 200, ConfigBody ?? "{\"mode\":\"" + PrintMode + "\"}");
+                return;
+            }
+            if (path == "/api/device/orders/pending" && PrintMode == "QUEUE" && PendingEmptyInQueue)
+            {
+                lock (Lock) _legacyCalls++;
+                Reply(c, 200, PendingCarriesMode ? "{\"orders\":[],\"mode\":\"QUEUE\"}" : "{\"orders\":[]}");
+                return;
+            }
+            if (LegacyAck500 && path.StartsWith("/api/device/orders/") && path.EndsWith("/printed")) { lock (Lock) _legacyCalls++; Reply(c, 500, "{}"); return; }
+            if (path.StartsWith("/api/device/orders/") && PrintMode == "QUEUE")
+            {
+                lock (Lock) _legacyCalls++;
+                Reply(c, 409, Legacy409Body ?? "{\"error\":\"A loja usa a fila de impressao.\",\"code\":\"MODE_QUEUE\"}");
+                return;
+            }
+            if (path.StartsWith("/api/device/orders/")) lock (Lock) _legacyCalls++;
             if (path == "/api/device/orders/pending")
             {
                 int n; lock (Lock) n = ++_pendingCalls;
@@ -129,7 +291,8 @@ namespace MeuCardapio.PrintClient
                 if (status == 200 && RemoveOnAck)
                 {
                     var id = path.Substring("/api/device/orders/".Length).Replace("/printed", "");
-                    lock (Lock) Pending.RemoveAll(x => x[0] == id);
+                    // §8 item 13a: o ack legado fecha o job do pedido na mesma transacao do printedAt.
+                    lock (Lock) { Pending.RemoveAll(x => x[0] == id); foreach (var jb in Jobs) if (jb.State != "PRINTED" && OrderIdOf(jb) == id) jb.State = "PRINTED"; }
                 }
                 Reply(c, status, "{}");
                 return;

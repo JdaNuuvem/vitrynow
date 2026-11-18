@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { makeApp, registerStore, resetDb, orderTokenHeader } from "./helpers";
 
 describe("hardening", () => {
   let app: ReturnType<typeof makeApp>;
@@ -82,7 +82,7 @@ describe("hardening", () => {
 
     const cancelAfterConfirm = await app.inject({
       method: "POST",
-      url: `/stores/loja-cancela/orders/${orderId}/cancel`,
+      url: `/stores/loja-cancela/orders/${orderId}/cancel`, headers: orderTokenHeader(orderId),
     });
     expect(cancelAfterConfirm.statusCode).toBe(409);
 
@@ -94,7 +94,7 @@ describe("hardening", () => {
     const order2Id = JSON.parse(order2.body).orderId;
     const cancelPending = await app.inject({
       method: "POST",
-      url: `/stores/loja-cancela/orders/${order2Id}/cancel`,
+      url: `/stores/loja-cancela/orders/${order2Id}/cancel`, headers: orderTokenHeader(order2Id),
     });
     expect(cancelPending.statusCode).toBe(200);
   });
@@ -116,11 +116,15 @@ describe("hardening", () => {
     });
     const productId = JSON.parse(product.body).product.id;
 
-    await app.inject({
+    const placed = await app.inject({
       method: "POST",
       url: "/stores/loja-snapshot/orders",
       payload: { type: "BALCAO", items: [{ productId, quantity: 2 }] },
     });
+    // API-56: produto em pedido EM ABERTO não é excluído (409, RN-CT-12); o pedido antigo é o já encerrado.
+    const blocked = await app.inject({ method: "POST", url: `/api/catalog/products/${productId}/delete`, headers: { cookie: cookie! } });
+    expect(blocked.statusCode).toBe(409);
+    await prisma.order.update({ where: { id: JSON.parse(placed.body).orderId }, data: { status: "CONCLUIDO" } });
 
     const deleteProduct = await app.inject({
       method: "POST",
@@ -132,6 +136,9 @@ describe("hardening", () => {
     const orders = await app.inject({ method: "GET", url: "/api/orders", headers: { cookie: cookie! } });
     const [order] = JSON.parse(orders.body).orders;
     expect(order.items[0].productName).toBe("Produto Temporário");
-    expect(order.items[0].productId).toBeNull();
+    // O id do produto não faz parte da resposta do painel (allowlist, API-54a); o vínculo some no banco, o snapshot fica.
+    expect(order.items[0]).not.toHaveProperty("productId");
+    const stored = await prisma.orderItem.findFirstOrThrow({ where: { order: { id: order.id } } });
+    expect(stored.productId).toBeNull();
   });
 });

@@ -5,6 +5,7 @@ import type { Menu, PaymentStatusResponse, PlaceOrderInput, PlacedOrderResponse 
 export interface StorefrontGateway {
   getMenu(slug: string): Promise<HttpResult<Menu>>;
   placeOrder(slug: string, input: PlaceOrderInput): Promise<HttpResult<PlacedOrderResponse>>;
-  cancelOrder(slug: string, orderId: string): Promise<HttpResult<unknown>>;
-  getPaymentStatus(slug: string, orderId: string): Promise<HttpResult<PaymentStatusResponse>>;
+  // NG-16: as duas rotas exigem o token do pedido (cabeçalho x-order-token); sem ele a API responde 404.
+  cancelOrder(slug: string, orderId: string, token: string): Promise<HttpResult<unknown>>;
+  getPaymentStatus(slug: string, orderId: string, token: string): Promise<HttpResult<PaymentStatusResponse>>;
 }

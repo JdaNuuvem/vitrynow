@@ -6,6 +6,8 @@ import { buildApp } from "../src/app";
 describe("configuração de segurança", () => {
   const saved = { ...process.env };
   beforeEach(() => {
+    // O fallback de teste só vale dentro do vitest (ST-04b): estes testes simulam um servidor real.
+    delete process.env.VITEST;
     process.env.NODE_ENV = "development";
     delete process.env.JWT_SECRET;
     delete process.env.MFA_HMAC_KEY;
@@ -36,6 +38,7 @@ describe("configuração de segurança", () => {
   it("aceita segredo forte; em test usa o segredo de teste sem exigir nada", () => {
     process.env.JWT_SECRET = strong();
     expect(getJwtSecret()).toBe(strong());
+    process.env.VITEST = "true"; // dentro do vitest o segredo de teste é aceito
     process.env.NODE_ENV = "test";
     delete process.env.JWT_SECRET;
     expect(getJwtSecret()).toContain("test");

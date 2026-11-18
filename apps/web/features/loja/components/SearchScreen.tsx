@@ -13,6 +13,7 @@ export function SearchScreen({
   onClose,
   onOpenProduct,
   onQuickAdd,
+  onRemoveOne,
 }: {
   categories: Category[];
   closed?: boolean;
@@ -20,6 +21,7 @@ export function SearchScreen({
   onClose: () => void;
   onOpenProduct: (product: Product) => void;
   onQuickAdd: (product: Product) => void;
+  onRemoveOne: (product: Product) => void;
 }) {
   const [term, setTerm] = useState("");
   const results = searchProducts(categories, term);
@@ -59,6 +61,7 @@ export function SearchScreen({
               quantityInCart={quantityByProduct[product.id] ?? 0}
               onOpen={onOpenProduct}
               onQuickAdd={onQuickAdd}
+              onRemoveOne={onRemoveOne}
             />
           ))}
         </div>

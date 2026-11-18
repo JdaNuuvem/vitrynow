@@ -31,6 +31,8 @@ namespace MeuCardapio.PrintClient.Services
             [JsonProperty("retryAfter")] public DateTime? RetryAfterUtc { get; set; }
             [JsonProperty("ackedAt")] public DateTime? AckedAtUtc { get; set; }
             [JsonProperty("code", NullValueHandling = NullValueHandling.Ignore)] public string Code { get; set; }
+            // Job ORDER_KITCHEN: o pedido que este job imprimiu. O modo legado pula esse pedido (PC-18), mesmo com o aviso do job pendente.
+            [JsonProperty("orderId", NullValueHandling = NullValueHandling.Ignore)] public string OrderId { get; set; }
         }
 
         public static readonly TimeSpan RetentionAfterAck = TimeSpan.FromDays(7);
@@ -46,6 +48,7 @@ namespace MeuCardapio.PrintClient.Services
         readonly Dictionary<string, Entry> _entries = new Dictionary<string, Entry>();
         readonly Dictionary<string, DateTime> _inFlight = new Dictionary<string, DateTime>();
         readonly HashSet<string> _alerted = new HashSet<string>();
+        readonly Dictionary<string, string> _jobOrder = new Dictionary<string, string>();   // job em impressao -> pedido que ele imprime
 
         // path == null: só em memória (testes).
         public PrintLedger(string path, Func<DateTime> utcNow = null)
@@ -81,6 +84,8 @@ namespace MeuCardapio.PrintClient.Services
             {
                 _inFlight.Remove(orderId);
                 var e = GetOrAdd(orderId);
+                string oid;
+                if (_jobOrder.TryGetValue(orderId, out oid)) { e.OrderId = oid; _jobOrder.Remove(orderId); }
                 e.PrintedAtUtc = _utcNow();
                 e.AckPending = true;
                 e.RetryAfterUtc = null;
@@ -96,6 +101,7 @@ namespace MeuCardapio.PrintClient.Services
             lock (_lock)
             {
                 _inFlight.Remove(orderId);
+                _jobOrder.Remove(orderId);
                 RegisterFailure(orderId, code);
                 Save();
             }
@@ -119,7 +125,7 @@ namespace MeuCardapio.PrintClient.Services
             {
                 var limit = _utcNow() - InFlightTimeout;
                 var stuck = _inFlight.Where(kv => kv.Value <= limit).Select(kv => kv.Key).ToList();
-                foreach (var id in stuck) { _inFlight.Remove(id); RegisterFailure(id, null); }
+                foreach (var id in stuck) { _inFlight.Remove(id); _jobOrder.Remove(id); RegisterFailure(id, null); }
                 if (stuck.Count > 0) Save();
                 return stuck;
             }
@@ -128,7 +134,7 @@ namespace MeuCardapio.PrintClient.Services
         // Liberação sem resultado (ex.: falha ao baixar o tíquete): sem contar como falha de impressão.
         public void Release(string orderId)
         {
-            lock (_lock) { _inFlight.Remove(orderId); }
+            lock (_lock) { _inFlight.Remove(orderId); _jobOrder.Remove(orderId); }
         }
 
         public void MarkAcked(string orderId)
@@ -139,6 +145,73 @@ namespace MeuCardapio.PrintClient.Services
                 e.AckPending = false;
                 e.AckedAtUtc = _utcNow();
                 Save();
+            }
+        }
+
+        // Em impressão agora (entre TryBeginPrint e MarkPrinted/MarkPrintFailed/Release/watchdog). O cliente de jobs espera
+        // por isto para só pedir o próximo job depois de resolver o atual.
+        public bool IsInFlight(string key)
+        {
+            lock (_lock) { return _inFlight.ContainsKey(key); }
+        }
+
+        // Modo PrintJob: há job em impressão agora? (não reclamar outro nem o mesmo de novo enquanto isso)
+        public bool AnyJobInFlight()
+        {
+            lock (_lock) { return _inFlight.Keys.Any(k => k.StartsWith("job:", StringComparison.Ordinal)); }
+        }
+
+        // Troca de modo (PC-18): pedido legado EM impressao nao pode ser reclamado como job. Aviso pendente NAO bloqueia nada (um aviso
+        // recusado para sempre congelaria o outro modo): quem protege contra a reimpressao e o registro de "impresso" dos dois lados
+        // (cinto: IsPrinted no job; IsOrderHeldByJob no legado).
+        public bool AnyLegacyInFlight()
+        {
+            lock (_lock) { return _inFlight.Keys.Any(k => !k.StartsWith("job:", StringComparison.Ordinal)); }
+        }
+
+        // Cinto simetrico: este PC ja imprimiu (ou esta imprimindo) o pedido por um JOB ORDER_KITCHEN. O legado nao o imprime de novo.
+        public void SetOrderRef(string jobKey, string orderId)
+        {
+            if (string.IsNullOrEmpty(jobKey) || string.IsNullOrEmpty(orderId)) return;
+            lock (_lock) { _jobOrder[jobKey] = orderId; }
+        }
+
+        public bool IsOrderHeldByJob(string orderId)
+        {
+            if (string.IsNullOrEmpty(orderId)) return false;
+            lock (_lock)
+            {
+                if (_jobOrder.Values.Contains(orderId)) return true;
+                return _entries.Values.Any(e => e.OrderId == orderId && e.PrintedAtUtc.HasValue);
+            }
+        }
+
+        // Modo PrintJob: há job que falhou aqui e ainda está no recuo? Reclamar agora prenderia um job que o cliente não vai
+        // imprimir até o fim do recuo (segurando-o pela lease inteira e bloqueando as outras impressoras).
+        public bool AnyJobInBackoff()
+        {
+            lock (_lock)
+            {
+                var now = _utcNow();
+                return _entries.Any(kv => kv.Key.StartsWith("job:", StringComparison.Ordinal) && kv.Value.Failures > 0 && !kv.Value.PrintedAtUtc.HasValue
+                                          && kv.Value.RetryAfterUtc.HasValue && kv.Value.RetryAfterUtc.Value > now);
+            }
+        }
+
+        // Modo PrintJob (PC-03): uma falha local de um job que o servidor parou de oferecer há mais de `age` não fica no
+        // indicador "sem imprimir" para sempre (o aviso passa a ser o do painel, ADR-0004 §2). Usa o fim do recuo como
+        // "última falha". Devolve quantas esqueceu.
+        public int ForgetStaleFailures(TimeSpan age)
+        {
+            lock (_lock)
+            {
+                var limit = _utcNow() - age;
+                var stale = _entries.Where(kv => kv.Key.StartsWith("job:", StringComparison.Ordinal) && kv.Value.Failures > 0 && !kv.Value.PrintedAtUtc.HasValue
+                                                 && kv.Value.RetryAfterUtc.HasValue && kv.Value.RetryAfterUtc.Value < limit && !_inFlight.ContainsKey(kv.Key))
+                                    .Select(kv => kv.Key).ToList();
+                foreach (var k in stale) { _entries[k].Failures = 0; _entries[k].RetryAfterUtc = null; }
+                if (stale.Count > 0) Save();
+                return stale.Count;
             }
         }
 

@@ -62,6 +62,12 @@
     padding: 0;
   }
 
+  /* folha curta: altura do conteúdo, no máximo a da tela menos a margem de cima */
+  .ui-modal--sheet.ui-modal--fit .ui-modal__panel {
+    height: auto;
+    max-height: calc(100% - 32px);
+  }
+
   .ui-modal--sheet .ui-modal__panel {
     width: 100% !important;
     height: calc(100% - 32px);
@@ -264,7 +270,7 @@
 }
 
 .confirm-dialog__actions button {
-  min-height: 40px;
+  min-height: 44px;
   border: none;
   border-radius: 12px;
   font-size: 14px;
@@ -280,6 +286,18 @@
 .confirm-dialog__confirm--danger {
   background: var(--danger);
   color: #ffffff;
+}
+
+/* Só contorno: a ação irreversível não pode ser tão chamativa quanto a segura. O seletor tem 2 classes porque
+   `.confirm-dialog__actions button` (border: none) teria a mesma força que uma classe só. */
+.confirm-dialog__actions .confirm-dialog__confirm--danger-outline {
+  border: 1px solid #fca5a5;
+  background: #ffffff;
+  color: #b91c1c;
+}
+
+.confirm-dialog__actions button {
+  flex-shrink: 0; /* com a janela baixa os botões não podem encolher abaixo dos 44 px */
 }
 
 .confirm-dialog__confirm[disabled] {

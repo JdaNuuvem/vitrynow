@@ -1,8 +1,12 @@
 import type { HttpClient, RequestOptions } from "../../http/HttpClient";
-import type { AuthGateway } from "../AuthGateway";
+import type { AuthGateway, CurrentUser } from "../AuthGateway";
 
 export class HttpAuthGateway implements AuthGateway {
   constructor(private readonly http: HttpClient) {}
+
+  me() {
+    return this.http.get<{ user: CurrentUser }>("/auth/me");
+  }
 
   login(email: string, password: string) {
     return this.http.post("/auth/login", { email, password });
@@ -20,7 +24,11 @@ export class HttpAuthGateway implements AuthGateway {
     return this.http.post("/auth/forgot-password", { email });
   }
 
-  resetPassword(token: string, newPassword: string) {
-    return this.http.post("/auth/reset-password", { token, newPassword });
+  resetPassword(token: string, newPassword: string, email: string) {
+    return this.http.post("/auth/reset-password", { token, newPassword, email });
+  }
+
+  inspectResetToken(token: string) {
+    return this.http.post<{ valid: boolean; email?: string }>("/auth/reset-password/inspect", { token });
   }
 }

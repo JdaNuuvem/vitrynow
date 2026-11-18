@@ -24,21 +24,63 @@ namespace MeuCardapio.PrintClient.Printing
         public static string Sanitize(string value)
         {
             if (string.IsNullOrEmpty(value)) return "";
-            var sb = new StringBuilder(value.Length);
+            var sb = new StringBuilder(Math.Min(value.Length, 4096));
             bool lastSpace = false;
-            foreach (var ch in value)
+            int combining = 0;
+            for (int i = 0; i < value.Length; i++)
             {
-                char c = ch;
-                if (c == '\t' || c == '\r' || c == '\n' || c == '\u2028' || c == '\u2029' || c == '\u0085') c = ' ';
-                if (c < ' ' || c == '\u007f') continue;
-                if (c >= '\u0080' && c <= '\u009f') continue;                 // C1
-                if (c >= '\u202a' && c <= '\u202e') continue;                 // marcas de direção (bidi override)
-                if (c >= '\u2066' && c <= '\u2069') continue;
-                if (c == '\u200b' || c == '\u200e' || c == '\u200f' || c == '\ufeff') continue;
+                char c = value[i];
+                if (c == '\t' || c == '\r' || c == '\n' || c == (char)0x2028 || c == (char)0x2029 || c == (char)0x0085) c = ' ';
+                if (c < ' ' || c == (char)0x7f) continue;
+                if (c >= (char)0x80 && c <= (char)0x9f) continue;                      // C1
+                if (c >= (char)0x202a && c <= (char)0x202e) continue;                  // marcas de direcao (bidi override)
+                if (c >= (char)0x2066 && c <= (char)0x2069) continue;
+                if (c == (char)0x200b || c == (char)0x200e || c == (char)0x200f || c == (char)0xfeff) continue;
+                // invisiveis e de formatacao sem funcao no papel (PC-15, parecer Nightingale)
+                if (c == (char)0x061c || c == (char)0x2060 || c == (char)0x180e || c == (char)0x034f) continue;
+                if (c >= (char)0xfff9 && c <= (char)0xfffc) continue;                  // anotacoes interlineares e objeto
+                if (c >= (char)0xe000 && c <= (char)0xf8ff) continue;                  // uso privado
+                if (char.IsSurrogate(c))
+                {
+                    // so passa o PAR valido (emoji); substituto solto e lixo e pode quebrar o desenho/ESC-POS
+                    if (char.IsHighSurrogate(c) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
+                    {
+                        int cp = char.ConvertToUtf32(c, value[i + 1]);
+                        if (cp >= 0xF0000) { i++; continue; }                          // planos de uso privado 15/16
+                        sb.Append(c).Append(value[i + 1]); i++; lastSpace = false; combining = 0;
+                    }
+                    continue;
+                }
+                // marcas combinantes (acento): no maximo 2 por letra (barra o "zalgo", que estoura a altura da linha)
+                var cat = CharUnicodeInfo.GetUnicodeCategory(c);
+                if (cat == UnicodeCategory.NonSpacingMark || cat == UnicodeCategory.EnclosingMark || cat == UnicodeCategory.SpacingCombiningMark)
+                {
+                    if (combining >= 2) continue;
+                    combining++;
+                }
+                else combining = 0;
                 if (c == ' ') { if (lastSpace) continue; lastSpace = true; } else lastSpace = false;
                 sb.Append(c);
+                if (sb.Length >= MaxScan) break;                                       // nao processa megabytes para depois truncar
             }
             return sb.ToString().Trim();
+        }
+
+        // Teto de varredura de um campo (bem acima do que sai no papel): evita gastar CPU com texto de megabytes.
+        const int MaxScan = 20000;
+        // Teto de um campo no papel (observacao, nome, endereco): 300 caracteres, com reticencias.
+        public const int MaxFieldChars = 300;
+        // Teto do tiquete: itens e adicionais por item. Acima disso o papel avisa e manda ver no painel.
+        public const int MaxItemLines = 80;
+        public const int MaxAdditionalsPerItem = 12;
+
+        // Corta no limite sem partir par de emoji nem letra com acento, e marca com reticencias.
+        public static string Truncate(string value, int max)
+        {
+            if (string.IsNullOrEmpty(value) || value.Length <= max) return value ?? "";
+            int cut = max;
+            while (cut > 0 && (char.IsLowSurrogate(value[cut]) || CharUnicodeInfo.GetUnicodeCategory(value[cut]) == UnicodeCategory.NonSpacingMark)) cut--;
+            return value.Substring(0, cut).TrimEnd() + (char)0x2026;
         }
 
         // Para o PAPEL: Sanitize + sem emoji/pictogramas. Fonte de impressora e code page de térmica não têm emoji

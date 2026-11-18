@@ -4,7 +4,7 @@
 import { createHmac } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { makeApp, registerStore, resetDb } from "../helpers";
+import { makeApp, registerStore, resetDb, orderTokenHeader, useMockedProvider } from "../helpers";
 import { subscribe } from "../../src/realtime/hub";
 import { mapMpStatus } from "../../src/lib/mercadopago";
 import { activateSubscription } from "../../src/lib/subscription";
@@ -60,6 +60,7 @@ describe("QA probes — API", () => {
   let app: ReturnType<typeof makeApp>;
 
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     app = makeApp();
     await app.ready();
@@ -99,6 +100,19 @@ describe("QA probes — API", () => {
     return { orderId: JSON.parse(res.body).orderId as string, providerPaymentId: pix.providerPaymentId };
   }
 
+  // Visão completa do pagamento no provedor (valor, moeda e referência batem com o que gravamos).
+  async function remoteFor(providerPaymentId: string, status: string) {
+    const order = await prisma.payment.findUnique({ where: { providerPaymentId } });
+    const sub = order ? null : await prisma.subscriptionPayment.findUnique({ where: { providerPaymentId } });
+    return {
+      providerPaymentId,
+      status,
+      externalReference: order?.orderId ?? sub?.id ?? null,
+      amountCents: order?.amountCents ?? sub?.amountCents ?? null,
+      currency: "BRL",
+    };
+  }
+
   const webhook = (dataId: string) => {
     const { headers, payload } = signedWebhook(dataId);
     return app.inject({ method: "POST", url: "/api/payments/webhook", headers, payload });
@@ -128,27 +142,27 @@ describe("QA probes — API", () => {
   });
 
   // ───────────── Regras do pedido público ─────────────
-  bug("D03 produto inativo (pausado) não pode ser pedido", async () => {
+  it("D03 produto inativo (pausado) não pode ser pedido", async () => {
     const ctx = await setupStore();
     await prisma.product.update({ where: { id: ctx.productId }, data: { active: false } });
     const res = await order(ctx.slug, { type: "BALCAO", items: [{ productId: ctx.productId, quantity: 1 }] });
     expect(res.statusCode).toBe(400);
   });
 
-  bug("D04a DELIVERY com entrega desabilitada na loja é recusado", async () => {
+  it("D04a DELIVERY com entrega desabilitada na loja é recusado", async () => {
     const ctx = await setupStore();
     await prisma.store.update({ where: { id: ctx.storeId }, data: { deliveryEnabled: false } });
     const res = await order(ctx.slug, { type: "DELIVERY", address: "Rua A, 1", items: [{ productId: ctx.productId, quantity: 1 }] });
     expect(res.statusCode).toBeGreaterThanOrEqual(400);
   });
 
-  bug("D04b DELIVERY sem endereço é recusado pelo servidor (hoje só o front valida)", async () => {
+  it("D04b DELIVERY sem endereço é recusado pelo servidor (hoje só o front valida)", async () => {
     const ctx = await setupStore();
     const res = await order(ctx.slug, { type: "DELIVERY", items: [{ productId: ctx.productId, quantity: 1 }] });
     expect(res.statusCode).toBe(400);
   });
 
-  bug("D04c retirada (BALCAO/MESA) com pickup desabilitado é recusada", async () => {
+  it("D04c retirada (BALCAO/MESA) com pickup desabilitado é recusada", async () => {
     const ctx = await setupStore();
     await prisma.store.update({ where: { id: ctx.storeId }, data: { pickupEnabled: false } });
     const res = await order(ctx.slug, { type: "BALCAO", items: [{ productId: ctx.productId, quantity: 1 }] });
@@ -200,28 +214,28 @@ describe("QA probes — API", () => {
   });
 
   // ───────────── Pagamento / PIX ─────────────
-  bug("D08 mapMpStatus não trata refunded/charged_back/in_process como PENDENTE", () => {
+  it("D08 mapMpStatus não trata refunded/charged_back/in_process como PENDENTE", () => {
     expect(mapMpStatus("refunded")).not.toBe("PENDENTE");
     expect(mapMpStatus("charged_back")).not.toBe("PENDENTE");
   });
 
-  bug("D09 webhook 'refunded' não ressuscita pagamento já REEMBOLSADO para PENDENTE", async () => {
+  it("D09 webhook 'refunded' não ressuscita pagamento já REEMBOLSADO para PENDENTE", async () => {
     const ctx = await setupStore();
     const { orderId, providerPaymentId } = await pixOrder(ctx);
     await prisma.payment.update({ where: { orderId }, data: { status: "REEMBOLSADO" } });
-    getPayment.mockResolvedValue({ providerPaymentId, status: "refunded" });
+    getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "refunded"));
     const res = await webhook(providerPaymentId);
     expect(res.statusCode).toBe(200);
     const payment = await prisma.payment.findUnique({ where: { orderId } });
     expect(payment?.status).toBe("REEMBOLSADO");
   });
 
-  bug("D10 webhook repetido do mesmo pagamento aprovado publica/imprime UMA vez só", async () => {
+  it("D10 webhook repetido do mesmo pagamento aprovado publica/imprime UMA vez só", async () => {
     const ctx = await setupStore();
     const { providerPaymentId } = await pixOrder(ctx);
     const socket = { readyState: 1, OPEN: 1, send: vi.fn(), on: vi.fn() };
-    subscribe(ctx.storeId, socket as never);
-    getPayment.mockResolvedValue({ providerPaymentId, status: "approved" });
+    subscribe(ctx.storeId, socket as never, "OWNER");
+    getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "approved"));
     await webhook(providerPaymentId);
     await webhook(providerPaymentId);
     await Promise.all([webhook(providerPaymentId), webhook(providerPaymentId)]);
@@ -229,36 +243,36 @@ describe("QA probes — API", () => {
     expect(created).toBe(1);
   });
 
-  bug("D11 PIX rejeitado/expirado devolve o uso do cupom e registra no histórico do pedido", async () => {
+  it("D11 PIX rejeitado/expirado devolve o uso do cupom e registra no histórico do pedido", async () => {
     const ctx = await setupStore();
     await app.inject({ method: "POST", url: "/api/coupons", headers: { cookie: ctx.cookie }, payload: { code: "pix10", discountType: "FIXED", discountValue: 100, maxUses: 1 } });
     const { orderId, providerPaymentId } = await pixOrder(ctx, { couponCode: "pix10" });
-    getPayment.mockResolvedValue({ providerPaymentId, status: "expired" });
+    getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "expired"));
     await webhook(providerPaymentId);
     const coupon = await prisma.coupon.findFirst({ where: { storeId: ctx.storeId } });
     const history = await prisma.orderStatusHistory.findMany({ where: { orderId, status: "CANCELADO" } });
     expect({ usedCount: coupon?.usedCount, canceladoNoHistorico: history.length }).toEqual({ usedCount: 0, canceladoNoHistorico: 1 });
   });
 
-  bug("D12 cliente NÃO cancela (sem estorno) um pedido cujo PIX já foi APROVADO", async () => {
+  it("D12 cliente NÃO cancela (sem estorno) um pedido cujo PIX já foi APROVADO", async () => {
     const ctx = await setupStore();
     const { orderId, providerPaymentId } = await pixOrder(ctx);
-    getPayment.mockResolvedValue({ providerPaymentId, status: "approved" });
+    getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "approved"));
     await webhook(providerPaymentId);
-    const res = await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${orderId}/cancel` });
+    const res = await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${orderId}/cancel`, headers: orderTokenHeader(orderId) });
     const after = await prisma.order.findUnique({ where: { id: orderId } });
     // Correto: ou recusa (409) mantendo o pedido, ou cancela E estorna. Cancelar sem estornar = dinheiro retido.
     const ok = res.statusCode === 409 || (after?.status === "CANCELADO" && refundPayment.mock.calls.length === 1);
     expect({ status: res.statusCode, orderStatus: after?.status, refunds: refundPayment.mock.calls.length, ok }).toMatchObject({ ok: true });
   });
 
-  bug("D13 pagamento aprovado DEPOIS de o cliente cancelar não reaparece como pedido novo (e deve gerar estorno)", async () => {
+  it("D13 pagamento aprovado DEPOIS de o cliente cancelar não reaparece como pedido novo (e deve gerar estorno)", async () => {
     const ctx = await setupStore();
     const { orderId, providerPaymentId } = await pixOrder(ctx);
     const socket = { readyState: 1, OPEN: 1, send: vi.fn(), on: vi.fn() };
-    subscribe(ctx.storeId, socket as never);
-    await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${orderId}/cancel` });
-    getPayment.mockResolvedValue({ providerPaymentId, status: "approved" });
+    subscribe(ctx.storeId, socket as never, "OWNER");
+    await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${orderId}/cancel`, headers: orderTokenHeader(orderId) });
+    getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "approved"));
     await webhook(providerPaymentId);
     const announced = socket.send.mock.calls.filter(([m]) => String(m).includes("order.created")).length;
     expect({ announced, refunds: refundPayment.mock.calls.length }).toEqual({ announced: 0, refunds: 1 });
@@ -267,7 +281,7 @@ describe("QA probes — API", () => {
   it("D21 webhook com assinatura inválida é 401 e não altera nada", async () => {
     const ctx = await setupStore();
     const { orderId, providerPaymentId } = await pixOrder(ctx);
-    getPayment.mockResolvedValue({ providerPaymentId, status: "approved" });
+    getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "approved"));
     const res = await app.inject({
       method: "POST",
       url: "/api/payments/webhook",
@@ -278,13 +292,13 @@ describe("QA probes — API", () => {
     expect((await prisma.order.findUnique({ where: { id: orderId } }))?.awaitingPayment).toBe(true);
   });
 
-  flakyBug("D22 webhook de assinatura em paralelo ativa o plano UMA vez (30 dias, não 60)", async () => {
-    const ctx = await setupStore();
+  it("D22 webhook de assinatura em paralelo ativa o plano UMA vez (30 dias, não 60)", async () => {
+    const ctx = await setupStore({ plan: "BASICO" });
     const pix = fakePix();
     createPix.mockResolvedValueOnce(pix);
-    const checkout = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: ctx.cookie }, payload: { planCode: "PRO" } });
+    const checkout = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: ctx.cookie }, payload: { planCode: "BASICO" } });
     expect(checkout.statusCode).toBe(201);
-    getPayment.mockResolvedValue({ providerPaymentId: pix.providerPaymentId, status: "approved" });
+    getPayment.mockResolvedValue(await remoteFor(pix.providerPaymentId, "approved"));
     await Promise.all([webhook(pix.providerPaymentId), webhook(pix.providerPaymentId), webhook(pix.providerPaymentId)]);
     const sub = await prisma.subscription.findUnique({ where: { storeId: ctx.storeId } });
     const days = (sub!.currentPeriodEnd!.getTime() - Date.now()) / 86_400_000;
@@ -292,7 +306,7 @@ describe("QA probes — API", () => {
   });
 
   // ───────────── Painel: máquina de estados ─────────────
-  bug("D14 pedido CANCELADO não pode voltar a CONCLUIDO/EM_PREPARO pelo painel", async () => {
+  it("D14 pedido CANCELADO não pode voltar a CONCLUIDO/EM_PREPARO pelo painel", async () => {
     const ctx = await setupStore();
     const res0 = await order(ctx.slug, { type: "BALCAO", items: [{ productId: ctx.productId, quantity: 1 }] });
     const orderId = JSON.parse(res0.body).orderId;
@@ -301,17 +315,17 @@ describe("QA probes — API", () => {
     expect(back.statusCode).toBeGreaterThanOrEqual(400);
   });
 
-  bug("D14b painel não cancela manualmente pedido PIX já pago sem estornar", async () => {
+  it("D14b painel não cancela manualmente pedido PIX já pago sem estornar", async () => {
     const ctx = await setupStore();
     const { orderId, providerPaymentId } = await pixOrder(ctx);
-    getPayment.mockResolvedValue({ providerPaymentId, status: "approved" });
+    getPayment.mockResolvedValue(await remoteFor(providerPaymentId, "approved"));
     await webhook(providerPaymentId);
     const res = await app.inject({ method: "POST", url: `/api/orders/${orderId}/status`, headers: { cookie: ctx.cookie }, payload: { status: "CANCELADO" } });
     expect(res.statusCode).toBeGreaterThanOrEqual(400);
   });
 
   // ───────────── Sessão / autenticação ─────────────
-  bug("D05 cadastro com e-mail já existente responde 409 (não 500)", async () => {
+  it("D05 cadastro com e-mail já existente responde 409 (não 500)", async () => {
     await registerStore(app, { email: "dup@teste.com" });
     const second = await registerStore(app, { email: "dup@teste.com" });
     expect(second.response.statusCode).toBe(409);
@@ -321,10 +335,10 @@ describe("QA probes — API", () => {
     const owner = await setupStore();
     // Equipe é recurso do PRO (D2/API-08): o teste vale só o fluxo de sessão, então ativamos o PRO nesta loja.
     await activateSubscription({ subscriptionId: (await prisma.subscription.findFirstOrThrow()).id, planCode: "PRO" });
-    const invite = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: owner.cookie }, payload: { email: "staff@teste.com", password: "senha123" } });
+    const invite = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: owner.cookie }, payload: { email: "staff@teste.com", password: "senha12345" } });
     expect(invite.statusCode).toBe(201);
     const staffId = JSON.parse(invite.body).user.id;
-    const loginRes = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "staff@teste.com", password: "senha123" } });
+    const loginRes = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "staff@teste.com", password: "senha12345" } });
     const staffCookie = (loginRes.headers["set-cookie"] as string).split(";")[0];
     expect((await app.inject({ method: "GET", url: "/auth/me", headers: { cookie: staffCookie } })).statusCode).toBe(200);
     const del = await app.inject({ method: "POST", url: `/api/users/${staffId}/delete`, headers: { cookie: owner.cookie } });
@@ -334,8 +348,8 @@ describe("QA probes — API", () => {
   });
 
   it("D06b sessão antiga é invalidada após troca de senha", async () => {
-    const { cookie } = await registerStore(app, { email: "troca@teste.com", password: "senha123" });
-    const change = await app.inject({ method: "POST", url: "/auth/change-password", headers: { cookie: cookie! }, payload: { currentPassword: "senha123", newPassword: "novaSenha456" } });
+    const { cookie } = await registerStore(app, { email: "troca@teste.com", password: "senha12345" });
+    const change = await app.inject({ method: "POST", url: "/auth/change-password", headers: { cookie: cookie! }, payload: { currentPassword: "senha12345", newPassword: "novaSenha456" } });
     expect(change.statusCode).toBe(200);
     const stolen = await app.inject({ method: "GET", url: "/auth/me", headers: { cookie: cookie! } });
     expect(stolen.statusCode).toBe(401);
@@ -377,7 +391,7 @@ describe("QA probes — API", () => {
     const auth = { authorization: `Bearer ${token}` };
     const a = JSON.parse((await order(ctx.slug, { type: "BALCAO", customerName: "Ana", items: [{ productId: ctx.productId, quantity: 2, additionalIds: [ctx.additionalId] }] })).body);
     const b = JSON.parse((await order(ctx.slug, { type: "BALCAO", items: [{ productId: ctx.productId, quantity: 1 }] })).body);
-    await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${b.orderId}/cancel` });
+    await app.inject({ method: "POST", url: `/stores/${ctx.slug}/orders/${b.orderId}/cancel`, headers: orderTokenHeader(b.orderId) });
 
     const pending = JSON.parse((await app.inject({ method: "GET", url: "/api/device/orders/pending", headers: auth })).body).orders;
     expect(pending.map((o: { id: string }) => o.id)).toEqual([a.orderId]);
@@ -406,18 +420,24 @@ describe("QA probes — API", () => {
   });
 
   // ───────────── Relatórios (cobertura que não existia) ─────────────
-  it("D17 relatório soma só pedidos não cancelados e fecha com a lista de pedidos", async () => {
+  it("D17 relatório (B14.1): venda = pedido aceito (PENDENTE fica 'em aberto', CANCELADO à parte); faturamento = total − gorjeta; fecha com a lista de pedidos", async () => {
     const ctx = await setupStore();
     const o1 = JSON.parse((await order(ctx.slug, { type: "BALCAO", paymentMethod: "DINHEIRO", items: [{ productId: ctx.productId, quantity: 2 }] })).body);
-    await order(ctx.slug, { type: "DELIVERY", address: "Rua B, 2", paymentMethod: "CREDITO", items: [{ productId: ctx.productId, quantity: 1 }] });
+    const o2 = JSON.parse((await order(ctx.slug, { type: "DELIVERY", address: "Rua B, 2", customerPhone: "11999999999", paymentMethod: "CREDITO", tipCents: 200, items: [{ productId: ctx.productId, quantity: 1 }] })).body);
     const o3 = JSON.parse((await order(ctx.slug, { type: "BALCAO", items: [{ productId: ctx.productId, quantity: 1 }] })).body);
+    await order(ctx.slug, { type: "BALCAO", paymentMethod: "DINHEIRO", items: [{ productId: ctx.productId, quantity: 1 }] }); // fica PENDENTE: "em aberto"
+    for (const id of [o1.orderId, o2.orderId]) await app.inject({ method: "POST", url: `/api/orders/${id}/transition`, headers: { cookie: ctx.cookie }, payload: { to: "CONFIRMADO" } });
     await app.inject({ method: "POST", url: `/api/orders/${o3.orderId}/status`, headers: { cookie: ctx.cookie }, payload: { status: "CANCELADO" } });
     const res = await app.inject({ method: "GET", url: "/api/reports/summary", headers: { cookie: ctx.cookie } });
     expect(res.statusCode).toBe(200);
     const r = JSON.parse(res.body);
     expect(r.orderCount).toBe(2);
-    expect(r.revenueCents).toBe(3000 + 1500);
+    expect(r.revenueCents).toBe(3000 + 1500); // o 2º pedido tem R$ 2,00 de gorjeta: fica fora do faturamento
+    expect(r.tipCents).toBe(200);
+    expect(r.ruleChangedAt).toBe("2026-11-18T00:00:00.000Z"); // a tela sabe a partir de quando a conta mudou
+    expect([r.canceledCount, r.canceledCents, r.openCount, r.openCents]).toEqual([1, 1500, 1, 1500]);
     expect(r.byPaymentMethod.DINHEIRO).toEqual({ count: 1, revenueCents: 3000 });
+    expect(r.byPaymentMethod.CREDITO).toEqual({ count: 1, revenueCents: 1500 });
     expect((await app.inject({ method: "GET", url: "/api/reports/summary?from=lixo", headers: { cookie: ctx.cookie } })).statusCode).toBe(400);
     expect((await app.inject({ method: "GET", url: "/api/reports/summary" })).statusCode).toBe(401);
     void o1;

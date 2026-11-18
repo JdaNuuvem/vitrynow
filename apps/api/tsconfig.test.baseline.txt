@@ -1,0 +1,23 @@
+tests/auth.test.ts: error TS2345: Argument of type '({ resetUrl }: { to: string; resetUrl: string; }) => Promise<void>' is not assignable to parameter of type 'NormalizedPrecedure<(input: { to: string; resetUrl: string; 
+tests/email-secrets-log.test.ts: error TS2345: Argument of type '({ resetUrl }: { to: string; resetUrl: string; }) => Promise<void>' is not assignable to parameter of type 'NormalizedPrecedure<(input: { to: string; reset
+tests/forgot-password-limits.test.ts: error TS2322: Type 'Promise<void>' is not assignable to type 'Promise<boolean>'.
+tests/forgot-password-tempo.test.ts: error TS2345: Argument of type '(input: { to: string; resetUrl: string; }) => Promise<void>' is not assignable to parameter of type 'NormalizedPrecedure<(input: { to: string; resetUrl
+tests/hash-lane.test.ts: error TS2345: Argument of type '({ resetUrl }: { to: string; resetUrl: string; }) => Promise<void>' is not assignable to parameter of type 'NormalizedPrecedure<(input: { to: string; resetUrl: str
+tests/password-policy.test.ts: error TS2345: Argument of type '({ resetUrl }: { to: string; resetUrl: string; }) => Promise<void>' is not assignable to parameter of type 'NormalizedPrecedure<(input: { to: string; resetUr
+tests/qa/saleline.test.ts: error TS2322: Type '({ id: string; type: string; status: string; totalCents: number; paymentMethod: string; createdAt: Date; paidAt: Date; deliveryFeeCents?: undefined; receiptId?: undefined; }
+tests/reset-email-confirmation.test.ts: error TS2345: Argument of type '({ resetUrl }: { to: string; resetUrl: string; }) => Promise<void>' is not assignable to parameter of type 'NormalizedPrecedure<(input: { to: string
+tests/reset-email-confirmation.test.ts: error TS7005: Variable 'accounts' implicitly has an 'any[]' type.
+tests/reset-email-confirmation.test.ts: error TS7034: Variable 'accounts' implicitly has type 'any[]' in some locations where its type cannot be determined.
+tests/reset-inspect.test.ts: error TS2345: Argument of type '({ resetUrl }: { to: string; resetUrl: string; }) => Promise<void>' is not assignable to parameter of type 'NormalizedPrecedure<(input: { to: string; resetUrl:
+tests/tokens-hash.test.ts: error TS2345: Argument of type '({ resetUrl }: { to: string; resetUrl: string; }) => Promise<void>' is not assignable to parameter of type 'NormalizedPrecedure<(input: { to: string; resetUrl: s
+tests/unit/catalog.service.test.ts: error TS2345: Argument of type 'FakeAudit' is not assignable to parameter of type 'AuditLogger'.
+tests/unit/coupons.service.test.ts: error TS2345: Argument of type 'FakeAudit' is not assignable to parameter of type 'AuditLogger'.
+tests/unit/deliverers.service.test.ts: error TS2345: Argument of type 'FakeAudit' is not assignable to parameter of type 'AuditLogger'.
+tests/unit/deviceTokens.service.test.ts: error TS2345: Argument of type 'FakeAudit' is not assignable to parameter of type 'AuditLogger'.
+tests/unit/fakes.ts: error TS2420: Class 'FakeAudit' incorrectly implements interface 'AuditLogger'.
+tests/unit/users.service.test.ts: error TS2345: Argument of type 'FakeAudit' is not assignable to parameter of type 'AuditLogger'.
+tests/unit/users.service.test.ts: error TS2554: Expected 3 arguments, but got 2.
+tests/unit/users.service.test.ts: error TS2554: Expected 3 arguments, but got 2.
+tests/unit/users.service.test.ts: error TS2554: Expected 3 arguments, but got 2.
+tests/unit/users.service.test.ts: error TS2554: Expected 3 arguments, but got 2.
+tests/unit/users.service.test.ts: error TS2554: Expected 3 arguments, but got 2.

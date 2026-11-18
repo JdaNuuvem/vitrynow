@@ -129,7 +129,7 @@ describe("auth", () => {
     expect(resetToken).toBeTruthy();
     // NG-06: o banco guarda só o hash; o valor só existe no link enviado por e-mail.
     const sentUrl = sentResetUrls.at(-1)!;
-    const plainToken = new URL(sentUrl).searchParams.get("token")!;
+    const plainToken = new URLSearchParams(new URL(sentUrl).hash.slice(1)).get("token")!;
     expect(plainToken).toHaveLength(32);
     expect(resetToken!.tokenHash).not.toBe(plainToken);
     expect(resetToken!.tokenHash).toBe(hashToken(plainToken));
@@ -137,7 +137,7 @@ describe("auth", () => {
     const reset = await app.inject({
       method: "POST",
       url: "/auth/reset-password",
-      payload: { token: plainToken, newPassword: "outraSenha123" },
+      payload: { token: plainToken, email: credentials.email, newPassword: "outraSenha123" },
     });
     expect(reset.statusCode).toBe(200);
 
@@ -148,7 +148,7 @@ describe("auth", () => {
     const reuse = await app.inject({
       method: "POST",
       url: "/auth/reset-password",
-      payload: { token: plainToken, newPassword: "maisUmaSenha123" },
+      payload: { token: plainToken, email: credentials.email, newPassword: "maisUmaSenha123" },
     });
     expect(reuse.statusCode).toBe(400);
   });

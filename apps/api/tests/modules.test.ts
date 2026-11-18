@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { activateSubscription } from "../src/lib/subscription";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
 // Contrato HTTP dos módulos refatorados em camadas (catálogo, cupons, entregadores,
@@ -55,8 +56,9 @@ describe("módulos em camadas — contrato HTTP", () => {
   });
 
   it("produto: edita preço e adicionais na mesma chamada", async () => {
+    const categoryId = json(await call("POST", "/api/catalog/categories", { name: "Burgers" })).category.id;
     const product = json(
-      await call("POST", "/api/catalog/products", { name: "Burger", priceCents: 1500, additionals: [{ name: "Bacon", priceCents: 400 }] }),
+      await call("POST", "/api/catalog/products", { categoryId, name: "Burger", priceCents: 1500, additionals: [{ name: "Bacon", priceCents: 400 }] }),
     ).product;
     const edited = json(
       await call("POST", `/api/catalog/products/${product.id}`, {
@@ -74,7 +76,7 @@ describe("módulos em camadas — contrato HTTP", () => {
     expect(json(created).coupon.code).toBe("PROMO10");
     const duplicate = await call("POST", "/api/coupons", { code: "PROMO10", discountType: "FIXED", discountValue: 500 });
     expect(duplicate.statusCode).toBe(409);
-    expect(json(duplicate).error).toBe("já existe um cupom com este código");
+    expect(json(duplicate)).toMatchObject({ code: "COUPON_CODE_TAKEN", error: "Já existe um cupom com esse código." });
   });
 
   it("entregador: atribuir a pedido inexistente é 404 e nada quebra", async () => {
@@ -114,6 +116,8 @@ describe("módulos em camadas — contrato HTTP", () => {
   });
 
   it("equipe: convida, e-mail duplicado é 409, remove; não remove a si mesmo nem o último dono", async () => {
+    // Equipe é recurso do PRO (D2); o teste vale só o BASICO, então ativamos o PRO nesta loja.
+    await activateSubscription({ subscriptionId: (await prisma.subscription.findFirstOrThrow()).id, planCode: "PRO" });
     const invited = await call("POST", "/api/users", { email: "func@teste.com", password: "provisoria1" });
     expect(invited.statusCode).toBe(201);
     const staffId = json(invited).user.id;
@@ -141,10 +145,10 @@ describe("módulos em camadas — contrato HTTP", () => {
     expect(wrong.statusCode).toBe(401);
     expect(json(wrong).error).toBe("senha atual incorreta");
 
-    const ok = await call("POST", "/auth/change-password", { currentPassword: "senha123", newPassword: "nova-senha1" });
+    const ok = await call("POST", "/auth/change-password", { currentPassword: "senha12345", newPassword: "nova-senha1" });
     expect(ok.statusCode).toBe(200);
 
-    const loginOld = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "dono1@teste.com", password: "senha123" } });
+    const loginOld = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "dono1@teste.com", password: "senha12345" } });
     expect(loginOld.statusCode).toBe(401);
   });
 

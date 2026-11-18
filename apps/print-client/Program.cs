@@ -23,6 +23,24 @@ namespace MeuCardapio.PrintClient
             AppDomain.CurrentDomain.UnhandledException += (s, e) =>
                 Logger.Error("Exceção não tratada (background)", e.ExceptionObject as Exception ?? new Exception(e.ExceptionObject?.ToString() ?? "desconhecida"));
 
+            // Uma instância por computador: duas imprimiriam o mesmo pedido (cada uma com o seu dedupe em memória).
+            using (var instance = SingleInstance.TryAcquire())
+            {
+                if (!instance.IsOwner)
+                {
+                    Logger.Info("Segunda instância recusada: o aplicativo já está aberto");
+                    // Iniciado pelo Windows (/autostart) sai calado; aberto pelo usuário avisa onde está.
+                    if (Array.IndexOf(args, "/autostart") < 0)
+                        MessageBox.Show("O MeuCardapio - Impressão já está aberto neste computador (procure o ícone perto do relógio, na bandeja do Windows).",
+                            "MeuCardapio - Impressão", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                Run(args);
+            }
+        }
+
+        static void Run(string[] args)
+        {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 

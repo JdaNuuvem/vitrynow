@@ -20,6 +20,9 @@ namespace MeuCardapio.PrintClient
             SelfTestDevice.Run();       // PC-02: ledger, dedupe, DPAPI, politica de URL, settings
             SelfTestUpdater.Run();      // PC-04: updater com manifesto assinado
             SelfTestDeviceClient.Run(); // PC-05/06: DeviceClient real contra API falsa
+            SelfTestInstall.Run();      // PC-09: instancia unica
+            SelfTestAudio.Run();        // PC-14: sons de alerta gerados (sem WMP nem arquivos de terceiros)
+            SelfTestJobs.Run();         // PC-03: cliente no modo PrintJob (claim/ack, ADR-0004)
             SelfTestHarness.Run();      // PC-12/QA-06: pipeline completo com impressora virtual e falhas simuladas
 
             Console.WriteLine(Failures == 0 ? "ALL OK" : "FAILURES=" + Failures);

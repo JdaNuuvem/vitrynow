@@ -26,19 +26,19 @@ public static class Preview
         foreach (var mm in new[] { 58, 80 })
         {
             var target = new VirtualPrintTarget(Path.Combine(dir, mm + "mm"), true);
-            foreach (var o in new[] { SelfTestPrint.Basic(), SelfTestPrint.LongAndHostile(), SelfTestPrint.ManyItems() })
-            { target.Print(TicketBuilder.Build(o, mm)); n++; }
+            foreach (var o in new[] { SelfTestPrint.Basic(), SelfTestPrint.CurrentContract(), SelfTestPrint.LongAndHostile(), SelfTestPrint.ManyItems(), SelfTestPrint.Reprint(), SelfTestPrint.Quantities(), SelfTestPrint.CancelFixture() })
+            { target.Print(TicketBuilder.Build(o, mm, SelfTestPrint.Tz)); n++; }
         }
         return n + " tiquetes gravados em " + dir;
     }
 }
 '@ | Set-Content -Path $glue -Encoding UTF8
 $srcs = @(
-  "SelfTest.cs", "SelfTestPrint.cs", "SelfTestHarness.cs", "SelfTestFakeApi.cs", "SelfTestDevice.cs", "SelfTestUpdater.cs", "SelfTestDeviceClient.cs",
-  "Models\PrintableOrder.cs",
+  "SelfTest.cs", "SelfTestPrint.cs", "SelfTestHarness.cs", "SelfTestAudio.cs", "SelfTestJobs.cs", "SelfTestInstall.cs", "SelfTestFakeApi.cs", "SelfTestDevice.cs", "SelfTestUpdater.cs", "SelfTestDeviceClient.cs",
+  "Models\PrintableOrder.cs", "Models\PrintJob.cs",
   "Printing\TicketDocument.cs", "Printing\TicketText.cs", "Printing\TicketBuilder.cs", "Printing\TextTicketWriter.cs", "Printing\IPrintTarget.cs",
   "Printing\GdiTicketPainter.cs", "Printing\VirtualPrintTarget.cs", "Printing\PrinterProbe.cs",
-  "Services\PrintCoordinator.cs", "Services\DeviceClient.cs", "Services\PrintLedger.cs", "Services\SecretStore.cs",
+  "Services\PrintFailure.cs", "Services\PrintCoordinator.cs", "Services\SingleInstance.cs", "Services\AlertSounds.cs", "Services\AudioPlayer.cs", "Services\DeviceClient.cs", "Services\PrintLedger.cs", "Services\SecretStore.cs",
   "Services\AppSettings.cs", "Services\ApiUrlPolicy.cs",
   "Services\Updater.cs", "Services\UpdateTransport.cs", "Services\UpdateVerifier.cs", "Services\Logger.cs"
 ) | ForEach-Object { Join-Path $base $_ }

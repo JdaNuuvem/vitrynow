@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import type { WebSocket } from "ws";
 import { prisma } from "@meucardapio/db";
 import { allowedOrigin } from "../lib/securityConfig";
-import { subscribe, trackDeviceSocket, trackUserSocket, WS_CLOSE_SESSION_REVOKED } from "../realtime/hub";
+import { subscribe, trackDeviceSocket, trackSessionSocket, trackUserSocket, WS_CLOSE_SESSION_REVOKED } from "../realtime/hub";
 
 // Revalida a sessão do painel enquanto o socket está aberto: cobre falha de entrega do
 // fechamento imediato (disconnectUser) e outras instâncias da API.
@@ -29,16 +29,31 @@ const realtimeRoutes: FastifyPluginAsync = async (app) => {
       ],
     },
     (socket, request) => {
-      const { userId, storeId } = request.user;
+      const { userId, storeId, sid, role } = request.user;
       const ws = socket as unknown as WebSocket;
-      subscribe(storeId, ws);
+      subscribe(storeId, ws, role);
       trackUserSocket(userId, ws);
+      if (sid) trackSessionSocket(sid, ws);
 
-      const sessionTv = readTokenVersion(request.cookies?.mc_session, app);
+      const claims = readClaims(request.cookies?.mc_session, app);
+
+      // ST-31: o socket não sobrevive ao token. Fecha no vencimento (o navegador reconecta com o cookie
+      // já renovado pelas chamadas HTTP); a revalidação periódica abaixo cobre usuário, versão e logout.
+      let expiryTimer: NodeJS.Timeout | undefined;
+      if (claims.exp !== null) {
+        const ms = Math.max(0, claims.exp * 1000 - Date.now());
+        expiryTimer = setTimeout(() => ws.close(WS_CLOSE_SESSION_REVOKED, "sessão vencida"), Math.min(ms, 2_147_000_000));
+        expiryTimer.unref();
+      }
+
       const timer = setInterval(async () => {
         try {
-          const user = await prisma.user.findUnique({ where: { id: userId }, select: { tokenVersion: true } });
-          if (!user || (sessionTv !== null && user.tokenVersion !== sessionTv)) {
+          if (claims.exp !== null && Date.now() >= claims.exp * 1000) return void ws.close(WS_CLOSE_SESSION_REVOKED, "sessão vencida");
+          const [user, revoked] = await Promise.all([
+            prisma.user.findUnique({ where: { id: userId }, select: { tokenVersion: true } }),
+            sid ? prisma.revokedSession.findUnique({ where: { sid }, select: { sid: true } }) : Promise.resolve(null),
+          ]);
+          if (!user || revoked || (claims.tv !== null && user.tokenVersion !== claims.tv)) {
             ws.close(WS_CLOSE_SESSION_REVOKED, "sessão encerrada");
           }
         } catch {
@@ -46,7 +61,10 @@ const realtimeRoutes: FastifyPluginAsync = async (app) => {
         }
       }, REVALIDATE_MS);
       timer.unref();
-      ws.on("close", () => clearInterval(timer));
+      ws.on("close", () => {
+        clearInterval(timer);
+        if (expiryTimer) clearTimeout(expiryTimer);
+      });
     },
   );
 
@@ -56,7 +74,7 @@ const realtimeRoutes: FastifyPluginAsync = async (app) => {
     (socket, request) => {
       const ws = socket as unknown as WebSocket;
       const deviceTokenId = request.deviceTokenId!;
-      subscribe(request.deviceStoreId!, ws);
+      subscribe(request.deviceStoreId!, ws, "DEVICE");
       trackDeviceSocket(deviceTokenId, ws);
 
       // Revalida a chave enquanto o socket está aberto (cobre outra instância da API ou falha de entrega).
@@ -74,13 +92,13 @@ const realtimeRoutes: FastifyPluginAsync = async (app) => {
   );
 };
 
-function readTokenVersion(token: string | undefined, app: import("fastify").FastifyInstance): number | null {
-  if (!token) return null;
+function readClaims(token: string | undefined, app: import("fastify").FastifyInstance): { tv: number | null; exp: number | null } {
+  if (!token) return { tv: null, exp: null };
   try {
-    const payload = app.jwt.decode<{ tv?: number }>(token);
-    return typeof payload?.tv === "number" ? payload.tv : null;
+    const payload = app.jwt.decode<{ tv?: number; exp?: number }>(token);
+    return { tv: typeof payload?.tv === "number" ? payload.tv : null, exp: typeof payload?.exp === "number" ? payload.exp : null };
   } catch {
-    return null;
+    return { tv: null, exp: null };
   }
 }
 

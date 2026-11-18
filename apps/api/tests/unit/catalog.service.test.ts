@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { Category, Product } from "@meucardapio/db";
 import type { CatalogRepository } from "../../src/modules/catalog/catalog.repository";
 import { CatalogService } from "../../src/modules/catalog/catalog.service";
-import { ConflictError, NotFoundError } from "../../src/shared/errors";
+import { CodedError, NotFoundError } from "../../src/shared/errors";
 import { FakeAudit, actor, rec } from "./fakes";
 
-function setup(opts: { categories?: Category[]; products?: Product[]; productsInCategory?: number } = {}) {
+function setup(opts: { categories?: Category[]; products?: Product[]; productsInCategory?: number; openOrders?: number } = {}) {
   const calls: string[] = [];
   const updates: unknown[] = [];
   const repo = {
@@ -14,6 +14,9 @@ function setup(opts: { categories?: Category[]; products?: Product[]; productsIn
     findProduct: async (storeId: string, id: string) =>
       (opts.products ?? []).find((p) => p.id === id && p.storeId === storeId) ?? null,
     countProductsInCategory: async () => opts.productsInCategory ?? 0,
+    countOpenOrdersWithProduct: async () => opts.openOrders ?? 0,
+    listCategoryNames: async () => (opts.categories ?? []).map((c) => ({ id: c.id, name: c.name })),
+    nextCategoryPosition: async () => 0,
     deleteCategory: async (id: string) => void calls.push(`deleteCategory:${id}`),
     deleteProduct: async (id: string) => void calls.push(`deleteProduct:${id}`),
     createCategory: async (_s: string, data: unknown) => (updates.push(data), rec<Category>({})),
@@ -29,7 +32,7 @@ const product = rec<Product>({ id: "prod-1", storeId: "store-1", name: "X-Bacon"
 describe("CatalogService", () => {
   it("não exclui categoria que ainda tem produtos (409) e não audita", async () => {
     const { service, audit, calls } = setup({ categories: [category], productsInCategory: 3 });
-    await expect(service.deleteCategory(actor, "cat-1")).rejects.toThrow(ConflictError);
+    await expect(service.deleteCategory(actor, "cat-1")).rejects.toThrow(CodedError);
     await expect(service.deleteCategory(actor, "cat-1")).rejects.toThrow("categoria tem 3 produto(s)");
     expect(calls).toEqual([]);
     expect(audit.entries).toEqual([]);
