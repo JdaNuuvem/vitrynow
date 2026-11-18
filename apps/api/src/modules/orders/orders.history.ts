@@ -157,7 +157,7 @@ export async function searchOrderHistory(
   if (status === "PAGAMENTO_EXPIRADO") where.push(Prisma.sql`p."status"::text = 'EXPIRADO'`);
   if (query.type) where.push(Prisma.sql`o."type"::text = ${query.type}`);
   if (query.paymentMethod) where.push(Prisma.sql`o."paymentMethod"::text = ${query.paymentMethod}`);
-  if (query.refundPending) where.push(Prisma.sql`p."status"::text = 'ESTORNO_PENDENTE'`);
+  if (query.refundPending) where.push(Prisma.sql`p."status"::text = 'ESTORNO_PENDENTE' AND p."refundAbandonedAt" IS NULL`);
 
   if (search) {
     const any: Prisma.Sql[] = [];
@@ -199,7 +199,7 @@ export async function searchOrderHistory(
     where: { id: { in: pageIds }, storeId },
     select: {
       id: true, code: true, createdAt: true, customerName: true, customerPhone: true, type: true, totalCents: true, status: true,
-      awaitingPayment: true, paymentMethod: true, printedAt: true, payment: { select: { status: true } },
+      awaitingPayment: true, paymentMethod: true, printedAt: true, payment: { select: { status: true, refundAbandonedAt: true } },
     },
   });
   const byId = new Map(found.map((o) => [o.id, o]));
@@ -224,7 +224,7 @@ export async function searchOrderHistory(
       display,
       paymentMethod: o.paymentMethod,
       paymentStatus,
-      refundPending: paymentStatus === "ESTORNO_PENDENTE",
+      refundPending: paymentStatus === "ESTORNO_PENDENTE" && !o.payment?.refundAbandonedAt,
       notPrinted: o.printedAt === null && !o.awaitingPayment && o.status !== "CANCELADO",
     };
   });
