@@ -6,7 +6,7 @@ import { prisma } from "@meucardapio/db";
 import { printableOrderSchema } from "@meucardapio/shared-types";
 import { BACKOFF_SECONDS, FAILURE_CODES, backoffSeconds, normalizeFailureCode, sanitizeDeviceText } from "../src/lib/printJobs";
 import { subscribe } from "../src/realtime/hub";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { makeApp, registerStore, resetDb, useMockedProvider } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -47,6 +47,7 @@ describe("regras puras da fila", () => {
 describe("API-12 — PrintJob", () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     app = makeApp();
     await app.ready();

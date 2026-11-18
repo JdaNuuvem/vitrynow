@@ -6,7 +6,7 @@ import { prisma } from "@meucardapio/db";
 import { mapMpStatus } from "../src/lib/mercadopago";
 import { PAYMENT_STATUSES, canMovePayment, isFinalPayment, originsFor } from "../src/lib/paymentStateMachine";
 import { subscribe } from "../src/realtime/hub";
-import { makeApp, registerStore, resetDb, orderTokenHeader } from "./helpers";
+import { makeApp, registerStore, resetDb, orderTokenHeader, useMockedProvider } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -65,6 +65,7 @@ describe("máquina de estados do pagamento", () => {
 describe("API-03 — webhook e PIX", () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     refundPayment.mockResolvedValue(undefined);
     cancelPayment.mockResolvedValue(undefined);
