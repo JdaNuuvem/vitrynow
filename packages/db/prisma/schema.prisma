@@ -106,6 +106,7 @@ model Store {
   deliveryEnabled Boolean @default(true)
   pickupEnabled   Boolean @default(true)
   acceptingOrders Boolean @default(true) // interruptor "Disponível" do painel: false = cardápio público recusa pedidos
+  hideSoldOutProducts Boolean @default(false) // API-17 (RN-B11-03): esconde produtos esgotados no cardápio público
   deliveryFeeCents Int    @default(0) // taxa de entrega fixa somada a pedidos DELIVERY
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -224,6 +225,8 @@ model Product {
   active      Boolean      @default(true)
   featured    Boolean      @default(false)
   position    Int          @default(0)
+  soldOut      Boolean     @default(false) // API-17 (B11): esgotado; vale até soldOutUntil (null = até reativar)
+  soldOutUntil DateTime?
   additionals ProductAdditional[]
   orderItems  OrderItem[]
   createdAt   DateTime     @default(now())

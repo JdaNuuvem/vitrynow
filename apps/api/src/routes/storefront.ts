@@ -1,3 +1,4 @@
+import { isSoldOutNow } from "../lib/soldOut";
 import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
@@ -36,6 +37,15 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       },
     });
 
+    // API-17 (B11): esgotado vira o campo `soldOut` (efetivo agora); com "esconder esgotados" o produto nem aparece.
+    const now = new Date();
+    const visibleCategories = categories.map(({ products, ...category }) => ({
+      ...category,
+      products: products
+        .map(({ soldOut, soldOutUntil, ...product }) => ({ ...product, soldOut: isSoldOutNow({ soldOut, soldOutUntil }, now) }))
+        .filter((product) => !(store.hideSoldOutProducts && product.soldOut)),
+    }));
+
     return {
       store: {
         name: store.name,
@@ -51,8 +61,9 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         pickupEnabled: store.pickupEnabled,
         acceptingOrders: store.acceptingOrders,
         deliveryFeeCents: store.deliveryFeeCents,
+        hideSoldOutProducts: store.hideSoldOutProducts,
       },
-      categories,
+      categories: visibleCategories,
     };
   });
 
@@ -102,7 +113,9 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja" });
     }
     // Produto pausado some do cardápio e não pode ser pedido por chamada direta (B08).
-    const unavailable = products.filter((p) => !p.active);
+    // API-17: esgotado hoje também é recusado (RN-B11-04), mesmo se escondido ou enviado direto à API.
+    const orderNow = new Date();
+    const unavailable = products.filter((p) => !p.active || isSoldOutNow(p, orderNow));
     if (unavailable.length > 0) {
       // Mesmo código/forma para B11, QR de mesa e pedido manual (contrato B3 §8, item 3).
       return reply.code(400).send({
