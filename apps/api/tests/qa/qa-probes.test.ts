@@ -4,7 +4,7 @@
 import { createHmac } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { makeApp, registerStore, resetDb, orderTokenHeader } from "../helpers";
+import { makeApp, registerStore, resetDb, orderTokenHeader, useMockedProvider } from "../helpers";
 import { subscribe } from "../../src/realtime/hub";
 import { mapMpStatus } from "../../src/lib/mercadopago";
 import { activateSubscription } from "../../src/lib/subscription";
@@ -60,6 +60,7 @@ describe("QA probes — API", () => {
   let app: ReturnType<typeof makeApp>;
 
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     app = makeApp();
     await app.ready();
