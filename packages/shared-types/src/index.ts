@@ -46,6 +46,7 @@ export const createOrderSchema = z.object({
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
 
 // API-13 — pedido lançado no PAINEL (atendente). O servidor calcula todo preço (RN-B2-01); a tela manda só ids e quantidades. Sem MESA no BASICO (RN-B2-13).
+export const MANUAL_DISCOUNT_REASONS = ["CORTESIA", "ERRO_DO_PEDIDO", "CLIENTE_FREQUENTE", "PROMOCAO_DO_DIA", "OUTRO"] as const;
 export const manualOrderChannelSchema = z.enum(["TELEFONE", "WHATSAPP", "BALCAO", "OUTRO"]);
 export const createManualOrderSchema = z.object({
   type: z.enum(["DELIVERY", "BALCAO"]),
@@ -60,7 +61,7 @@ export const createManualOrderSchema = z.object({
   alreadyPaid: z.boolean().optional(), // "já pago": o dinheiro foi recebido agora (em dinheiro exige caixa aberto, RN-B2-07)
   changeForCents: z.number().int().positive().max(100_000_000).optional(),
   tipCents: z.number().int().nonnegative().max(10_000_000).optional(),
-  discount: z.object({ percent: z.number().int().min(1).max(100), reason: z.string().trim().min(1).max(100) }).optional(), // RN-B2-06
+  discount: z.object({ percent: z.number().int().min(1).max(100), reason: z.enum(MANUAL_DISCOUNT_REASONS) }).optional(), // RN-B2-06: motivo em LISTA FECHADA (sem texto livre: o atendente poderia digitar dado do cliente)
   channel: manualOrderChannelSchema.optional(),
 });
 export type CreateManualOrderInput = z.infer<typeof createManualOrderSchema>;

@@ -7,11 +7,14 @@ import { newOrderToken } from "../lib/orderToken";
 import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { publishToStore } from "../realtime/hub";
 import { logAudit } from "../lib/audit";
+import { limited, tooMany } from "../lib/slidingLimit";
 import { CodedError, useDomainErrors } from "../shared/errors";
 
 // API-13 — pedido lançado no PAINEL (B2). O servidor decide TODO preço (RN-B2-01); o pedido nasce CONFIRMADO (o atendente já o aceitou), com tíquete na MESMA
 // transação (nunca pedido sem job) e `source = PAINEL`. Ignora "loja fechada", horário, pedido mínimo e modalidade desligada: a loja decide (RN-B2-04).
 // Não cria cobrança no provedor: PIX aqui é "presencial", confirmado à mão (RN-B2-08).
+// Cada pedido imprime um tíquete (papel físico): limite por USUÁRIO, não só por IP.
+const MANUAL_ORDERS_PER_MINUTE = 60;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{8,100}$/;
 
 const manualOrderRoutes: FastifyPluginAsync = async (app) => {
@@ -19,11 +22,13 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/api/orders", { preHandler: app.requirePanelAuth }, async (request, reply) => {
     const { storeId, userId, role } = request.user;
+    if (limited(`manual-order:${userId}`, MANUAL_ORDERS_PER_MINUTE)) return tooMany(reply);
     const parsed = createManualOrderSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Corpo inválido.", code: "VALIDATION_ERROR", fields: parsed.error.flatten().fieldErrors });
     const input = parsed.data;
 
     // RN-B2-10: cada abertura do formulário manda uma chave; duplo clique ou reenvio por rede lenta devolvem o MESMO pedido.
+    // CONTRATO: a chave identifica a ABERTURA do formulário, não o conteúdo; a mesma chave com corpo DIFERENTE devolve o pedido antigo (200 replay), sem comparar.
     const rawKey = request.headers["idempotency-key"];
     const manualKey = typeof rawKey === "string" ? rawKey : undefined;
     if (manualKey !== undefined && !IDEMPOTENCY_KEY.test(manualKey)) {

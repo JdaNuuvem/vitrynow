@@ -8,3 +8,5 @@ ALTER TABLE "Order" ADD COLUMN "source" "OrderSource" NOT NULL DEFAULT 'CLIENTE'
   ADD COLUMN "manualDiscountReason" TEXT;
 CREATE UNIQUE INDEX "Order_storeId_manualKey_key" ON "Order"("storeId", "manualKey");
 ALTER TABLE "Store" ADD COLUMN "manualDiscountStaffLimitPercent" INTEGER NOT NULL DEFAULT 10;
+-- O motivo do desconto manual é CÓDIGO de lista fechada; qualquer texto livre legado é descartado.
+UPDATE "Order" SET "manualDiscountReason" = NULL WHERE "manualDiscountReason" IS NOT NULL AND "manualDiscountReason" NOT IN ('CORTESIA', 'ERRO_DO_PEDIDO', 'CLIENTE_FREQUENTE', 'PROMOCAO_DO_DIA', 'OUTRO');

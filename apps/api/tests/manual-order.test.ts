@@ -1,11 +1,13 @@
 // API-13 — pedido lançado no painel (B2, CA-B2-01..10): servidor calcula o preço, nasce CONFIRMADO com tíquete, caixa/desconto/cupom/idempotência/isolamento.
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { resetLimits } from "../src/lib/slidingLimit";
 import { makeApp, orderTokenHeader, registerStore, resetDb } from "./helpers";
 
 describe("API-13 — pedido manual", () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
+    resetLimits();
     app = makeApp();
     await app.ready();
   });
@@ -105,25 +107,25 @@ describe("API-13 — pedido manual", () => {
 
   it("CA-B2-05/RN-B2-06: desconto manual: STAFF até 10% passa, 15% ⇒ 403 DISCOUNT_ABOVE_LIMIT; OWNER 15% passa e fica na auditoria com o motivo; motivo é obrigatório", async () => {
     const l = await loja();
-    expect((await novo(l, { discount: { percent: 10, reason: "cliente antigo" } }, l.staff)).statusCode).toBe(201);
-    const alto = await novo(l, { discount: { percent: 15, reason: "x" } }, l.staff);
+    expect((await novo(l, { discount: { percent: 10, reason: "CLIENTE_FREQUENTE" } }, l.staff)).statusCode).toBe(201);
+    const alto = await novo(l, { discount: { percent: 15, reason: "CORTESIA" } }, l.staff);
     expect([alto.statusCode, json(alto).code, json(alto).limitPercent]).toEqual([403, "DISCOUNT_ABOVE_LIMIT", 10]);
-    const dono = await novo(l, { discount: { percent: 15, reason: "reclamação" } });
+    const dono = await novo(l, { discount: { percent: 15, reason: "ERRO_DO_PEDIDO" } });
     expect(dono.statusCode, dono.body).toBe(201);
     const o = await prisma.order.findUniqueOrThrow({ where: { id: json(dono).orderId } });
-    expect([o.discountCents, o.totalCents, o.manualDiscountPercent, o.manualDiscountReason]).toEqual([600, 3400, 15, "reclamação"]);
-    const sem = await novo(l, { discount: { percent: 5, reason: "" } });
+    expect([o.discountCents, o.totalCents, o.manualDiscountPercent, o.manualDiscountReason]).toEqual([600, 3400, 15, "ERRO_DO_PEDIDO"]);
+    const sem = await novo(l, { discount: { percent: 5, reason: "Maria da Silva pediu" } });
     expect(sem.statusCode).toBe(400);
     await new Promise((r) => setTimeout(r, 300));
     const aud = await prisma.auditLog.findFirst({ where: { storeId: l.store.id, action: "order.manual_create", targetId: o.id } });
-    expect(aud?.metadata).toMatchObject({ discountPercent: 15, discountReason: "reclamação", role: "OWNER" });
+    expect(aud?.metadata).toMatchObject({ discountPercent: 15, discountReason: "ERRO_DO_PEDIDO", role: "OWNER" });
     expect(await orders(l)).toHaveLength(2); // o recusado e o sem motivo não gravaram
   });
 
   it("desconto 100% + cupom nunca passa do subtotal (total só com taxa/gorjeta)", async () => {
     const l = await loja();
     expect((await cupom(l, { discountValue: 50 })).statusCode).toBe(201);
-    const r = await novo(l, { couponCode: "promo", discount: { percent: 100, reason: "cortesia" } });
+    const r = await novo(l, { couponCode: "promo", discount: { percent: 100, reason: "CORTESIA" } });
     expect(r.statusCode, r.body).toBe(201);
     const o = (await orders(l))[0];
     expect([o.discountCents, o.totalCents, o.paymentMethod]).toEqual([4000, 0, null]);
@@ -155,7 +157,36 @@ describe("API-13 — pedido manual", () => {
     expect(new Set(rs.map((r) => json(r).orderId)).size).toBe(1);
     expect(await orders(l)).toHaveLength(2);
     expect((await novo(l, {}, l.owner, { "idempotency-key": "curta" })).statusCode).toBe(400);
+    // CONTRATO: a chave identifica a ABERTURA do formulário; a mesma chave com corpo DIFERENTE devolve o pedido antigo
+    const diferente = await novo(l, { items: [{ productId: l.productId, quantity: 3 }] }, l.owner, h);
+    expect([diferente.statusCode, json(diferente).orderId, json(diferente).replay]).toEqual([200, json(a).orderId, true]);
+    expect((await orders(l)).find((o) => o.id === json(a).orderId)?.totalCents).toBe(4000);
   });
+
+  it("R1 (Nightingale): o motivo do desconto é CÓDIGO de lista fechada; texto livre (nome do cliente) ⇒ 400 e nada gravado; a auditoria só leva o código", async () => {
+    const l = await loja();
+    for (const reason of ["Maria da Silva", "cortesia", "", "OUTRO "]) {
+      expect((await novo(l, { discount: { percent: 5, reason } })).statusCode, reason).toBe(400);
+    }
+    expect(await orders(l)).toHaveLength(0);
+    for (const reason of ["CORTESIA", "ERRO_DO_PEDIDO", "CLIENTE_FREQUENTE", "PROMOCAO_DO_DIA", "OUTRO"]) {
+      expect((await novo(l, { discount: { percent: 5, reason } })).statusCode, reason).toBe(201);
+    }
+    await new Promise((r) => setTimeout(r, 300));
+    const auds = await prisma.auditLog.findMany({ where: { storeId: l.store.id, action: "order.manual_create" } });
+    expect(auds.map((a) => (a.metadata as { discountReason: string }).discountReason).sort()).toEqual(["CLIENTE_FREQUENTE", "CORTESIA", "ERRO_DO_PEDIDO", "OUTRO", "PROMOCAO_DO_DIA"]);
+  });
+
+  it("R2 (Nightingale): limite de 60 pedidos por minuto POR USUÁRIO (cada pedido imprime tíquete): o 61º ⇒ 429; outro usuário e outra loja não são afetados", async () => {
+    const l = await loja();
+    const outra = await loja();
+    for (let i = 0; i < 60; i += 1) expect((await novo(l)).statusCode, `pedido ${i + 1}`).toBe(201);
+    const estouro = await novo(l);
+    expect([estouro.statusCode, json(estouro).code]).toEqual([429, "RATE_LIMITED"]);
+    expect(await orders(l)).toHaveLength(60);
+    expect((await novo(l, {}, l.staff)).statusCode).toBe(201); // outro usuário da mesma loja
+    expect((await novo(outra)).statusCode).toBe(201); // outra loja
+  }, 120000);
 
   it("RN-B2-12: 6 lançamentos simultâneos sem chave ⇒ 6 códigos distintos (mesma sequência, sem colisão)", async () => {
     const l = await loja();
@@ -193,7 +224,7 @@ describe("API-13 — pedido manual", () => {
     const curto = await novo(l, { paymentMethod: "DINHEIRO", changeForCents: 1000 });
     expect(curto.statusCode).toBe(400);
     expect((await novo(l, { paymentMethod: "DINHEIRO", changeForCents: 5000 })).statusCode).toBe(201);
-    const zero = await novo(l, { paymentMethod: "PIX", alreadyPaid: true, discount: { percent: 100, reason: "brinde" } });
+    const zero = await novo(l, { paymentMethod: "PIX", alreadyPaid: true, discount: { percent: 100, reason: "OUTRO" } });
     expect(zero.statusCode, zero.body).toBe(201);
     const o = await prisma.order.findUniqueOrThrow({ where: { id: json(zero).orderId } });
     expect([o.totalCents, o.paymentMethod, o.paidAt]).toEqual([0, null, null]);
