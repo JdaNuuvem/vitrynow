@@ -3,7 +3,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { FakePixGateway } from "../src/modules/storePayments/gateway";
-import { paymentReconcileJob, ORPHAN_GRACE_MINUTES } from "../src/jobs/paymentReconcile";
+import { paymentReconcileJob, ORPHAN_GRACE_MINUTES, ORPHAN_MAX_AGE_HOURS } from "../src/jobs/paymentReconcile";
 import { registeredJobs } from "../src/jobs/registry";
 import { connectPixAccount, makeApp, registerStore, resetDb } from "./helpers";
 
@@ -60,7 +60,7 @@ describe("SEC-17 - conciliacao de cobranca PIX orfa", () => {
     expect(registeredJobs.map((j) => j.name)).toContain("payment.reconcile");
   });
 
-  it("orfa de pedido cancelado: reencontra pela chave, anexa id/conta e CANCELA no provedor, sem segunda cobranca", async () => {
+  it("orfa de pedido cancelado: reencontra por leitura (referencia do pedido), anexa id/conta e CANCELA no provedor, sem segunda cobranca", async () => {
     const l = await loja();
     const o = await pedidoOrfao(l, { cancelado: true });
     expect(FakePixGateway.peek(o.providerId)?.status).toBe("pending"); // sem o job o cliente ainda poderia pagar esse PIX
@@ -125,6 +125,7 @@ describe("SEC-17 - conciliacao de cobranca PIX orfa", () => {
     await prisma.paymentAccount.updateMany({ where: { storeId: l.storeId }, data: { status: "DISCONNECTED" } });
     await reconciliar();
     expect((await pagamento(o.paymentId)).lastCheckedAt).not.toBeNull();
+    await new Promise((r) => setTimeout(r, 400)); // auditoria assincrona
     expect(await prisma.auditLog.count({ where: { storeId: l.storeId, action: "payment.orphan_unverifiable" } })).toBe(1);
     expect((await reconciliar()).processed).toBe(0);
   });
@@ -138,5 +139,38 @@ describe("SEC-17 - conciliacao de cobranca PIX orfa", () => {
     expect((await pagamento(oa.paymentId)).paymentAccountId).toBe(a.account!.id);
     expect((await pagamento(ob.paymentId)).paymentAccountId).toBe(b.account!.id);
     expect(FakePixGateway.peek(oa.providerId)?.owner).toBe(a.account!.sellerUserId);
+  });
+
+  it("NUNCA cria cobranca: o provedor nao ganha nenhum pagamento novo durante a conciliacao (sem depender de chave de idempotencia)", async () => {
+    const l = await loja();
+    const o = await pedidoOrfao(l, { cancelado: true });
+    (FakePixGateway as unknown as { keys: Map<string, string> }).keys.clear(); // a janela da chave de idempotencia ja "passou": criar de novo geraria cobranca viva nova
+    const antes = [...(FakePixGateway as unknown as { ledger: Map<string, unknown> }).ledger.keys()].length;
+    await reconciliar();
+    expect([...(FakePixGateway as unknown as { ledger: Map<string, unknown> }).ledger.keys()].length).toBe(antes);
+    expect((await pagamento(o.paymentId)).providerPaymentId).toBe(o.providerId);
+  });
+
+  it("linha mais velha que o limite: nao reconcilia, fica auditada (payment.orphan_unverifiable) e nao repete", async () => {
+    const l = await loja();
+    const o = await pedidoOrfao(l, { idadeMin: ORPHAN_MAX_AGE_HOURS * 60 + 30, cancelado: true });
+    await reconciliar();
+    const p = await pagamento(o.paymentId);
+    expect([p.providerPaymentId, p.lastCheckedAt === null]).toEqual([null, false]);
+    expect(FakePixGateway.peek(o.providerId)?.status).toBe("pending"); // intocada: suporte decide
+    await new Promise((r) => setTimeout(r, 400)); // auditoria assincrona
+    expect(await prisma.auditLog.count({ where: { storeId: l.storeId, action: "payment.orphan_unverifiable" } })).toBe(1);
+    expect((await reconciliar()).processed).toBe(0);
+  });
+
+  it("provedor sem cobranca para o pedido: auditado como nao encontrado, sem criar nada e sem repetir", async () => {
+    const l = await loja();
+    const o = await pedidoOrfao(l, { cancelado: true });
+    FakePixGateway.reset(); // a cobranca nunca chegou ao provedor
+    await reconciliar();
+    expect((await pagamento(o.paymentId)).providerPaymentId).toBeNull();
+    await new Promise((r) => setTimeout(r, 400)); // auditoria assincrona
+    expect(await prisma.auditLog.count({ where: { storeId: l.storeId, action: "payment.orphan_not_found" } })).toBe(1);
+    expect((await reconciliar()).processed).toBe(0);
   });
 });

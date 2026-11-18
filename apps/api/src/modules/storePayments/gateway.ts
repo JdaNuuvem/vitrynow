@@ -84,6 +84,13 @@ export class FakePixGateway implements PixGateway {
     return { providerPaymentId, status: entry.status, externalReference: entry.externalReference, amountCents: entry.amountCents, currency: "BRL" };
   }
 
+  async findByExternalReference(externalReference: string): Promise<ProviderPayment[]> {
+    this.guard();
+    return [...FakePixGateway.ledger.entries()]
+      .filter(([, e]) => e.owner === this.owner && e.externalReference === externalReference)
+      .map(([id, e]) => ({ providerPaymentId: id, status: e.status, externalReference: e.externalReference, amountCents: e.amountCents, currency: "BRL" }));
+  }
+
   async cancelPayment(providerPaymentId: string): Promise<void> {
     this.guard();
     const entry = this.own(providerPaymentId);
@@ -116,6 +123,7 @@ function wrap(gateway: PixGateway, accountId: string, storeId: string): StoreGat
     storeId,
     createPixPayment: (input) => gateway.createPixPayment(input),
     getPayment: (id) => gateway.getPayment(id),
+    findByExternalReference: (ref) => gateway.findByExternalReference(ref),
     cancelPayment: (id) => gateway.cancelPayment(id),
     refundPayment: (id, key) => gateway.refundPayment(id, key),
   };
@@ -137,7 +145,7 @@ export async function gatewayForStore(storeId: string): Promise<StoreGateway> {
  */
 export async function gatewayOfPayment(payment: { paymentAccountId: string | null }, storeId: string): Promise<PixGateway> {
   if (!payment.paymentAccountId) {
-    return { createPixPayment: () => Promise.reject(new Error("pagamento legado da plataforma não cria cobrança")), getPayment: platformGet, cancelPayment: platformCancel, refundPayment: platformRefund };
+    return { createPixPayment: () => Promise.reject(new Error("pagamento legado da plataforma não cria cobrança")), getPayment: platformGet, findByExternalReference: () => Promise.reject(new Error("pagamento legado da plataforma não reconcilia por referência")), cancelPayment: platformCancel, refundPayment: platformRefund };
   }
   return gatewayForAccount(payment.paymentAccountId, storeId);
 }
