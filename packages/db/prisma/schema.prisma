@@ -132,6 +132,7 @@ model Store {
   qrOrderingEnabled    Boolean @default(true)
   qrOrdersNeedApproval Boolean @default(true)
   tables               Table[]
+  receipts             Receipt[]
 }
 
 // API-22 (ADR-0002 nível 1): mesa física com QR próprio. `qrToken` é opaco (256 bits), nunca derivado de id/slug, e regenerável.
@@ -145,6 +146,7 @@ model Table {
   position  Int      @default(0)
   createdAt DateTime @default(now())
   orders    Order[]
+  receipts  Receipt[]
 
   @@unique([storeId, label])
   @@unique([id, storeId]) // alvo da FK composta de Order: o banco recusa mesa de outra loja
@@ -307,6 +309,9 @@ model Order {
   // API-22 (mesa): mesa do pedido e SHA-256 do token anônimo do aparelho que o fez ("Minha mesa" mostra só os pedidos do próprio aparelho, RN-MB-06).
   tableId           String?
   table             Table?      @relation(fields: [tableId, storeId], references: [id, storeId])
+  // API-24 (ADR-0012): recebimento que pagou este pedido de mesa. Pedido de mesa só vira venda/caixa no `receivedAt` do Receipt (RN-MB-04).
+  receiptId         String?
+  receipt           Receipt?    @relation(fields: [receiptId], references: [id], onDelete: SetNull)
   deviceTokenHash   String?
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
@@ -721,4 +726,45 @@ model PrintJob {
   @@unique([id, storeId])
   @@index([storeId, status, availableAt, createdAt])
   @@index([orderId])
+}
+
+enum ReceiptKind {
+  TABLE // BASICO: conta virtual da mesa (API-24)
+  TAB // PRO: comanda (futuro)
+}
+
+// API-24 (ADR-0012, RN-MB-03/04): o FATO financeiro de receber a mesa. No BASICO: 1 ReceiptPayment, sem taxa de serviço, desconto nem divisão.
+// Imutável depois de gravado (correção = estorno registrado, P2).
+model Receipt {
+  id              String      @id @default(cuid())
+  storeId         String
+  store           Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  kind            ReceiptKind @default(TABLE)
+  tableId         String?
+  table           Table?      @relation(fields: [tableId, storeId], references: [id, storeId], onDelete: NoAction)
+  subtotalCents   Int
+  serviceFeeCents Int         @default(0)
+  discountCents   Int         @default(0)
+  totalCents      Int
+  receivedAt      DateTime    @default(now())
+  receivedByUserId String
+  cashSessionId   String?
+  orders          Order[]
+  payments        ReceiptPayment[]
+
+  @@index([storeId, receivedAt])
+  @@index([storeId, tableId])
+}
+
+model ReceiptPayment {
+  id             String             @id @default(cuid())
+  receiptId      String
+  receipt        Receipt            @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  storeId        String
+  method         OrderPaymentMethod
+  amountCents    Int
+  changeForCents Int? // dinheiro: "troco para"; o valor que conta no caixa é amountCents (o aplicado à conta)
+
+  @@index([receiptId])
+  @@index([storeId, method])
 }

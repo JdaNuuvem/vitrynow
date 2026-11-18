@@ -61,6 +61,14 @@ export const qrSettingsSchema = z.object({
   confirmNoApproval: z.boolean().optional(), // RN-MB-01: desligar o aceite exige confirmar o aviso
 }).refine((v) => v.qrOrderingEnabled !== undefined || v.qrOrdersNeedApproval !== undefined, "nada para alterar");
 
+// API-24 — receber a mesa (BASICO: UMA forma de pagamento, sem taxa de serviço, desconto nem divisão; RN-MB-03). O servidor soma a conta; o total do cliente só confere.
+export const receiveTableSchema = z.object({
+  paymentMethod: paymentMethodSchema,
+  changeForCents: z.number().int().positive().max(100_000_000).optional(), // dinheiro: "troco para"
+  expectedTotalCents: z.number().int().positive().max(1_000_000_000).optional(), // o que a tela mostrava: se a conta mudou, 409 TOTAL_CHANGED
+}).strict();
+export type ReceiveTableInput = z.infer<typeof receiveTableSchema>;
+
 // API-13 — pedido lançado no PAINEL (atendente). O servidor calcula todo preço (RN-B2-01); a tela manda só ids e quantidades. Sem MESA no BASICO (RN-B2-13).
 export const MANUAL_DISCOUNT_REASONS = ["CORTESIA", "ERRO_DO_PEDIDO", "CLIENTE_FREQUENTE", "PROMOCAO_DO_DIA", "OUTRO"] as const;
 export const manualOrderChannelSchema = z.enum(["TELEFONE", "WHATSAPP", "BALCAO", "OUTRO"]);

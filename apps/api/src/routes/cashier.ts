@@ -31,7 +31,12 @@ async function summarizeSession(db: Db | typeof prisma, storeId: string, session
     },
     select: { type: true, status: true, totalCents: true, deliveryFeeCents: true, tipCents: true, paymentMethod: true, createdAt: true, paidAt: true, awaitingPayment: true },
   });
-  return computeCashSummary(session, orders, session.closedAt ?? new Date());
+  // API-24: o recebimento da mesa entra pelo `receivedAt` (a venda da mesa é o recebimento, não o pedido).
+  const receipts = await db.receipt.findMany({
+    where: { storeId, receivedAt: { gte: session.openedAt, ...(session.closedAt ? { lte: session.closedAt } : {}) } },
+    select: { id: true, receivedAt: true, totalCents: true, serviceFeeCents: true, payments: { select: { method: true, amountCents: true, changeForCents: true } } },
+  });
+  return computeCashSummary(session, orders, session.closedAt ?? new Date(), receipts);
 }
 
 // A API devolve a movimentação com TIPO, valor, motivo, PAPEL e HORA de quem lançou: nunca o id do usuário nem o e-mail (CA-CX-22).
