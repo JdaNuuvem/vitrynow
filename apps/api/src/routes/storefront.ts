@@ -330,6 +330,36 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
+  // API-19 — link público de ACOMPANHAMENTO do pedido (B13a). Sem login: quem tem o token do pedido (cabeçalho `x-order-token`, nunca na URL)
+  // vê onde o pedido está. Resposta SÓ com o que o cliente já sabe e precisa: código, tipo, etapa atual, horários das etapas, nome da loja e,
+  // se cancelado, a frase fixa e a linha do dinheiro. NUNCA telefone, endereço, e-mail, observações, ids internos nem dado de pagamento do provedor.
+  // Sem token certo: o MESMO 404 de pedido inexistente (não revela que o pedido existe). Não indexável, sem Referer, sem cache.
+  app.get("/stores/:slug/orders/:orderId/tracking", { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } }, async (request, reply) => {
+    reply.header("Cache-Control", "no-store").header("X-Robots-Tag", "noindex, nofollow").header("Referrer-Policy", "no-referrer");
+    const { slug, orderId } = request.params as { slug: string; orderId: string };
+    const store = await prisma.store.findUnique({ where: { slug }, select: { id: true, name: true } });
+    const order = store
+      ? await prisma.order.findFirst({ where: { id: orderId, storeId: store.id }, include: { payment: { select: { status: true, amountCents: true } } } })
+      : null;
+    if (!store || !order || !orderTokenMatches(request.headers[ORDER_TOKEN_HEADER], order.publicTokenHash)) {
+      return reply.code(404).send({ error: "pedido não encontrado" });
+    }
+    const history = await prisma.orderStatusHistory.findMany({
+      where: { orderId: order.id, kind: { in: ["ADVANCE", "CANCEL"] } },
+      orderBy: { seq: "asc" },
+      select: { status: true, createdAt: true, kind: true, reasonCode: true, source: true },
+    });
+    const cancelRow = order.status === "CANCELADO" ? [...history].reverse().find((h) => h.kind === "CANCEL") : undefined;
+    return {
+      store: { name: store.name },
+      order: { code: order.code, type: order.type, status: order.status, createdAt: order.createdAt.toISOString(), awaitingPayment: order.awaitingPayment },
+      timeline: history.map((h) => ({ status: h.status, at: h.createdAt.toISOString() })),
+      cancelReason: cancelRow
+        ? { customerMessage: customerMessageFor(cancelRow.reasonCode, messageActorFor(cancelRow.source)), moneyLine: moneyLineFor(order.payment, cancelRow.reasonCode) }
+        : null,
+    };
+  });
+
   // Cliente só cancela enquanto a loja não aceitou (PENDENTE); vence quem chegar primeiro.
   // Com PIX já aprovado, o estorno roda automaticamente (ADR-0007 §5.3).
   app.post("/stores/:slug/orders/:orderId/cancel", { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
