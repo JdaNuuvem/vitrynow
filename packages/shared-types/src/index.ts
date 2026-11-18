@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { textField } from "./text";
+export * from "./text";
 
 // Telefone tolerante (BR ou genérico): dígitos, espaços, parênteses, hífen, "+", 8-20 chars.
 // Não valida DDD/formato exato — só rejeita lixo claramente não-telefone.
@@ -23,7 +25,7 @@ export const orderStatusSchema = z.enum([
 export const createOrderItemSchema = z.object({
   productId: z.string().min(1),
   quantity: z.number().int().positive().max(100),
-  notes: z.string().max(300).optional(),
+  notes: textField({ max: 150, multiline: true }).optional(), // RN-TXT-02: observação do item
   additionalIds: z.array(z.string().min(1)).max(50).optional(),
 });
 
@@ -33,10 +35,10 @@ export type PaymentMethod = z.infer<typeof paymentMethodSchema>;
 
 export const createOrderSchema = z.object({
   type: orderTypeSchema,
-  customerName: z.string().min(1).max(150).optional(),
+  customerName: textField({ max: 80, min: 1 }).optional(),
   customerPhone: phoneSchema.optional(),
-  address: z.string().max(500).optional(),
-  notes: z.string().max(500).optional(),
+  address: textField({ max: 280, multiline: true }).optional(), // rua+número 200 e complemento 80 (RN-TXT-02)
+  notes: textField({ max: 300, multiline: true }).optional(), // observação do pedido
   items: z.array(createOrderItemSchema).min(1).max(100),
   couponCode: z.string().min(1).max(50).optional(),
   paymentMethod: paymentMethodSchema.optional(),
@@ -113,7 +115,7 @@ export const inspectResetTokenSchema = z.object({ token: z.string().min(1).max(5
 export type InspectResetTokenInput = z.infer<typeof inspectResetTokenSchema>;
 
 export const registerStoreSchema = z.object({
-  storeName: z.string().min(1).max(150),
+  storeName: textField({ max: 150, min: 1 }),
   slug: z
     .string()
     .min(1)
@@ -219,7 +221,7 @@ export type PrintableOrder = z.infer<typeof printableOrderSchema>;
 // ---- Catálogo (painel) ----
 
 export const createCategorySchema = z.object({
-  name: z.string().min(1).max(150),
+  name: textField({ max: 50, min: 1 }),
   icon: z.string().max(8).optional().or(z.literal("")),
   position: z.number().int().optional(),
 });
@@ -227,14 +229,14 @@ export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
 
 export const productAdditionalInputSchema = z.object({
   id: z.string().optional(), // presente ao editar um adicional existente
-  name: z.string().min(1).max(150),
+  name: textField({ max: 60, min: 1 }),
   priceCents: z.number().int().nonnegative().max(100_000_000),
 });
 
 export const createProductSchema = z.object({
   categoryId: z.string().min(1).optional(),
-  name: z.string().min(1).max(150),
-  description: z.string().max(1000).optional(),
+  name: textField({ max: 80, min: 1 }),
+  description: textField({ max: 300, multiline: true }).optional(),
   imageUrl: z.string().url().max(500).optional().or(z.literal("")),
   priceCents: z.number().int().nonnegative().max(100_000_000),
   active: z.boolean().optional(),
@@ -270,13 +272,13 @@ export const orderHistoryQuerySchema = z.object({
   cursor: z.string().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
-export const orderInternalNoteSchema = z.object({ note: z.string().max(500).nullable() });
+export const orderInternalNoteSchema = z.object({ note: textField({ max: 500, multiline: true }).nullable() });
 
 // ---- Caixa (painel) ----
 
 export const openCashSessionSchema = z.object({
   openingBalanceCents: z.number().int().nonnegative().max(100_000_000), // teto da RN-CX-12 (R$ 1.000.000,00)
-  notes: z.string().trim().max(300).optional(),
+  notes: textField({ max: 300, multiline: true }).optional(),
 });
 export type OpenCashSessionInput = z.infer<typeof openCashSessionSchema>;
 
@@ -284,9 +286,9 @@ export type OpenCashSessionInput = z.infer<typeof openCashSessionSchema>;
 // `reason`/`reasonText` são validados pelo servidor contra a lista fechada (CASH_REASON_REQUIRED / CASH_REASON_INVALID).
 export const closeCashSessionSchema = z.object({
   closingBalanceCents: z.number().int().nonnegative().max(100_000_000).nullable().optional(),
-  notes: z.string().trim().max(300).optional(),
+  notes: textField({ max: 300, multiline: true }).optional(),
   reason: z.string().max(40).nullable().optional(),
-  reasonText: z.string().max(400).nullable().optional(),
+  reasonText: textField({ max: 400 }).nullable().optional(), // limpa aqui; o limite de 200 do motivo OUTRO é regra do servidor (CASH_REASON_INVALID, API-27)
 });
 export type CloseCashSessionInput = z.infer<typeof closeCashSessionSchema>;
 
@@ -296,9 +298,9 @@ export const cashMovementTypeSchema = z.enum(["SUPRIMENTO", "SANGRIA"]);
 export const createCashMovementSchema = z.object({
   type: cashMovementTypeSchema,
   amountCents: z.number().int().positive().max(100_000_000),
-  notes: z.string().max(300).optional(),
+  notes: textField({ max: 300, multiline: true }).optional(),
   reason: z.string().max(40).nullable().optional(),
-  reasonText: z.string().max(400).nullable().optional(),
+  reasonText: textField({ max: 400 }).nullable().optional(), // limpa aqui; o limite de 200 do motivo OUTRO é regra do servidor (CASH_REASON_INVALID, API-27)
 });
 export const setCashStaffLimitSchema = z.object({ limitCents: z.number().int().nonnegative().max(100_000_000) });
 export type CreateCashMovementInput = z.infer<typeof createCashMovementSchema>;
@@ -332,7 +334,7 @@ export type UpdateCouponInput = z.infer<typeof updateCouponSchema>;
 // ---- Conta / personalização da loja ----
 
 export const updateStoreSettingsSchema = z.object({
-  name: z.string().min(1).max(150).optional(),
+  name: textField({ max: 150, min: 1 }).optional(),
   logoUrl: z.string().url().max(500).optional().or(z.literal("")),
   coverImageUrl: z.string().url().max(500).optional().or(z.literal("")),
   primaryColor: z
@@ -341,13 +343,13 @@ export const updateStoreSettingsSchema = z.object({
     .optional()
     .or(z.literal("")),
   customDomain: z.string().max(200).optional().or(z.literal("")),
-  address: z.string().max(300).optional().or(z.literal("")),
+  address: textField({ max: 300, multiline: true }).optional(),
   whatsapp: z
     .string()
     .regex(/^[0-9]{10,15}$/, "use só números com DDI, ex. 5521999999999")
     .optional()
     .or(z.literal("")),
-  openingHours: z.string().max(200).optional().or(z.literal("")),
+  openingHours: textField({ max: 200 }).optional(),
   minOrderCents: z.number().int().nonnegative().max(100_000_000).optional(),
   deliveryEnabled: z.boolean().optional(),
   pickupEnabled: z.boolean().optional(),
@@ -359,7 +361,7 @@ export type UpdateStoreSettingsInput = z.infer<typeof updateStoreSettingsSchema>
 // ---- Entregadores ----
 
 export const createDelivererSchema = z.object({
-  name: z.string().min(1).max(150),
+  name: textField({ max: 80, min: 1 }),
   phone: phoneSchema.optional(),
 });
 export type CreateDelivererInput = z.infer<typeof createDelivererSchema>;
@@ -384,7 +386,7 @@ export type CreateDeviceTokenInput = z.infer<typeof createDeviceTokenSchema>;
 // ---- Feedback do painel ----
 
 export const createFeedbackSchema = z.object({
-  message: z.string().trim().min(1).max(2000),
+  message: textField({ max: 2000, min: 1, multiline: true }),
 });
 export type CreateFeedbackInput = z.infer<typeof createFeedbackSchema>;
 
@@ -401,8 +403,8 @@ export type CheckoutPlanInput = z.infer<typeof checkoutPlanSchema>;
 // ---- Avisos da plataforma ----
 
 export const createNoticeSchema = z.object({
-  title: z.string().trim().min(1).max(150),
-  body: z.string().trim().min(1).max(2000),
+  title: textField({ max: 150, min: 1 }),
+  body: textField({ max: 2000, min: 1, multiline: true }),
   imageUrl: z.string().url().max(500).optional(),
   expiresAt: z.string().datetime().optional(),
 });

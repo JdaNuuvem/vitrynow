@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "@meucardapio/db";
-import { orderHistoryQuerySchema, orderInternalNoteSchema, orderStatusSchema } from "@meucardapio/shared-types";
+import { orderHistoryQuerySchema, orderInternalNoteSchema, orderStatusSchema, TEXT_TOO_LONG_PREFIX } from "@meucardapio/shared-types";
 import { prismaAuditLogger } from "../../shared/audit";
 import { CodedError, useDomainErrors } from "../../shared/errors";
 import { publishToStore } from "../../realtime/hub";
@@ -61,7 +61,7 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
     const { id } = request.params as { id: string };
     const parsed = orderInternalNoteSchema.safeParse(request.body);
     if (!parsed.success) {
-      const tooLong = parsed.error.issues.some((i) => i.code === "too_big");
+      const tooLong = parsed.error.issues.some((i) => i.code === "too_big" || i.message.startsWith(TEXT_TOO_LONG_PREFIX));
       return reply.code(400).send(tooLong ? { error: "A observação pode ter até 500 caracteres.", code: "NOTE_TOO_LONG" } : { error: "Observação inválida.", code: "VALIDATION_ERROR" });
     }
     return orderService.setInternalNote(actorOf(request), id, parsed.data.note);

@@ -1,6 +1,9 @@
-import { printableOrderSchema, TICKET_SCHEMA_VERSION, type PrintableOrder, type TicketPaymentStatus } from "@meucardapio/shared-types";
+import { printableOrderSchema, sanitizeText, TICKET_SCHEMA_VERSION, type PrintableOrder, type TicketPaymentStatus } from "@meucardapio/shared-types";
 import type { PaymentStatus } from "@meucardapio/db";
 import { prisma } from "@meucardapio/db";
+
+// API-49 / ADR-0004 D4-6: de novo no renderizador (dados antigos podem ter controle): nada de byte de comando no tíquete.
+const clean = (value: string | null | undefined, multiline = false): string | null => (value == null ? null : sanitizeText(value, { multiline }));
 
 // `PAGO` é a única prova de "NÃO COBRAR" no tíquete (ADR-0004 §7). Só sai de pagamento APROVADO — estado que o
 // webhook verificado (assinatura, valor, moeda e referência conferidos; API-03) é o único a gravar. Tudo o mais é
@@ -71,12 +74,12 @@ export async function buildPrintableOrder(orderId: string, options: PrintableOpt
     orderId: order.id,
     code: order.code,
     type: order.type,
-    storeName: order.store.name,
-    customerName: order.customerName,
+    storeName: clean(order.store.name) ?? "",
+    customerName: clean(order.customerName),
     customerPhone: order.customerPhone,
     // Endereço só quando o tipo pede (retirada/mesa não levam endereço — D4-2, mínimo necessário).
-    address: order.type === "DELIVERY" ? order.address : null,
-    notes: order.notes,
+    address: order.type === "DELIVERY" ? clean(order.address, true) : null,
+    notes: clean(order.notes, true),
     subtotalCents: order.subtotalCents,
     discountCents: order.discountCents,
     couponCode: order.coupon?.code ?? null,
@@ -93,11 +96,11 @@ export async function buildPrintableOrder(orderId: string, options: PrintableOpt
     cancelNotice: options.cancelNotice ?? false,
     createdAt: order.createdAt.toISOString(),
     items: order.items.map((item) => ({
-      productName: item.productName,
+      productName: clean(item.productName) ?? "",
       quantity: item.quantity,
       unitPriceCents: item.unitPriceCents,
-      notes: item.notes,
-      additionals: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })),
+      notes: clean(item.notes, true),
+      additionals: item.additionals.map((a) => ({ name: clean(a.name) ?? "", priceCents: a.priceCents })),
     })),
   });
 }
