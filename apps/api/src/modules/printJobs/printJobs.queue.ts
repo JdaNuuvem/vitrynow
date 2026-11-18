@@ -35,7 +35,7 @@ export async function enqueueOrderTicket(tx: Tx, order: { id: string; storeId: s
 // Pedido cancelado: o que ainda NÃO começou a imprimir deixa de ser entregue (CANCELED). Roda na transação do cancelamento.
 export async function cancelPendingTickets(tx: Tx, order: { id: string; storeId: string }): Promise<number> {
   const canceled = await tx.printJob.updateMany({
-    where: { storeId: order.storeId, orderId: order.id, kind: { in: ["ORDER_KITCHEN", "ORDER_REPRINT"] }, status: "PENDING" },
+    where: { storeId: order.storeId, orderId: order.id, kind: { in: ["ORDER_KITCHEN", "ORDER_REPRINT"] }, status: { in: ["PENDING", "STALE"] } },
     data: { status: "CANCELED" },
   });
   return canceled.count;

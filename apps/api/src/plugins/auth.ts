@@ -89,12 +89,17 @@ const authPlugin: FastifyPluginAsync = async (app) => {
 
     // Usuário e lista de revogação (logout deste aparelho) na mesma ida ao banco, ambos por chave primária.
     const [user, revoked] = await Promise.all([
-      prisma.user.findUnique({ where: { id: payload.sub }, select: { id: true, storeId: true, role: true, tokenVersion: true } }),
+      prisma.user.findUnique({ where: { id: payload.sub }, select: { id: true, storeId: true, role: true, tokenVersion: true, store: { select: { platformSuspendedAt: true } } } }),
       prisma.revokedSession.findUnique({ where: { sid: payload.sid }, select: { sid: true } }),
     ]);
     if (revoked) return deny("SESSION_REVOKED");
     if (!user) return deny("SESSION_REVOKED");
     if (user.tokenVersion !== payload.tv) return deny("SESSION_REVOKED");
+
+    // API-25: loja suspensa pela plataforma fica SOMENTE LEITURA no painel (o dono ainda entra e vê). Escrita: 403 STORE_SUSPENDED.
+    if (user.store.platformSuspendedAt && method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+      return reply.code(403).send({ error: "A loja está suspensa pela plataforma. Fale com o suporte.", code: "STORE_SUSPENDED" });
+    }
 
     request.user = { userId: user.id, storeId: user.storeId, role: user.role, sid: payload.sid };
 
@@ -107,7 +112,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
   // Encadear depois de requirePanelAuth: `{ preHandler: [app.requirePanelAuth, app.requireOwner] }`.
   app.decorate("requireOwner", async (request: FastifyRequest, reply: FastifyReply) => {
     if (request.user.role !== "OWNER") {
-      reply.code(403).send({ error: "ação restrita ao dono da loja" });
+      return reply.code(403).send({ error: "ação restrita ao dono da loja" });
     }
   });
 
@@ -116,8 +121,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     const header = request.headers.authorization;
     const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
     if (!token) {
-      reply.code(401).send({ error: "token de dispositivo ausente" });
-      return;
+      return reply.code(401).send({ error: "token de dispositivo ausente" });
     }
     // NG-06: o banco guarda só o hash; busca por índice único do hash do que chegou.
     // O modo de impressão da loja vem na MESMA consulta (sem ida extra ao banco) para o cabeçalho abaixo.
@@ -126,8 +130,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
       include: { store: { select: { printMode: true } } },
     });
     if (!deviceToken || deviceToken.revokedAt) {
-      reply.code(401).send({ error: "token de dispositivo inválido" });
-      return;
+      return reply.code(401).send({ error: "token de dispositivo inválido" });
     }
     request.deviceStoreId = deviceToken.storeId;
     request.deviceTokenId = deviceToken.id;

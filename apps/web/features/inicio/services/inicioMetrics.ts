@@ -1,9 +1,16 @@
+import type { Order } from "@/core/domain/orders";
 import type { ReportDay, ReportRange, ReportSummary, ReportTopProduct } from "@/core/domain/reports";
+import { applySaleDefinition, awaitingInRange } from "./salesDefinition";
 
 export type DayPoint = { day: number; revenueCents: number };
 
 export type InicioMetrics = {
+  // Faturamento e vendas pela definição única do B14.1 (ver salesDefinition.ts): sem gorjeta, sem "Aguardando aceite".
   revenueCents: number;
+  tipCents: number;
+  awaiting: { count: number; cents: number };
+  awaitingKnown: boolean;
+  chartExact: boolean;
   orderCount: number;
   customerCount: number;
   averageTicketCents: number;
@@ -34,16 +41,25 @@ export function buildMonthSeries(byDay: ReportDay[], now: Date): DayPoint[] {
   });
 }
 
-export function buildInicioMetrics(month: ReportSummary, week: ReportSummary, now: Date): InicioMetrics {
-  const countOf = (type: string) => month.byType[type]?.count ?? 0;
+// `orders` = lista de pedidos do painel (para separar o "Aguardando aceite"); null se não carregou.
+export function buildInicioMetrics(month: ReportSummary, week: ReportSummary, now: Date, orders: Order[] | null = null): InicioMetrics {
+  const monthAwaiting = orders && awaitingInRange(orders, monthRange(now));
+  const monthSales = applySaleDefinition(month, monthAwaiting);
+  const weekSales = applySaleDefinition(week, orders && awaitingInRange(orders, weekRange(now)));
+  // Por tipo, só vendas: o "Aguardando aceite" sai da contagem como saiu do total.
+  const countOf = (type: string) => Math.max(0, (month.byType[type]?.count ?? 0) - (monthAwaiting?.filter((order) => order.type === type).length ?? 0));
   return {
-    revenueCents: month.revenueCents,
-    orderCount: month.orderCount,
+    revenueCents: monthSales.revenueCents,
+    tipCents: monthSales.tipCents,
+    awaiting: monthSales.awaiting,
+    awaitingKnown: monthSales.awaitingKnown,
+    chartExact: monthSales.chartExact,
+    orderCount: monthSales.salesCount,
     customerCount: month.customerCount,
-    averageTicketCents: month.averageTicketCents,
-    week: { orderCount: week.orderCount, revenueCents: week.revenueCents },
+    averageTicketCents: monthSales.averageTicketCents,
+    week: { orderCount: weekSales.salesCount, revenueCents: weekSales.revenueCents },
     orderTypes: { delivery: countOf("DELIVERY"), table: countOf("MESA"), pickup: countOf("BALCAO") },
     topProducts: month.topProducts,
-    monthSeries: buildMonthSeries(month.byDay, now),
+    monthSeries: buildMonthSeries(monthSales.byDay, now),
   };
 }

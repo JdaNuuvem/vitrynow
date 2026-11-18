@@ -6,7 +6,7 @@ import { prisma } from "@meucardapio/db";
 import { mapMpStatus } from "../src/lib/mercadopago";
 import { PAYMENT_STATUSES, canMovePayment, isFinalPayment, originsFor } from "../src/lib/paymentStateMachine";
 import { subscribe } from "../src/realtime/hub";
-import { makeApp, registerStore, resetDb, orderTokenHeader } from "./helpers";
+import { makeApp, registerStore, resetDb, orderTokenHeader, useMockedProvider } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -62,19 +62,21 @@ describe("máquina de estados do pagamento", () => {
 });
 
 // ───────────── Integração ─────────────
-describe("API-03 — webhook e PIX", () => {
+// Folga para máquina carregada (CI, suíte em paralelo): um timeout de 15 s num teste derrubava os seguintes em cascata. Só o prazo muda, nenhuma asserção.
+describe("API-03 — webhook e PIX", { timeout: 60_000 }, () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     refundPayment.mockResolvedValue(undefined);
     cancelPayment.mockResolvedValue(undefined);
     app = makeApp();
     await app.ready();
-  });
+  }, 60_000);
   afterEach(async () => {
     await app.close();
     await resetDb();
-  });
+  }, 60_000);
   afterAll(async () => {
     await prisma.$disconnect();
   });
@@ -82,8 +84,8 @@ describe("API-03 — webhook e PIX", () => {
   const json = (r: { body: string }) => JSON.parse(r.body);
   let seq = 0;
 
-  async function setup() {
-    const { cookie, response } = await registerStore(app);
+  async function setup(plan?: "BASICO" | "PRO") {
+    const { cookie, response } = await registerStore(app, plan ? { plan } : {});
     const { id: storeId, slug } = json(response).store;
     const cat = json(await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie: cookie! }, payload: { name: "X" } })).category.id;
     const productId = json(
@@ -490,7 +492,7 @@ describe("API-03 — webhook e PIX", () => {
     seq += 1;
     const providerPaymentId = `mp-sub-${Date.now()}-${seq}`;
     createPix.mockResolvedValueOnce({ providerPaymentId, status: "pending", pixQrCode: "x", pixQrCodeBase64: "y", expiresAt: new Date(Date.now() + 60_000) });
-    const res = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: ctx.cookie }, payload: { planCode: "PRO" } });
+    const res = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: ctx.cookie }, payload: { planCode: "BASICO" } }); // PRO está inativo até lançar (ADR-0003 §2.6)
     expect(res.statusCode).toBe(201);
     const sp = await prisma.subscriptionPayment.findUniqueOrThrow({ where: { providerPaymentId } });
     return { providerPaymentId, sp };
@@ -499,7 +501,7 @@ describe("API-03 — webhook e PIX", () => {
     getPayment.mockResolvedValue({ providerPaymentId, status, externalReference: sp.id, amountCents: sp.amountCents, currency: "BRL", ...over } as never);
 
   it("assinatura: webhooks aprovados simultâneos e repetidos ativam o plano UMA vez (30 dias, não 60/90)", async () => {
-    const ctx = await setup();
+    const ctx = await setup("BASICO");
     const { providerPaymentId, sp } = await subscriptionCheckout(ctx);
     subRemote(providerPaymentId, sp, "approved");
     await Promise.all(Array.from({ length: 6 }, () => webhook(providerPaymentId)));
@@ -512,7 +514,7 @@ describe("API-03 — webhook e PIX", () => {
   });
 
   it("R6: dois pagamentos DISTINTOS da mesma assinatura aprovados em paralelo somam os períodos (60 dias), sem perder um", async () => {
-    const ctx = await setup();
+    const ctx = await setup("BASICO");
     const a = await subscriptionCheckout(ctx);
     const b = await subscriptionCheckout(ctx);
     getPayment.mockImplementation((async (id: string) => {
@@ -527,7 +529,7 @@ describe("API-03 — webhook e PIX", () => {
   });
 
   it("assinatura: valor/referência divergentes não ativam; 'refunded' depois de aprovado não regride o estado", async () => {
-    const ctx = await setup();
+    const ctx = await setup("BASICO");
     const { providerPaymentId, sp } = await subscriptionCheckout(ctx);
     subRemote(providerPaymentId, sp, "approved", { amountCents: 100 });
     await webhook(providerPaymentId);

@@ -337,7 +337,7 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
         const [row] = json(res).rows;
         expect(row.customerPhone).toBe("*******4321");
         expect(Object.keys(row).sort()).toEqual(
-          ["code", "createdAt", "customerName", "customerPhone", "display", "hasPhone", "id", "notPrinted", "paymentMethod", "paymentStatus", "refundPending", "status", "totalCents", "type"].sort(),
+          ["code", "createdAt", "customerName", "customerPhone", "display", "hasPhone", "id", "notPrinted", "paymentMethod", "paymentStatus", "refundAbandoned", "refundPending", "refundStuck", "status", "totalCents", "type"].sort(),
         );
       }
     });
@@ -590,7 +590,7 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
       expect(await ids("?status=ABERTO")).toEqual([pendente, preparo, esquecido].sort()); // sem período: o de 120 dias aparece
       expect(await ids("?status=ABERTO&period=today")).toEqual([pendente, preparo, esquecido].sort()); // período, from e to são IGNORADOS
       expect(await ids("?status=ABERTO&period=custom&from=2026-11-01&to=2026-11-02")).toEqual([pendente, preparo, esquecido].sort());
-      expect(await ids("?status=ABERTO&period=custom&from=lixo&to=lixo")).toEqual([pendente, preparo, esquecido].sort()); // nem é validado
+      expect(await ids("?status=ABERTO&period=custom&from=lixo&to=lixo")).toEqual([pendente, preparo, esquecido].sort()); // `from`/`to` nem são lidos
       // os outros status mantêm a janela: o de 120 dias NÃO aparece no padrão de 7 dias nem no ALL
       expect(await ids("")).not.toContain(esquecido);
       expect(await ids("?status=ALL")).not.toContain(esquecido);
@@ -599,6 +599,17 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
       const body = json(await hist(ctx.owner, "?status=ABERTO"));
       expect(body).toMatchObject({ total: 3, period: null, timezone: TZ });
       expect(json(await hist(ctx.owner, "")).period).toMatchObject({ from: expect.any(String), to: expect.any(String) }); // os demais seguem com período
+    });
+
+    it("ABERTO ignora period/from/to, mas a FORMA é validada na rota: `period` fora do enum dá 400 FILTER_INVALID (erro de cliente aparece)", async () => {
+      const ctx = await setup();
+      await mk(ctx, { ago: 120 * DAY, status: "PRONTO" });
+      for (const qs of ["?status=ABERTO&period=banana", "?status=ABERTO&period=90d"]) {
+        const res = await hist(ctx.owner, qs);
+        expect(res.statusCode, qs).toBe(400);
+        expect(json(res).code, qs).toBe("FILTER_INVALID");
+      }
+      expect(json(await hist(ctx.owner, "?status=ABERTO&period=custom&from=2026-12-31&to=2026-01-01")).total).toBe(1); // invertido: ignorado, não é lido
     });
 
     it("ABERTO: cursor percorre TODOS os abertos (mais recente primeiro) sem repetir nem perder; a contagem é a de TODOS", async () => {

@@ -4,11 +4,11 @@ import { printAckSchema, setPrintModeSchema } from "@meucardapio/shared-types";
 import { prismaAuditLogger } from "../../shared/audit";
 import { useDomainErrors } from "../../shared/errors";
 import { limited, tooMany } from "../../lib/slidingLimit";
-import { publishToStore } from "../../realtime/hub";
+import { publishToPanel, publishToStore } from "../../realtime/hub";
 import { PrintJobService } from "./printJobs.service";
 import { PrintModeService, loadPrintMode } from "./printMode.service";
 
-export const printJobService = new PrintJobService(prisma, prismaAuditLogger, publishToStore);
+export const printJobService = new PrintJobService(prisma, prismaAuditLogger, publishToStore, () => new Date(), publishToPanel);
 export const printModeService = new PrintModeService(prisma, prismaAuditLogger);
 
 // Rotas da fila de impressão. Dispositivo (token da impressora): claim e ack. Painel (sessão): reimprimir, teste e lista.
@@ -43,7 +43,7 @@ const printJobRoutes: FastifyPluginAsync = async (app) => {
     if (request.user.role === "OWNER") return;
     if (limited(`denied:${request.user.userId}`, 10)) return tooMany(reply);
     await printModeService.recordDenied(request.user, (request.body as { mode?: unknown } | null)?.mode);
-    reply.code(403).send({ error: "ação restrita ao dono da loja" });
+    return reply.code(403).send({ error: "ação restrita ao dono da loja" });
   };
   app.put("/api/store/print-mode", { preHandler: [app.requirePanelAuth, ownerOrRecordDenied] }, async (request, reply) => {
     if (limited(`mode:${request.user.storeId}`, 10)) return tooMany(reply); // balde da LOJA (10 trocas por minuto)
@@ -64,6 +64,15 @@ const printJobRoutes: FastifyPluginAsync = async (app) => {
   app.post("/api/print-jobs/test", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request, reply) => {
     return reply.code(201).send({ job: await printJobService.createTest(actorOf(request)) });
   });
+
+  // N6: "Imprimir agora" num trabalho que passou da janela de 12 h. OWNER e STAFF; limite por USUÁRIO; STAFF segue a regra de contato da 2ª via.
+  app.post("/api/print-jobs/:id/print-now", panel, async (request, reply) => {
+    if (limited(`printnow:${request.user.userId}`, 30)) return tooMany(reply);
+    const { id } = request.params as { id: string };
+    return { job: await printJobService.printNow(actorOf(request), id) };
+  });
+
+  app.get("/api/print-jobs/summary", panel, async (request) => printJobService.summary(request.user.storeId));
 
   app.get("/api/print-jobs", panel, async (request) => {
     const query = request.query as { orderId?: string; limit?: string };

@@ -4,7 +4,7 @@
 import { createHmac } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { makeApp, registerStore, resetDb, orderTokenHeader } from "../helpers";
+import { makeApp, registerStore, resetDb, orderTokenHeader, useMockedProvider } from "../helpers";
 import { subscribe } from "../../src/realtime/hub";
 import { mapMpStatus } from "../../src/lib/mercadopago";
 import { activateSubscription } from "../../src/lib/subscription";
@@ -60,6 +60,7 @@ describe("QA probes — API", () => {
   let app: ReturnType<typeof makeApp>;
 
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     app = makeApp();
     await app.ready();
@@ -292,10 +293,10 @@ describe("QA probes — API", () => {
   });
 
   it("D22 webhook de assinatura em paralelo ativa o plano UMA vez (30 dias, não 60)", async () => {
-    const ctx = await setupStore();
+    const ctx = await setupStore({ plan: "BASICO" });
     const pix = fakePix();
     createPix.mockResolvedValueOnce(pix);
-    const checkout = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: ctx.cookie }, payload: { planCode: "PRO" } });
+    const checkout = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: ctx.cookie }, payload: { planCode: "BASICO" } });
     expect(checkout.statusCode).toBe(201);
     getPayment.mockResolvedValue(await remoteFor(pix.providerPaymentId, "approved"));
     await Promise.all([webhook(pix.providerPaymentId), webhook(pix.providerPaymentId), webhook(pix.providerPaymentId)]);
@@ -433,6 +434,7 @@ describe("QA probes — API", () => {
     expect(r.orderCount).toBe(2);
     expect(r.revenueCents).toBe(3000 + 1500); // o 2º pedido tem R$ 2,00 de gorjeta: fica fora do faturamento
     expect(r.tipCents).toBe(200);
+    expect(r.ruleChangedAt).toBe("2026-11-18T00:00:00.000Z"); // a tela sabe a partir de quando a conta mudou
     expect([r.canceledCount, r.canceledCents, r.openCount, r.openCents]).toEqual([1, 1500, 1, 1500]);
     expect(r.byPaymentMethod.DINHEIRO).toEqual({ count: 1, revenueCents: 3000 });
     expect(r.byPaymentMethod.CREDITO).toEqual({ count: 1, revenueCents: 1500 });

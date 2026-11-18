@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { prisma } from "@meucardapio/db";
 import { TICKET_SCHEMA_VERSION } from "@meucardapio/shared-types";
 import { buildPrintableOrder, buildTestTicket, nothingToCharge } from "../src/lib/printable";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { makeApp, registerStore, resetDb, useMockedProvider } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -16,6 +16,7 @@ import * as mp from "../src/lib/mercadopago";
 describe("API-66 — nothingToCharge no tíquete", () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     app = makeApp();
     await app.ready();
@@ -59,7 +60,7 @@ describe("API-66 — nothingToCharge no tíquete", () => {
     await coupon(ctx, { code: "TUDO", discountType: "PERCENT", discountValue: 100, maxUses: 5 });
     const t = await ticketOf(ctx, await order(ctx, { couponCode: "TUDO", paymentMethod: "PIX" }));
     expect(t).toMatchObject({ ticketSchemaVersion: TICKET_SCHEMA_VERSION, totalCents: 0, subtotalCents: 4000, discountCents: 4000, paymentMethod: null, nothingToCharge: true });
-    expect(TICKET_SCHEMA_VERSION).toBe(3);
+    expect(TICKET_SCHEMA_VERSION).toBe(4);
     expect(vi.mocked(mp.createPixPayment)).not.toHaveBeenCalled();
   });
 
@@ -115,7 +116,7 @@ describe("API-66 — nothingToCharge no tíquete", () => {
     for (const status of ["PENDENTE", "APROVADO", "EM_ANALISE", "REEMBOLSADO", "ESTORNO_PENDENTE", "CONTESTADO"] as const) {
       expect(nothingToCharge({ totalCents: 0 }, { status }), status).toBe(false);
     }
-    for (const total of [1, 600, 4000]) expect(nothingToCharge({ totalCents: total }, null), String(total)).toBe(false);
+    for (const total of [1, 600, 4000, 250_000, 99_999_999]) expect(nothingToCharge({ totalCents: total }, null), String(total)).toBe(false); // total grande (> R$ 1.000) sem pagamento também é false
     expect(nothingToCharge({ totalCents: -1 }, null)).toBe(false); // valor impossível nunca vira "nada a cobrar"
   });
 });

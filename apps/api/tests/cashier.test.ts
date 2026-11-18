@@ -59,7 +59,12 @@ describe("computeCashSummary", () => {
     expect(summary.sales.deliveryFeeCents).toBe(500);
     expect(summary.sales.tipCents).toBe(200);
     expect(summary.sales.byType.DELIVERY).toEqual({ count: 1, revenueCents: 2200 });
-    expect(summary.sales.byType.MESA).toEqual({ count: 1, revenueCents: 1000 });
+    // API-24 (RN-MB-04): pedido de mesa SEM recebimento não é venda (receita 0); a venda da mesa é o recebimento.
+    expect(summary.sales.byType.MESA).toEqual({ count: 0, revenueCents: 0 });
+    const recebida = computeCashSummary({ ...SESSION, openingBalanceCents: 0, movements: [] }, [order({ type: "MESA", totalCents: 1000 })], NOW, [
+      { id: "r1", receivedAt: SESSION.openedAt, totalCents: 1000, serviceFeeCents: 0, payments: [{ method: "PIX", amountCents: 1000 }] },
+    ]);
+    expect(recebida.sales.byType.MESA).toEqual({ count: 1, revenueCents: 1000 });
   });
 });
 

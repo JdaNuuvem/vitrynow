@@ -109,3 +109,60 @@ export async function sendLoginAlertEmail(input: { to: string }) {
   });
   if (error) console.error(`[email] falha ao enviar aviso de tentativas de login para ${maskEmail(input.to)}:`, error);
 }
+
+// API-07 (ADR-0001 §3.4): a conta do Mercado Pago da loja pede reconexão. Sem isso o PIX some do cardápio e o dono não sabe.
+// Texto fixo, sem dado do vendedor nem do provedor.
+export async function sendPaymentReconnectEmail(input: { to: string }) {
+  const resend = client();
+  if (!resend) {
+    console.warn(`[email] RESEND_API_KEY não configurado — aviso de reconexão do Mercado Pago para ${input.to}`);
+    return;
+  }
+  const { error } = await resend.emails.send({
+    from: FROM,
+    to: input.to,
+    subject: "Reconecte seu Mercado Pago — MeuCardapio",
+    html: `
+      <p>O PIX da sua loja foi desligado porque a conexão com o seu Mercado Pago precisa ser refeita.</p>
+      <p>Entre no painel, abra <b>Pagamentos</b> e conecte de novo. Pedidos já pagos continuam sendo conciliados.</p>
+    `,
+  });
+  if (error) console.error(`[email] falha ao enviar aviso de reconexão para ${input.to}:`, error);
+}
+
+// API-25 (ADR-0015 §3D): aviso de concessão/ajuste de créditos. Vai ao OWNER da loja e, se PLATFORM_ALERT_EMAIL estiver definido, ao responsável
+// da plataforma. Texto escapado; sem dado de pagamento além da referência curta já sanitizada.
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+export async function sendCreditChangeEmail(input: {
+  to: string;
+  storeName: string;
+  credits: number;
+  reason: string;
+  note: string;
+  externalRef?: string | null;
+  actor: string;
+  audience: "owner" | "platform";
+}) {
+  const resend = client();
+  if (!resend) {
+    console.warn(`[email] RESEND_API_KEY não configurado — aviso de créditos (${input.audience}) para ${maskEmail(input.to)}`);
+    return;
+  }
+  const signal = input.credits > 0 ? "+" : "";
+  const { error } = await resend.emails.send({
+    from: FROM,
+    to: input.to,
+    subject: `Créditos de IA da loja ${escapeHtml(input.storeName)} — MeuCardapio`,
+    html: `
+      <p>Loja: <b>${escapeHtml(input.storeName)}</b></p>
+      <p>Alteração: <b>${signal}${input.credits}</b> crédito(s) (${escapeHtml(input.reason)})</p>
+      <p>Motivo: ${escapeHtml(input.note)}</p>
+      ${input.externalRef ? `<p>Referência: ${escapeHtml(input.externalRef)}</p>` : ""}
+      <p>Registrado por: ${escapeHtml(input.actor)}</p>
+    `,
+  });
+  if (error) console.error(`[email] falha ao enviar aviso de créditos para ${maskEmail(input.to)}:`, error);
+}
