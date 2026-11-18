@@ -32,7 +32,7 @@ export function platformCookieOptions() {
 
 export function requirePlatformRole(role: "ADMIN") {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    if (request.platformAdmin?.role !== role) reply.code(403).send({ error: "ação restrita a administradores da plataforma", code: "PLATFORM_ROLE_REQUIRED" });
+    if (request.platformAdmin?.role !== role) return reply.code(403).send({ error: "ação restrita a administradores da plataforma", code: "PLATFORM_ROLE_REQUIRED" });
   };
 }
 
