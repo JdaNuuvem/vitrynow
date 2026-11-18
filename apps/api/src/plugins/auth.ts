@@ -6,6 +6,7 @@ import { prisma } from "@meucardapio/db";
 import { allowedOrigin, getJwtSecret, getMfaKey } from "../lib/securityConfig";
 import { hashToken } from "../lib/tokenHash";
 import { sessionAbsoluteLimit, sessionCookieOptions, signSession, sessionNeedsRenewal, SESSION_COOKIE } from "../lib/session";
+import { securityEvent } from "../lib/securityEvents";
 
 // O token carrega só identidade e versão (ADR-0008); `storeId`/`role` vêm SEMPRE do banco,
 // reescritos em request.user por requirePanelAuth.
@@ -59,12 +60,16 @@ const authPlugin: FastifyPluginAsync = async (app) => {
   // Painel: cookie httpOnly com JWT que carrega só {sub, tv, auth_time, exp}. A cada requisição
   // relê o usuário por PK: removido, senha trocada (tv) ou papel alterado valem na hora.
   app.decorate("requirePanelAuth", async (request: FastifyRequest, reply: FastifyReply) => {
-    const deny = (code: string) => reply.code(401).send({ error: "não autenticado", code });
+    const deny = (code: string) => {
+      securityEvent(request, "session_rejected", { reason: code });
+      return reply.code(401).send({ error: "não autenticado", code });
+    };
 
     // CSRF em profundidade: escrita autenticada por cookie só aceita Origin igual ao do painel.
     const method = request.method;
     const origin = request.headers.origin;
     if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS" && origin && origin !== allowedOrigin()) {
+      securityEvent(request, "origin_mismatch");
       return reply.code(403).send({ error: "origem não permitida", code: "ORIGIN_MISMATCH" });
     }
 
@@ -121,6 +126,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     const header = request.headers.authorization;
     const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
     if (!token) {
+      securityEvent(request, "device_token_refused", { reason: "TOKEN_MISSING" });
       return reply.code(401).send({ error: "token de dispositivo ausente" });
     }
     // NG-06: o banco guarda só o hash; busca por índice único do hash do que chegou.
@@ -130,6 +136,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
       include: { store: { select: { printMode: true } } },
     });
     if (!deviceToken || deviceToken.revokedAt) {
+      securityEvent(request, "device_token_refused", { reason: deviceToken ? "TOKEN_REVOKED" : "TOKEN_UNKNOWN" });
       return reply.code(401).send({ error: "token de dispositivo inválido" });
     }
     request.deviceStoreId = deviceToken.storeId;

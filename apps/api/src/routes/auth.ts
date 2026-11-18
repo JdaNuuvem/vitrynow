@@ -17,6 +17,7 @@ import { DUMMY_HASH, bcryptPasswordHasher as passwordHasher } from "../shared/pa
 import { RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, constantTimeEqual, issueResetToken, markResetSendFailed, padToMinimum, runBeforeClaimHook } from "../lib/passwordReset";
 import { NOW_UTC as NOW } from "../lib/sqlTime";
 import { clientIpOf } from "../lib/clientIp";
+import { securityEvent } from "../lib/securityEvents";
 
 // Sentinela interno (não vira resposta): desfaz a transação da redefinição quando o claim passou sem hash pronto (ver o comentário no uso).
 class ResetHashNotReady extends Error {}
@@ -100,6 +101,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     const slot = throttle.reserve(email, clientIpOf(request));
     if (!slot.allowed) {
       reply.header("Retry-After", String(slot.retryAfterSeconds));
+      securityEvent(request, "login_locked", { email });
       return reply.code(429).send({ error: "muitas tentativas de login; tente de novo em alguns minutos", code: "LOGIN_LOCKED" });
     }
     if (slot.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, slot.delayMs));
@@ -121,9 +123,11 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       throw error;
     }
     if (!user || !passwordOk) {
+      securityEvent(request, "login_failed", { email });
       return reply.code(401).send({ error: "credenciais inválidas" });
     }
     throttle.succeed(email, clientIpOf(request));
+    securityEvent(request, "login_ok", { email, userId: user.id });
 
     reply.setCookie(SESSION_COOKIE, signSession(app, user), sessionCookieOptions());
     return { ok: true };
@@ -157,6 +161,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       select: { id: true, tokenVersion: true },
     });
     disconnectUser(user.id);
+    securityEvent(request, "logout_all", { userId: user.id });
     reply.setCookie(SESSION_COOKIE, signSession(app, user), sessionCookieOptions());
     return { ok: true };
   });
