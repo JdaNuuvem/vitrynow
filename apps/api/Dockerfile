@@ -1,4 +1,4 @@
-FROM node:20-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /repo
 RUN corepack enable
 # openssl TAMBÉM no build: com ele o Prisma baixa (na instalação) os engines do OpenSSL 3.0, os mesmos que a imagem final usa.
@@ -32,7 +32,7 @@ RUN pnpm --filter @meucardapio/shared-types build
 RUN pnpm --filter @meucardapio/db build
 RUN pnpm --filter @meucardapio/api build
 
-FROM node:20-alpine
+FROM node:24-alpine
 WORKDIR /repo
 RUN corepack enable
 # Sem isso, o Prisma não consegue detectar a versão do OpenSSL em runtime (comando

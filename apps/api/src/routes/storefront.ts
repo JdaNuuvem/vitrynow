@@ -4,7 +4,8 @@ import { prisma } from "@meucardapio/db";
 import { createOrderSchema } from "@meucardapio/shared-types";
 import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
 import { publishToStore } from "../realtime/hub";
-import { createPixPayment } from "../lib/mercadopago";
+import { gatewayForStore } from "../modules/storePayments/gateway";
+import { PixUnavailableError } from "../modules/storePayments/storePayments.service";
 import { orderService } from "../modules/orders/orders.module";
 import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { customerMessageFor, messageActorFor, moneyLineFor } from "../lib/cancelMessages";
@@ -259,7 +260,9 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
 
     const payment = await prisma.payment.findUniqueOrThrow({ where: { orderId: order.id } });
     try {
-      const pix = await createPixPayment({
+      // PIX POR LOJA (ADR-0001, API-07): a cobrança sai na conta do Mercado Pago DA LOJA, nunca na da plataforma. O cliente não vê "reconecte".
+      const gateway = await gatewayForStore(store.id);
+      const pix = await gateway.createPixPayment({
         orderId: order.id,
         amountCents: totalCents,
         description: `Pedido #${order.code} — ${store.name}`,
@@ -269,6 +272,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       await prisma.payment.update({
         where: { id: payment.id },
         data: {
+          paymentAccountId: gateway.accountId,
           providerPaymentId: pix.providerPaymentId,
           pixQrCode: pix.pixQrCode,
           pixQrCodeBase64: pix.pixQrCodeBase64,
@@ -282,10 +286,13 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         payment: { pixQrCode: pix.pixQrCode, pixQrCodeBase64: pix.pixQrCodeBase64, expiresAt: pix.expiresAt },
       });
     } catch (error) {
+      // Conta desconectada entre a conferência do portão e a cobrança: o PIX simplesmente não existe (409), sem pedido solto.
+      const unavailable = error instanceof PixUnavailableError;
       app.log.error({ err: error }, "falha ao gerar o pagamento PIX do pedido");
       // O pedido NÃO é apagado (auditoria): vira CANCELADO com motivo e o cupom volta pelo fluxo de cancelamento.
       // Se o provedor chegou a criar a cobrança, o webhook/conciliação a encontra pela referência e estorna.
       await orderService.cancelBySystem(store.id, order.id, "PAGAMENTO_NAO_APROVADO", "SYSTEM").catch((cancelError) => app.log.error({ err: cancelError }, "falha ao cancelar o pedido após erro no PIX"));
+      if (unavailable) return reply.code(409).send({ error: "O PIX não está disponível nesta loja no momento.", code: "PIX_UNAVAILABLE" });
       return reply.code(502).send({ error: "não foi possível gerar o pagamento PIX, tente novamente" });
     }
     },
@@ -326,6 +333,36 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
             customerMessage: customerMessageFor(cancelRow.reasonCode, messageActorFor(cancelRow.source)),
             moneyLine: moneyLineFor(order.payment, cancelRow.reasonCode),
           }
+        : null,
+    };
+  });
+
+  // API-19 — link público de ACOMPANHAMENTO do pedido (B13a). Sem login: quem tem o token do pedido (cabeçalho `x-order-token`, nunca na URL)
+  // vê onde o pedido está. Resposta SÓ com o que o cliente já sabe e precisa: código, tipo, etapa atual, horários das etapas, nome da loja e,
+  // se cancelado, a frase fixa e a linha do dinheiro. NUNCA telefone, endereço, e-mail, observações, ids internos nem dado de pagamento do provedor.
+  // Sem token certo: o MESMO 404 de pedido inexistente (não revela que o pedido existe). Não indexável, sem Referer, sem cache.
+  app.get("/stores/:slug/orders/:orderId/tracking", { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } }, async (request, reply) => {
+    reply.header("Cache-Control", "no-store").header("X-Robots-Tag", "noindex, nofollow").header("Referrer-Policy", "no-referrer");
+    const { slug, orderId } = request.params as { slug: string; orderId: string };
+    const store = await prisma.store.findUnique({ where: { slug }, select: { id: true, name: true } });
+    const order = store
+      ? await prisma.order.findFirst({ where: { id: orderId, storeId: store.id }, include: { payment: { select: { status: true, amountCents: true } } } })
+      : null;
+    if (!store || !order || !orderTokenMatches(request.headers[ORDER_TOKEN_HEADER], order.publicTokenHash)) {
+      return reply.code(404).send({ error: "pedido não encontrado" });
+    }
+    const history = await prisma.orderStatusHistory.findMany({
+      where: { orderId: order.id, kind: { in: ["ADVANCE", "CANCEL"] } },
+      orderBy: { seq: "asc" },
+      select: { status: true, createdAt: true, kind: true, reasonCode: true, source: true },
+    });
+    const cancelRow = order.status === "CANCELADO" ? [...history].reverse().find((h) => h.kind === "CANCEL") : undefined;
+    return {
+      store: { name: store.name },
+      order: { code: order.code, type: order.type, status: order.status, createdAt: order.createdAt.toISOString(), awaitingPayment: order.awaitingPayment },
+      timeline: history.map((h) => ({ status: h.status, at: h.createdAt.toISOString() })),
+      cancelReason: cancelRow
+        ? { customerMessage: customerMessageFor(cancelRow.reasonCode, messageActorFor(cancelRow.source)), moneyLine: moneyLineFor(order.payment, cancelRow.reasonCode) }
         : null,
     };
   });

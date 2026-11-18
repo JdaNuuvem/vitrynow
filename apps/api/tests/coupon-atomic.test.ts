@@ -2,7 +2,7 @@
 // (leonardo\regras-cupom-e-total-zero.md, CA-CP-01..11).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { makeApp, registerStore, resetDb, useMockedProvider } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -14,6 +14,7 @@ import { storeToday } from "../src/lib/storeDay";
 describe("FUNC-01/02 — cupom e total zero", () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     app = makeApp();
     await app.ready();
