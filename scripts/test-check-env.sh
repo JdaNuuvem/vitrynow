@@ -31,7 +31,7 @@ troca() { sed "s#^$1=.*#$1=$2#"; }         # troca o valor de $1
 # caso <descrição> <exit esperado> <trecho esperado ("" = qualquer)> <conteúdo do .env>
 caso() {
   local desc="$1" want="$2" frag="$3" content="$4"; local f="$TMP/e.env"; printf '%s\n' "$content" > "$f"
-  local out rc; out="$(bash "$CHK" "$f" 2>&1)"; rc=$?
+  local out rc; out="$(bash "$CHK" ${ARGS:-} "$f" 2>&1)"; rc=$?
   if [ "$rc" = "$want" ] && { [ -z "$frag" ] || [[ "$out" == *"$frag"* ]]; }; then PASS=$((PASS+1)); echo "  [ok]    $desc"
   else FAILS=$((FAILS+1)); echo "  [FALHA] $desc (exit=$rc, esperado $want, trecho '$frag')"; echo "$out" | sed 's/^/          /' | head -12; fi
   # segurança: nenhum valor de segredo pode aparecer na saída
@@ -74,6 +74,30 @@ caso "PRIVACY_ACTIONS_ENABLED=true sem PRIVACY_ACTIONS_LEGAL_OK reprova" 1 "PRIV
 caso "PRIVACY_ACTIONS_ENABLED=true com PRIVACY_ACTIONS_LEGAL_OK=true passa" 0 "" "$(base; echo PRIVACY_ACTIONS_ENABLED=true; echo PRIVACY_ACTIONS_LEGAL_OK=true; echo PRIVACY_HASH_SALT=$S5)"
 caso "PRIVACY_ACTIONS_ENABLED desligada passa" 0 "" "$(base; echo PRIVACY_ACTIONS_ENABLED=false)"
 caso "PRIVACY_ACTIONS_ENABLED=true sem PRIVACY_HASH_SALT reprova" 1 "PRIVACY_HASH_SALT" "$(base; echo PRIVACY_ACTIONS_ENABLED=true; echo PRIVACY_ACTIONS_LEGAL_OK=true)"
+
+# --- INF-19/C2: --prod transforma os riscos em ERRO (e sem --prod continuam avisos)
+PRODOK() { base; echo MFA_ENFORCED=true; echo RESEND_API_KEY=re_chave_ficticia_para_o_teste; }
+caso "sem --prod: MFA desligada, sem e-mail e APP_VERSION=local são só aviso" 0 "RESEND_API_KEY vazia" "$(base | troca APP_VERSION local)"
+ARGS=--prod
+caso "--prod: configuração completa passa" 0 "OK:" "$(PRODOK)"
+caso "--prod: MFA_ENFORCED ausente reprova" 1 "MFA_ENFORCED não é true" "$(base; echo RESEND_API_KEY=re_chave_ficticia_para_o_teste)"
+caso "--prod: MFA_ENFORCED=false reprova" 1 "MFA_ENFORCED não é true" "$(PRODOK | troca MFA_ENFORCED false)"
+caso "--prod: APP_VERSION=local reprova" 1 "APP_VERSION=local" "$(PRODOK | troca APP_VERSION local)"
+caso "--prod: RESEND_API_KEY vazia reprova" 1 "RESEND_API_KEY vazia" "$(base; echo MFA_ENFORCED=true; echo RESEND_API_KEY=)"
+caso "--prod: os três riscos juntos dão 3 erros" 1 "3 erro(s)" "$(base | troca APP_VERSION local)"
+ARGS=
+# --- INF-19/C4: ADMIN_TOKEN fraco reprova sempre; vazio é permitido
+caso "ADMIN_TOKEN curto reprova mesmo sem --prod" 1 "ADMIN_TOKEN curto" "$(base; echo ADMIN_TOKEN=curto123)"
+caso "ADMIN_TOKEN forte passa" 0 "" "$(base; echo ADMIN_TOKEN=$S5)"
+caso "ADMIN_TOKEN vazio passa" 0 "" "$(base; echo ADMIN_TOKEN=)"
+# --- INF-19/C3: .env legível por outros gera aviso (só onde o modo do arquivo é confiável)
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*|CYGWIN*) echo "  [pulado] modo do .env (Windows: o modo de arquivo não é confiável); testar no Linux" ;;
+  *) f="$TMP/perm.env"; base > "$f"; chmod 644 "$f"; out="$(bash "$CHK" "$f" 2>&1)"
+     [[ "$out" == *"chmod 600"* ]] && { PASS=$((PASS+1)); echo "  [ok]    .env com modo 644 gera aviso de chmod 600"; } || { FAILS=$((FAILS+1)); echo "  [FALHA] .env 644 sem aviso"; }
+     chmod 600 "$f"; out="$(bash "$CHK" "$f" 2>&1)"
+     [[ "$out" != *"chmod 600"* ]] && { PASS=$((PASS+1)); echo "  [ok]    .env com modo 600 sem aviso"; } || { FAILS=$((FAILS+1)); echo "  [FALHA] .env 600 com aviso indevido"; } ;;
+esac
 
 echo; echo "RESULTADO: $PASS ok, $FAILS falhas"
 [ "$FAILS" -eq 0 ]

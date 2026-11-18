@@ -28,8 +28,8 @@ esac
 [[ "$WAIT" =~ ^[0-9]+$ ]] || { echo "DEPLOY_WAIT precisa ser um número de segundos (veio '$WAIT')"; exit 2; }
 
 [ -f "$ENVF" ] || { echo "arquivo $ENVF não existe (copie .env.example e preencha)"; exit 2; }
-echo "== validando $ENVF (infra/check-env.sh; não imprime valores de segredo)"
-if ! ./check-env.sh "$ENVF"; then echo "ABORTADO: $ENVF inválido; nada foi alterado."; exit 1; fi
+echo "== validando $ENVF (infra/check-env.sh --prod; não imprime valores de segredo)"
+if ! ./check-env.sh --prod "$ENVF"; then echo "ABORTADO: $ENVF inválido; nada foi alterado."; exit 1; fi
 [ "$MODE" = "check" ] && exit 0
 WO="$(set -a; . "./$ENVF" >/dev/null 2>&1; set +a; printf '%s' "${WEB_ORIGIN:-}")"
 APPV="$(set -a; . "./$ENVF" >/dev/null 2>&1; set +a; printf '%s' "${APP_VERSION:-}")"
