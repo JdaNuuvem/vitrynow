@@ -4,6 +4,7 @@ import { prismaAuditLogger } from "../shared/audit";
 import { gatewayForStore } from "../modules/storePayments/gateway";
 import { PixUnavailableError } from "../modules/storePayments/storePayments.service";
 import { paymentService } from "../modules/payments/payments.module";
+import { publishToStore } from "../realtime/hub";
 import { claimWithLock } from "./lock";
 import { JOB_LOCK_KEYS } from "./lockKeys";
 import type { Job } from "./types";
@@ -103,6 +104,13 @@ async function reconcileOne(db: Db, row: Row, now: Date) {
   const stillOpen = charge.status === "pending" || charge.status === "in_process";
   // Duplicatas abertas (mesma referência): só a escolhida fica ligada ao pedido; as outras abertas são canceladas no provedor (nunca ficam cobráveis).
   for (const extra of found.slice(1)) if (extra.status === "pending" || extra.status === "in_process") await gateway.cancelPayment(extra.providerPaymentId).catch(() => audit("payment.orphan_extra_cancel_failed"));
+  // Cliente pagou DUAS vezes o mesmo pedido: a 2ª aprovada não é estornada sozinha (decisão de dinheiro é do dono). Fica no rastro e o painel avisa.
+  const duplicatePaid = found.slice(1).filter((p) => p.status === "approved");
+  if (duplicatePaid.length > 0) {
+    await db.payment.updateMany({ where: { id: row.id, reconcileNote: null }, data: { reconcileNote: "Cobrança paga em duplicidade para este pedido. Estornar a segunda pelo app do provedor e conferir com o cliente." } });
+    audit("payment.orphan_duplicate_paid", { duplicates: duplicatePaid.length });
+    publishToStore(row.storeId, { type: "payment.reconcile_needed", orderId: row.orderId });
+  }
   if (stillOpen && order.status === "CANCELADO") {
     await gateway.cancelPayment(charge.providerPaymentId);
     await db.payment.updateMany({ where: { id: row.id, status: "PENDENTE" }, data: { status: "CANCELADO" } });

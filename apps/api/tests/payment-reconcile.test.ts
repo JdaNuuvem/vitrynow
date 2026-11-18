@@ -173,4 +173,18 @@ describe("SEC-17 - conciliacao de cobranca PIX orfa", () => {
     expect(await prisma.auditLog.count({ where: { storeId: l.storeId, action: "payment.orphan_not_found" } })).toBe(1);
     expect((await reconciliar()).processed).toBe(0);
   });
+
+  it("DUAS cobrancas aprovadas para o mesmo pedido: a 2a nao e estornada sozinha, mas fica auditada e o painel recebe o alerta (reconcileNote)", async () => {
+    const l = await loja();
+    const o = await pedidoOrfao(l);
+    const gw = new FakePixGateway(l.account!.sellerUserId);
+    const segunda = await gw.createPixPayment({ orderId: o.orderId, amountCents: 2000, description: "dup", payerEmail: "x@y.z", idempotencyKey: "outra-chave" });
+    FakePixGateway.approve(o.providerId);
+    FakePixGateway.approve(segunda.providerPaymentId);
+    await reconciliar();
+    await new Promise((r) => setTimeout(r, 400)); // auditoria assincrona
+    expect(await prisma.auditLog.count({ where: { storeId: l.storeId, action: "payment.orphan_duplicate_paid" } })).toBe(1);
+    expect((await pagamento(o.paymentId)).reconcileNote).toContain("duplicidade");
+    expect(FakePixGateway.peek(segunda.providerPaymentId)?.refunds).toBe(0); // nunca estorna sozinho
+  });
 });
