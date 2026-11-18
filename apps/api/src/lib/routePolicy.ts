@@ -55,6 +55,8 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/deliverers/:id/delete": "blocked",
   "POST /api/store/settings": "blocked",
   "POST /api/store/availability": "blocked",
+  "POST /api/store/hours": "blocked",
+  "POST /api/store/status": "blocked", // pausar/fechar por hoje: na Consulta já não há pedido novo para pausar
   "POST /api/users": "blocked",
   "POST /api/users/:id/delete": "blocked",
   "POST /api/store/payments/mercadopago/connect": "blocked", // API-07: conectar a conta de PIX é configuração (sem loja ativa não conecta)
@@ -94,6 +96,24 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/delivery-zones/:id/delete": "blocked",
   "POST /api/delivery-zones/import": "blocked",
   "POST /api/delivery-zones/config": "blocked",
+  "POST /api/auth/verify-email/resend": "billing", // API-26: conta, tambem liberado na Suspensao
+  "POST /api/onboarding/steps/:step": "blocked", // API-26: cadastro guiado
+  // — Lote 2 (Atlas): rotas das branches integradas; classes conservadoras, a revisar com cada dono (Nightingale/Leonardo) —
+  "POST /api/tables": "blocked", // API-22: cadastro de mesa
+  "PATCH /api/tables/:id": "blocked",
+  "POST /api/tables/:id/regenerate-qr": "blocked",
+  "DELETE /api/tables/:id": "blocked",
+  "POST /api/store/qr-settings": "blocked",
+  "POST /api/tables/:id/receive": "finish", // API-24: receber a mesa encerra o que JA foi servido (RN-A-01)
+  "POST /api/catalog/categories/reorder": "blocked", // API-56
+  "POST /api/catalog/categories/:id/move-products": "blocked",
+  "POST /api/catalog/products/reorder": "blocked",
+  "POST /api/media/images": "blocked", // API-18: upload e cadastro
+  "POST /api/media/images/:id/delete": "blocked",
+  "POST /api/catalog/option-groups": "blocked", // API-15
+  "POST /api/catalog/option-groups/:id": "blocked",
+  "POST /api/catalog/option-groups/:id/delete": "blocked",
+  "POST /api/catalog/products/:id/option-groups": "blocked"
 };
 
 /**
@@ -114,15 +134,31 @@ export const PUBLIC_ROUTE_POLICY: Record<string, PublicPolicy> = {
   "POST /auth/reset-password/inspect": "exempt", // SEC-29: confere o link antes de pedir a senha nova
   // Webhook do Mercado Pago: segue processando em qualquer fase (é o que reativa e concilia o PIX).
   "POST /api/payments/webhook": "exempt",
-  // Admin da plataforma por x-admin-token (some com o back-office, API-25).
-  "POST /api/admin/notices": "exempt",
-  "POST /api/admin/notices/:id/delete": "exempt",
+  "POST /auth/verify-email": "exempt", // API-26: confirma o e-mail pelo link (publico, token no corpo)
   "POST /stores/:slug/orders": "public-order",
   "GET /stores/:slug/menu": "public-menu",
   "GET /stores/:slug/orders/:orderId/payment-status": "public-allowed",
   "POST /stores/:slug/orders/:orderId/cancel": "public-allowed",
   // API-19: o cliente acompanha o pedido que já fez, também com a loja em Consulta/Suspensão (decisão do Atlas).
   "GET /stores/:slug/orders/:orderId/tracking": "public-allowed",
+  // API-22 (mesa/QR): o QR segue a mesma regra do cardapio publico (RN-A-02): loja suspensa nao recebe pedido.
+  "GET /stores/:slug/tables/:qrToken/menu": "public-menu",
+  "POST /stores/:slug/tables/:qrToken/orders": "public-order",
+  "GET /stores/:slug/tables/:qrToken/my-orders": "public-allowed",
+  "POST /stores/:slug/tables/:qrToken/call-waiter": "public-allowed",
+  "POST /stores/:slug/tables/:qrToken/ask-bill": "public-allowed",
+  // API-25: back-office da plataforma tem sessao PROPRIA (cookie de plataforma), fora do portao de assinatura das lojas.
+  "POST /api/platform/auth/login": "exempt",
+  "POST /api/platform/auth/verify": "exempt",
+  "POST /api/platform/auth/logout": "exempt",
+  "POST /api/platform/mfa/challenge": "exempt",
+  "POST /api/platform/mfa/verify": "exempt",
+  "POST /api/platform/stores/:id/suspend": "exempt",
+  "POST /api/platform/stores/:id/reactivate": "exempt",
+  "POST /api/platform/stores/:id/extend-trial": "exempt",
+  "POST /api/platform/notices": "exempt",
+  "POST /api/platform/notices/:id/delete": "exempt",
+  "POST /api/platform/stores/:id/credits": "exempt",
 };
 
 export const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);

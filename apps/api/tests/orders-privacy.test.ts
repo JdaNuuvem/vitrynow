@@ -121,7 +121,7 @@ describe("API-54a — lista, ações e detalhe", () => {
         expect(o).toMatchObject({ hasPhone: true, hasAddress: true, contactMasked: true });
       }
       const paid = orders.find((o: { payment: unknown }) => o.payment);
-      expect(Object.keys(paid.payment).sort()).toEqual(["amountCents", "expiresAt", "reconcileRequired", "refundAbandoned", "refundPending", "status"]);
+      expect(Object.keys(paid.payment).sort()).toEqual(["amountCents", "expiresAt", "reconcileRequired", "refundAbandoned", "refundPending", "refundStuck", "status"]);
     }
   });
 
@@ -133,7 +133,7 @@ describe("API-54a — lista, ações e detalhe", () => {
       [
         "address", "allowedTransitions", "awaitingPayment", "blocked", "cancel", "canUndo", "canceledAt", "changeForCents", "code", "contactMasked", "createdAt",
         "customerName", "customerPhone", "delivererId", "deliverer", "deliveryFeeCents", "discountCents", "hasAddress", "hasPhone", "id", "items", "notes",
-        "paymentMethod", "payment", "printedAt", "serverNow", "status", "statusChangedAt", "subtotalCents", "tipCents", "totalCents", "type", "undoUntil", "updatedAt",
+        "paymentMethod", "payment", "printedAt", "serverNow", "status", "source", "statusChangedAt", "subtotalCents", "tableId", "tipCents", "totalCents", "type", "undoUntil", "updatedAt",
       ].sort(),
     );
     expect(Object.keys(o.items[0]).sort()).toEqual(["id", "notes", "productName", "quantity", "unitPriceCents"]);

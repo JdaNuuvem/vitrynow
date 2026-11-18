@@ -70,12 +70,17 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
       take: reportLimits.maxOrders + 1, // defesa: pedidos que entraram entre o count e a leitura não passam do teto
     });
     // API-21 (B14.1, mesma regra do caixa): VENDA = CONFIRMADO..CONCLUIDO (PENDENTE é "em aberto", CANCELADO é à parte); faturamento = total − gorjeta.
-    const orders = inPeriod.filter(isSale);
+    // API-24 (RN-MB-04): pedido de MESA nunca é venda por pedido; a venda da mesa é o RECEBIMENTO (Receipt), reconhecida em `receivedAt`.
+    const orders = inPeriod.filter((o) => isSale(o) && o.type !== "MESA");
     const canceled = inPeriod.filter((o) => o.status === "CANCELADO");
-    const open = inPeriod.filter((o) => o.status === "PENDENTE");
+    const open = inPeriod.filter((o) => o.status === "PENDENTE" && o.type !== "MESA");
+    const receipts = await prisma.receipt.findMany({
+      where: { storeId, receivedAt: { gte: from, lt: toInclusive } },
+      include: { payments: true, orders: { include: { items: true } } },
+    });
 
-    const orderCount = orders.length;
-    const revenueCents = orders.reduce((sum, o) => sum + saleRevenueCents(o), 0);
+    const orderCount = orders.length + receipts.length;
+    const revenueCents = orders.reduce((sum, o) => sum + saleRevenueCents(o), 0) + receipts.reduce((sum, r) => sum + r.totalCents, 0);
     const discountCents = orders.reduce((sum, o) => sum + o.discountCents, 0);
     const averageTicketCents = orderCount > 0 ? Math.round(revenueCents / orderCount) : 0;
 
@@ -89,6 +94,13 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
       const entry = dayAgg.get(date) ?? { date, orderCount: 0, revenueCents: 0 };
       entry.orderCount += 1;
       entry.revenueCents += saleRevenueCents(order);
+      dayAgg.set(date, entry);
+    }
+    for (const r of receipts) {
+      const date = r.receivedAt.toLocaleDateString("en-CA", { timeZone: STORE_TIMEZONE });
+      const entry = dayAgg.get(date) ?? { date, orderCount: 0, revenueCents: 0 };
+      entry.orderCount += 1;
+      entry.revenueCents += r.totalCents;
       dayAgg.set(date, entry);
     }
     const byDay = [...dayAgg.values()].sort((a, b) => a.date.localeCompare(b.date));
@@ -105,7 +117,16 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
       byPaymentMethod[bucket].revenueCents += saleRevenueCents(order);
     }
 
+    for (const r of receipts) {
+      for (const p of r.payments) {
+        byPaymentMethod[p.method] ??= { count: 0, revenueCents: 0 };
+        byPaymentMethod[p.method].count += 1;
+        byPaymentMethod[p.method].revenueCents += p.amountCents;
+      }
+    }
+
     const byType: Record<string, { count: number; revenueCents: number }> = {};
+    if (receipts.length > 0) byType.MESA = { count: receipts.length, revenueCents: receipts.reduce((sum, r) => sum + r.totalCents, 0) };
     for (const order of orders) {
       byType[order.type] ??= { count: 0, revenueCents: 0 };
       byType[order.type].count += 1;
@@ -120,6 +141,18 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
         entry.quantity += item.quantity;
         entry.revenueCents += item.unitPriceCents * item.quantity;
         productAgg.set(key, entry);
+      }
+    }
+    for (const r of receipts) {
+      for (const order of r.orders) {
+        if (order.status === "CANCELADO") continue;
+        for (const item of order.items) {
+          const key = item.productId ?? item.productName;
+          const entry = productAgg.get(key) ?? { productName: item.productName, quantity: 0, revenueCents: 0 };
+          entry.quantity += item.quantity;
+          entry.revenueCents += item.unitPriceCents * item.quantity;
+          productAgg.set(key, entry);
+        }
       }
     }
     const topProducts = [...productAgg.values()].sort((a, b) => b.quantity - a.quantity).slice(0, 10);
