@@ -163,6 +163,7 @@ export const WS_AUDIENCE: Record<WsServerMessage["type"], WsAudience> = {
   "order.cancel_notice": "panel",
   "payment.refund_pending": "panel",
   "payment.refund_done": "panel",
+  "payment.refund_stuck": "panel", // API-69 x API-47 (lote 1): so orderId; o hub o entrega SO ao OWNER (OWNER_ONLY_TYPES)
   "payment.reconcile_needed": "panel",
   "print.available": "both",
   "print.job_failed": "panel",
