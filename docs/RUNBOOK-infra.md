@@ -28,6 +28,16 @@ Sintoma: o `migrate` sai com erro e novos deploys dizem *"found failed migration
 - Provar a restauração: `scripts/backup/restore-verify.sh <dump>` restaura num banco **novo** e confere sha256, migrações e contagem linha a linha. **Provado:** `scripts/test-backup-restore.sh` (10 verificações; a suíte inteira da API roda verde sobre o banco restaurado: 251 testes).
 - **Ressalvas:** (a) o backup está no **mesmo servidor**: cópia off-site depende de destino que só o Claudio define (CL-12); (b) criptografar o backup antes do off-site (recomendação da Nightingale, não feito); (c) o volume `caddy_data` (conta ACME) **não** entra no backup: é segredo, trate à parte.
 
+## 5b. ANTES de restaurar um backup: exportar o que é IRREVERSÍVEL (INF-11; Nightingale A2, Leonardo A2b)
+**Regra:** restaurar um dump anterior **ressuscita** dado que o sistema já apagou ou anonimizou (nome, telefone e endereço de cliente anonimizado, API-52a), **e a linha de `AuditLog` que registrava a anonimização some junto** (está no mesmo banco). Por isso, antes de QUALQUER restauração (no servidor ou em ensaio com dado real):
+1. Exportar do banco ATUAL as linhas irreversíveis (somente leitura; o arquivo tem ids opacos, sem dado pessoal; guardar fora do banco, modo 600):
+   `docker compose exec -T postgres psql -U meucardapio -d meucardapio -At -c "COPY (SELECT id, \"storeId\", action, \"targetType\", \"targetId\", metadata, \"createdAt\" FROM \"AuditLog\" WHERE action = 'privacy.anonymize_customer' ORDER BY \"createdAt\") TO STDOUT WITH CSV HEADER" > anonimizacoes-AAAAMMDD.csv`
+   (a ação passa a existir quando a API-52a entrar na main; antes disso a consulta volta vazia. Para outras ações irreversíveis futuras, acrescentar o nome em `action IN (...)`.)
+2. Restaurar (e só então migrar: `prisma migrate deploy`).
+3. **Reaplicar**: para cada `orderIds` em `metadata` do CSV (a API-52a grava os ids; lotes de até 500 por linha), rodar de novo a anonimização desses pedidos e conferir que nome/telefone/endereço voltaram a ficar vazios. Sem o CSV não há como saber quem foi anonimizado.
+4. Registrar no BOARD/runbook de incidentes: dump usado, data, CSV, quantos pedidos reaplicados.
+**Limites (honestos):** a retenção é `KEEP_DAYS=14` e `KEEP_MIN=3` (nunca apaga os 3 mais recentes): o dado anonimizado continua nos backups por até 14 dias (o aviso de privacidade precisa dizer isso; é do jurídico). A reaplicação por `orderIds` ainda **não existe como comando** (depende da API-52a gravar `orderIds`); até lá o passo 3 é manual. Provado: a consulta roda (Postgres de teste, 17/11) e devolve o cabeçalho CSV. NÃO provado: contra uma anonimização REAL (não existe ainda) nem a reaplicação.
+
 ## 6. PIX por loja (API-07)
 - Padrão: `MP_OAUTH_MODE=off` (nada do PIX é exigido). Para `real`: `PAYMENT_ENC_KEY` (32+, própria), `PAYMENT_ENC_KEY_ID`, `MP_CLIENT_ID`, `MP_CLIENT_SECRET`, `PUBLIC_API_URL` (https). `fake` só em dev. `infra/check-env.sh` valida; a API recusa subir fora disso.
 - **Rotação da chave de cifra** (sem queda): (1) ponha a nova em `PAYMENT_ENC_KEY` com `PAYMENT_ENC_KEY_ID=v2` e a antiga em `PAYMENT_ENC_KEY_PREV` + `PAYMENT_ENC_KEY_PREV_ID=v1`; (2) `check-env.sh` e deploy; (3) **re-cifrar tudo** com a chave nova; (4) só depois esvazie os dois `PREV` e faça o deploy.
