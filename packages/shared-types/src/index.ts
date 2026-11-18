@@ -210,6 +210,24 @@ export const productAdditionalInputSchema = z.object({
   priceCents: z.number().int().nonnegative().max(100_000_000),
 });
 
+// SEC-14 (ST-18): domínio próprio da loja = NOME DE HOST puro, em minúsculas (sem esquema, porta, caminho, espaço, IP nem 'localhost'). Quando o roteamento
+// por domínio existir, `customDomain` decide de qual loja é a requisição: texto livre e repetido permitiria uma loja tomar o domínio de outra.
+const HOST_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+export const customDomainSchema = z
+  .string()
+  .transform((v) => v.trim().toLowerCase().replace(/\.$/, ""))
+  .pipe(
+    z
+      .string()
+      .max(253, "domínio longo demais")
+      .refine((host) => {
+        const labels = host.split(".");
+        if (labels.length < 2 || !labels.every((label) => HOST_LABEL.test(label))) return false;
+        if (/^\d+$/.test(labels[labels.length - 1])) return false; // 1.2.3.4 e afins: IP não é domínio
+        return /^[a-z]{2,63}$|^xn--[a-z0-9-]{1,59}$/.test(labels[labels.length - 1]);
+      }, "use só o nome do domínio, ex. cardapio.minhaloja.com.br (sem http://, porta ou caminho)"),
+  );
+
 // ST-17 / NG-07: URL de imagem só em https, sem usuário/senha e sem esquema estranho (javascript:, data:, file:, http:).
 // O CSP do web (img-src) já recusa http:// no navegador; recusar aqui dá ao lojista a mensagem na hora em vez de
 // uma foto que some sozinha. Até o upload próprio (B12), o lojista cola uma URL https.
@@ -332,7 +350,7 @@ export const updateStoreSettingsSchema = z.object({
     .regex(/^#[0-9a-fA-F]{6}$/, "use um hex de cor, ex. #16a34a")
     .optional()
     .or(z.literal("")),
-  customDomain: z.string().max(200).optional().or(z.literal("")),
+  customDomain: customDomainSchema.optional().or(z.literal("")),
   address: z.string().max(300).optional().or(z.literal("")),
   whatsapp: z
     .string()

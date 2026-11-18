@@ -93,7 +93,7 @@ model Store {
   logoUrl      String?
   coverImageUrl String? // banner exibido no topo do cardápio público, separado da logo
   primaryColor String? // ex. "#16a34a" — aplicado no storefront público
-  customDomain String? // guardado como referência; roteamento de domínio próprio é infra, não app
+  customDomain String? @unique // nome de host em minúsculas (validado em shared-types); ÚNICO: duas lojas nunca reivindicam o mesmo domínio (SEC-14/ST-18)
   address       String? // exibido no cardápio público
   whatsapp      String? // só dígitos com DDI, ex. "5521999999999" — vira link wa.me
   openingHours  String? // texto livre, ex. "Seg a sáb, 09:00 às 17:00"
