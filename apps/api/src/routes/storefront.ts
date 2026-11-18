@@ -4,7 +4,8 @@ import { prisma } from "@meucardapio/db";
 import { createOrderSchema } from "@meucardapio/shared-types";
 import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
 import { publishToStore } from "../realtime/hub";
-import { createPixPayment } from "../lib/mercadopago";
+import { gatewayForStore } from "../modules/storePayments/gateway";
+import { PixUnavailableError } from "../modules/storePayments/storePayments.service";
 import { orderService } from "../modules/orders/orders.module";
 import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { customerMessageFor, messageActorFor, moneyLineFor } from "../lib/cancelMessages";
@@ -259,7 +260,9 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
 
     const payment = await prisma.payment.findUniqueOrThrow({ where: { orderId: order.id } });
     try {
-      const pix = await createPixPayment({
+      // PIX POR LOJA (ADR-0001, API-07): a cobrança sai na conta do Mercado Pago DA LOJA, nunca na da plataforma. O cliente não vê "reconecte".
+      const gateway = await gatewayForStore(store.id);
+      const pix = await gateway.createPixPayment({
         orderId: order.id,
         amountCents: totalCents,
         description: `Pedido #${order.code} — ${store.name}`,
@@ -269,6 +272,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       await prisma.payment.update({
         where: { id: payment.id },
         data: {
+          paymentAccountId: gateway.accountId,
           providerPaymentId: pix.providerPaymentId,
           pixQrCode: pix.pixQrCode,
           pixQrCodeBase64: pix.pixQrCodeBase64,
@@ -282,10 +286,13 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         payment: { pixQrCode: pix.pixQrCode, pixQrCodeBase64: pix.pixQrCodeBase64, expiresAt: pix.expiresAt },
       });
     } catch (error) {
+      // Conta desconectada entre a conferência do portão e a cobrança: o PIX simplesmente não existe (409), sem pedido solto.
+      const unavailable = error instanceof PixUnavailableError;
       app.log.error({ err: error }, "falha ao gerar o pagamento PIX do pedido");
       // O pedido NÃO é apagado (auditoria): vira CANCELADO com motivo e o cupom volta pelo fluxo de cancelamento.
       // Se o provedor chegou a criar a cobrança, o webhook/conciliação a encontra pela referência e estorna.
       await orderService.cancelBySystem(store.id, order.id, "PAGAMENTO_NAO_APROVADO", "SYSTEM").catch((cancelError) => app.log.error({ err: cancelError }, "falha ao cancelar o pedido após erro no PIX"));
+      if (unavailable) return reply.code(409).send({ error: "O PIX não está disponível nesta loja no momento.", code: "PIX_UNAVAILABLE" });
       return reply.code(502).send({ error: "não foi possível gerar o pagamento PIX, tente novamente" });
     }
     },

@@ -1,4 +1,4 @@
-import { PIX_EXPIRATION_MINUTES, mercadoPagoGateway, type PixCharge, type PixChargeInput, type PixGateway, type ProviderPayment } from "../../lib/mercadopago";
+import { PIX_EXPIRATION_MINUTES, cancelPayment as platformCancel, getPayment as platformGet, mercadoPagoGateway, refundPayment as platformRefund, type PixCharge, type PixChargeInput, type PixGateway, type ProviderPayment } from "../../lib/mercadopago";
 import { oauthProvider } from "./oauth";
 import { AccountChangedError, NeedsReconnectError, PixUnavailableError } from "./storePayments.service";
 import { storePaymentsService } from "./storePayments.module";
@@ -128,6 +128,18 @@ export async function gatewayForStore(storeId: string): Promise<StoreGateway> {
     throw error instanceof NeedsReconnectError ? new PixUnavailableError() : error;
   });
   return wrap(maker({ accessToken, owner: account.sellerUserId }), account.id, account.storeId);
+}
+
+/**
+ * O gateway de um pagamento de PEDIDO JÁ CRIADO (consultar, cancelar, estornar): a conta DA LOJA que o criou
+ * (`Payment.paymentAccountId`, conferida contra a loja do pedido). Pagamento anterior à API-07 (`paymentAccountId = null`) foi criado na
+ * conta da PLATAFORMA e continua nas funções da plataforma. Conta de outra loja ⇒ `PixUnavailableError`; conta desconectada ⇒ `AccountChangedError`.
+ */
+export async function gatewayOfPayment(payment: { paymentAccountId: string | null }, storeId: string): Promise<PixGateway> {
+  if (!payment.paymentAccountId) {
+    return { createPixPayment: () => Promise.reject(new Error("pagamento legado da plataforma não cria cobrança")), getPayment: platformGet, cancelPayment: platformCancel, refundPayment: platformRefund };
+  }
+  return gatewayForAccount(payment.paymentAccountId, storeId);
 }
 
 export async function gatewayForAccount(accountId: string, expectedStoreId: string): Promise<StoreGateway> {

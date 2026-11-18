@@ -1,6 +1,8 @@
 import { prisma } from "@meucardapio/db";
 import { buildApp } from "../src/app";
 import { encryptSecret } from "../src/lib/paymentCrypto";
+import { setGatewayMaker } from "../src/modules/storePayments/gateway";
+import type { PixGateway } from "../src/lib/mercadopago";
 import { assertSafeToReset } from "./dbGuard";
 
 // NG-16: o token do pedido só existe na resposta da criação. Os testes que depois consultam/cancelam como cliente
@@ -66,6 +68,20 @@ export async function resetDb() {
 }
 
 let storeSeq = 0;
+
+/**
+ * API-07 (P-1): o checkout cria/consulta/cancela/estorna PIX pelo gateway DA LOJA. Os testes antigos de pedido/webhook controlam o provedor
+ * mockando as 4 funções de `lib/mercadopago` (`vi.fn`); esta ponte aponta o gateway de loja para ESSAS MESMAS funções, então as
+ * asserções delas (chamadas, idempotência, erros) continuam valendo sem reescrita. Chame no `beforeEach` do arquivo que mocka o módulo.
+ */
+export function useMockedProvider(mp: PixGateway) {
+  setGatewayMaker(() => ({
+    createPixPayment: (input) => mp.createPixPayment(input),
+    getPayment: (id) => mp.getPayment(id),
+    cancelPayment: (id) => mp.cancelPayment(id),
+    refundPayment: (id, key) => mp.refundPayment(id, key),
+  }));
+}
 
 /**
  * API-07 (G3): sem conta do Mercado Pago CONECTADA a loja não vende PIX (409 PIX_UNAVAILABLE). Conecta uma conta FAKE direto no banco
