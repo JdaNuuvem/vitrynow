@@ -161,6 +161,13 @@ describe("Consulta e Suspensão por rota (integração)", () => {
     }
   });
 
+  it("classes das rotas novas (API-12b, API-19, API-27, API-54, SEC-29): reprint termina pedido recebido; configuração e anotação são bloqueadas; tracking e inspect do link são livres", () => {
+    expect(PANEL_ROUTE_POLICY["POST /api/orders/:id/reprint"]).toBe("finish");
+    for (const key of ["POST /api/orders/:id/internal-note", "PUT /api/store/print-mode", "POST /api/print-jobs/test", "PUT /api/cashier/staff-withdrawal-limit"]) expect(PANEL_ROUTE_POLICY[key], key).toBe("blocked");
+    expect(PUBLIC_ROUTE_POLICY["GET /stores/:slug/orders/:orderId/tracking"]).toBe("public-allowed");
+    expect(PUBLIC_ROUTE_POLICY["POST /auth/reset-password/inspect"]).toBe("exempt");
+  });
+
   it("CA-B17-01 / CA-MX-03: pedido criado ANTES da virada pode ser concluído e estornado na Consulta; abrir outro caixa não", async () => {
     const productId = await seedCatalog();
     const created = await placeOrder(productId);
@@ -177,8 +184,8 @@ describe("Consulta e Suspensão por rota (integração)", () => {
     expect(await prisma.order.findUnique({ where: { id: orderId } })).toMatchObject({ status: "CONCLUIDO" });
 
     // CA-MX-04: fechar o caixa pode; abrir outro e lançar sangria não
-    const close = await inject("POST", "/api/cashier/close", { closingBalanceCents: 2500 });
-    expect(close.statusCode).toBe(200);
+    const close = await inject("POST", "/api/cashier/close", { closingBalanceCents: 2500, reason: "OUTRO", reasonText: "diferença de teste" });
+    expect(close.statusCode, JSON.stringify(close.body ?? "")).toBe(200);
     expect(codeOf(await inject("POST", "/api/cashier/open", { openingBalanceCents: 0 }))).toBe("READ_ONLY");
     expect(codeOf(await inject("POST", "/api/cashier/movements", { type: "SANGRIA", amountCents: 100 }))).toBe("READ_ONLY");
   });
@@ -253,7 +260,8 @@ describe("Consulta e Suspensão por rota (integração)", () => {
       await phase();
       const status = await app.inject({ method: "GET", url: "/stores/loja-fase/orders/inexistente/payment-status" });
       const cancel = await app.inject({ method: "POST", url: "/stores/loja-fase/orders/inexistente/cancel", payload: {} });
-      for (const response of [status, cancel]) {
+      const tracking = await app.inject({ method: "GET", url: "/stores/loja-fase/orders/inexistente/tracking" }); // API-19: o cliente acompanha o que já fez
+      for (const response of [status, cancel, tracking]) {
         expect(response.statusCode).toBe(404); // chegou até a rota (pedido não existe), não foi barrado pela assinatura
       }
     }
