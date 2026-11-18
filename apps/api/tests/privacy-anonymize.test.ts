@@ -47,7 +47,7 @@ describe("privacidade: anonimizar cliente", { timeout: 60_000 }, () => {
     const { cookie, response } = await registerStore(app);
     const storeId = json(response).store.id as string;
     const invited = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: cookie! }, payload: { email: `staff-pv-${Date.now()}-${seq++}@t.com`, password: "provisoria1" } });
-    expect(invited.statusCode, invited.body).toBe(200);
+    expect(invited.statusCode, invited.body).toBe(201);
     const staff = (await login(app, json(invited).user.email, "provisoria1")).cookie!;
     return { owner: cookie!, staff, storeId };
   }
@@ -72,7 +72,7 @@ describe("privacidade: anonimizar cliente", { timeout: 60_000 }, () => {
   const SENHA = "senha12345"; // a senha do `registerStore`; sem MFA ativa a execução pede a senha atual (parecer da Nightingale R1)
   const run = (cookie: string, body: object, headers: Record<string, string> = {}) =>
     app.inject({ method: "POST", url: "/api/privacy/anonymize", headers: { cookie, ...headers }, payload: { currentPassword: SENHA, ...body } });
-  const summary = async (cookie: string) => json(await app.inject({ method: "GET", url: `/api/reports/summary?from=2020-01-01&to=${new Date(Date.now() + DAY).toISOString().slice(0, 10)}`, headers: { cookie } })); // `to` fixo: o campo `to` devolvido é o relógio da consulta
+  const summary = async (cookie: string) => json(await app.inject({ method: "GET", url: `/api/reports/summary?from=${new Date(Date.now() - 30 * DAY).toISOString().slice(0, 10)}&to=${new Date(Date.now() + DAY).toISOString().slice(0, 10)}`, headers: { cookie } })); // `to` fixo: o campo `to` devolvido é o relógio da consulta
 
   it("CA-PV-01: 7 encerrados + 1 em aberto ⇒ BLOQUEIA citando o aberto; depois de concluir, anonimiza os 8", async () => {
     const ctx = await setup();
