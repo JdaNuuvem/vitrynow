@@ -134,8 +134,14 @@ if ($continue) {
 #     tem ~7% de ruído por rodada nesta máquina compartilhada; defeito real é sempre o mesmo ramo). Valores, ramos e CPU de cada tentativa ficam impressos;
 #   * sob carga CONHECIDA => espera 20 s e roda mais 3 vezes: 3 de 3 => não bloqueia (aviso com os números); senão BLOQUEIA.
 # Padrão do nome em ASCII (. no lugar de ê): sem BOM o PowerShell 5.1 lê o .ps1 como ANSI e o acento viraria lixo.
-$timingFile = 'tests/reset-email-confirmation.test.ts'
-$timingPattern = 'MESMO\stempo\snas\str.s\srecusas'
+# LISTA dos testes de tempo (INF-20c): cada um roda isolado, com a MESMA regra, e TODOS são excluídos da suíte paralela. O 2º (SEC-39, ex-ST-57) só existe depois que a SEC-39
+# entrar na main; arquivo ausente = AVISO impresso (não some em silêncio). O parser lê as chaves do JSON de TEMPO_RAMOS, então ramos novos não exigem mudança aqui.
+$timingTests = @(
+  @{ Nome = 'redefinição de senha'; File = 'tests/reset-email-confirmation.test.ts'; Pattern = 'MESMO\stempo\snas\str.s\srecusas' },
+  @{ Nome = 'esqueci a senha (SEC-39)'; File = 'tests/forgot-password-tempo.test.ts'; Pattern = 'MESMO\stempo\spara\sconta\sexistente' }
+)
+$timingFile = $timingTests[0].File
+$timingPattern = $timingTests[0].Pattern
 function Get-CargaConhecida {  # devolve @{ Cpu=<int|-1>; Outras=<n suítes vitest alheias>; Alta=<bool> }
   $vals = @(); for ($i = 0; $i -lt 3; $i++) { try { $vals += [int](Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average } catch { }; Start-Sleep -Seconds 1 }
   $cpu = if ($vals.Count) { [int](($vals | Measure-Object -Average).Average) } else { -1 }
@@ -151,7 +157,10 @@ function Get-RamoAfastado($ramos) {  # ramo mais afastado da MEDIANA dos ramos: 
   if (-not $ramos -or $ramos.Count -lt 3) { return $null }
   $v = @($ramos.Values | Sort-Object); $med = $v[[int][math]::Floor($v.Count / 2)]
   $pior = $ramos.GetEnumerator() | Sort-Object { [math]::Abs($_.Value - $med) } -Descending | Select-Object -First 1
-  [pscustomobject]@{ Nome = $pior.Key; Delta = [math]::Round($pior.Value - $med, 0) }
+  # CONJUNTO dos ramos a mais de 35 ms da mediana (INF-20c): com 2 ramos empatados no afastamento o "mais afastado" sozinho desempata ao acaso e a salvaguarda ficava
+  # cega; o conjunto não depende de desempate. Defeito real = algum ramo está em TODOS os conjuntos das falhas.
+  $conj = @($ramos.GetEnumerator() | Where-Object { [math]::Abs($_.Value - $med) -gt 35 } | ForEach-Object { $_.Key } | Sort-Object)
+  [pscustomobject]@{ Nome = $pior.Key; Delta = [math]::Round($pior.Value - $med, 0); Conj = $conj }
 }
 function Invoke-TimingTest {  # roda SÓ o teste de tempo; devolve @{ Ok; Valor; Tipo; Texto; Cpu; Lista; Ramo; DeltaTxt }
   $cpu = Get-CpuAgora
@@ -177,13 +186,17 @@ function Invoke-TimingTest {  # roda SÓ o teste de tempo; devolve @{ Ok; Valor;
   $lista = if ($ramos.Count) { (($ramos.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$([math]::Round($_.Value))" }) -join ' ') + ' (ms)' } else { 'ramos não medidos' }
   # Texto = como mostrar o valor: "diferença X ms (limite 35)", "tempo X ms ABAIXO do piso" ou "não medido".
   $texto = if (-not $valor) { 'não medido' } elseif ($tipo -eq 'piso') { "tempo $valor ms ABAIXO do piso" } else { "diferença $valor ms (limite 35)" }
-  [pscustomobject]@{ Ok = $passou; Valor = $valor; Tipo = $tipo; Texto = $texto; Cpu = $cpu; Lista = $lista; Ramo = $(if ($af) { $af.Nome } else { '' }); DeltaTxt = $(if ($af) { '{0:+#;-#;0}' -f $af.Delta } else { '' }) }
+  [pscustomobject]@{ Ok = $passou; Valor = $valor; Tipo = $tipo; Texto = $texto; Cpu = $cpu; Lista = $lista; Ramo = $(if ($af) { $af.Nome } else { '' }); Conj = $(if ($af) { $af.Conj } else { @() }); DeltaTxt = $(if ($af) { '{0:+#;-#;0}' -f $af.Delta } else { '' }) }
 }
 function Format-Tentativa([int]$n, $r) {
   "   tentativa ${n}: CPU $($r.Cpu)% | $(if ($r.Ok) { 'passou' } else { 'FALHOU' }) | $($r.Lista) | $(if ($r.Ramo) { "ramo mais afastado da mediana: $($r.Ramo) ($($r.DeltaTxt) ms)" } else { 'ramo: n/d' })"
 }
+foreach ($tt in $timingTests) {
+if (-not $continue -or $SkipTests) { break }
+if (-not (Test-Path (Join-Path $repo "apps/api/$($tt.File)"))) { Write-Host "AVISO: teste de tempo '$($tt.Nome)' ausente ($($tt.File)): não roda neste commit." -ForegroundColor Yellow; continue }
+$timingFile = $tt.File; $timingPattern = $tt.Pattern
 if ($continue -and -not $SkipTests) {
-  $continue = Step 'teste de tempo (SEGURANÇA), isolado, antes da suíte' {
+  $continue = Step "teste de tempo (SEGURANÇA), isolado, antes da suíte: $($tt.Nome)" {
     $carga = Get-CargaConhecida
     Write-Host "   carga antes: CPU $($carga.Cpu)%, outras suítes vitest: $($carga.Outras) => $(if ($carga.Alta) { 'CARGA CONHECIDA (CPU >= 60%)' } else { 'repouso (CPU < 60%)' })"
     $tent = New-Object System.Collections.Generic.List[object]
@@ -205,17 +218,22 @@ if ($continue -and -not $SkipTests) {
     # REPOUSO (INF-20b, decisão do Atlas 17/11): o teste falha ~7% das rodadas por RUÍDO com a máquina compartilhada (medido: CPU do host 0-49%, picos de 400-1159 ms que
     # estouram o piso), então 2 falhas seguidas NÃO bastam. Mais 3 rodadas; BLOQUEIA se >= 2 das 3 falharem, OU se o MESMO ramo foi o mais afastado em TODAS as falhas (um
     # defeito real é sempre o mesmo ramo; ruído cai em ramos variados). Todas as tentativas (valores e CPU) ficam impressas. O Atlas revê a regra se o bloqueio por ruído passar de 1 em 20 CIs.
-    Write-Host '   repouso, 2 falhas seguidas: rodando mais 3 vezes. Bloqueia se >= 2 das 3 falharem OU se o mesmo ramo for o mais afastado em todas as falhas.'
+    Write-Host '   repouso, 2 falhas seguidas: rodando mais 3 vezes. Bloqueia se >= 2 das 3 falharem OU se algum ramo ficar a mais de 35 ms da mediana em todas as falhas.'
     for ($i = 3; $i -le 5; $i++) { $r = Invoke-TimingTest; $tent.Add($r); Write-Host (Format-Tentativa $i $r) }
     $falhasDepois = @($tent | Select-Object -Skip 2 | Where-Object { -not $_.Ok }).Count
     $falhas = @($tent | Where-Object { -not $_.Ok })
-    $ramosFalha = @($falhas | ForEach-Object { $_.Ramo } | Select-Object -Unique)
-    $mesmoRamo = ($ramosFalha.Count -eq 1 -and [bool]$ramosFalha[0])
+    # ramos comuns a TODAS as falhas (interseção dos conjuntos > 35 ms da mediana); falha sem ramo medido = interseção vazia
+    $comuns = $null
+    foreach ($fl in $falhas) { $c = @($fl.Conj); if ($null -eq $comuns) { $comuns = $c } else { $comuns = @($comuns | Where-Object { $c -contains $_ }) } }
+    $comuns = @($comuns)
+    $mesmoRamo = ($comuns.Count -gt 0)
+    $ramosFalha = $comuns
     if ($falhasDepois -ge 2) { throw "teste de tempo falhou 2 vezes seguidas E $falhasDepois das 3 rodadas seguintes (em repouso, CPU $($carga.Cpu)%): é defeito (SEGURANÇA, o tempo de resposta distingue contas); não afrouxe o limite nem o piso. Valores acima" }
-    if ($mesmoRamo) { throw "teste de tempo: o MESMO ramo ($($ramosFalha[0])) foi o mais afastado em todas as $($falhas.Count) falhas, mesmo com $falhasDepois de 3 falhando depois: tem cara de defeito real (SEGURANÇA); valores acima" }
-    Write-Host "   AVISO: $($falhas.Count) falhas em $($tent.Count) rodadas, mas só $falhasDepois das 3 últimas e em ramos diferentes ($(($falhas | ForEach-Object { if ($_.Ramo) { $_.Ramo } else { 'n/d' } }) -join ', ')): ruído provável, NÃO bloqueia. Conte este aviso: o Atlas revê a regra se o ruído bloquear mais de 1 CI em 20."
+    if ($mesmoRamo) { throw "teste de tempo: o MESMO ramo ($($ramosFalha -join ', ')) ficou a mais de 35 ms da mediana em todas as $($falhas.Count) falhas, mesmo com $falhasDepois de 3 falhando depois: tem cara de defeito real (SEGURANÇA); valores acima" }
+    Write-Host "   AVISO: $($falhas.Count) falhas em $($tent.Count) rodadas, mas só $falhasDepois das 3 últimas e em ramos diferentes ($(($falhas | ForEach-Object { if ($_.Conj.Count) { $_.Conj -join '+' } else { 'nenhum' } }) -join ', ')): ruído provável, NÃO bloqueia. Conte este aviso: o Atlas revê a regra se o ruído bloquear mais de 1 CI em 20."
     $global:LASTEXITCODE = 0
   }
+}
 }
 
 if ($continue -and -not $SkipTests) {
@@ -223,7 +241,7 @@ if ($continue -and -not $SkipTests) {
     $env:TEST_DATABASE_URL = $testUrl
     # A suíte principal PULA só o teste de tempo (ele roda sozinho, antes; ver 4b). -t negativo, ASCII e sem espaços; node direto (o shim do pnpm quebra argumentos).
     Push-Location (Join-Path $repo 'apps/api')
-    try { node node_modules/vitest/vitest.mjs run -t ('^((?!' + $timingPattern + ').)*$') } finally { Pop-Location }
+    try { node node_modules/vitest/vitest.mjs run -t ('^((?!' + (($timingTests | ForEach-Object { $_.Pattern }) -join '|') + ').)*$') } finally { Pop-Location }
   }
 }
 if ($continue -and -not $SkipTests) {
