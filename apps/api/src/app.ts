@@ -49,6 +49,7 @@ import storePaymentRoutes from "./modules/storePayments/storePayments.module";
 import subscriptionGate from "./plugins/subscriptionGate";
 import storeHoursRoutes from "./modules/storeHours/storeHours.module";
 import optionGroupRoutes from "./modules/optionGroups/optionGroups.module";
+import { assertStorageBootConfig } from "./lib/objectStorage";
 import menuRevalidationPlugin from "./plugins/menuRevalidation";
 
 export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = {}) {
@@ -57,6 +58,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   // e o rate limit deixa de contar o IP do proxy. Vazio = ignora X-Forwarded-For (não forjável).
   // Pagamentos por loja: modo/credenciais/chave inválidos derrubam o boot (não o 1º PIX). `code`/`state` do OAuth saem do log pelo `redactLogUrl` do SEC-31.
   assertPaymentsBootConfig(process.env, currentKey);
+  assertStorageBootConfig(process.env); // API-18: produção sem S3 configurado não sobe (nada de Fake em memória silencioso)
   // ST-76: o id padrão do Fastify é um contador sequencial (`req-1`, `req-2`…) e o 5xx devolve esse id ao cliente (ST-75): dois erros espaçados
   // mediriam o tráfego da API desde o boot. Id aleatório curto, e `requestIdHeader: false` para NÃO aceitar o `request-id` do cliente como id do log.
   const app = Fastify({
