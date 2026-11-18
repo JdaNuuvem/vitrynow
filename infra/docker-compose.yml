@@ -102,7 +102,8 @@ services:
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAIL_FROM: ${EMAIL_FROM:-MeuCardapio <onboarding@resend.dev>}
       TRIAL_DAYS: ${TRIAL_DAYS:-7}
-      MFA_ENFORCED: ${MFA_ENFORCED:-false}
+      # SEC-13: em produção a API NÃO sobe com MFA_ENFORCED diferente de "true" (guarda de partida em lib/mfaBoot.ts). Padrão SEGURO: true.
+      MFA_ENFORCED: ${MFA_ENFORCED:-true}
     expose:
       - "3001"
     cap_drop: [ALL]
