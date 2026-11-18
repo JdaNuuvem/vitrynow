@@ -1,0 +1,95 @@
+﻿name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # A suite apaga tabelas: so aceita banco "_test" em 127.0.0.1 na faixa 55440-55459 (apps/api/tests/dbGuard.ts).
+  TEST_DATABASE_URL: postgresql://meucardapio:meucardapio@127.0.0.1:55440/meucardapio_test?schema=public
+  DATABASE_URL: postgresql://meucardapio:meucardapio@127.0.0.1:55440/meucardapio_test?schema=public
+
+jobs:
+  backend:
+    name: Backend (API + banco)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: meucardapio
+          POSTGRES_PASSWORD: meucardapio
+          POSTGRES_DB: meucardapio_test
+        ports:
+          - 55440:5432
+        options: >-
+          --health-cmd "pg_isready -U meucardapio -d meucardapio_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - name: Instalar (lockfile congelado)
+        run: pnpm install --frozen-lockfile
+      - name: Prisma validate, migrations e drift
+        run: |
+          pnpm --filter '@meucardapio/db' generate
+          pnpm --filter '@meucardapio/db' exec prisma validate
+          pnpm --filter '@meucardapio/db' exec prisma migrate deploy
+          set +e
+          pnpm --filter '@meucardapio/db' exec prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code
+          code=$?
+          if [ "$code" -eq 2 ]; then echo "DRIFT: schema.prisma tem mudancas sem migration"; exit 1; fi
+          exit $code
+      - name: Typecheck (db, shared-types, api)
+        run: |
+          pnpm --filter '@meucardapio/shared-types' build
+          pnpm --filter '@meucardapio/db' build
+          pnpm --filter '@meucardapio/api' exec tsc --noEmit
+      - name: Teste de tempo (seguranca), isolado
+        working-directory: apps/api
+        run: node ../../node_modules/vitest/vitest.mjs run tests/reset-email-confirmation.test.ts -t 'MESMO\stempo\snas\str.s\srecusas'
+      - name: Testes da API
+        working-directory: apps/api
+        run: node ../../node_modules/vitest/vitest.mjs run -t '^((?!MESMO\stempo\snas\str.s\srecusas).)*$'
+
+  web:
+    name: Painel e cardapio (web)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - name: Instalar (lockfile congelado)
+        run: pnpm install --frozen-lockfile
+      - name: Preparar pacotes
+        run: |
+          pnpm --filter '@meucardapio/db' generate
+          pnpm --filter '@meucardapio/shared-types' build
+          pnpm --filter '@meucardapio/db' build
+      - name: Typecheck
+        run: pnpm --filter '@meucardapio/web' run typecheck
+      - name: Lint
+        run: pnpm --filter '@meucardapio/web' run lint
+      - name: Testes
+        run: pnpm --filter '@meucardapio/web' test
+      - name: Build
+        run: pnpm --filter '@meucardapio/web' run build
