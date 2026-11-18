@@ -28,6 +28,7 @@ import feedbackRoutes from "./routes/feedback";
 import subscriptionRoutes from "./routes/subscription";
 import noticeRoutes from "./routes/notices";
 import mfaRoutes from "./routes/mfa";
+import deliveryZoneRoutes from "./routes/deliveryZones";
 import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
 import { clientKey } from "./lib/clientKey";
 import { isPrismaError, loggerOptions, redactLogUrl } from "./lib/logging";
@@ -125,6 +126,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(subscriptionRoutes);
   app.register(noticeRoutes);
   app.register(mfaRoutes);
+  app.register(deliveryZoneRoutes);
 
   return app;
 }

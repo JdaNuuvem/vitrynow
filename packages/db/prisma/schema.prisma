@@ -11,6 +11,31 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// API-16 (B9): o que fazer com bairro fora da lista (só vale quando a loja tem bairros cadastrados).
+enum DeliveryOutsideMode {
+  REFUSE
+  DEFAULT_FEE
+}
+
+// API-16 (B9): bairro atendido, com taxa e prazo. Único por loja (nameKey = nome sem acento/caixa).
+model DeliveryZone {
+  id            String   @id @default(cuid())
+  storeId       String
+  store         Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  name          String
+  nameKey       String
+  feeCents      Int
+  etaMinMinutes Int?
+  etaMaxMinutes Int?
+  freeFromCents Int?
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  @@unique([id, storeId])
+  @@unique([storeId, nameKey])
+  @@index([storeId])
+}
+
 enum UserRole {
   OWNER
   STAFF
@@ -101,6 +126,9 @@ model Store {
   deliveryEnabled Boolean @default(true)
   pickupEnabled   Boolean @default(true)
   acceptingOrders Boolean @default(true) // interruptor "Disponível" do painel: false = cardápio público recusa pedidos
+  deliveryZones   DeliveryZone[]
+  deliveryOutsideMode   DeliveryOutsideMode @default(REFUSE) // API-16: bairro fora da lista (só com bairros cadastrados)
+  freeShippingFromCents Int?                                 // API-16: frete grátis geral a partir do subtotal líquido
   deliveryFeeCents Int    @default(0) // taxa de entrega fixa somada a pedidos DELIVERY
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -261,6 +289,9 @@ model Order {
   paymentMethod  OrderPaymentMethod? // null = forma de pagamento não identificada
   changeForCents Int? // "troco para" informado pelo cliente (só DINHEIRO)
   deliveryFeeCents Int      @default(0) // snapshot da taxa de entrega — já incluída em totalCents
+  deliveryZoneName String?  // API-16: cópia do nome/prazo do bairro na hora do pedido (RN-B9-04)
+  deliveryEtaMinMinutes Int?
+  deliveryEtaMaxMinutes Int?
   tipCents       Int        @default(0) // gorjeta — já incluída em totalCents
   awaitingPayment Boolean   @default(false) // true enquanto espera confirmação de pagamento online (ex. PIX) — não entra no kanban/impressão até confirmar
   printedAt     DateTime?
