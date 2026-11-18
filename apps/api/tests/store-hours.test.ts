@@ -25,7 +25,7 @@ describe("horário de funcionamento (API-11)", () => {
   beforeEach(async () => {
     app = makeApp();
     await app.ready();
-    cookie = (await registerStore(app, { slug: "loja-hr", code: "HR1" })).cookie!;
+    cookie = (await registerStore(app, { slug: "loja-hr", code: "HR1", plan: "BASICO" })).cookie!;
     const category = await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie }, payload: { name: "Lanches" } });
     const product = await app.inject({
       method: "POST",

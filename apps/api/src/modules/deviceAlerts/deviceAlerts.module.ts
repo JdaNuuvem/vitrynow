@@ -1,5 +1,6 @@
+import { clientIpOf } from "../../lib/clientIp";
 import { createHash } from "node:crypto";
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { deviceAlertBodySchema } from "@meucardapio/shared-types";
 import { prismaAuditLogger } from "../../shared/audit";
@@ -22,14 +23,14 @@ const deviceAlertRoutes: FastifyPluginAsync = async (app) => {
         rateLimit: {
           max: 30,
           timeWindow: "1 minute",
-          keyGenerator: (request: { headers: { authorization?: string }; ip: string }) =>
-            "device-alert:" + createHash("sha256").update(request.headers.authorization ?? clientKey(request.ip)).digest("hex").slice(0, 24),
+          keyGenerator: (request: FastifyRequest) =>
+            "device-alert:" + createHash("sha256").update(request.headers.authorization ?? clientKey(clientIpOf(request))).digest("hex").slice(0, 24),
         },
       },
       // Contador por IP ANTES da autenticação: uma requisição com `Authorization` aleatório (token inexistente) não cairia no limite por
       // token e custaria uma consulta indexada cada; por IP o volume de tentativas sem token válido tem teto (sem gravar nada).
       onRequest: async (request, reply) => {
-        if (limited(`alerts-ip:${clientKey(request.ip)}`, 120)) return tooMany(reply); // IPv6 ⇒ /64 (SEC-23): girar o fim do endereço não escapa
+        if (limited(`alerts-ip:${clientKey(clientIpOf(request))}`, 120)) return tooMany(reply); // IPv6 ⇒ /64 (SEC-23): girar o fim do endereço não escapa
       },
       preHandler: app.requireDeviceAuth,
     },

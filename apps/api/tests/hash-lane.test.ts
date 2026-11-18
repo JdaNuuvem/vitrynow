@@ -431,7 +431,7 @@ describe("SEC-34 — varredura: ninguém chama bcrypt fora da faixa", () => {
   it("nenhuma rota chama o hasher sem a chave da origem e o `DUMMY_HASH` só é comparado pelo hasher (mesma faixa)", () => {
     const auth = readFileSync(path.join(srcDir, "routes", "auth.ts"), "utf8");
     expect(auth).not.toMatch(/bcrypt\./);
-    expect(auth).toMatch(/passwordHasher\.verify\(password, user\?\.passwordHash \?\? DUMMY_HASH, clientKey\(request\.ip\)\)/);
-    for (const m of auth.matchAll(/passwordHasher\.(hash|verify)\(([^)]*\)?[^)]*)\)/g)) expect(m[0], m[0]).toContain("clientKey(request.ip)");
+    expect(auth).toMatch(/passwordHasher\.verify\(password, user\?\.passwordHash \?\? DUMMY_HASH, clientKey\(clientIpOf\(request\)\)\)/); // SEC-24: o IP vem de clientIpOf (visitante repassado pelo servico interno), nunca de request.ip
+    for (const m of auth.matchAll(/passwordHasher\.(hash|verify)\(([^)]*\)?[^)]*)\)/g)) expect(m[0], m[0]).toContain("clientKey(clientIpOf(request))");
   });
 });

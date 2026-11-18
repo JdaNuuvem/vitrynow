@@ -1,3 +1,4 @@
+import { clientIpOf } from "../lib/clientIp";
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { Prisma, prisma } from "@meucardapio/db";
@@ -267,7 +268,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (!found) return notFound(reply);
     const { table, store } = found;
     // D2-2: limite duplo — rígido por (mesa, IP), generoso por mesa (não derruba a mesa inteira por um abusador).
-    if (limited(`qr-order:${table.id}:${clientKey(request.ip)}`, 6) || limited(`qr-order-table:${table.id}`, 12)) return tooMany(reply);
+    if (limited(`qr-order:${table.id}:${clientKey(clientIpOf(request))}`, 6) || limited(`qr-order-table:${table.id}`, 12)) return tooMany(reply);
 
     if (!store.qrOrderingEnabled) return reply.code(409).send({ error: "Esta loja não recebe pedidos pelo QR. Chame o atendente.", code: "QR_ORDERING_DISABLED" });
     if (!store.acceptingOrders) return reply.code(409).send({ error: "A loja não está aceitando pedidos no momento.", code: "STORE_CLOSED" });

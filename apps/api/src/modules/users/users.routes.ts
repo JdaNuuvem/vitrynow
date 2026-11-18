@@ -1,3 +1,4 @@
+import { clientIpOf } from "../../lib/clientIp";
 import type { FastifyPluginAsync } from "fastify";
 import { changePasswordSchema, createStaffUserSchema } from "@meucardapio/shared-types";
 import { clientKey } from "../../lib/clientKey";
@@ -37,7 +38,7 @@ export function buildUserRoutes(service: UsersService): FastifyPluginAsync {
         if (parsed.data.role === "OWNER" && !(await mfaProofAccepted(request, "invite_owner"))) {
           return reply.code(403).send({ error: "Confirmação de segurança necessária.", code: "MFA_REQUIRED", purpose: "invite_owner" });
         }
-        const user = await service.invite(request.user.storeId, parsed.data, clientKey(request.ip));
+        const user = await service.invite(request.user.storeId, parsed.data, clientKey(clientIpOf(request)));
         return reply.code(201).send({ user });
       },
     );
@@ -59,7 +60,7 @@ export function buildUserRoutes(service: UsersService): FastifyPluginAsync {
       async (request, reply) => {
         const parsed = changePasswordSchema.safeParse(request.body);
         if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
-        const { tokenVersion } = await service.changePassword(request.user.userId, parsed.data, clientKey(request.ip));
+        const { tokenVersion } = await service.changePassword(request.user.userId, parsed.data, clientKey(clientIpOf(request)));
         // Derruba as OUTRAS sessões e sockets; este dispositivo recebe cookie na versão nova.
         disconnectUser(request.user.userId);
         reply.setCookie(SESSION_COOKIE, signSession(app, { id: request.user.userId, tokenVersion }), sessionCookieOptions());

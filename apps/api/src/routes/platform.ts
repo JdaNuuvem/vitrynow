@@ -1,3 +1,4 @@
+import { clientIpOf } from "../lib/clientIp";
 import { randomBytes } from "node:crypto";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { Prisma, prisma } from "@meucardapio/db";
@@ -59,7 +60,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     const { email, password } = parsed.data;
 
-    const slot = throttle.reserve(email, request.ip);
+    const slot = throttle.reserve(email, clientIpOf(request));
     if (!slot.allowed) {
       reply.header("Retry-After", String(slot.retryAfterSeconds));
       return reply.code(429).send({ error: "muitas tentativas; tente de novo em alguns minutos", code: "LOGIN_LOCKED" });
@@ -69,16 +70,16 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
     const admin = await prisma.platformAdmin.findUnique({ where: { email } });
     let passwordOk: boolean;
     try {
-      passwordOk = await passwordHasher.verify(password, admin?.passwordHash ?? DUMMY_HASH, clientKey(request.ip));
+      passwordOk = await passwordHasher.verify(password, admin?.passwordHash ?? DUMMY_HASH, clientKey(clientIpOf(request)));
     } catch (error) {
       if (error instanceof ServerBusyError) {
-        throttle.refund(email, request.ip);
+        throttle.refund(email, clientIpOf(request));
         return sendServerBusy(reply);
       }
       throw error;
     }
     if (!admin || admin.disabledAt || !passwordOk) return reply.code(401).send({ error: "credenciais inválidas" });
-    throttle.succeed(email, request.ip);
+    throttle.succeed(email, clientIpOf(request));
 
     // Senha certa NÃO abre sessão: só gera o desafio. O cookie só nasce em /auth/verify.
     const { challenge, code } = await createChallenge(admin.id, "platform_login");
@@ -376,7 +377,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
     const adminRow = await prisma.platformAdmin.findUnique({ where: { id: admin.id }, select: { passwordHash: true } });
     let passwordOk: boolean;
     try {
-      passwordOk = await passwordHasher.verify(input.password, adminRow?.passwordHash ?? DUMMY_HASH, clientKey(request.ip));
+      passwordOk = await passwordHasher.verify(input.password, adminRow?.passwordHash ?? DUMMY_HASH, clientKey(clientIpOf(request)));
     } catch (error) {
       if (error instanceof ServerBusyError) return sendServerBusy(reply);
       throw error;

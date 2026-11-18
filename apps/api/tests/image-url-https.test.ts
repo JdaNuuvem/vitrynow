@@ -49,7 +49,7 @@ describe("httpsUrl (esquema compartilhado)", () => {
 
 describe("schemas que usam httpsUrl", () => {
   it("produto: imageUrl https ou vazia (para apagar a foto); http recusada", () => {
-    const base = { name: "X", priceCents: 100 };
+    const base = { categoryId: "cat-1", name: "X", priceCents: 100 }; // API-56: categoryId e obrigatorio
     expect(createProductSchema.safeParse({ ...base, imageUrl: "https://a.com/x.jpg" }).success).toBe(true);
     expect(createProductSchema.safeParse({ ...base, imageUrl: "" }).success).toBe(true);
     expect(createProductSchema.safeParse({ ...base }).success).toBe(true);
@@ -103,8 +103,9 @@ describe("rotas (integração)", () => {
   it("catálogo: produto com foto http é recusado (400); com https é criado", async () => {
     const { cookie } = await registerStore(app);
     const headers = { cookie: cookie! };
+    const categoryId = (await app.inject({ method: "POST", url: "/api/catalog/categories", headers, payload: { name: "Lanches" } })).json().category.id as string; // API-56: categoria obrigatoria
     const create = (imageUrl: string) =>
-      app.inject({ method: "POST", url: "/api/catalog/products", headers, payload: { name: "Lanche", priceCents: 1500, imageUrl } });
+      app.inject({ method: "POST", url: "/api/catalog/products", headers, payload: { categoryId, name: "Lanche", priceCents: 1500, imageUrl } });
 
     const bad = await create("http://a.com/p.jpg");
     expect(bad.statusCode).toBe(400);
