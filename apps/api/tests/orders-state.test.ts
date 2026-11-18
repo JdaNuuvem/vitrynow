@@ -2,6 +2,7 @@
 // Mercado Pago é SEMPRE mockado.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { activateSubscription } from "../src/lib/subscription";
 import { login, makeApp, registerStore, resetDb, orderTokenHeader, useMockedProvider } from "./helpers";
 import { subscribe } from "../src/realtime/hub";
 
@@ -48,6 +49,9 @@ describe("API-02 — estados do pedido", () => {
   type Ctx = Awaited<ReturnType<typeof setup>>;
 
   async function staffCookie(ctx: Ctx) {
+    // Equipe é recurso do PRO (API-08): a loja de teste ativa o PRO antes de convidar.
+    const subscription = await prisma.subscription.findFirstOrThrow({ where: { storeId: ctx.storeId } });
+    await activateSubscription({ subscriptionId: subscription.id, planCode: "PRO" });
     const invited = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: ctx.cookie }, payload: { email: `staff-${Date.now()}@t.com`, password: "provisoria1" } });
     expect(invited.statusCode).toBe(201);
     const email = json(invited).user.email as string;

@@ -58,6 +58,11 @@ const isProviderNotFound = (error: unknown): boolean => {
 export interface PixGateway {
   createPixPayment(input: PixChargeInput): Promise<PixCharge>;
   getPayment(providerPaymentId: string): Promise<ProviderPayment>;
+  /**
+   * SOMENTE LEITURA (SEC-17): pagamentos que o provedor tem para esta `external_reference` (= id do pedido). Reencontra a cobrança "órfã" sem criar nada
+   * e sem depender da janela de validade da chave de idempotência.
+   */
+  findByExternalReference(externalReference: string): Promise<ProviderPayment[]>;
   /** Cancela um pagamento PIX ainda pendente (cliente cancelou o pedido antes de pagar). */
   cancelPayment(providerPaymentId: string): Promise<void>;
   /**
@@ -107,6 +112,17 @@ export function mercadoPagoGateway(accessToken: string): PixGateway {
         amountCents: typeof result.transaction_amount === "number" ? Math.round(result.transaction_amount * 100) : null,
         currency: result.currency_id ?? null,
       };
+    },
+    async findByExternalReference(externalReference) {
+      // NÃO VERIFICADO no sandbox (CL-13): filtro `external_reference` do search e formato de `results`.
+      const found = await new MpPayment(client()).search({ options: { external_reference: externalReference, sort: "date_created", criteria: "desc" } });
+      return (found.results ?? []).map((r) => ({
+        providerPaymentId: String(r.id),
+        status: r.status,
+        externalReference: r.external_reference ?? null,
+        amountCents: typeof r.transaction_amount === "number" ? Math.round(r.transaction_amount * 100) : null,
+        currency: r.currency_id ?? null,
+      }));
     },
     async cancelPayment(providerPaymentId) {
       const payment = new MpPayment(client());

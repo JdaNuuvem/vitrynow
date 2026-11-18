@@ -6,6 +6,7 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import websocket from "@fastify/websocket";
 import authPlugin from "./plugins/auth";
+import { withTextTooLongCode } from "./lib/textErrors";
 import healthRoutes from "./routes/health";
 import authRoutes from "./routes/auth";
 import storefrontRoutes from "./routes/storefront";
@@ -29,6 +30,7 @@ import feedbackRoutes from "./routes/feedback";
 import subscriptionRoutes from "./routes/subscription";
 import noticeRoutes from "./routes/notices";
 import mfaRoutes from "./routes/mfa";
+import deliveryZoneRoutes from "./routes/deliveryZones";
 import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
 import { clientKey } from "./lib/clientKey";
 import { isPrismaError, loggerOptions, redactLogUrl } from "./lib/logging";
@@ -38,6 +40,7 @@ import { assertPaymentsBootConfig } from "./modules/storePayments/oauth";
 import jobsPlugin from "./jobs/plugin";
 import pixAvailabilityPlugin from "./plugins/pixAvailability";
 import storePaymentRoutes from "./modules/storePayments/storePayments.module";
+import subscriptionGate from "./plugins/subscriptionGate";
 
 export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = {}) {
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
@@ -81,6 +84,12 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
     return reply.send(error);
   });
 
+  // API-49: código TEXT_TOO_LONG nos 400 de validação. Hook SÍNCRONO (com `done`) de propósito: um onSend assíncrono atrasa o
+  // `reply.sent`, e os guardas que fazem `reply.code(403).send(...)` sem `return` (requireOwner etc.) deixariam a rota seguir.
+  app.addHook("onSend", (_request, reply, payload, done) => {
+    done(null, reply.statusCode === 400 && typeof payload === "string" ? withTextTooLongCode(payload) : payload);
+  });
+
   app.register(cors, {
     origin: allowedOrigin(),
     credentials: true,
@@ -96,6 +105,8 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(websocket);
   app.register(authPlugin);
   app.register(jobsPlugin);
+  // Portão da assinatura (Consulta/Suspensão): precisa vir ANTES de qualquer rota, pois age no `onRoute`.
+  app.register(subscriptionGate);
   app.register(pixAvailabilityPlugin);
 
   // Várias rotas são "ação sem corpo" (delete, revoke) chamadas com
@@ -135,6 +146,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(storePaymentRoutes);
   app.register(noticeRoutes);
   app.register(mfaRoutes);
+  app.register(deliveryZoneRoutes);
 
   return app;
 }

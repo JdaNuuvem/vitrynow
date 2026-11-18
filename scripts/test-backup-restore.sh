@@ -76,5 +76,27 @@ else check ok "dump truncado reprovado: $(tail -1 "$TMPD/bad.log" | cut -c1-100)
 LEFT="$(docker exec "${DSTENV[@]}" "$DST" psql -X -At -d postgres -c "select count(*) from pg_database where datname like 'restore_verify_%'")"
 [ "$LEFT" = 0 ] && check ok "bases temporárias de verificação foram removidas" || check fail "sobraram $LEFT bases restore_verify_*"
 
+# (5) Opcional e pesado (RUN_SUITE=1): a prova final de que o backup serve — restaurar o dump num banco
+# novo e rodar a suíte da API inteira sobre ele. A suíte apaga dados, por isso o banco é descartável
+# e termina em _test (exigência do vitest.config da API).
+if [ "${RUN_SUITE:-0}" = 1 ]; then
+  echo "== (5) suíte da API sobre o banco restaurado do dump"
+  RDB=restore_suite_test
+  docker exec -e PGPASSWORD=$PW "$SRC" psql -U meucardapio -d postgres -c "drop database if exists $RDB" >/dev/null 2>&1
+  docker exec -e PGPASSWORD=$PW "$SRC" psql -U meucardapio -d postgres -c "create database $RDB" >/dev/null
+  if docker exec -e PGPASSWORD=$PW -e PGHOST=localhost "$SRC" pg_restore -U meucardapio --exit-on-error --no-owner --no-acl -d $RDB "$DUMP" >"$TMPD/rs.log" 2>&1; then
+    check ok "dump restaurado em $RDB ($(docker exec -e PGPASSWORD=$PW "$SRC" psql -U meucardapio -d $RDB -At -c "select count(*) from _prisma_migrations") migrações)"
+    rc=0
+    ( cd "$ROOT" && pnpm install --frozen-lockfile >/dev/null 2>&1; pnpm --filter @meucardapio/db generate >/dev/null 2>&1
+      pnpm --filter @meucardapio/db build >/dev/null 2>&1; pnpm --filter @meucardapio/shared-types build >/dev/null 2>&1
+      TEST_DATABASE_URL="postgresql://meucardapio:$PW@127.0.0.1:$SRC_PORT/$RDB?schema=public" pnpm --filter @meucardapio/api test ) > "$TMPD/suite.log" 2>&1 || rc=$?
+    # guarda o log completo (o TMPD some no fim); SUITE_LOG=<arquivo>
+    if [ -n "${SUITE_LOG:-}" ]; then sed 's/\x1b\[[0-9;]*m//g' "$TMPD/suite.log" | tr -d '\r' > "$SUITE_LOG"; fi
+    sed 's/\x1b\[[0-9;]*m//g' "$TMPD/suite.log" | tr -d '\r' | grep -aE "Test Files|Tests  |FAIL|Error:" | head -8 | sed 's/^/   /'
+    [ "$rc" = 0 ] && check ok "suíte da API verde sobre o banco restaurado" || check fail "suíte da API falhou sobre o banco restaurado (exit $rc)"
+  else cat "$TMPD/rs.log"; check fail "pg_restore em $RDB falhou"; fi
+  docker exec -e PGPASSWORD=$PW "$SRC" psql -U meucardapio -d postgres -c "drop database if exists $RDB" >/dev/null 2>&1
+fi
+
 echo; echo "RESULTADO: $PASS ok, $FAILS falhas"
 [ "$FAILS" -eq 0 ]

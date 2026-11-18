@@ -216,6 +216,18 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
     if (ticketQueued) publishToStore(storeId, { type: "print.available" });
     return reply.code(201).send({ orderId: order.id, code: order.code, token: accessToken.token });
   });
+  // SEC-15 / RN-B2-06: o limite de desconto manual do STAFF (%) é do DONO: só o OWNER muda (0 = STAFF sem desconto), a faixa é 0..100 e a mudança fica na auditoria.
+  app.put("/api/store/manual-discount-limit", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request, reply) => {
+    const { storeId, userId } = request.user;
+    const percent = (request.body as { limitPercent?: unknown } | null)?.limitPercent;
+    if (typeof percent !== "number" || !Number.isInteger(percent) || percent < 0 || percent > 100) {
+      return reply.code(400).send({ error: "Informe o limite em % (inteiro de 0 a 100).", code: "VALIDATION_ERROR" });
+    }
+    const before = await prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { manualDiscountStaffLimitPercent: true } });
+    await prisma.store.update({ where: { id: storeId }, data: { manualDiscountStaffLimitPercent: percent } });
+    logAudit({ storeId, userId, action: "store.manual_discount_limit_change", targetType: "Store", targetId: storeId, metadata: { fromPercent: before.manualDiscountStaffLimitPercent, toPercent: percent } });
+    return { limitPercent: percent };
+  });
 };
 
 export default manualOrderRoutes;

@@ -116,7 +116,7 @@ describe("API-66 — nothingToCharge no tíquete", () => {
     for (const status of ["PENDENTE", "APROVADO", "EM_ANALISE", "REEMBOLSADO", "ESTORNO_PENDENTE", "CONTESTADO"] as const) {
       expect(nothingToCharge({ totalCents: 0 }, { status }), status).toBe(false);
     }
-    for (const total of [1, 600, 4000]) expect(nothingToCharge({ totalCents: total }, null), String(total)).toBe(false);
+    for (const total of [1, 600, 4000, 250_000, 99_999_999]) expect(nothingToCharge({ totalCents: total }, null), String(total)).toBe(false); // total grande (> R$ 1.000) sem pagamento também é false
     expect(nothingToCharge({ totalCents: -1 }, null)).toBe(false); // valor impossível nunca vira "nada a cobrar"
   });
 });

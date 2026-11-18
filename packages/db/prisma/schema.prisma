@@ -11,6 +11,31 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// API-16 (B9): o que fazer com bairro fora da lista (só vale quando a loja tem bairros cadastrados).
+enum DeliveryOutsideMode {
+  REFUSE
+  DEFAULT_FEE
+}
+
+// API-16 (B9): bairro atendido, com taxa e prazo. Único por loja (nameKey = nome sem acento/caixa).
+model DeliveryZone {
+  id            String   @id @default(cuid())
+  storeId       String
+  store         Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  name          String
+  nameKey       String
+  feeCents      Int
+  etaMinMinutes Int?
+  etaMaxMinutes Int?
+  freeFromCents Int?
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  @@unique([id, storeId])
+  @@unique([storeId, nameKey])
+  @@index([storeId])
+}
+
 enum UserRole {
   OWNER
   STAFF
@@ -106,6 +131,10 @@ model Store {
   deliveryEnabled Boolean @default(true)
   pickupEnabled   Boolean @default(true)
   acceptingOrders Boolean @default(true) // interruptor "Disponível" do painel: false = cardápio público recusa pedidos
+  hideSoldOutProducts Boolean @default(false) // API-17 (RN-B11-03): esconde produtos esgotados no cardápio público
+  deliveryZones   DeliveryZone[]
+  deliveryOutsideMode   DeliveryOutsideMode @default(REFUSE) // API-16: bairro fora da lista (só com bairros cadastrados)
+  freeShippingFromCents Int?                                 // API-16: frete grátis geral a partir do subtotal líquido
   deliveryFeeCents Int    @default(0) // taxa de entrega fixa somada a pedidos DELIVERY
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -127,6 +156,7 @@ model Store {
   printMode    PrintMode @default(LEGACY) // modo de impressão decidido pelo SERVIDOR por loja (ADR-0004 §8.12)
   manualDiscountStaffLimitPercent Int @default(10) // desconto manual do pedido lançado no painel: STAFF até este %, acima só o OWNER (RN-B2-06)
   cashStaffWithdrawalLimitCents Int @default(0) // limite de sangria do STAFF por lançamento (RN-CX-09); 0 = toda sangria exige o dono
+  featureInterests FeatureInterest[]
 }
 
 // Contador atômico por loja (hoje: sequência do código do pedido). Incrementado com
@@ -224,6 +254,8 @@ model Product {
   active      Boolean      @default(true)
   featured    Boolean      @default(false)
   position    Int          @default(0)
+  soldOut      Boolean     @default(false) // API-17 (B11): esgotado; vale até soldOutUntil (null = até reativar)
+  soldOutUntil DateTime?
   additionals ProductAdditional[]
   orderItems  OrderItem[]
   createdAt   DateTime     @default(now())
@@ -268,6 +300,9 @@ model Order {
   paymentMethod  OrderPaymentMethod? // null = forma de pagamento não identificada
   changeForCents Int? // "troco para" informado pelo cliente (só DINHEIRO)
   deliveryFeeCents Int      @default(0) // snapshot da taxa de entrega — já incluída em totalCents
+  deliveryZoneName String?  // API-16: cópia do nome/prazo do bairro na hora do pedido (RN-B9-04)
+  deliveryEtaMinMinutes Int?
+  deliveryEtaMaxMinutes Int?
   tipCents       Int        @default(0) // gorjeta — já incluída em totalCents
   awaitingPayment Boolean   @default(false) // true enquanto espera confirmação de pagamento online (ex. PIX) — não entra no kanban/impressão até confirmar
   printedAt     DateTime?
@@ -475,6 +510,8 @@ model Payment {
   lastRawStatus     String?
   lastCheckedAt     DateTime?
   reconcileNote     String? // estorno feito mas o pedido já estava finalizado: conciliação manual (nunca silencioso)
+  refundAbandonedAt DateTime? // API-61: dono encerrou o estorno SEM devolver por aqui (o dinheiro continua como recebido); nulo = em curso
+  refundAbandonCode String? // API-61: código fechado do motivo (MP_RECUSA|PAGAMENTO_ANTIGO|CONTA_DESCONECTADA|ACERTADO_COM_CLIENTE|OUTRO); sem texto livre
   paymentAccountId  String? // conta do vendedor que criou a cobrança (API-07); pagamento antigo/da plataforma = null
   paymentAccount    PaymentAccount? @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
   createdAt         DateTime      @default(now())
@@ -552,7 +589,8 @@ model Plan {
   code       String   @unique // ex.: "BASICO", "PRO"
   name       String
   priceCents Int // cobrança mensal
-  features   String[] // chaves de recurso liberadas (ver lib/subscription.ts)
+  features   String[] // chaves de recurso liberadas (só chaves "entregues": lib/features.ts)
+  limits     Json     @default("{}") // { maxUsers, maxPrinters }; null = sem limite (ADR-0003 §2.1)
   active     Boolean  @default(true)
   position   Int      @default(0)
   createdAt  DateTime @default(now())
@@ -574,6 +612,19 @@ model Subscription {
   updatedAt        DateTime           @updatedAt
 
   payments SubscriptionPayment[]
+}
+
+// "Quero ser avisado" (RN-B10-05): lojista tentou usar recurso que o plano não tem. Um registro por
+// loja e recurso; só mede demanda, não promete data nem preço.
+model FeatureInterest {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  feature   String
+  createdAt DateTime @default(now())
+
+  @@unique([storeId, feature])
+  @@unique([id, storeId]) // ADR-0009: base das FKs compostas por loja
 }
 
 // Cobrança PIX de uma assinatura (conta Mercado Pago da plataforma).
@@ -665,6 +716,7 @@ enum PrintJobStatus {
   PRINTED
   FAILED
   CANCELED
+  STALE // N6/RN-IMP-20: mais velho que a janela de retomada (12 h); não sai sozinho, o painel oferece "Imprimir agora"
 }
 
 model PrintJob {
@@ -677,6 +729,7 @@ model PrintJob {
   status           PrintJobStatus @default(PENDING)
   attempts         Int            @default(0)
   maxAttempts      Int            @default(3)
+  resumedAt        DateTime? // "Imprimir agora" (N6): a janela de 12 h passa a contar daqui, não da criação
   availableAt      DateTime       @default(now()) // só é entregue com availableAt <= agora (recuo por falha)
   claimedAt        DateTime?
   leaseUntil       DateTime? // vence pelo relógio do banco; vencida = pode ser reclamada por outro
