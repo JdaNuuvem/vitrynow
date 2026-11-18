@@ -19,6 +19,7 @@ import { CodedError, useDomainErrors } from "../shared/errors";
 
 export const DEVICE_TOKEN_HEADER = "x-device-token";
 const MAX_TOKEN_LENGTH = 200;
+const QR_PENDING_CAP = 15; // D2-2: teto de pedidos PENDENTE (já impressos, sem aceite) por mesa; acima disso o QR recusa até a equipe aceitar/recusar (cada pedido gasta papel)
 const QR_BURST_PENDING = 5; // RN-MB-08: tantos pedidos PENDENTE na mesa => alerta no painel (não bloqueia o cliente)
 const newDeviceToken = () => {
   const token = "mcd_" + randomBytes(32).toString("base64url");
@@ -209,6 +210,10 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.code(400).send({ error: `pedido mínimo é R$ ${(store.minOrderCents / 100).toFixed(2)}`, code: "MIN_ORDER" });
     }
 
+    if ((await prisma.order.count({ where: { storeId: store.id, tableId: table.id, status: "PENDENTE" } })) >= QR_PENDING_CAP) {
+      return reply.code(429).send({ error: "Há muitos pedidos aguardando esta mesa. Chame o atendente.", code: "TABLE_PENDING_LIMIT" });
+    }
+
     // Token do aparelho: reaproveita o enviado; senão emite um novo (devolvido UMA vez). Só o hash vai ao banco.
     const sent = deviceTokenOf(request);
     const device = sent ? { token: sent, hash: hashToken(sent), issued: false } : { ...newDeviceToken(), issued: true };
@@ -247,14 +252,14 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           },
         },
       });
-      // Com aceite, o tíquete da cozinha sai quando a equipe aceita (API-23); sem aceite, nasce junto do pedido.
-      if (direct) ticketQueued = await enqueueOrderTicket(tx, { id: created.id, storeId: store.id });
+      // Decisão do Claudio (18/11): imprime AO CHEGAR, com ou sem aceite; o aceite só muda o estado. O tíquete nasce na MESMA transação (nunca pedido sem job).
+      ticketQueued = await enqueueOrderTicket(tx, { id: created.id, storeId: store.id });
       return created;
     }, ORDER_TX_OPTIONS);
 
     publishToStore(store.id, { type: "order.created", orderId: order.id });
     if (ticketQueued) publishToStore(store.id, { type: "print.available" });
-    // Rajada (RN-MB-08): muitos PENDENTE na mesma mesa => alerta, nunca bloqueio.
+    // Rajada (RN-MB-08): muitos PENDENTE na mesma mesa => alerta no painel.
     if (!direct) {
       const pending = await prisma.order.count({ where: { storeId: store.id, tableId: table.id, status: "PENDENTE" } });
       if (pending >= QR_BURST_PENDING) publishToStore(store.id, { type: "table.alert", tableId: table.id, kind: "BURST" });
