@@ -75,6 +75,8 @@ if (-not $ciLock) {
   if (-not $ciLock) { Write-Host "Desisti após $WaitMinutes min sem vaga. Tente de novo mais tarde." -ForegroundColor Red; exit 3 }
 }
 foreach ($tool in 'node', 'pnpm', 'docker') { if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "$tool não encontrado no PATH" } }
+$nodeMajor = [int](((node -v) -replace '^v', '') -split '\.')[0]
+if ($nodeMajor -lt 24) { throw "Node $nodeMajor no PATH: o projeto exige Node 24 (engines em package.json, .nvmrc, Dockerfiles e CI usam 24)" }
 
 $continue = $true
 if ($continue) { $continue = Step 'install (lockfile congelado)' { pnpm install --frozen-lockfile } }

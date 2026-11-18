@@ -47,7 +47,7 @@ echo "== validando e subindo a stack ($PROJ)"
 out="$("${DC[@]}" up -d --build 2>&1)"; rc=$?
 echo "$out" | tail -25
 [ "$rc" -eq 0 ] || { echo "FALHA: 'compose up --build' saiu com $rc (build ou subida); o smoke para aqui: o resto só geraria falhas em cascata"; exit 1; }
-docker run -d --name "$PROJ-xffecho" --network "${PROJ}_default" --network-alias xffecho node:20-alpine node -e \
+docker run -d --name "$PROJ-xffecho" --network "${PROJ}_default" --network-alias xffecho node:24-alpine node -e \
   "require('http').createServer((q,s)=>s.end(JSON.stringify({xff:q.headers['x-forwarded-for']||null,ip:q.socket.remoteAddress,secret:q.headers['x-internal-service-secret']||null,visitor:q.headers['x-visitor-ip']||null}))).listen(8080)" >/dev/null
 
 echo "== aguardando saúde (até 180s)"
@@ -93,7 +93,7 @@ done
 [ -z "$leak" ] && check ok "15 variações de caminho de /api/admin/* (caixa, //, %61, ../, ;, %00) não chegam ao handler" || check fail "variações que passaram do Caddy:$leak"
 
 echo "== 6 X-Forwarded-For forjado não chega ao backend"
-# o eco (node:20-alpine) pode demorar a abrir a porta: espera até 30 s por uma resposta não vazia
+# o eco (node:24-alpine) pode demorar a abrir a porta: espera até 30 s por uma resposta não vazia
 r=""
 for i in $(seq 1 15); do
   r="$(curl -s -H 'X-Forwarded-For: 6.6.6.6, 7.7.7.7' "http://127.0.0.1:$PORT/__xff")"
@@ -104,14 +104,14 @@ if [ -z "$r" ]; then
   echo "   DIAGNÓSTICO: eco=$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}}' "$PROJ-xffecho" 2>&1)"
   echo "   --- logs do eco:"; docker logs --tail 5 "$PROJ-xffecho" 2>&1 | sed 's/^/   /'
   echo "   --- status direto do eco pela rede do compose:"
-  docker run --rm --network "${PROJ}_default" node:20-alpine node -e "require('http').get('http://xffecho:8080',r=>{console.log('eco responde',r.statusCode)}).on('error',e=>console.log('eco inacessível:',e.code))" 2>&1 | sed 's/^/   /'
+  docker run --rm --network "${PROJ}_default" node:24-alpine node -e "require('http').get('http://xffecho:8080',r=>{console.log('eco responde',r.statusCode)}).on('error',e=>console.log('eco inacessível:',e.code))" 2>&1 | sed 's/^/   /'
   echo "   --- caddy:"; "${DC[@]}" logs --tail 8 caddy 2>&1 | sed 's/^/   /'
 fi
 case "$r" in *6.6.6.6*|*7.7.7.7*) check fail "XFF forjado chegou ao backend";; *'"xff":"'*) check ok "XFF do cliente descartado; Caddy envia o IP real da conexão";; *) check fail "resposta inesperada: $r";; esac
 
 echo "== 6e Caddy remove x-internal-service-secret e x-visitor-ip vindos da internet (SEC-24)"
 # controle: DENTRO da rede o eco devolve os cabeçalhos se eles chegarem (senão o teste abaixo seria vazio)
-ctl="$(docker run --rm --network "${PROJ}_default" node:20-alpine node -e "require('http').get('http://xffecho:8080',{headers:{'x-internal-service-secret':'ctl-secreto','x-visitor-ip':'9.9.9.9'}},r=>{let b='';r.on('data',d=>b+=d);r.on('end',()=>console.log(b))})" 2>&1)"
+ctl="$(docker run --rm --network "${PROJ}_default" node:24-alpine node -e "require('http').get('http://xffecho:8080',{headers:{'x-internal-service-secret':'ctl-secreto','x-visitor-ip':'9.9.9.9'}},r=>{let b='';r.on('data',d=>b+=d);r.on('end',()=>console.log(b))})" 2>&1)"
 case "$ctl" in *ctl-secreto*9.9.9.9*|*9.9.9.9*ctl-secreto*) check ok "controle: o eco devolve os dois cabeçalhos quando eles CHEGAM (o teste abaixo não é vazio)";; *) check fail "controle falhou: o eco não devolveu os cabeçalhos ($ctl)";; esac
 # pela internet (via Caddy), com variações de caixa: nada pode chegar ao backend
 leak=""
@@ -228,7 +228,7 @@ echo "== 9 limite de requisições por IP em /loja/* (SEC-26 / ST-44, ST-45, ST-
 # teste confere que os IPs são mesmo distintos; se não forem, o teste é inválido e falha dizendo isso.
 tot429=0; CIDS=()
 for n in 1 2 3 4 5 6 7 8 9 10; do
-  CIDS+=("$(docker run -d --network "${PROJ}_default" node:20-alpine node -e "
+  CIDS+=("$(docker run -d --network "${PROJ}_default" node:24-alpine node -e "
     const http=require('http');let c429=0,ok=0,i=0;
     const next=()=>{ if(i>=100){console.log(c429+' '+ok);return;} i++;
       http.get('http://caddy:80/loja/distinto-$n-'+i,r=>{ r.resume(); if(r.statusCode===429)c429++; else ok++; r.on('end',next); }).on('error',()=>{ ok++; next(); }); };
@@ -320,7 +320,7 @@ CID9="$("${DC[@]}" ps -q caddy)"
 # Se alguém baixar o mem_limit ou o custo por chave subir, falha.
 memmb() { docker stats --no-stream --format '{{.MemUsage}}' "$1" | awk '{v=$1; if (v ~ /GiB/) {sub(/GiB/,"",v); printf "%.1f", v*1024} else if (v ~ /MiB/) {sub(/MiB/,"",v); printf "%.1f", v} else if (v ~ /KiB/) {sub(/KiB/,"",v); printf "%.1f", v/1024} else {sub(/B/,"",v); printf "%.1f", v/1048576}}'; }
 onda() { # onda <prefixo-das-chaves>: 20 mil chaves distintas; imprime "done <429>"
-  docker run --rm --network "${PROJ}_default" node:20-alpine node -e "
+  docker run --rm --network "${PROJ}_default" node:24-alpine node -e "
     const http=require('http');const agent=new http.Agent({keepAlive:true,maxSockets:64});
     let sent=0,done=0,c429=0,total=20000;
     const one=()=>{ if(sent>=total) return; const i=sent++;
@@ -385,7 +385,7 @@ actl="$("${DC[@]}" exec -T api node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -
 [ "$actl" = conectou ] && check ok "controle: a API CONECTA ao Postgres em $pgip:5432" || check fail "controle falhou: a API não conectou ao banco ($actl)"
 wcon="$("${DC[@]}" exec -T web node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -1)"
 [ "$wcon" = conectou ] && check fail "o web CONECTA ao Postgres em $pgip:5432 (rede de dados deveria estar isolada)" || check ok "o web NÃO conecta ao Postgres ($wcon)"
-ccon="$(docker run --rm --network container:"$CID" node:20-alpine node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -1)"
+ccon="$(docker run --rm --network container:"$CID" node:24-alpine node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -1)"
 [ "$ccon" = conectou ] && check fail "o Caddy CONECTA ao Postgres em $pgip:5432 (rede de dados deveria estar isolada)" || check ok "o Caddy NÃO conecta ao Postgres ($ccon; testado dentro da rede dele)"
 # rastreabilidade (BOARD): versão, build-info (módulo e commit) e digest da imagem final
 echo "   caddy version: $(docker exec "$CID" caddy version 2>&1 | head -1)"

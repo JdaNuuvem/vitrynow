@@ -20,7 +20,7 @@ docker run -d --name "$CT" --network "$NET" --memory "$MEM" -e "GOMEMLIMIT=$GOM"
 sleep 4
 cg() { docker exec "$CT" sh -c 'cat /sys/fs/cgroup/memory.stat 2>/dev/null || cat /sys/fs/cgroup/memory/memory.stat' 2>/dev/null | tr -d '' | awk '$1=="anon"||$1=="total_rss"{a=$2} $1=="file"||$1=="total_cache"{c=$2} END{printf "anon=%d file=%d", a/1048576, c/1048576}'; }
 mem() { docker stats --no-stream --format '{{.MemUsage}}' "$CT" 2>/dev/null | awk '{v=$1; if (v ~ /GiB/) {sub(/GiB/,"",v); printf "%.0f", v*1024} else {sub(/MiB/,"",v); printf "%.0f", v}}'; }
-onda() { docker run --rm --network "$NET" node:20-alpine node -e "
+onda() { docker run --rm --network "$NET" node:24-alpine node -e "
   const http=require('http');const agent=new http.Agent({keepAlive:true,maxSockets:64});let sent=0,done=0,total=20000;
   const fin=()=>{done++; if(done===total){console.log('ok');agent.destroy();} else one();};
   const one=()=>{ if(sent>=total) return; const i=sent++; http.get({host:'$CT',port:8080,path:'/',agent,headers:{'X-Mem-Key':'$1-'+i}},r=>{r.resume();r.on('end',fin)}).on('error',fin); };
