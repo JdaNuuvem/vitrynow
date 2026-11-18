@@ -10,9 +10,19 @@ describe("rota /reset-senha: nada de Referer e fora do índice (ST-56)", () => {
     expect(rule?.headers).toContainEqual({ key: "Referrer-Policy", value: "no-referrer" });
   });
 
-  it("o cabeçalho não vaza para as outras rotas (a regra é só desta)", async () => {
-    const rules = await nextConfig.headers!();
-    expect(rules.every((r: { source: string }) => r.source === "/reset-senha")).toBe(true);
+  it("o no-referrer não vaza para as outras rotas: só a regra desta rota o traz (NG-07 acrescentou a CSP global)", async () => {
+    const rules = (await nextConfig.headers!()) as { source: string; headers: { key: string; value: string }[] }[];
+    const noReferrer = rules.filter((r) => r.headers.some((h) => h.key === "Referrer-Policy" && h.value === "no-referrer"));
+    expect(noReferrer.map((r) => r.source)).toEqual(["/reset-senha"]);
+  });
+
+  it("a regra global deixa de fora o /reset-senha (nunca duas regras definindo o mesmo cabeçalho) e esta rota segue com a CSP", async () => {
+    const rules = (await nextConfig.headers!()) as { source: string; headers: { key: string; value: string }[] }[];
+    const reset = rules.find((r) => r.source === "/reset-senha")!;
+    expect(reset.headers.some((h) => h.key === "Content-Security-Policy")).toBe(true);
+    const global = rules.find((r) => r.source !== "/reset-senha")!;
+    expect(new RegExp(`^${global.source}$`).test("/reset-senha")).toBe(false);
+    expect(new RegExp(`^${global.source}$`).test("/login")).toBe(true);
   });
 
   it("o metadata também pede no-referrer e noindex (vale em navegação no cliente)", () => {
