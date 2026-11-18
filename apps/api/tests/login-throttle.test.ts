@@ -209,7 +209,7 @@ describe("login e cadastro (NG-05 / SEC-20, ST-05, ST-33, ST-34, B21)", () => {
 
   it("corrida: dois cadastros ao mesmo tempo com o mesmo e-mail ⇒ um 201 e o resto 409, nunca 500", async () => {
     const payload = (n: number) => ({ storeName: `Loja ${n}`, slug: `loja-corrida-${n}`, code: `CR${n}`, email: n === 2 ? "CORRIDA@teste.com" : "corrida@teste.com", password: "senha12345" });
-    const results = await Promise.all([1, 2, 3].map((n) => app.inject({ method: "POST", url: "/auth/register", payload: payload(n) })));
+    const results = await Promise.all([1, 2, 3].map((n) => app.inject({ method: "POST", url: "/auth/register", remoteAddress: `10.88.0.${n}`, payload: payload(n) }))); // clientes DISTINTOS: a faixa de hash (SEC-34) limita a 2 vagas por origem
     const codes = results.map((r) => r.statusCode);
     expect(codes.filter((c) => c === 201)).toHaveLength(1);
     expect(codes.every((c) => c === 201 || c === 409)).toBe(true);
@@ -218,7 +218,7 @@ describe("login e cadastro (NG-05 / SEC-20, ST-05, ST-33, ST-34, B21)", () => {
 
   it("corrida: mesmo slug com e-mails diferentes ⇒ um 201 e o resto 409, nunca 500", async () => {
     const payload = (n: number) => ({ storeName: `Loja ${n}`, slug: "mesmo-slug", code: `SL${n}`, email: `dono${n}@teste.com`, password: "senha12345" });
-    const results = await Promise.all([1, 2, 3].map((n) => app.inject({ method: "POST", url: "/auth/register", payload: payload(n) })));
+    const results = await Promise.all([1, 2, 3].map((n) => app.inject({ method: "POST", url: "/auth/register", remoteAddress: `10.88.0.${n}`, payload: payload(n) }))); // clientes DISTINTOS: a faixa de hash (SEC-34) limita a 2 vagas por origem
     const codes = results.map((r) => r.statusCode);
     expect(codes.filter((c) => c === 201)).toHaveLength(1);
     expect(codes.every((c) => c === 201 || c === 409)).toBe(true);

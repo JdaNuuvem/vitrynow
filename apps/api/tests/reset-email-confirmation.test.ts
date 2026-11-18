@@ -1,9 +1,9 @@
-import bcrypt from "bcryptjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import * as emailLib from "../src/lib/email";
 import { RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, makeResetHooks, resetHooks } from "../src/lib/passwordReset";
 import { hashToken } from "../src/lib/tokenHash";
+import { bcryptPasswordHasher } from "../src/shared/passwordHasher";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
 // SEC-29 (ST-67, Sun Tzu): o link de redefinição só vale se quem o usa DIGITAR o e-mail da conta do token. O e-mail mascarado sozinho
@@ -299,7 +299,8 @@ describe("redefinição de senha exige o e-mail da conta do token (SEC-29, ST-67
   it("tempo: e-mail CERTO contra token já MORTO tem a mesma duração das outras recusas (a recusa nunca paga o bcrypt)", async () => {
     const a = await accountWithToken("morto@exemplo.com");
     await prisma.passwordResetToken.updateMany({ where: { tokenHash: hashToken(a.token) }, data: { expiresAt: new Date(Date.now() - 1000) } });
-    const hashSpy = vi.spyOn(bcrypt, "hash");
+    const b = await accountWithToken("controle@exemplo.com"); // criada ANTES do espião: o cadastro também faz hash
+    const hashSpy = vi.spyOn(bcryptPasswordHasher, "hash"); // SEC-34: todo hash passa pelo hasher da API (e pela faixa)
     const sample = async (payload: Record<string, unknown>) => {
       const ms: number[] = [];
       for (let i = 0; i < 5; i += 1) {
@@ -312,6 +313,9 @@ describe("redefinição de senha exige o e-mail da conta do token (SEC-29, ST-67
     const rightEmailDeadToken = await sample({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
     const wrongEmailDeadToken = await sample({ token: a.token, email: "outro@exemplo.com", newPassword: "senha-nova-do-dono" });
     expect(hashSpy).not.toHaveBeenCalled(); // nenhuma recusa chegou ao bcrypt
+    // CONTROLE POSITIVO: o espião enxerga o hash de uma redefinição que dá certo (sem isto o teste acima seria vazio)
+    expect((await reset({ token: b.token, email: b.credentials.email, newPassword: "senha-nova-do-dono" })).statusCode).toBe(200);
+    expect(hashSpy).toHaveBeenCalledTimes(1);
     hashSpy.mockRestore();
     expect(Math.abs(rightEmailDeadToken - wrongEmailDeadToken)).toBeLessThan(35);
   }, 120000);
