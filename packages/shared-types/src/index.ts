@@ -533,6 +533,14 @@ export const anonymizeCustomerSchema = z
     currentPassword: z.string().min(1).max(200).optional(),
   })
   .refine((v) => Boolean(v.phone) !== Boolean(v.orderCode), { message: "Informe o telefone OU o código do pedido." });
+export const exportCustomerSchema = z
+  .object({
+    phone: z.string().trim().min(8).max(30).optional(),
+    orderCode: z.string().trim().min(1).max(20).optional(),
+    currentPassword: z.string().min(1).max(200).optional(),
+  })
+  .refine((v) => Boolean(v.phone) !== Boolean(v.orderCode), { message: "Informe o telefone OU o código do pedido." });
+export type ExportCustomerInput = z.infer<typeof exportCustomerSchema>;
 export type AnonymizeCustomerInput = z.infer<typeof anonymizeCustomerSchema>;
 
 // ---- Loja disponível/fechada ----
