@@ -1,0 +1,130 @@
+.controlecaixa {
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 40px 24px;
+  color: var(--ink);
+}
+
+.controlecaixa h1 {
+  margin-bottom: 24px;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 32px;
+}
+
+.controlecaixa__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 448px;
+}
+
+.controlecaixa-card {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  font-size: 14px;
+}
+
+.controlecaixa-card--narrow {
+  max-width: 384px;
+}
+
+.controlecaixa-card h2 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.controlecaixa-card > input,
+.controlecaixa-card select {
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.controlecaixa-card > input {
+  width: 100%;
+}
+
+.controlecaixa__row {
+  display: flex;
+  gap: 8px;
+}
+
+.controlecaixa__row .money-input {
+  flex: 1;
+}
+
+.controlecaixa__label {
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.controlecaixa__muted {
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+.controlecaixa__strong {
+  font-weight: 600;
+}
+
+.controlecaixa__error {
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.controlecaixa__stale {
+  padding: 12px;
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 14px;
+}
+
+.controlecaixa__movement {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.controlecaixa__diff {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.controlecaixa__diff--off {
+  color: var(--warn);
+}
+
+.controlecaixa__button {
+  align-self: stretch;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.controlecaixa__button--danger {
+  background: var(--danger);
+}
+
+@media (max-width: 800px) {
+  .controlecaixa {
+    padding: 24px 16px 120px;
+  }
+}

@@ -1,0 +1,11 @@
+      Lanchonete Boa Vista
+       TESTE DE IMPRESSÃO
+--------------------------------
+Se você consegue ler este papel,
+ a impressora está funcionando.
+Acentos: ação, é, ñ, ü Valor: R$
+             12,34
+.........1.........2.........3..
+  Bobina de 58 mm: 32 colunas
+        17/11/2026 12:00
+--------------------------------

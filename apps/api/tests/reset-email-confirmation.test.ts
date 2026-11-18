@@ -1,0 +1,359 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prisma } from "@meucardapio/db";
+import * as emailLib from "../src/lib/email";
+import { RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, makeResetHooks, resetHooks } from "../src/lib/passwordReset";
+import { hashToken } from "../src/lib/tokenHash";
+import { bcryptPasswordHasher } from "../src/shared/passwordHasher";
+import { makeApp, registerStore, resetDb } from "./helpers";
+
+// SEC-29 (ST-67, Sun Tzu): o link de redefinição só vale se quem o usa DIGITAR o e-mail da conta do token. O e-mail mascarado sozinho
+// não distingue maria@gmail.com de mallory@gmail.com (os dois viram m***@gmail.com). Cenário: o atacante pede a redefinição da conta DELE e
+// manda o link à vítima; a vítima digita o e-mail DELA e o servidor recusa.
+
+describe("redefinição de senha exige o e-mail da conta do token (SEC-29, ST-67)", () => {
+  let app: ReturnType<typeof makeApp>;
+  let ipSeq = 0;
+  const ip = () => `10.66.${Math.floor(++ipSeq / 250)}.${(ipSeq % 250) + 1}`;
+  const reset = (payload: Record<string, unknown>) => app.inject({ method: "POST", url: "/auth/reset-password", remoteAddress: ip(), payload: payload as never });
+
+  async function accountWithToken(email: string) {
+    const urls: string[] = [];
+    const spy = vi.spyOn(emailLib, "sendPasswordResetEmail").mockImplementation(async ({ resetUrl }) => {
+      urls.push(resetUrl);
+    });
+    const { credentials } = await registerStore(app, { email });
+    await app.inject({ method: "POST", url: "/auth/forgot-password", remoteAddress: ip(), payload: { email: credentials.email } });
+    await vi.waitFor(() => expect(urls).toHaveLength(1));
+    spy.mockRestore();
+    return { credentials, token: new URLSearchParams(new URL(urls[0]).hash.slice(1)).get("token")! };
+  }
+  const unusedActive = (token: string) => prisma.passwordResetToken.count({ where: { tokenHash: hashToken(token), usedAt: null, expiresAt: { gt: new Date() } } });
+
+  beforeEach(async () => {
+    await resetDb();
+    app = makeApp();
+    await app.ready();
+  });
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await resetDb(); // o último teste do arquivo não pode deixar loja/usuário para o vizinho (409 EMAIL_IN_USE/STORE_IN_USE)
+  });
+
+  it("token da conta A + e-mail da conta B ⇒ recusado, o token NÃO é gasto e continua válido (o dono ainda o usa)", async () => {
+    const a = await accountWithToken("mallory@exemplo.com");
+    const victim = await registerStore(app, { email: "maria@exemplo.com" });
+
+    const refused = await reset({ token: a.token, email: victim.credentials.email, newPassword: "senha-nova-da-vitima" });
+    expect(refused.statusCode).toBe(400);
+    expect(await unusedActive(a.token)).toBe(1);
+    // a senha da conta A NÃO mudou
+    const stillOld = await app.inject({ method: "POST", url: "/auth/login", remoteAddress: ip(), payload: { email: a.credentials.email, password: a.credentials.password } });
+    expect(stillOld.statusCode).toBe(200);
+
+    // com o e-mail certo o mesmo token funciona
+    const ok = await reset({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
+    expect(ok.statusCode).toBe(200);
+    expect(await unusedActive(a.token)).toBe(0);
+  }, 60000);
+
+  it("e-mail da conta com outra caixa e com espaços nas pontas ⇒ aceito", async () => {
+    const a = await accountWithToken("Maria.Silva@Exemplo.com");
+    expect(a.credentials.email).toBeTruthy();
+    const ok = await reset({ token: a.token, email: "  MARIA.SILVA@exemplo.COM  ", newPassword: "senha-nova-do-dono" });
+    expect(ok.statusCode).toBe(200);
+  }, 60000);
+
+  it("SEM o campo e-mail (bundle antigo em cache), e-mail vazio ou malformado ⇒ a MESMA recusa genérica, o token não é gasto e o e-mail nunca é opcional", async () => {
+    const a = await accountWithToken("dono@exemplo.com");
+    const generic = await reset({ token: "w".repeat(32), email: "qualquer@exemplo.com", newPassword: "senha-nova-do-dono" }); // token inexistente
+    const bodies = new Set<string>([generic.body]);
+    for (const payload of [{ token: a.token, newPassword: "senha-nova-do-dono" }, { token: a.token, email: "", newPassword: "senha-nova-do-dono" }, { token: a.token, email: "nao-e-email", newPassword: "senha-nova-do-dono" }]) {
+      const res = await reset(payload);
+      expect(res.statusCode).toBe(400);
+      bodies.add(res.body);
+    }
+    expect(bodies.size).toBe(1);
+    expect(await unusedActive(a.token)).toBe(1);
+    // e a senha curta continua com o erro de validação próprio (não depende do token)
+    const short = await reset({ token: a.token, email: a.credentials.email, newPassword: "curta" });
+    expect(short.statusCode).toBe(400);
+    expect(short.body).not.toBe(generic.body);
+  }, 60000);
+
+  it("MESMA resposta (status e corpo) para e-mail errado, token inexistente, token usado e token vencido", async () => {
+    const a = await accountWithToken("a@exemplo.com");
+    const b = await accountWithToken("b@exemplo.com");
+    // token vencido
+    await prisma.passwordResetToken.updateMany({ where: { tokenHash: hashToken(b.token) }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    // token usado
+    const c = await accountWithToken("c@exemplo.com");
+    expect((await reset({ token: c.token, email: c.credentials.email, newPassword: "senha-nova-do-dono" })).statusCode).toBe(200);
+
+    const responses = [
+      await reset({ token: a.token, email: "outra-pessoa@exemplo.com", newPassword: "senha-nova-da-vitima" }), // e-mail errado
+      await reset({ token: "x".repeat(32), email: a.credentials.email, newPassword: "senha-nova-da-vitima" }), // token inexistente
+      await reset({ token: c.token, email: c.credentials.email, newPassword: "senha-nova-da-vitima" }), // usado
+      await reset({ token: b.token, email: b.credentials.email, newPassword: "senha-nova-da-vitima" }), // vencido
+    ];
+    expect(new Set(responses.map((r) => r.statusCode))).toEqual(new Set([400]));
+    expect(new Set(responses.map((r) => r.body)).size).toBe(1);
+    expect(new Set(responses.map((r) => JSON.stringify(Object.keys(r.headers).filter((h) => /^(x-|retry-after)/.test(h)).sort()))).size).toBe(1);
+  }, 120000);
+
+  it("MESMO tempo nas três recusas: diferença entre as medianas < 35 ms e todas no piso", async () => {
+    // SEC-38 (teste de SEGURANÇA, não se afrouxa): amostras ENTRELAÇADAS. Em cada rodada sai UM pedido de cada ramo (a ordem gira a cada rodada), então um pico
+    // de latência do banco ou do agendador (medido: 400 a 1.159 ms com a CPU quase parada) cai nos ramos da MESMA rodada, e a diferença PAREADA contra o ramo
+    // "token inexistente" o cancela. A comparação é a MEDIANA das diferenças pareadas (< 35 ms) em 15 rodadas: 2 ou 3 rodadas com pico não movem a mediana, e
+    // um defeito real (um ramo +300 ms, ou sem piso) desloca o ramo em TODAS as rodadas e derruba o teste. A parte "todo pedido ≥ piso" é DETERMINÍSTICA: usa o
+    // MÍNIMO de cada ramo (o ruído só pode somar tempo, nunca tirar).
+    const ROUNDS = 15;
+    // um token vivo aguenta 4 e-mails errados (o 5º o invalida): 4 contas cobrem as 15 rodadas do ramo "e-mail errado" sem nunca matar o token
+    const accounts = [];
+    for (let i = 0; i < 4; i += 1) accounts.push(await accountWithToken(`tempo${i}@exemplo.com`));
+    const live = accounts[0];
+    const BRANCHES = ["wrongEmail", "noToken", "empty", "noEmail", "badEmail"] as const;
+    type Branch = (typeof BRANCHES)[number];
+    const payloadOf = (branch: Branch, round: number): Record<string, unknown> => {
+      const password = "senha-nova-da-vitima";
+      if (branch === "wrongEmail") return { token: accounts[Math.floor(round / 4)].token, email: "errado@exemplo.com", newPassword: password };
+      if (branch === "noToken") return { token: "y".repeat(32), email: live.credentials.email, newPassword: password };
+      if (branch === "empty") return { token: "z", email: live.credentials.email, newPassword: password };
+      if (branch === "noEmail") return { token: live.token, newPassword: password }; // bundle antigo: SEM o campo e-mail
+      return { token: live.token, email: "isto-nao-e-um-email", newPassword: password };
+    };
+    // aquecimento (conexões do pool, JIT): sem ele a 1ª amostra paga a reconexão depois de um arquivo que desconectou o Prisma e o teste vira ruído de CPU
+    for (let i = 0; i < 3; i += 1) await reset({ token: "w".repeat(32), email: live.credentials.email, newPassword: "senha-nova-da-vitima" });
+
+    const durations: Record<Branch, number[]> = { wrongEmail: [], noToken: [], empty: [], noEmail: [], badEmail: [] };
+    for (let round = 0; round < ROUNDS; round += 1) {
+      for (let k = 0; k < BRANCHES.length; k += 1) {
+        const branch = BRANCHES[(k + round) % BRANCHES.length];
+        const t0 = performance.now();
+        const res = await reset(payloadOf(branch, round));
+        durations[branch].push(performance.now() - t0);
+        expect(res.statusCode, `${branch} rodada ${round}`).toBe(400); // todas são recusas; nenhuma pode ter dado certo nem 5xx
+      }
+    }
+    const median = (values: number[]) => [...values].sort((x, y) => x - y)[Math.floor(values.length / 2)];
+    const medians = Object.fromEntries(BRANCHES.map((b) => [b, median(durations[b])])) as Record<Branch, number>;
+    const pairedDelta = (branch: Branch) => median(durations[branch].map((value, round) => value - durations.noToken[round]));
+    const deltas = Object.fromEntries(BRANCHES.map((b) => [b, pairedDelta(b)])) as Record<Branch, number>;
+    // Linhas lidas pelo estágio de tempo do scripts/ci.ps1 (INF-20b): QUAL ramo ficou lento em cada falha. Defeito real = sempre o MESMO ramo; ruído = ramos variados.
+    console.log(`TEMPO_RAMOS ${JSON.stringify(medians)}`);
+    console.log(`TEMPO_DELTAS_PAREADOS ${JSON.stringify(deltas)}`);
+    // (1) DETERMINÍSTICO: nenhuma resposta de nenhum ramo volta antes do piso (o mínimo, não a mediana)
+    for (const branch of BRANCHES) {
+      const fastest = Math.min(...durations[branch]);
+      expect(fastest, `ramo ${branch}: a resposta mais rápida levou ${fastest.toFixed(0)} ms, ABAIXO do piso de ${RESET_FAIL_MIN_DURATION_MS} ms`).toBeGreaterThanOrEqual(RESET_FAIL_MIN_DURATION_MS - 10);
+    }
+    // (2) mesmo tempo: a mediana da diferença PAREADA de cada ramo contra "token inexistente" fica abaixo de 35 ms
+    for (const branch of BRANCHES) {
+      if (branch === "noToken") continue;
+      expect(Math.abs(deltas[branch]), `ramo ${branch}: diferença pareada mediana de ${deltas[branch].toFixed(1)} ms contra "token inexistente" (limite 35)`).toBeLessThan(35);
+    }
+  }, 180000);
+
+  // SEC-38: lê `synchronous_commit` na MESMA transação, no instante em que o UPDATE que decide está para rodar.
+  async function commitModeSeenByClaim(payload: Record<string, unknown>) {
+    const seen: string[] = [];
+    const holder = prisma as unknown as { $transaction: (fn: (tx: unknown) => unknown, options?: unknown) => Promise<unknown> };
+    const original = holder.$transaction;
+    holder.$transaction = ((fn: (tx: any) => unknown, options?: unknown) =>
+      original.call(prisma, (tx: any) => {
+        const proxied = new Proxy(tx, {
+          get(target, prop, receiver) {
+            if (prop !== "$queryRaw") return Reflect.get(target, prop, receiver);
+            return async (strings: TemplateStringsArray, ...values: unknown[]) => {
+              if (strings.join("?").includes('UPDATE "PasswordResetToken"')) {
+                const rows = (await target.$queryRaw`SELECT current_setting('synchronous_commit') AS v`) as { v: string }[];
+                seen.push(rows[0].v);
+              }
+              return target.$queryRaw(strings, ...values);
+            };
+          },
+        });
+        return fn(proxied);
+      }, options)) as never;
+    try {
+      const res = await reset(payload);
+      return { seen, res };
+    } finally {
+      holder.$transaction = original;
+    }
+  }
+
+  it("SEC-38: a RECUSA não espera o fsync (`synchronous_commit` off) e a troca de senha continua DURÁVEL (on); nada vaza para o pool", async () => {
+    const a = await accountWithToken("fsync@exemplo.com");
+    const wrong = await commitModeSeenByClaim({ token: a.token, email: "errado@exemplo.com", newPassword: "senha-nova-da-vitima" });
+    expect(wrong.res.statusCode).toBe(400);
+    expect(wrong.seen).toEqual(["off"]);
+    const noToken = await commitModeSeenByClaim({ token: "y".repeat(32), email: a.credentials.email, newPassword: "senha-nova-da-vitima" });
+    expect(noToken.seen).toEqual(["off"]);
+    // e-mail CERTO (a troca grava a senha nova e consome o token): durável
+    const right = await commitModeSeenByClaim({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
+    expect(right.res.statusCode).toBe(200);
+    expect(right.seen).toEqual(["on"]);
+    // não vaza: as conexões do pool seguem com o padrão do banco
+    const values = await Promise.all(Array.from({ length: 12 }, () => prisma.$queryRaw<{ v: string }[]>`SELECT current_setting('synchronous_commit') AS v`));
+    expect(values.map((r) => r[0].v)).toEqual(Array(12).fill("on"));
+  }, 60000);
+
+  it(`${RESET_MAX_EMAIL_FAILURES} e-mails errados INVALIDAM o token, com a mesma resposta; depois nem o e-mail certo o reabre`, async () => {
+    const a = await accountWithToken("brute@exemplo.com");
+    const bodies = new Set<string>();
+    for (let i = 0; i < RESET_MAX_EMAIL_FAILURES; i += 1) {
+      const res = await reset({ token: a.token, email: `chute${i}@exemplo.com`, newPassword: "senha-nova-da-vitima" });
+      expect(res.statusCode).toBe(400);
+      bodies.add(res.body);
+      if (i < RESET_MAX_EMAIL_FAILURES - 1) expect(await unusedActive(a.token)).toBe(1); // ainda vale até o último chute
+    }
+    expect(await unusedActive(a.token)).toBe(0);
+    const after = await reset({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
+    expect(after.statusCode).toBe(400);
+    bodies.add(after.body);
+    expect(bodies.size).toBe(1);
+    const row = await prisma.passwordResetToken.findFirstOrThrow({ where: { tokenHash: hashToken(a.token) } });
+    expect(row.usedAt).toBeNull(); // invalidado, nunca "usado"
+    expect(row.emailFailures).toBe(RESET_MAX_EMAIL_FAILURES);
+  }, 120000);
+
+  it("e-mail errado em token de OUTRA conta não conta falha no token de quem acertou (contador é por token)", async () => {
+    const a = await accountWithToken("um@exemplo.com");
+    const b = await accountWithToken("dois@exemplo.com");
+    for (let i = 0; i < 3; i += 1) await reset({ token: a.token, email: "errado@exemplo.com", newPassword: "senha-nova-da-vitima" });
+    expect((await prisma.passwordResetToken.findFirstOrThrow({ where: { tokenHash: hashToken(b.token) } })).emailFailures).toBe(0);
+    expect((await reset({ token: b.token, email: b.credentials.email, newPassword: "senha-nova-do-dono" })).statusCode).toBe(200);
+  }, 120000);
+
+  // ST-68 (Sun Tzu, mesma classe do ST-32): a decisão tem de sair NO BANCO, numa instrução. O pedido CERTO é atrasado só no bcrypt, depois de ler
+  // o token como "vivo" e o e-mail como certo; enquanto isso 30 pedidos errados gravam as falhas e o token morre na 5ª. Se a decisão fosse
+  // tomada com a leitura velha (antes do UPDATE), o certo passaria mesmo com 5 falhas já gravadas.
+  it("ST-68: rajada de 30 e-mails errados + o CERTO por último (lendo o token antes de as falhas serem gravadas) ⇒ o certo é RECUSADO", async () => {
+    const a = await accountWithToken("rajada@exemplo.com");
+    // O gancho não recebe o e-mail (ST-69): o PRIMEIRO pedido a chegar nele é o CERTO (é enviado antes e o teste espera ele parar no portão);
+    // ele já leu o token "vivo" e o e-mail certo e ESPERA aqui, enquanto os 30 errados gravam as falhas e o token morre na 5ª.
+    let reachedGate!: () => void;
+    let openGate!: () => void;
+    const reached = new Promise<void>((resolve) => (reachedGate = resolve));
+    const gate = new Promise<void>((resolve) => (openGate = resolve));
+    let calls = 0;
+    resetHooks.beforeClaim = async () => {
+      calls += 1;
+      if (calls === 1) {
+        reachedGate();
+        await gate;
+      }
+    };
+    try {
+      const right = reset({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
+      await reached; // o certo já leu o token "vivo" e está parado antes do UPDATE
+      await Promise.all(Array.from({ length: 30 }, (_, i) => reset({ token: a.token, email: `chute${i}@exemplo.com`, newPassword: "senha-nova-da-vitima" })));
+      openGate();
+      const rightRes = await right;
+      expect(rightRes.statusCode).toBe(400); // vulnerável (antes do conserto): 200
+    } finally {
+      openGate();
+      resetHooks.beforeClaim = undefined;
+    }
+    const row = await prisma.passwordResetToken.findFirstOrThrow({ where: { tokenHash: hashToken(a.token) } });
+    expect(row.usedAt).toBeNull();
+    expect(row.emailFailures).toBe(RESET_MAX_EMAIL_FAILURES); // o contador parou na 5ª: o resto nem o toca
+    const login = await app.inject({ method: "POST", url: "/auth/login", remoteAddress: ip(), payload: { email: a.credentials.email, password: a.credentials.password } });
+    expect(login.statusCode).toBe(200); // a senha NÃO mudou
+  }, 120000);
+
+  // ST-69: o gancho de teste não pode ser uma porta de produção. Fora de NODE_ENV=test ele nasce congelado e a rota nem o consulta.
+  it("ST-69: fora de NODE_ENV=test o gancho definido NÃO é chamado e o objeto de produção é congelado", async () => {
+    const a = await accountWithToken("gancho@exemplo.com");
+    const hook = vi.fn(async () => {});
+    resetHooks.beforeClaim = hook;
+    try {
+      vi.stubEnv("NODE_ENV", "production");
+      const res = await reset({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
+      expect(res.statusCode).toBe(200); // o fluxo segue normal sem o gancho
+      expect(hook).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      resetHooks.beforeClaim = undefined;
+    }
+    // controle positivo: em test o mesmo gancho É chamado
+    const b = await accountWithToken("gancho2@exemplo.com");
+    resetHooks.beforeClaim = hook;
+    try {
+      await reset({ token: b.token, email: b.credentials.email, newPassword: "senha-nova-do-dono" });
+      expect(hook).toHaveBeenCalledTimes(1);
+    } finally {
+      resetHooks.beforeClaim = undefined;
+    }
+    // fora de test (produção, desenvolvimento, NODE_ENV ausente) o objeto nasce congelado: ninguém consegue defini-lo
+    for (const env of ["production", "development", undefined]) {
+      const frozen = makeResetHooks(env);
+      expect(Object.isFrozen(frozen), String(env)).toBe(true);
+      expect(() => {
+        frozen.beforeClaim = async () => {};
+      }, String(env)).toThrow(TypeError);
+    }
+    expect(Object.isFrozen(makeResetHooks("test"))).toBe(false);
+  }, 120000);
+
+  it("tempo: e-mail CERTO contra token já MORTO tem a mesma duração das outras recusas (a recusa nunca paga o bcrypt)", async () => {
+    const a = await accountWithToken("morto@exemplo.com");
+    await prisma.passwordResetToken.updateMany({ where: { tokenHash: hashToken(a.token) }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    const b = await accountWithToken("controle@exemplo.com"); // criada ANTES do espião: o cadastro também faz hash
+    const hashSpy = vi.spyOn(bcryptPasswordHasher, "hash"); // SEC-34: todo hash passa pelo hasher da API (e pela faixa)
+    const sample = async (payload: Record<string, unknown>) => {
+      const ms: number[] = [];
+      for (let i = 0; i < 5; i += 1) {
+        const t0 = performance.now();
+        await reset(payload);
+        ms.push(performance.now() - t0);
+      }
+      return [...ms].sort((x, y) => x - y)[2];
+    };
+    const rightEmailDeadToken = await sample({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
+    const wrongEmailDeadToken = await sample({ token: a.token, email: "outro@exemplo.com", newPassword: "senha-nova-do-dono" });
+    expect(hashSpy).not.toHaveBeenCalled(); // nenhuma recusa chegou ao bcrypt
+    // CONTROLE POSITIVO: o espião enxerga o hash de uma redefinição que dá certo (sem isto o teste acima seria vazio)
+    expect((await reset({ token: b.token, email: b.credentials.email, newPassword: "senha-nova-do-dono" })).statusCode).toBe(200);
+    expect(hashSpy).toHaveBeenCalledTimes(1);
+    hashSpy.mockRestore();
+    expect(Math.abs(rightEmailDeadToken - wrongEmailDeadToken)).toBeLessThan(35);
+  }, 120000);
+
+  it("ST-68: dois pedidos CERTOS ao mesmo tempo ⇒ exatamente UM redefine (o token não é usado 2×) e a senha muda uma vez só", async () => {
+    const a = await accountWithToken("duplo@exemplo.com");
+    const before = await prisma.user.findUniqueOrThrow({ where: { email: a.credentials.email }, select: { tokenVersion: true } });
+    const results = await Promise.all([
+      reset({ token: a.token, email: a.credentials.email, newPassword: "primeira-senha-nova" }),
+      reset({ token: a.token, email: a.credentials.email, newPassword: "segunda-senha-nova-" }),
+    ]);
+    expect(results.map((r) => r.statusCode).sort()).toEqual([200, 400]);
+    const after = await prisma.user.findUniqueOrThrow({ where: { email: a.credentials.email }, select: { tokenVersion: true } });
+    expect(after.tokenVersion).toBe(before.tokenVersion + 1);
+  }, 120000);
+
+  it("ST-68: contador já em 5 com o token ainda no prazo (estado inconsistente) ⇒ nem o e-mail CERTO passa (o WHERE do banco também confere o contador)", async () => {
+    const a = await accountWithToken("esgotado@exemplo.com");
+    await prisma.passwordResetToken.updateMany({ where: { tokenHash: hashToken(a.token) }, data: { emailFailures: RESET_MAX_EMAIL_FAILURES } });
+    expect(await unusedActive(a.token)).toBe(1);
+    const res = await reset({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
+    expect(res.statusCode).toBe(400);
+    expect((await prisma.passwordResetToken.findFirstOrThrow({ where: { tokenHash: hashToken(a.token) } })).usedAt).toBeNull();
+  }, 60000);
+
+  it("troca da senha e consumo do token são UMA transação: se a troca falhar, o token continua válido (nada de token queimado sem senha nova)", async () => {
+    const a = await accountWithToken("atomico@exemplo.com");
+    // falha REAL do banco dentro da transação: uma restrição temporária que o `tokenVersion + 1` da troca de senha viola
+    await prisma.user.update({ where: { email: a.credentials.email }, data: { tokenVersion: 4 } });
+    await prisma.$executeRawUnsafe(`ALTER TABLE "User" ADD CONSTRAINT "zz_ng_atomico" CHECK ("tokenVersion" < 5)`);
+    try {
+      const res = await reset({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
+      expect(res.statusCode).toBeGreaterThanOrEqual(400);
+      expect(await unusedActive(a.token)).toBe(1); // o consumo do token foi desfeito junto
+    } finally {
+      await prisma.$executeRawUnsafe(`ALTER TABLE "User" DROP CONSTRAINT IF EXISTS "zz_ng_atomico"`);
+    }
+    const retry = await reset({ token: a.token, email: a.credentials.email, newPassword: "senha-nova-do-dono" });
+    expect(retry.statusCode).toBe(200);
+  }, 120000);
+});

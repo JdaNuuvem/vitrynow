@@ -1,0 +1,69 @@
+import type { Subscription } from "@/core/domain/subscription";
+
+export const FEATURE_LABELS: Record<string, string> = {
+  multi_user: "Usuários da equipe com acesso limitado",
+};
+
+export const BASELINE_FEATURES = ["Cardápio online e pedidos", "Painel de pedidos em tempo real", "Controle de caixa e relatórios"];
+
+export type SubscriptionTone = "info" | "ok" | "warning" | "danger";
+
+export type SubscriptionDescription = {
+  badge: string;
+  tone: SubscriptionTone;
+  headline: string;
+  detail: string;
+};
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+function days(count: number): string {
+  return `${count} ${count === 1 ? "dia" : "dias"}`;
+}
+
+export function describeSubscription(subscription: Subscription): SubscriptionDescription {
+  const plan = subscription.planName ?? "Plano";
+  switch (subscription.state) {
+    case "trial":
+      return {
+        badge: "Teste grátis",
+        tone: subscription.daysLeft <= 3 ? "warning" : "info",
+        headline: `Restam ${days(subscription.daysLeft)} de teste grátis`,
+        detail: `O teste termina em ${formatDate(subscription.trialEndsAt)}. Assine um plano para continuar usando todos os recursos.`,
+      };
+    case "active":
+      return {
+        badge: "Ativo",
+        tone: "ok",
+        headline: `Plano ${plan}`,
+        detail: `Próxima renovação em ${formatDate(subscription.currentPeriodEnd!)} (${days(subscription.daysLeft)}).`,
+      };
+    case "canceled":
+      return {
+        badge: "Cancelado",
+        tone: "warning",
+        headline: `Plano ${plan} cancelado`,
+        detail: `Você mantém o acesso até ${formatDate(subscription.currentPeriodEnd!)}.`,
+      };
+    case "past_due":
+      return {
+        badge: "Vencido",
+        tone: "danger",
+        headline: `Plano ${plan} vencido`,
+        detail: "O período pago terminou. Renove para liberar os recursos do plano novamente.",
+      };
+    case "expired":
+      return {
+        badge: "Encerrado",
+        tone: "danger",
+        headline: "Seu teste grátis terminou",
+        detail: "Assine um plano para voltar a usar os recursos que dependem dele.",
+      };
+  }
+}
+
+export function featureLabel(feature: string): string {
+  return FEATURE_LABELS[feature] ?? feature;
+}

@@ -1,0 +1,1844 @@
+/* Loja pública (fora do painel): não usa panel-tokens. O destaque vem de --loja-accent,
+   definido inline no .loja quando a loja tem cor principal. */
+.loja {
+  --loja-accent: #1f7a54; /* padrão D-01; o tema (theme.ts) sobrescreve por loja */
+  --loja-accent-on: #ffffff;
+  --loja-accent-ink: #17603f;
+  --loja-line: #e5e7eb;
+  --loja-ink: #0f172a;
+  --loja-ink-2: #334155;
+  --loja-ink-3: #475569;
+  --loja-muted: #64748b;
+  --loja-faint: #94a3b8; /* só ícone decorativo: 2,5:1 reprova como texto (spec 09 §3) */
+  --loja-field-line: #7b8aa0; /* borda de campo, 3,35:1 (WCAG 1.4.11) */
+  --loja-surface: #f8fafc;
+  --loja-surface-2: #f1f5f9;
+  --loja-link: #1d4ed8;
+  --loja-danger: #dc2626;
+  --loja-danger-ink: #b91c1c; /* texto de erro sobre fundo rosado */
+  --loja-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --loja-shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+
+  /* Movimento (spec 12 §8, WEB-28). Nada usa estes tokens ainda: as telas passam a usá-los fatia a fatia.
+     Duração entre 80 e 420 ms; a rolagem suave dos chips (~400 ms) vem do navegador. */
+  --loja-dur-1: 120ms;
+  --loja-dur-2: 200ms;
+  --loja-dur-3: 280ms;
+  --loja-dur-4: 420ms;
+  --loja-ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --loja-ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --loja-ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  /* entrada em cascata: 40 ms entre itens, no máximo 8 por entrada (M-01); a tela põe `--loja-index` */
+  --loja-stagger: 40ms;
+  --loja-shimmer: 1200ms;
+}
+
+/* Quem pediu menos movimento: todo token de tempo vira ~0 e quem usa o token já respeita a preferência.
+   Todo `--loja-dur-*` novo precisa de linha aqui (motion.test.ts confere). */
+@media (prefers-reduced-motion: reduce) {
+  .loja {
+    --loja-dur-1: 0.01ms;
+    --loja-dur-2: 0.01ms;
+    --loja-dur-3: 0.01ms;
+    --loja-dur-4: 0.01ms;
+    --loja-stagger: 0ms;
+    --loja-shimmer: 0.01ms;
+  }
+}
+
+.loja__message {
+  padding: 2rem;
+}
+
+.loja__muted {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: var(--loja-muted);
+}
+
+.loja__icon {
+  height: 1rem;
+  width: 1rem;
+  flex-shrink: 0;
+}
+.loja__icon--md {
+  height: 1.25rem;
+  width: 1.25rem;
+}
+.loja__icon--lg {
+  height: 1.5rem;
+  width: 1.5rem;
+}
+
+/* ---------- página principal, cardápio v2 (spec 12, UX-26 Fatia 1) ----------
+   Medidas e hierarquia vêm do mockup aprovado pelo Claudio (davinci\esbocos\cardapio-v2.html), reescritas com as
+   variáveis da loja. SEM movimento nesta fatia (nenhuma transition/animation): o movimento é a Fatia 2.
+   Largura da coluna: 720 px até 1099 (2 colunas de cartão a partir de 768), 1040 px a partir de 1100. */
+.loja {
+  --loja-col: 720px;
+  --loja-stick: 56px;
+  --loja-title: var(--font-loja-title), Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --loja-accent-soft: color-mix(in srgb, var(--loja-accent) 10%, #ffffff);
+}
+
+@media (min-width: 1100px) {
+  .loja {
+    --loja-col: 1040px;
+  }
+}
+
+.loja__page {
+  position: relative;
+  padding-bottom: 9rem;
+}
+
+/* página branca como no mockup (o layout do site é cinza-claro) */
+.loja {
+  min-height: 100vh;
+  background: #ffffff;
+}
+
+/* demais abas (Meus pedidos): coluna centralizada */
+.loja__column {
+  max-width: var(--loja-col);
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+.loja__marker {
+  height: 1px;
+}
+
+/* Fim REAL da página (na borda de baixo, depois do espaço do rodapé): "no fim" só vale quando não há mais o que rolar,
+   senão o chip da última categoria acenderia uns 150 px antes de ela chegar. */
+.loja__end {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+}
+
+.loja__content {
+  max-width: var(--loja-col);
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+.loja__section {
+  padding-top: 20px;
+  /* As duas barras fixas (56 + 56) ficam por cima. A seção rolada pelo chip para um pouco ACIMA da linha de leitura
+     do scrollspy (120 px): encostada nela, o destaque ficaria ambíguo entre duas seções. */
+  scroll-margin-top: calc(var(--loja-stick) * 2 - 4px);
+}
+
+.loja__section-title {
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--loja-ink);
+  font-family: var(--loja-title);
+  font-size: 1.25rem;
+  line-height: 1.625rem;
+  font-weight: 800;
+}
+
+.loja__list {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr;
+}
+
+/* ---------- capa e folha ---------- */
+.loja__cover {
+  height: 160px;
+  width: 100%;
+  background: var(--loja-surface-2);
+  overflow: hidden;
+}
+
+.loja__cover img {
+  display: block;
+  height: 100%;
+  width: 100%;
+  object-fit: cover;
+}
+
+/* Sem capa (ou capa quebrada): degradê da cor da loja com padrão sutil, nunca faixa cinza (spec 12 §2.1). */
+.loja__cover--empty {
+  background:
+    radial-gradient(circle at 20% 30%, rgb(255 255 255 / 0.22) 0 8%, transparent 9%),
+    radial-gradient(circle at 78% 62%, rgb(255 255 255 / 0.16) 0 12%, transparent 13%),
+    repeating-linear-gradient(135deg, rgb(255 255 255 / 0.06) 0 14px, transparent 14px 28px),
+    linear-gradient(135deg, var(--loja-accent), color-mix(in srgb, var(--loja-accent) 45%, #000000));
+}
+
+@media (min-width: 768px) {
+  .loja__cover {
+    height: 200px;
+  }
+}
+
+@media (min-width: 1100px) {
+  .loja__cover {
+    height: 240px;
+  }
+}
+
+.loja__card {
+  position: relative;
+  box-sizing: border-box;
+  max-width: var(--loja-col);
+  margin: -24px auto 0;
+  padding: 0 16px 8px;
+  border-radius: 24px 24px 0 0;
+  background: #ffffff;
+  box-shadow: 0 -8px 24px rgb(0 0 0 / 0.08);
+}
+
+.loja__logo {
+  display: grid;
+  place-items: center;
+  height: 88px;
+  width: 88px;
+  margin-top: -44px;
+  overflow: hidden;
+  border: 4px solid #ffffff;
+  border-radius: 50%;
+  background: var(--loja-surface-2);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.14);
+}
+
+.loja__logo img {
+  height: 100%;
+  width: 100%;
+  object-fit: cover;
+}
+
+/* Sem logo: monograma sobre a cor da loja (nunca círculo cinza) */
+.loja__logo--initials {
+  background: linear-gradient(145deg, var(--loja-accent), color-mix(in srgb, var(--loja-accent) 60%, #000000));
+  color: var(--loja-accent-on);
+  font-family: var(--loja-title);
+  font-size: 1.625rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+/* ---------- identidade ---------- */
+.loja__ident {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+}
+
+@media (min-width: 1100px) {
+  .loja__ident {
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+    gap: 24px;
+  }
+
+  .loja__status {
+    margin-top: 6px;
+  }
+}
+
+.loja__name-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.loja__name {
+  min-width: 0;
+  color: var(--loja-ink);
+  font-family: var(--loja-title);
+  font-size: 1.375rem;
+  line-height: 1.75rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.loja__info {
+  margin-top: 6px;
+  display: grid;
+  gap: 6px;
+  color: var(--loja-ink-3);
+}
+
+.loja__line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.875rem;
+  line-height: 1.3125rem;
+}
+
+.loja__line svg {
+  margin-top: 3px;
+  color: var(--loja-ink);
+}
+
+.loja__whatsapp {
+  position: relative;
+  display: flex;
+  height: 2.25rem;
+  width: 2.25rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: #dcfce7;
+  color: #15803d;
+}
+
+/* O círculo continua com 36 px; a área de toque sobe a 44 px (WCAG 2.5.8; achado F1 do Deming). */
+.loja__whatsapp::after {
+  content: "";
+  position: absolute;
+  inset: -0.25rem;
+}
+
+/* ---------- caixa de status ---------- */
+.loja__status {
+  border-radius: 12px;
+  background: var(--loja-surface-2);
+  padding: 12px 14px;
+}
+
+.loja__status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.loja__status-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #157a3b;
+  font-weight: 700;
+}
+
+.loja__status--closed .loja__status-state {
+  color: var(--loja-danger-ink);
+}
+
+.loja__dot {
+  height: 8px;
+  width: 8px;
+  border-radius: 50%;
+  background: #157a3b;
+}
+
+.loja__dot--closed {
+  background: var(--loja-danger);
+}
+
+.loja__status-text {
+  margin-top: 2px;
+  color: var(--loja-ink-3);
+}
+
+.loja__hours-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  margin: -10px -6px -10px 0;
+  padding: 0 6px;
+  border: 0;
+  background: none;
+  color: var(--loja-accent-ink);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.loja__hours-chevron {
+  display: inline-flex;
+}
+
+.loja__hours-chevron--open {
+  transform: rotate(180deg);
+}
+
+.loja__hours {
+  margin-top: 8px;
+  color: var(--loja-ink-3);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  white-space: pre-line;
+}
+
+/* ---------- busca e categorias ---------- */
+.loja__search {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  width: 100%;
+  padding: 0 16px;
+  border: 1px solid var(--loja-field-line);
+  border-radius: 24px;
+  background: #ffffff;
+  color: var(--loja-ink-3);
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.loja__search-icon {
+  display: inline-flex;
+  color: var(--loja-accent-ink);
+}
+
+.loja__categories-head {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.loja__categories-title {
+  color: var(--loja-ink);
+  font-family: var(--loja-title);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.loja__categories-all {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--loja-accent-ink);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* ---------- barras fixas: topo (celular) e chips ---------- */
+.loja__bar {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  height: var(--loja-stick);
+  background: #ffffff;
+  visibility: hidden;
+}
+
+.loja__bar--on {
+  display: block;
+  visibility: visible;
+}
+
+.loja__bar-in {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-sizing: border-box;
+  height: 100%;
+  max-width: var(--loja-col);
+  margin: 0 auto;
+  padding: 0 12px;
+}
+
+.loja__bar-logo,
+.loja__stick-id img {
+  height: 32px;
+  width: 32px;
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.loja__bar-logo--initials,
+.loja__stick-logo {
+  display: grid;
+  place-items: center;
+  height: 32px;
+  width: 32px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--loja-accent);
+  color: var(--loja-accent-on);
+  font-family: var(--loja-title);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.loja__bar-name,
+.loja__stick-name {
+  overflow: hidden;
+  color: var(--loja-ink);
+  font-family: var(--loja-title);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loja__bar-name {
+  flex: 1;
+}
+
+.loja__stick-search {
+  display: none;
+  place-items: center;
+  height: 44px;
+  width: 44px;
+  flex: none;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--loja-ink);
+  cursor: pointer;
+}
+
+.loja__bar .loja__stick-search {
+  display: grid;
+}
+
+/* A barra de chips é FILHA da página inteira (não da folha da identidade): é o que a mantém fixa até o fim. */
+.loja__chipsbox {
+  position: sticky;
+  top: 0;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  padding-inline: max(0px, calc((100% - var(--loja-col)) / 2));
+  background: #ffffff;
+}
+
+.loja__chipsbox--stuck {
+  top: var(--loja-stick);
+  box-shadow: 0 1px 0 var(--loja-line);
+}
+
+.loja__stick-id {
+  display: none;
+}
+
+.loja__chips {
+  display: flex;
+  flex: 1;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 8px 16px;
+  scroll-padding-inline: 16px;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+}
+
+.loja__chips::-webkit-scrollbar {
+  display: none;
+}
+
+.loja__chip {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  scroll-snap-align: start;
+  cursor: pointer;
+}
+
+.loja__chip-body {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 20px;
+  background: var(--loja-surface-2);
+  color: var(--loja-ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.loja__chip--active .loja__chip-body {
+  background: var(--loja-accent);
+  color: var(--loja-accent-on);
+}
+
+.loja__chip-icon {
+  font-size: 1rem;
+}
+
+/* ≥ 768 px (tablet em pé, spec 12 §5): uma linha só (logo + nome + chips + buscar), sem a barra de 56 */
+@media (min-width: 768px) {
+  .loja__bar,
+  .loja__bar--on {
+    display: none;
+  }
+
+  .loja__section {
+    scroll-margin-top: 68px; /* linha de leitura do scrollspy em tela larga: 72 px */
+  }
+
+  .loja__list {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .loja__chipsbox--stuck {
+    top: 0;
+  }
+
+  .loja__chipsbox--stuck .loja__stick-id {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 10px;
+    max-width: 240px;
+    padding-left: 16px;
+  }
+
+  .loja__chipsbox--stuck .loja__chips {
+    padding-left: 12px;
+  }
+
+  .loja__chipsbox--stuck .loja__stick-search {
+    display: grid;
+  }
+}
+
+/* ---------- cartão de produto ---------- */
+.loja__item {
+  position: relative;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  min-height: 128px;
+  padding: 8px;
+  border: 1px solid var(--loja-line);
+  border-radius: 16px;
+  background: #ffffff;
+}
+
+.loja__item-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 4px 0 2px 6px;
+}
+
+/* O nome é o botão principal e a área de toque cobre o CARTÃO inteiro (::after): meça o alvo pelo cartão. */
+.loja__item-name {
+  all: unset;
+  display: -webkit-box;
+  box-sizing: border-box;
+  overflow: hidden;
+  color: var(--loja-ink);
+  font-family: var(--loja-title);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.375rem;
+  cursor: pointer;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.loja__item-name::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 16px;
+}
+
+.loja__item-name:focus-visible::after {
+  outline: 3px solid var(--loja-accent);
+  outline-offset: 2px;
+}
+
+.loja__item-desc {
+  display: -webkit-box;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--loja-ink-3);
+  font-size: 0.8125rem;
+  line-height: 1.125rem;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.loja__item-price {
+  margin-top: auto;
+  padding-top: 8px;
+  color: var(--loja-accent-ink);
+  font-family: var(--loja-title);
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.loja__item-options {
+  margin-top: 2px;
+  color: var(--loja-ink-3);
+  font-size: 0.75rem;
+}
+
+/* Foto 112×112 com espaço reservado: zero salto de layout */
+.loja__item-media {
+  position: relative;
+  align-self: start;
+  flex: none;
+  height: 112px;
+  width: 112px;
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+.loja__item-media img {
+  display: block;
+  height: 100%;
+  width: 100%;
+  object-fit: cover;
+}
+
+/* Sem foto: tinta da cor da loja com o emoji da categoria */
+.loja__item-media--tint {
+  background: var(--loja-accent-soft);
+}
+
+.loja__item-media--tint::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(135deg, rgb(255 255 255 / 0.5) 0 8px, transparent 8px 16px);
+}
+
+.loja__item-emoji {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  font-size: 2.375rem;
+}
+
+/* "+" e stepper: botões de verdade, POR CIMA da área de toque do nome (z-index), com área de 44 px */
+.loja__item-add {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 3;
+}
+
+.loja__add-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 44px;
+  width: 44px;
+  margin: -6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.loja__add-dot {
+  display: grid;
+  place-items: center;
+  height: 32px;
+  width: 32px;
+  border-radius: 50%;
+  background: var(--loja-accent);
+  color: var(--loja-accent-on);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+}
+
+.loja__add-dot svg {
+  height: 18px;
+  width: 18px;
+}
+
+.loja__add-button:focus-visible .loja__add-dot,
+.loja__stepper-card button:focus-visible {
+  outline: 3px solid var(--loja-ink);
+  outline-offset: 2px;
+}
+
+.loja__add-count {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 10px;
+  background: #ffffff;
+  color: var(--loja-accent-ink);
+  box-shadow: 0 0 0 2px var(--loja-accent);
+  font-size: 0.75rem;
+  font-weight: 800;
+  line-height: 20px;
+  text-align: center;
+}
+
+.loja__stepper-card {
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  border-radius: 22px;
+  background: var(--loja-accent);
+  color: var(--loja-accent-on);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25);
+}
+
+.loja__stepper-card button {
+  display: grid;
+  place-items: center;
+  height: 44px;
+  width: 44px;
+  margin: -4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.loja__stepper-card svg {
+  height: 16px;
+  width: 16px;
+}
+
+.loja__stepper-card b {
+  min-width: 18px;
+  font-weight: 800;
+  text-align: center;
+}
+
+/* Linha compacta (DV-V2-01): categoria com poucas fotos, sem bloco de foto */
+.loja__item--compact {
+  grid-template-columns: 1fr;
+  min-height: 72px;
+  padding: 12px 56px 12px 14px;
+}
+
+.loja__item--compact .loja__item-main {
+  padding: 0;
+}
+
+.loja__item--compact .loja__item-price {
+  padding-top: 4px;
+}
+
+.loja__item--compact .loja__item-add {
+  right: 10px;
+  bottom: 50%;
+  transform: translateY(50%);
+}
+
+.loja__item--compact .loja__add-dot {
+  height: 36px;
+  width: 36px;
+}
+
+/* ---------- barra inferior e carrinho flutuante ---------- */
+.loja__nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  padding: 0 max(0px, calc((100% - var(--loja-col)) / 2)) env(safe-area-inset-bottom);
+  border-top: 1px solid var(--loja-line);
+  background: #ffffff;
+}
+
+.loja__nav-tab {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: 64px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--loja-ink-3);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.loja__nav-tab svg {
+  height: 24px;
+  width: 24px;
+}
+
+.loja__nav-tab--active {
+  color: var(--loja-accent-ink);
+}
+
+/* Indicador de 3 px no topo da aba ativa (a animação dele é da Fatia 3) */
+.loja__nav-tab--active::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 50%;
+  height: 3px;
+  width: 40px;
+  margin-left: -20px;
+  border-radius: 0 0 3px 3px;
+  background: var(--loja-accent);
+}
+
+.loja__nav-label {
+  line-height: 1rem;
+}
+
+.loja__cart-bar {
+  position: fixed;
+  left: 50%;
+  bottom: calc(76px + env(safe-area-inset-bottom));
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  height: 52px;
+  width: min(calc(100% - 32px), calc(var(--loja-col) - 32px));
+  padding: 0 18px;
+  transform: translateX(-50%);
+  border: 0;
+  border-radius: 26px;
+  background: var(--loja-accent);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.28);
+  color: var(--loja-accent-on);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.loja__cart-bar:focus-visible {
+  outline: 3px solid var(--loja-ink);
+  outline-offset: 3px;
+}
+
+.loja__cart-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.loja__cart-bar-count {
+  display: grid;
+  place-items: center;
+  min-width: 26px;
+  height: 26px;
+  border-radius: 13px;
+  background: rgb(255 255 255 / 0.22);
+  font-size: 0.8125rem;
+}
+
+/* ---------- telas cheias (detalhe, busca, categorias) ---------- */
+.loja__screen {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+}
+.loja__screen-body {
+  flex: 1 1 0%;
+  overflow-y: auto;
+}
+.loja__screen-body--stack {
+  padding: 1rem;
+}
+.loja__screen-body--stack > * + * {
+  margin-top: 0.75rem;
+}
+.loja__screen-body--results {
+  padding: 0.75rem 1rem;
+}
+
+.loja__screen-bar {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--loja-line);
+  padding: 0.75rem 1rem;
+}
+.loja__screen-bar--between {
+  justify-content: space-between;
+}
+.loja__screen-bar--gap {
+  gap: 0.5rem;
+}
+.loja__screen-title {
+  font-size: 1.125rem;
+  line-height: 1.75rem;
+  font-weight: 700;
+}
+.loja__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  color: var(--loja-ink-2);
+}
+
+.loja__category-button {
+  display: block;
+  width: 100%;
+  border-radius: 0.5rem;
+  background: var(--loja-surface-2);
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-weight: 500;
+  color: var(--loja-ink-2);
+}
+.loja__category-icon {
+  margin-right: 0.5rem;
+}
+
+.loja__search-lead {
+  color: var(--loja-faint);
+}
+.loja__search-input {
+  flex: 1 1 0%;
+  font-size: 1rem;
+  line-height: 1.5rem;
+  min-height: 2.75rem;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+}
+.loja__search-input::placeholder {
+  color: var(--loja-muted); /* 4,8:1; o --loja-faint reprovava (spec 09 §3) */
+  opacity: 1;
+}
+.loja__results-title {
+  margin-bottom: 0.75rem;
+  font-weight: 600;
+}
+.loja__empty-center {
+  margin-top: 2rem;
+  text-align: center;
+  color: var(--loja-muted);
+}
+
+/* ---------- detalhe do produto ---------- */
+.loja__detail-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-top-left-radius: 1rem;
+  border-top-right-radius: 1rem;
+  border-bottom: 1px solid var(--loja-line);
+  background: #fff;
+  padding: 0.75rem 0;
+}
+.loja__detail-back {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem; /* 44 x 44 (antes 9 x 32) */
+  height: 2.75rem;
+  left: 0.5rem;
+  font-size: 1.5rem;
+  line-height: 2rem;
+  color: var(--loja-ink-3);
+}
+.loja__detail-logo {
+  height: 2.25rem;
+  width: 2.25rem;
+  border-radius: 9999px;
+  object-fit: cover;
+}
+.loja__hero {
+  display: flex;
+  height: 18rem;
+  align-items: center;
+  justify-content: center;
+  background: #fffbeb;
+}
+.loja__hero img {
+  height: 100%;
+  width: 100%;
+  object-fit: cover;
+}
+.loja__hero-fallback {
+  font-size: 3rem;
+  line-height: 1;
+}
+.loja__detail-content {
+  margin-left: auto;
+  margin-right: auto;
+  max-width: 42rem;
+  padding: 1rem;
+}
+.loja__detail-title {
+  font-size: 1.25rem;
+  line-height: 1.75rem;
+  font-weight: 600;
+}
+.loja__detail-desc {
+  margin-top: 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: var(--loja-ink-2);
+}
+.loja__additionals {
+  margin-top: 1rem;
+}
+.loja__additionals-title {
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 600;
+  color: var(--loja-ink-2);
+}
+.loja__additionals-list > * + * {
+  margin-top: 0.25rem;
+}
+.loja__additional {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 3rem; /* linha inteira clicável de 48 px */
+  cursor: pointer;
+  border-radius: 0.25rem;
+  border: 1px solid var(--loja-line);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+.loja__additional-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.loja__additional-price {
+  color: var(--loja-muted);
+}
+.loja__notes {
+  margin-top: 1.5rem;
+}
+.loja__notes-label {
+  margin-bottom: 0.5rem;
+  display: block;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: var(--loja-ink-2);
+}
+.loja__notes-input {
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid var(--loja-field-line);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+.loja__detail-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border-top: 1px solid var(--loja-line);
+  background: #fff;
+  padding: 1rem;
+}
+.loja__stepper {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.loja__step {
+  height: 2.75rem; /* 44 px (antes 36) */
+  width: 2.75rem;
+  font-size: 1.5rem;
+  line-height: 2rem;
+  color: var(--loja-accent);
+}
+.loja__step--off {
+  color: var(--loja-muted); /* continua visível quando desabilitado (spec 09 §10.2) */
+  opacity: 0.6;
+}
+.loja__stepper-qty {
+  width: 1rem;
+  text-align: center;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+.loja__add {
+  display: flex;
+  flex: 1 1 0%;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 0.75rem;
+  background: var(--loja-accent);
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+/* ---------- gavetas (carrinho e checkout) ---------- */
+.loja__sheet {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background: rgb(0 0 0 / 0.4);
+}
+.loja__sheet-panel {
+  max-height: 80vh;
+  overflow-y: auto;
+  border-top-left-radius: 1.5rem; /* 24 px (spec 09 §10.2) */
+  border-top-right-radius: 1.5rem;
+  background: #fff;
+  padding: 1rem;
+}
+.loja__sheet-panel:focus {
+  outline: none; /* o foco inicial vai na folha; o anel aparece nos controles */
+  box-shadow: none;
+}
+.loja__sheet-panel--tall {
+  max-height: 85vh;
+}
+/* ≥ 801 px: modal centralizado de 520 px, não a largura da tela */
+@media (min-width: 801px) {
+  .loja__sheet {
+    align-items: center;
+    justify-content: center;
+  }
+  .loja__sheet-panel {
+    width: 100%;
+    max-width: 32.5rem; /* 520 px */
+    border-radius: 1rem;
+  }
+}
+.loja__sheet-head {
+  margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.loja__sheet-title {
+  font-size: 1.125rem;
+  line-height: 1.75rem;
+  font-weight: 700;
+}
+.loja__sheet-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem; /* 44 x 44 */
+  height: 2.75rem;
+  margin-right: -0.5rem;
+  color: var(--loja-ink-3);
+}
+
+.loja__cart-lines > * + * {
+  margin-top: 0.75rem;
+}
+.loja__cart-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--loja-line);
+  padding-bottom: 0.5rem;
+}
+.loja__cart-info {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+.loja__cart-name {
+  font-weight: 500;
+}
+.loja__cart-sub {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--loja-muted);
+}
+.loja__cart-sub--notes {
+  font-style: italic;
+}
+.loja__cart-stepper {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.loja__round {
+  height: 2.75rem; /* 44 px */
+  width: 2.75rem;
+  border-radius: 9999px;
+  border: 1px solid var(--loja-line);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+.loja__cart-qty {
+  width: 1rem;
+  text-align: center;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+.loja__warning {
+  margin-top: 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: #b45309;
+}
+.loja__total {
+  margin-top: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+}
+
+.loja__cta {
+  width: 100%;
+  min-height: 3rem; /* 48 px */
+  border-radius: 0.75rem;
+  background: var(--loja-accent);
+  padding: 0.75rem 1rem;
+  color: #fff;
+}
+.loja__cta--spaced {
+  margin-top: 1rem;
+}
+.loja__cta:disabled {
+  opacity: 0.6;
+}
+
+.loja__form > * + * {
+  margin-top: 0.5rem;
+}
+.loja__tabs {
+  display: flex;
+  gap: 0.5rem;
+}
+.loja__tab {
+  flex: 1 1 0%;
+  min-height: 3rem; /* 48 px */
+  border-radius: 0.25rem;
+  border: 1px solid var(--loja-field-line);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+.loja__tab--active {
+  border-color: var(--loja-ink);
+  background: var(--loja-ink);
+  color: #fff;
+}
+.loja__field {
+  width: 100%;
+  min-height: 2.75rem;
+  border-radius: 0.25rem;
+  border: 1px solid var(--loja-field-line);
+  padding: 0.5rem 0.75rem;
+}
+.loja__field--upper {
+  text-transform: uppercase;
+}
+.loja__error {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: var(--loja-danger);
+}
+
+/* checkout: rótulos, troco, gorjeta, resumo de valores */
+.loja__label {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 600;
+  color: var(--loja-ink-3);
+}
+.loja__money {
+  min-height: 2.75rem; /* 44 px (revisão rev3, ajuste 1) */
+  cursor: text;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 0.25rem;
+  border: 1px solid var(--loja-field-line);
+  padding: 0.5rem 0.75rem;
+  color: var(--loja-muted);
+}
+.loja__money input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--loja-ink);
+  font: inherit;
+}
+.loja__tips {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.375rem;
+}
+.loja__tip {
+  min-height: 2.75rem; /* área clicável de 44 px */
+  border-radius: 9999px;
+  border: 1px solid var(--loja-field-line);
+  padding: 0.25rem 0.25rem;
+  text-align: center;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  color: var(--loja-ink-3);
+}
+.loja__tip--active {
+  border-color: var(--loja-accent);
+  background: var(--loja-accent);
+  color: #fff;
+}
+.loja__summary {
+  border-radius: 0.75rem;
+  background: var(--loja-surface);
+  padding: 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: var(--loja-ink-3);
+}
+.loja__summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.loja__summary-row + .loja__summary-row {
+  margin-top: 0.25rem;
+}
+.loja__summary-row--total {
+  margin-top: 0.5rem;
+  border-top: 1px solid var(--loja-line);
+  padding-top: 0.5rem;
+  font-weight: 600;
+  color: var(--loja-ink);
+}
+.loja__hint {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--loja-muted);
+}
+
+/* aviso de loja fechada para pedidos */
+.loja__closed {
+  margin-top: 1rem;
+  border-radius: 0.75rem;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  padding: 0.75rem 1rem;
+  text-align: center;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  font-weight: 500;
+  color: var(--loja-danger-ink); /* #b91c1c: 6,0:1 sobre #fef2f2 (o #dc2626 dava 4,41:1) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+/* ---------- pedidos ---------- */
+.loja__orders {
+  padding: 1.5rem 1rem 6rem;
+}
+.loja__orders-title {
+  margin-bottom: 1rem;
+  font-size: 1.25rem;
+  line-height: 1.75rem;
+  font-weight: 700;
+}
+.loja__order-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 0.5rem;
+  border: 1px solid var(--loja-line);
+  padding: 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+.loja__order-code {
+  font-weight: 600;
+}
+.loja__order-date {
+  color: var(--loja-muted);
+}
+.loja__order-total {
+  font-weight: 500;
+}
+
+/* ---------- resultado do pedido ---------- */
+.loja__result {
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  text-align: center;
+}
+.loja__result-title {
+  font-size: 1.5rem;
+  line-height: 2rem;
+  font-weight: 700;
+}
+.loja__result-text {
+  margin-top: 0.5rem;
+  color: var(--loja-ink-3);
+}
+.loja__result-text--ok {
+  color: #15803d;
+}
+.loja__result-hint {
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: var(--loja-muted);
+}
+.loja__result-warning {
+  margin-top: 0.75rem;
+  font-size: 0.9375rem;
+  line-height: 1.375rem;
+  font-weight: 700;
+  color: var(--loja-ink);
+}
+.loja__result-store {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: var(--loja-muted);
+}
+.loja__result-total {
+  margin-top: 0.25rem;
+  font-size: 1.125rem;
+  line-height: 1.5rem;
+  font-weight: 700;
+}
+.loja__cta--outline {
+  border: 2px solid var(--loja-accent);
+  background: transparent;
+  color: var(--loja-accent);
+}
+.loja__qr-box {
+  width: 100%;
+  max-width: 24rem; /* a linha inteira do "Mostrar QR Code" é o alvo de toque, como o botão de copiar */
+  margin: 0.75rem 0;
+}
+.loja__qr-box summary {
+  display: flex;
+  min-height: 2.75rem; /* 44 px */
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--loja-ink-3);
+  text-decoration: underline;
+}
+.loja__qr-box .loja__qr {
+  margin: 0.5rem auto 0;
+}
+.loja__order-note {
+  margin-top: 0.25rem;
+  font-size: 0.8125rem;
+  line-height: 1.125rem;
+  color: var(--loja-muted);
+}
+.loja__result-error {
+  margin-top: 0.5rem;
+  margin-bottom: 1rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: var(--loja-danger-ink);
+}
+.loja__qr {
+  margin: 1rem 0;
+  height: 14rem;
+  width: 14rem;
+}
+.loja__pix-code {
+  width: 100%;
+  max-width: 28rem;
+  border-radius: 0.25rem;
+  border: 1px solid var(--loja-line);
+  padding: 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+}
+.loja__result-link {
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  text-decoration-line: underline;
+}
+.loja__result-link--cancel {
+  margin-top: 1rem;
+  color: var(--loja-danger);
+}
+.loja__result-link--back {
+  margin-top: 0.75rem;
+  color: var(--loja-link);
+}
+.loja__result-link--back-lg {
+  margin-top: 1rem;
+  color: var(--loja-link);
+}
+
+/* Quem pediu menos movimento no sistema não recebe animação nem rolagem suave. */
+@media (prefers-reduced-motion: reduce) {
+  .loja,
+  .loja * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------- foco, pular para o conteúdo e cardápio vazio (spec 09 §4, §5, §6) ---------- */
+/* Anel de foco: 2 px branco + 2 px escuro. O outline transparente continua valendo no modo de alto contraste. */
+.loja :focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--loja-ink);
+}
+/* o campo de valor tem o <input> sem borda dentro de uma moldura: o anel vai na moldura */
+.loja__money input:focus-visible {
+  box-shadow: none;
+}
+.loja__money:focus-within {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--loja-ink);
+}
+
+.loja__skip {
+  position: absolute;
+  left: 0.75rem;
+  top: 0.75rem;
+  z-index: 50;
+  transform: translateY(-200%);
+  border-radius: 0.5rem;
+  background: var(--loja-ink);
+  padding: 0.75rem 1rem;
+  color: #fff;
+  font-weight: 600;
+}
+.loja__skip:focus {
+  transform: translateY(0);
+}
+.loja__content:focus {
+  outline: none;
+}
+
+.loja__empty-menu {
+  margin: 2rem 1rem;
+  text-align: center;
+  color: var(--loja-ink-3);
+}
+.loja__empty-menu-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  margin-top: 0.75rem;
+  border-radius: 9999px;
+  border: 1px solid var(--loja-field-line);
+  padding: 0 1.25rem;
+  color: var(--loja-link);
+  font-weight: 600;
+}
+
+/* ---------- checkout acessível (spec 09 §10.2) ---------- */
+.loja__fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.loja__legend {
+  margin-bottom: 0.25rem;
+  padding: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--loja-ink-2);
+}
+.loja__required {
+  font-weight: 400;
+  color: var(--loja-ink-3);
+}
+.loja__field[aria-invalid="true"],
+.loja__money[data-invalid="true"] {
+  border-color: var(--loja-danger);
+}
+.loja__error-text {
+  margin-top: 0.25rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: var(--loja-danger);
+}
+.loja__error-summary {
+  border-radius: 0.5rem;
+  border: 1px solid var(--loja-danger);
+  background: #fef2f2;
+  padding: 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--loja-danger-ink);
+  margin-bottom: 0.5rem; /* respiro antes do primeiro grupo (revisão rev3, ajuste 2) */
+}
+.loja__radio-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 3.5rem; /* 56 px */
+  border-radius: 0.5rem;
+  border: 1px solid var(--loja-field-line);
+  padding: 0 0.75rem;
+  cursor: pointer;
+}
+.loja__radio-card + .loja__radio-card {
+  margin-top: 0.375rem;
+}
+.loja__radio-card input {
+  width: 1.25rem;
+  height: 1.25rem;
+  accent-color: var(--loja-ink);
+}
+.loja__radio-card--checked {
+  border-color: var(--loja-ink);
+  background: var(--loja-surface);
+  font-weight: 600;
+}
+.loja__icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  color: var(--loja-ink-3);
+}
+.loja__cart-sub {
+  font-size: 0.875rem; /* 14 px, antes ~12 px (spec 09 §10.2) */
+}
+.loja__cart-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.loja__radio-card:focus-within,
+.loja__tip:focus-within {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--loja-ink);
+}
+.loja__radio-card--inline {
+  margin-top: 0 !important;
+}
+.loja__choice-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+.loja__detail-footer--closed {
+  flex-direction: column;
+  align-items: stretch;
+}
+.loja__detail-footer--closed .loja__closed {
+  margin-top: 0;
+}
+
+/* ---------- resultado do pedido (spec 09 §10.2) ---------- */
+.loja__result .loja__cta {
+  max-width: 24rem;
+  margin-top: 1.25rem;
+}
+.loja__result-title:focus {
+  outline: none;
+  box-shadow: none;
+}
+.loja__result-code {
+  margin-top: 0.25rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--loja-ink-2);
+}
+.loja__result-summary {
+  margin-top: 1rem;
+  width: 100%;
+  max-width: 24rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--loja-line);
+  background: #fff;
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  color: var(--loja-ink-2);
+}
+.loja__result-summary ul {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+}
+.loja__result-summary p {
+  margin-top: 0.25rem;
+}
+/* cancelar é ação secundária: texto, não botão vermelho cheio */
+.loja__result-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
+  margin-top: 0.5rem;
+  padding: 0 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--loja-ink-3);
+  text-decoration: underline;
+}
+.loja__cta--danger {
+  background: var(--loja-danger-ink);
+}
+
+/* folha dentro da tela de resultado (que centraliza o texto): alinha e empilha os botões */
+.loja__sheet-panel {
+  text-align: left;
+}
+.loja__sheet-panel .loja__cta {
+  max-width: none;
+}
+.loja__sheet-panel .loja__result-secondary {
+  display: flex;
+  width: 100%;
+}
+
+/* caixa de marcar dos adicionais com 24 px; a linha inteira já é o rótulo clicável */
+.loja__additional input[type="checkbox"] {
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-right: 0.5rem;
+  accent-color: var(--loja-ink);
+}

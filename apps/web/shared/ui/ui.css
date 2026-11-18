@@ -1,0 +1,311 @@
+.ui-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100000000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.ui-modal__scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  animation: ui-fade-in 0.25s ease both;
+}
+
+.ui-modal__panel {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  max-width: 100%;
+  max-height: calc(100% - 32px);
+  overflow: hidden;
+  background: #ffffff;
+  border-radius: 24px;
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.16);
+  outline: none;
+  animation: ui-modal-in 0.35s var(--ease-smooth-out) both;
+}
+
+@keyframes ui-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes ui-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+}
+
+@keyframes ui-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-modal__scrim,
+  .ui-modal__panel {
+    animation: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .ui-modal--sheet {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  /* folha curta: altura do conteúdo, no máximo a da tela menos a margem de cima */
+  .ui-modal--sheet.ui-modal--fit .ui-modal__panel {
+    height: auto;
+    max-height: calc(100% - 32px);
+  }
+
+  .ui-modal--sheet .ui-modal__panel {
+    width: 100% !important;
+    height: calc(100% - 32px);
+    max-height: none;
+    border-radius: 24px 24px 0 0;
+    animation-name: ui-sheet-in;
+    animation-duration: 0.45s;
+  }
+}
+
+.info-modal__handle {
+  display: none;
+  width: 40px;
+  height: 4px;
+  flex-shrink: 0;
+  margin: 12px auto 0;
+  border-radius: 2px;
+  background: rgba(221, 221, 221, 0.5);
+}
+
+.info-modal__scroll {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 32px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 32px;
+  background: var(--surface);
+}
+
+.info-modal__title {
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 130%;
+  text-align: center;
+}
+
+.info-modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
+}
+
+.info-modal__section {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  gap: 8px;
+  padding: 12px;
+  border: 0.5px solid var(--line);
+  border-radius: 12px;
+}
+
+.info-modal__section strong {
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.info-modal__section-desc {
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: 0.14px;
+  text-wrap: pretty;
+}
+
+.info-modal__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 40px;
+  min-height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-primary);
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+  cursor: pointer;
+}
+
+.info-modal__close:hover {
+  background: var(--surface-soft);
+}
+
+@media (max-width: 768px) {
+  .info-modal__handle {
+    display: block;
+  }
+
+  .info-modal__scroll {
+    gap: 24px;
+    padding: 24px 16px 40px;
+  }
+
+  .info-modal__title {
+    font-size: 16px;
+    line-height: 24px;
+  }
+}
+
+.ui-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 20px;
+  background: #cfcfcf;
+  cursor: pointer;
+  transition: background-color var(--transition);
+}
+
+.ui-switch--on {
+  background: var(--ok);
+}
+
+.ui-switch__knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform var(--transition);
+}
+
+.ui-switch--on .ui-switch__knob {
+  transform: translateX(16px);
+}
+
+.ui-switch:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.ui-shine {
+  background: #f6f7f8;
+  background-image: linear-gradient(to right, #f6f7f8 0%, #dfdfdf 20%, #f6f7f8 40%, #f6f7f8 100%);
+  background-repeat: no-repeat;
+  background-size: 200% 100%;
+  animation: ui-shine 1.5s linear infinite;
+}
+
+@keyframes ui-shine {
+  from {
+    background-position: -100% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-shine {
+    animation: none;
+  }
+}
+
+.confirm-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 24px;
+  color: var(--ink);
+}
+
+.confirm-dialog h3 {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.confirm-dialog p {
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.confirm-dialog__error {
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.confirm-dialog__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.confirm-dialog__actions button {
+  min-height: 44px;
+  border: none;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.confirm-dialog__confirm--primary {
+  background: var(--color-primary);
+  color: #ffffff;
+}
+
+.confirm-dialog__confirm--danger {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+/* Só contorno: a ação irreversível não pode ser tão chamativa quanto a segura. O seletor tem 2 classes porque
+   `.confirm-dialog__actions button` (border: none) teria a mesma força que uma classe só. */
+.confirm-dialog__actions .confirm-dialog__confirm--danger-outline {
+  border: 1px solid #fca5a5;
+  background: #ffffff;
+  color: #b91c1c;
+}
+
+.confirm-dialog__actions button {
+  flex-shrink: 0; /* com a janela baixa os botões não podem encolher abaixo dos 44 px */
+}
+
+.confirm-dialog__confirm[disabled] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.confirm-dialog__cancel {
+  background: none;
+  color: var(--color-primary);
+}

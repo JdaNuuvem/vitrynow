@@ -1,0 +1,57 @@
+import type { FastifyPluginAsync } from "fastify";
+import { changePasswordSchema, createStaffUserSchema } from "@meucardapio/shared-types";
+import { clientKey } from "../../lib/clientKey";
+import { requireMfa } from "../../lib/mfaGate";
+import { SESSION_COOKIE, sessionCookieOptions, signSession } from "../../lib/session";
+import { disconnectUser } from "../../realtime/hub";
+import { requireFeature } from "../../lib/subscription";
+import { useDomainErrors } from "../../shared/errors";
+import type { UsersService } from "./users.service";
+
+// Gestão de equipe da loja (convidar/remover STAFF) + troca de senha — autenticado pelo painel.
+// Os portões de plano (multi_user) e de MFA ficam aqui, na borda, como preHandlers.
+export function buildUserRoutes(service: UsersService): FastifyPluginAsync {
+  return async (app) => {
+    useDomainErrors(app);
+
+    app.get("/api/users", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request) => {
+      return { users: await service.list(request.user.storeId) };
+    });
+
+    app.post(
+      "/api/users",
+      { preHandler: [app.requirePanelAuth, app.requireOwner, requireFeature("multi_user")] },
+      async (request, reply) => {
+        const parsed = createStaffUserSchema.safeParse(request.body);
+        if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+        const user = await service.invite(request.user.storeId, parsed.data, clientKey(request.ip));
+        return reply.code(201).send({ user });
+      },
+    );
+
+    app.post(
+      "/api/users/:id/delete",
+      { preHandler: [app.requirePanelAuth, app.requireOwner, requireMfa("delete_user")] },
+      async (request) => {
+        const { id } = request.params as { id: string };
+        await service.remove(request.user, id);
+        disconnectUser(id); // a linha sumiu: o JWT já morre, aqui fecha também o WebSocket aberto
+        return { ok: true };
+      },
+    );
+
+    app.post(
+      "/auth/change-password",
+      { preHandler: [app.requirePanelAuth, requireMfa("change_password")] },
+      async (request, reply) => {
+        const parsed = changePasswordSchema.safeParse(request.body);
+        if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+        const { tokenVersion } = await service.changePassword(request.user.userId, parsed.data, clientKey(request.ip));
+        // Derruba as OUTRAS sessões e sockets; este dispositivo recebe cookie na versão nova.
+        disconnectUser(request.user.userId);
+        reply.setCookie(SESSION_COOKIE, signSession(app, { id: request.user.userId, tokenVersion }), sessionCookieOptions());
+        return { ok: true };
+      },
+    );
+  };
+}
