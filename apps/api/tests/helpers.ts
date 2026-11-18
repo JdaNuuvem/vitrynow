@@ -124,6 +124,7 @@ export async function registerStore(
     const storeId = (JSON.parse(response.body) as { store?: { id?: string } }).store?.id;
     if (storeId) await connectPixAccount(storeId);
   }
+  // API-08: a loja de teste nasce em PRO, pois `multi_user` e trancado no BASICO (402); `plan: "BASICO"` testa os limites.
   if (overrides.plan !== "BASICO" && response.statusCode === 201) {
     const sid = (JSON.parse(response.body) as { store?: { id?: string } }).store?.id;
     if (sid) await activateSubscription({ subscriptionId: (await prisma.subscription.findFirstOrThrow({ where: { storeId: sid } })).id, planCode: "PRO" });
