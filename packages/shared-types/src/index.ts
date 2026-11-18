@@ -424,6 +424,35 @@ export type CreateFeedbackInput = z.infer<typeof createFeedbackSchema>;
 export const storeAvailabilitySchema = z.object({ acceptingOrders: z.boolean() });
 export type StoreAvailabilityInput = z.infer<typeof storeAvailabilitySchema>;
 
+// ---- Horário de funcionamento (B5) ----
+// Dia 0 = domingo (como Date#getDay). "24:00" só vale como fim. Validações de sobreposição ficam na API.
+
+const hhmmSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "use HH:MM");
+const hhmmEndSchema = z.string().regex(/^(([01]\d|2[0-3]):[0-5]\d|24:00)$/, "use HH:MM");
+export const scheduleIntervalSchema = z.object({ start: hhmmSchema, end: hhmmEndSchema });
+export const storeScheduleSchema = z.object({
+  week: z.array(z.array(scheduleIntervalSchema).max(6)).length(7),
+  exceptions: z
+    .array(
+      z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "use AAAA-MM-DD"),
+        closed: z.boolean(),
+        intervals: z.array(scheduleIntervalSchema).max(6).optional(),
+      }),
+    )
+    .max(200)
+    .default([]),
+  cutoffMinutes: z.number().int().min(0).max(240).default(0),
+});
+export type StoreScheduleInput = z.infer<typeof storeScheduleSchema>;
+export const updateStoreHoursSchema = z.object({ schedule: storeScheduleSchema.nullable() });
+export const storeStatusActionSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("PAUSE"), minutes: z.union([z.literal(15), z.literal(30), z.literal(60)]) }),
+  z.object({ action: z.literal("CLOSE_TODAY") }),
+  z.object({ action: z.literal("RESUME") }),
+]);
+export type StoreStatusAction = z.infer<typeof storeStatusActionSchema>;
+
 // ---- Planos e assinatura ----
 
 export const checkoutPlanSchema = z.object({ planCode: z.string().min(1).max(50) });
