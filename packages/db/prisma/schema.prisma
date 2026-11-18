@@ -121,6 +121,10 @@ model Store {
   printJobs    PrintJob[]
   printMode    PrintMode @default(LEGACY) // modo de impressão decidido pelo SERVIDOR por loja (ADR-0004 §8.12)
   cashStaffWithdrawalLimitCents Int @default(0) // limite de sangria do STAFF por lançamento (RN-CX-09); 0 = toda sangria exige o dono
+  // API-25: suspensão MANUAL pela equipe da plataforma (back-office). Nulo = não suspensa. Independe da suspensão por assinatura (API-09).
+  platformSuspendedAt     DateTime?
+  platformSuspendedReason String?
+  aiCreditLedger AiCreditLedger[]
 }
 
 // Contador atômico por loja (hoje: sequência do código do pedido). Incrementado com
@@ -679,4 +683,70 @@ model PrintJob {
   @@unique([id, storeId])
   @@index([storeId, status, availableAt, createdAt])
   @@index([orderId])
+}
+
+
+// ---- API-25: back-office da plataforma (contas de equipe SEPARADAS dos usuários de loja) ----
+
+enum PlatformRole {
+  ADMIN   // tudo, inclusive conceder/ajustar créditos
+  SUPPORT // lê lojas, suspende/reativa, estende trial, publica avisos; NÃO mexe em créditos
+}
+
+model PlatformAdmin {
+  id           String       @id @default(cuid())
+  email        String       @unique // sempre minúsculo
+  passwordHash String
+  role         PlatformRole @default(SUPPORT)
+  tokenVersion Int          @default(0)
+  disabledAt   DateTime?
+  createdAt    DateTime     @default(now())
+
+  auditLogs PlatformAuditLog[]
+  credits   AiCreditLedger[]
+}
+
+// Auditoria da equipe (RN-BKO-03). Imutável: trigger recusa UPDATE/DELETE. Sem FK para Store de propósito (o rastro sobrevive à loja).
+model PlatformAuditLog {
+  id        String        @id @default(cuid())
+  adminId   String
+  admin     PlatformAdmin @relation(fields: [adminId], references: [id], onDelete: Restrict)
+  storeId   String?
+  action    String
+  reason    String?
+  metadata  Json?
+  createdAt DateTime      @default(now())
+
+  @@index([storeId, createdAt])
+  @@index([adminId, createdAt])
+}
+
+enum AiCreditReason {
+  PURCHASE // crédito pago (pagamento recebido FORA do sistema; exige externalRef)
+  GRANT    // concessão sem pagamento (compensação), sempre com motivo; nunca cortesia automática do PRO
+  ADJUST   // ajuste (positivo ou negativo), sempre com motivo
+  RESERVE
+  CONSUME
+  RELEASE
+}
+
+// Livro-razão de créditos de IA por loja (ADR-0015 §3D). IMUTÁVEL: só INSERT (trigger recusa UPDATE/DELETE); saldo = SUM(delta).
+model AiCreditLedger {
+  id             String         @id @default(cuid())
+  storeId        String
+  store          Store          @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  delta          Int
+  reason         AiCreditReason
+  note           String? // motivo curto, sanitizado
+  externalRef    String? // referência do pagamento recebido fora do sistema (sem dado de cartão)
+  priceCents     Int? // preço cobrado, opcional (nulo = sem cobrança registrada)
+  expiresAt      DateTime? // opcional; nulo = não expira (job de expiração desligado)
+  jobId          String?
+  idempotencyKey String
+  actorAdminId   String?
+  actorAdmin     PlatformAdmin? @relation(fields: [actorAdminId], references: [id], onDelete: Restrict)
+  createdAt      DateTime       @default(now())
+
+  @@unique([storeId, idempotencyKey])
+  @@index([storeId, createdAt])
 }

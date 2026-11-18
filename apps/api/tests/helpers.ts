@@ -1,4 +1,7 @@
+import { vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { sendMfaCodeEmail } from "../src/lib/email";
+import { bcryptPasswordHasher } from "../src/shared/passwordHasher";
 import { buildApp } from "../src/app";
 import { encryptSecret } from "../src/lib/paymentCrypto";
 import { setGatewayMaker } from "../src/modules/storePayments/gateway";
@@ -41,7 +44,10 @@ export async function resetDb() {
   await assertSafeToReset({
     currentDatabase: async () => (await prisma.$queryRaw<{ db: string }[]>`select current_database() as db`)[0].db,
   });
+  // API-25: o livro-razão e a auditoria da plataforma são imutáveis (trigger recusa DELETE); a limpeza de TESTE usa TRUNCATE.
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "AiCreditLedger", "PlatformAuditLog"');
   await prisma.$transaction([
+    prisma.platformAdmin.deleteMany(),
     prisma.orderStatusHistory.deleteMany(),
     prisma.orderItemAdditional.deleteMany(),
     prisma.orderItem.deleteMany(),
@@ -129,4 +135,37 @@ export async function login(app: ReturnType<typeof makeApp>, email: string, pass
   const response = await app.inject({ method: "POST", url: "/auth/login", payload: { email, password } });
   const cookie = (response.headers["set-cookie"] as string | undefined)?.split(";")[0];
   return { response, cookie };
+}
+
+
+// ---- API-25: back-office. Os testes que usam estes helpers precisam mockar `../src/lib/email` (sendMfaCodeEmail como vi.fn). ----
+let adminSeq = 0;
+
+export async function createPlatformAdmin(role: "ADMIN" | "SUPPORT" = "ADMIN", overrides: Partial<{ email: string; password: string }> = {}) {
+  adminSeq += 1;
+  const email = overrides.email ?? `equipe${adminSeq}@plataforma.teste`;
+  const password = overrides.password ?? "senha-da-equipe-12345";
+  const admin = await prisma.platformAdmin.create({ data: { email, passwordHash: await bcryptPasswordHasher.hash(password, "test"), role } });
+  return { admin, email, password };
+}
+
+function lastMfaCode(): string {
+  return vi.mocked(sendMfaCodeEmail).mock.calls.at(-1)![0].code;
+}
+
+/** Entra no back-office (senha + código por e-mail) e devolve o cookie da sessão da equipe. */
+export async function platformLogin(app: ReturnType<typeof makeApp>, email: string, password: string) {
+  const step1 = await app.inject({ method: "POST", url: "/api/platform/auth/login", payload: { email, password } });
+  if (step1.statusCode !== 202) return { step1, cookie: undefined as string | undefined };
+  const { challengeId } = JSON.parse(step1.body) as { challengeId: string };
+  const step2 = await app.inject({ method: "POST", url: "/api/platform/auth/verify", payload: { challengeId, code: lastMfaCode() } });
+  return { step1, step2, cookie: (step2.headers["set-cookie"] as string | undefined)?.split(";")[0] };
+}
+
+/** Comprovante de uso único para conceder créditos (pede o código, verifica e devolve o id do desafio). */
+export async function platformCreditProof(app: ReturnType<typeof makeApp>, cookie: string) {
+  const created = await app.inject({ method: "POST", url: "/api/platform/mfa/challenge", headers: { cookie }, payload: { purpose: "platform_credit_grant" } });
+  const { challengeId } = JSON.parse(created.body) as { challengeId: string };
+  await app.inject({ method: "POST", url: "/api/platform/mfa/verify", headers: { cookie }, payload: { challengeId, code: lastMfaCode() } });
+  return challengeId;
 }

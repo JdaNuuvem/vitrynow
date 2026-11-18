@@ -49,7 +49,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         minOrderCents: store.minOrderCents,
         deliveryEnabled: store.deliveryEnabled,
         pickupEnabled: store.pickupEnabled,
-        acceptingOrders: store.acceptingOrders,
+        acceptingOrders: store.acceptingOrders && !store.platformSuspendedAt,
         deliveryFeeCents: store.deliveryFeeCents,
       },
       categories,
@@ -63,6 +63,9 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     const { slug } = request.params as { slug: string };
     const store = await prisma.store.findUnique({ where: { slug } });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });
+    if (store.platformSuspendedAt) {
+      return reply.code(409).send({ error: "A loja não está aceitando pedidos no momento.", code: "STORE_SUSPENDED" });
+    }
     if (!store.acceptingOrders) {
       return reply.code(409).send({ error: "A loja não está aceitando pedidos no momento.", code: "STORE_CLOSED" });
     }

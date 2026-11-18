@@ -176,7 +176,19 @@ de dev.
   existente ativa 30 dias. Recurso fora do plano responde 402 `FEATURE_LOCKED` (hoje: `multi_user`, que
   libera criar usuários da equipe).
 - **Avisos:** `GET /api/notices` e `POST /api/notices/:id/read` para o painel; a equipe da plataforma
-  publica em `POST /api/admin/notices` com o header `x-admin-token` (`ADMIN_TOKEN`).
+  publica em `POST /api/platform/notices` (sessão do back-office). O `x-admin-token`/`ADMIN_TOKEN` foi aposentado (API-25).
+- **Back-office da plataforma (API-25):** contas da equipe separadas dos usuários de loja (`PlatformAdmin`, papéis
+  `ADMIN` e `SUPPORT`; criar por `apps/api/scripts/create-platform-admin.ts`). Entrada em dois passos, sempre com
+  código por e-mail: `POST /api/platform/auth/login` → `POST /api/platform/auth/verify` (cookie `mc_platform_session`).
+  Rotas: `GET /api/platform/stores` (busca `q`, paginação), `GET /api/platform/stores/:id`, `POST …/suspend`,
+  `…/reactivate`, `…/extend-trial` (todas com motivo), avisos e créditos. Loja suspensa fica somente leitura no painel
+  (403 `STORE_SUSPENDED`) e o cardápio recusa pedidos (409). Toda ação **e toda leitura de loja** grava
+  `PlatformAuditLog` (imutável).
+- **Créditos de IA (livro-razão, ADR-0015 §3D):** `POST /api/platform/stores/:id/credits` (só `ADMIN`; senha de novo +
+  comprovante `x-mfa-challenge` de `/api/platform/mfa/*`; `PURCHASE` exige `externalRef`; só `ADJUST` pode ser
+  negativo; `idempotencyKey`; limite `CREDIT_GRANT_MAX`). `GET …/credits` lista o livro-razão e o saldo (soma dos
+  lançamentos). `AiCreditLedger` e `PlatformAuditLog` recusam UPDATE/DELETE no próprio banco. Sem preço padrão e sem
+  cortesia no PRO; o consumo (reserva/débito) é a tarefa AI-04.
 - **MFA por e-mail:** `POST /api/mfa/challenge` e `POST /api/mfa/verify` geram um comprovante de uso único
   (10 min). Com `MFA_ENFORCED=true`, estorno, troca de senha e remoção de usuário exigem o header
   `x-mfa-challenge`; sem o comprovante a API responde 403 `MFA_REQUIRED`.

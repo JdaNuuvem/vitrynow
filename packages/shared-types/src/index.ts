@@ -407,3 +407,49 @@ export type PrintAckInput = z.infer<typeof printAckSchema>;
 export const printModeSchema = z.enum(["LEGACY", "QUEUE"]);
 export type PrintModeValue = z.infer<typeof printModeSchema>;
 export const setPrintModeSchema = z.object({ mode: printModeSchema });
+
+// ---- Back-office da plataforma (API-25) ----
+
+const platformReason = z.string().trim().min(5, "informe o motivo (mínimo 5 caracteres)").max(300);
+
+export const platformLoginSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  password: z.string().min(1).max(200),
+});
+
+export const platformMfaVerifySchema = z.object({
+  challengeId: z.string().min(1).max(100),
+  code: z.string().regex(/^\d{6}$/, "o código tem 6 dígitos"),
+});
+
+export const PLATFORM_MFA_PURPOSES = ["platform_login", "platform_credit_grant"] as const;
+export const platformMfaChallengeSchema = z.object({ purpose: z.enum(PLATFORM_MFA_PURPOSES).exclude(["platform_login"]) });
+
+export const platformStoreListQuerySchema = z.object({
+  q: z.string().trim().max(100).optional(),
+  page: z.coerce.number().int().min(1).max(10_000).default(1),
+  pageSize: z.coerce.number().int().min(1).max(50).default(20),
+});
+
+export const platformReasonSchema = z.object({ reason: platformReason });
+export const platformExtendTrialSchema = z.object({ days: z.number().int().min(1).max(60), reason: platformReason });
+
+export const platformCreateNoticeSchema = createNoticeSchema;
+
+export const platformCreditGrantSchema = z
+  .object({
+    reason: z.enum(["PURCHASE", "GRANT", "ADJUST"]),
+    credits: z.number().int().min(-1000).max(1000).refine((value) => value !== 0, "a quantidade não pode ser zero"),
+    note: platformReason,
+    externalRef: z.string().trim().min(3).max(120).regex(/^[\w .\-/#:]+$/, "referência com caracteres inválidos").optional(),
+    priceCents: z.number().int().min(0).max(100_000_000).optional(),
+    expiresAt: z.string().datetime().optional(),
+    idempotencyKey: z.string().trim().min(8).max(100),
+    password: z.string().min(1).max(200),
+  })
+  .superRefine((value, ctx) => {
+    if (value.reason !== "ADJUST" && value.credits < 0) ctx.addIssue({ code: "custom", path: ["credits"], message: "só o ajuste (ADJUST) pode ser negativo" });
+    if (value.reason === "PURCHASE" && !value.externalRef) ctx.addIssue({ code: "custom", path: ["externalRef"], message: "compra exige a referência do pagamento recebido" });
+    if (value.credits < 0 && (value.priceCents !== undefined || value.externalRef !== undefined)) ctx.addIssue({ code: "custom", path: ["priceCents"], message: "ajuste negativo não leva preço nem referência de pagamento" });
+  });
+export type PlatformCreditGrantInput = z.infer<typeof platformCreditGrantSchema>;
