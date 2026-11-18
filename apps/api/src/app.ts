@@ -6,6 +6,7 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import websocket from "@fastify/websocket";
 import authPlugin from "./plugins/auth";
+import { withTextTooLongCode } from "./lib/textErrors";
 import healthRoutes from "./routes/health";
 import authRoutes from "./routes/auth";
 import storefrontRoutes from "./routes/storefront";
@@ -72,6 +73,12 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
       return reply.code(code).send({ statusCode: code, error: "Erro interno do servidor. Tente de novo.", message: "Erro interno do servidor", requestId: request.id });
     }
     return reply.send(error);
+  });
+
+  // API-49: código TEXT_TOO_LONG nos 400 de validação. Hook SÍNCRONO (com `done`) de propósito: um onSend assíncrono atrasa o
+  // `reply.sent`, e os guardas que fazem `reply.code(403).send(...)` sem `return` (requireOwner etc.) deixariam a rota seguir.
+  app.addHook("onSend", (_request, reply, payload, done) => {
+    done(null, reply.statusCode === 400 && typeof payload === "string" ? withTextTooLongCode(payload) : payload);
   });
 
   app.register(cors, {
