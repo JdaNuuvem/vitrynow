@@ -11,6 +11,31 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// API-16 (B9): o que fazer com bairro fora da lista (só vale quando a loja tem bairros cadastrados).
+enum DeliveryOutsideMode {
+  REFUSE
+  DEFAULT_FEE
+}
+
+// API-16 (B9): bairro atendido, com taxa e prazo. Único por loja (nameKey = nome sem acento/caixa).
+model DeliveryZone {
+  id            String   @id @default(cuid())
+  storeId       String
+  store         Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  name          String
+  nameKey       String
+  feeCents      Int
+  etaMinMinutes Int?
+  etaMaxMinutes Int?
+  freeFromCents Int?
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  @@unique([id, storeId])
+  @@unique([storeId, nameKey])
+  @@index([storeId])
+}
+
 enum UserRole {
   OWNER
   STAFF
@@ -65,6 +90,7 @@ enum HistorySource {
 enum OrderSource {
   CLIENTE
   PAINEL
+  QR_MESA // API-22: pedido feito pelo celular do cliente no QR da mesa
 }
 
 enum HistoryKind {
@@ -98,14 +124,21 @@ model Store {
   logoUrl      String?
   coverImageUrl String? // banner exibido no topo do cardápio público, separado da logo
   primaryColor String? // ex. "#16a34a" — aplicado no storefront público
-  customDomain String? // guardado como referência; roteamento de domínio próprio é infra, não app
+  customDomain String? @unique // nome de host em minúsculas (validado em shared-types); ÚNICO: duas lojas nunca reivindicam o mesmo domínio (SEC-14/ST-18)
   address       String? // exibido no cardápio público
   whatsapp      String? // só dígitos com DDI, ex. "5521999999999" — vira link wa.me
-  openingHours  String? // texto livre, ex. "Seg a sáb, 09:00 às 17:00"
+  openingHours  String? // texto livre, ex. "Seg a sáb, 09:00 às 17:00" (só informativo; a grade fica em `schedule`)
+  schedule      Json?   // B5/API-11: grade semanal + exceções + corte (modules/storeHours); null = sem grade (loja aberta quando ligada)
+  pausedUntil   DateTime? // "Pausar 15/30/60 min": recusa pedido até este instante
+  closedUntil   DateTime? // "Fechar por hoje": recusa pedido até a próxima abertura da grade
   minOrderCents Int?    // pedido mínimo do storefront público; null = sem mínimo
   deliveryEnabled Boolean @default(true)
   pickupEnabled   Boolean @default(true)
   acceptingOrders Boolean @default(true) // interruptor "Disponível" do painel: false = cardápio público recusa pedidos
+  hideSoldOutProducts Boolean @default(false) // API-17 (RN-B11-03): esconde produtos esgotados no cardápio público
+  deliveryZones   DeliveryZone[]
+  deliveryOutsideMode   DeliveryOutsideMode @default(REFUSE) // API-16: bairro fora da lista (só com bairros cadastrados)
+  freeShippingFromCents Int?                                 // API-16: frete grátis geral a partir do subtotal líquido
   deliveryFeeCents Int    @default(0) // taxa de entrega fixa somada a pedidos DELIVERY
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -122,11 +155,42 @@ model Store {
   deviceAlerts DeviceAlert[]
   subscription Subscription?
   paymentAccounts PaymentAccount[]
+  optionGroups OptionGroup[]
   counter      StoreCounter?
   printJobs    PrintJob[]
+  onboardingSteps OnboardingStep[]
+  activationEvents ActivationEvent[]
+  images       Image[]
   printMode    PrintMode @default(LEGACY) // modo de impressão decidido pelo SERVIDOR por loja (ADR-0004 §8.12)
   manualDiscountStaffLimitPercent Int @default(10) // desconto manual do pedido lançado no painel: STAFF até este %, acima só o OWNER (RN-B2-06)
   cashStaffWithdrawalLimitCents Int @default(0) // limite de sangria do STAFF por lançamento (RN-CX-09); 0 = toda sangria exige o dono
+  featureInterests FeatureInterest[]
+  // API-22 (mesa/QR, ADR-0002): aceita pedido pelo QR; por padrão a equipe precisa aceitar (RN-MB-01).
+  qrOrderingEnabled    Boolean @default(true)
+  qrOrdersNeedApproval Boolean @default(true)
+  tables               Table[]
+  receipts             Receipt[]
+  // API-25: suspensão MANUAL pela equipe da plataforma (back-office). Nulo = não suspensa. Independe da suspensão por assinatura (API-09).
+  platformSuspendedAt     DateTime?
+  platformSuspendedReason String?
+  aiCreditLedger AiCreditLedger[]
+}
+
+// API-22 (ADR-0002 nível 1): mesa física com QR próprio. `qrToken` é opaco (256 bits), nunca derivado de id/slug, e regenerável.
+model Table {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  label     String
+  qrToken   String   @unique
+  active    Boolean  @default(true)
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+  orders    Order[]
+  receipts  Receipt[]
+
+  @@unique([storeId, label])
+  @@unique([id, storeId]) // alvo da FK composta de Order: o banco recusa mesa de outra loja
 }
 
 // Contador atômico por loja (hoje: sequência do código do pedido). Incrementado com
@@ -149,6 +213,8 @@ model User {
   tokenVersion Int      @default(0)
   createdAt    DateTime @default(now())
   noticeDismissals UserNoticeDismissal[]
+  emailVerifiedAt DateTime? // API-26: e-mail confirmado (RN-ONB-03); nulo = ainda não verificado
+  emailVerificationTokens EmailVerificationToken[]
 
   @@index([storeId])
 }
@@ -224,10 +290,14 @@ model Product {
   active      Boolean      @default(true)
   featured    Boolean      @default(false)
   position    Int          @default(0)
+  soldOut      Boolean     @default(false) // API-17 (B11): esgotado; vale até soldOutUntil (null = até reativar)
+  soldOutUntil DateTime?
   additionals ProductAdditional[]
+  optionGroups ProductOptionGroup[]
   orderItems  OrderItem[]
   createdAt   DateTime     @default(now())
 
+  @@unique([id, storeId]) // ADR-0009: base das FKs compostas por loja (ProductOptionGroup)
   @@index([storeId])
   @@index([categoryId])
 }
@@ -248,6 +318,7 @@ model Order {
   publicTokenHash String? @unique
   // API-21 (RN-CX-01/02): quando o dinheiro deste pedido foi RECEBIDO. O caixa conta dinheiro só a partir daqui; null = ainda não recebido.
   paidAt        DateTime?
+  cashRefundMovementId String? @unique // API-59 (RN-CX-14): DEVOLUCAO criada no caixa ATUAL ao cancelar pedido de caixa ja fechado; unico = idempotencia
   paidAtApproximate Boolean @default(false) // true = `paidAt` estimado pela migração (sem o instante real); novos pedidos gravam o real
   storeId       String
   store         Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
@@ -268,6 +339,9 @@ model Order {
   paymentMethod  OrderPaymentMethod? // null = forma de pagamento não identificada
   changeForCents Int? // "troco para" informado pelo cliente (só DINHEIRO)
   deliveryFeeCents Int      @default(0) // snapshot da taxa de entrega — já incluída em totalCents
+  deliveryZoneName String?  // API-16: cópia do nome/prazo do bairro na hora do pedido (RN-B9-04)
+  deliveryEtaMinMinutes Int?
+  deliveryEtaMaxMinutes Int?
   tipCents       Int        @default(0) // gorjeta — já incluída em totalCents
   awaitingPayment Boolean   @default(false) // true enquanto espera confirmação de pagamento online (ex. PIX) — não entra no kanban/impressão até confirmar
   printedAt     DateTime?
@@ -283,6 +357,13 @@ model Order {
   manualBodyHash    String? // impressão digital do corpo que usou a chave: mesma chave + corpo diferente = 409 (RN-B2-10)
   manualDiscountPercent Int?
   manualDiscountReason  String?
+  // API-22 (mesa): mesa do pedido e SHA-256 do token anônimo do aparelho que o fez ("Minha mesa" mostra só os pedidos do próprio aparelho, RN-MB-06).
+  tableId           String?
+  table             Table?      @relation(fields: [tableId, storeId], references: [id, storeId])
+  // API-24 (ADR-0012): recebimento que pagou este pedido de mesa. Pedido de mesa só vira venda/caixa no `receivedAt` do Receipt (RN-MB-04).
+  receiptId         String?
+  receipt           Receipt?    @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+  deviceTokenHash   String?
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
 
@@ -296,6 +377,9 @@ model Order {
   @@unique([id, storeId]) // alvo da FK composta de PrintJob (ADR-0009: o banco recusa referência entre lojas)
   @@index([storeId, status])
   @@index([storeId, createdAt]) // histórico e kanban por período (API-54)
+  @@index([storeId, tableId, status])
+  @@index([storeId, deviceTokenHash])
+  @@index([receiptId]) // API-24: o CREATE INDEX da migracao 500000 tem que existir no schema (drift 0)
   @@index([couponId])
   @@index([delivererId])
 }
@@ -312,6 +396,7 @@ model OrderItem {
   notes        String?
 
   additionals  OrderItemAdditional[]
+  options      OrderItemOption[]
 
   @@index([orderId])
 }
@@ -375,6 +460,89 @@ model PaymentOAuthState {
   @@index([expiresAt])
 }
 
+// ---- B8: grupos de opções e variações (API-15, ADR-0009: FKs compostas por loja) ----
+
+enum OptionPriceMode {
+  SUM  // o preço da opção se SOMA ao do produto (Borda +R$ 8); é o comportamento dos adicionais
+  BASE // o preço da opção É o preço do produto (Pizza P/M/G); no máximo um grupo BASE por produto, sempre 1..1
+}
+
+// Grupo de opções da loja, reutilizável em vários produtos ("Tamanho", "Borda", "Molhos").
+model OptionGroup {
+  id           String          @id @default(cuid())
+  storeId      String
+  store        Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  name         String
+  helpText     String?
+  minSelect    Int             @default(0) // 0 = opcional; >= 1 = obrigatório
+  maxSelect    Int? // null = sem limite (adicionais legados)
+  maxPerOption Int             @default(1) // quantidade máxima de cada opção ("até 2 bacons")
+  priceMode    OptionPriceMode @default(SUM)
+  source       String          @default("MANUAL") // "LEGACY_ADDITIONALS" = espelho de ProductAdditional (fase expand)
+  createdAt    DateTime        @default(now())
+
+  options  Option[]
+  products ProductOptionGroup[]
+
+  @@unique([id, storeId])
+  @@index([storeId])
+}
+
+model Option {
+  id         String      @id @default(cuid())
+  storeId    String
+  groupId    String
+  group      OptionGroup @relation(fields: [groupId, storeId], references: [id, storeId], onDelete: Cascade)
+  name       String
+  priceCents Int
+  active     Boolean     @default(true) // false = indisponível (some da escolha, RN-B8-05)
+  position   Int         @default(0)
+  createdAt  DateTime    @default(now())
+
+  @@unique([id, storeId])
+  @@index([groupId])
+}
+
+// Vínculo produto ↔ grupo, com a ordem em que o cliente vê os grupos.
+model ProductOptionGroup {
+  productId String
+  groupId   String
+  storeId   String
+  product   Product     @relation(fields: [productId, storeId], references: [id, storeId], onDelete: Cascade)
+  group     OptionGroup @relation(fields: [groupId, storeId], references: [id, storeId], onDelete: Cascade)
+  position  Int         @default(0)
+
+  @@id([productId, groupId])
+  @@index([storeId])
+  @@index([groupId])
+}
+
+// Cópia da opção escolhida (RN-B8-07): nome do grupo, nome, preço e quantidade no momento do pedido.
+model OrderItemOption {
+  id          String          @id @default(cuid())
+  orderItemId String
+  orderItem   OrderItem       @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  groupName   String
+  name        String
+  priceCents  Int // preço unitário da opção (no grupo BASE, o preço-base da variação)
+  quantity    Int             @default(1)
+  priceMode   OptionPriceMode @default(SUM)
+
+  @@index([orderItemId])
+}
+
+// Pedidos de "refaça a vitrine desta loja" para o web (API-58, ADR-0013 §2.4). Uma linha pendente por slug: várias
+// mudanças seguidas viram uma só chamada. O job `menu.revalidate` envia e reenvia com recuo; o TTL do ISR cobre o intervalo.
+model MenuRevalidation {
+  slug          String   @id
+  storeId       String
+  requestedAt   DateTime @default(now()) // muda a cada novo pedido; evita apagar um pedido mais novo que chegou durante o envio
+  nextAttemptAt DateTime @default(now())
+  attempts      Int      @default(0)
+
+  @@index([nextAttemptAt])
+}
+
 model OrderStatusHistory {
   id        String      @id @default(cuid())
   orderId   String
@@ -405,8 +573,8 @@ model CashSession {
   openingNotes       String?
   closingNotes       String?
   closedByUserId     String?
-  expectedClosingCents Int? // saldo esperado calculado no momento do fechamento
-  differenceCents    Int? // closingBalanceCents - expectedClosingCents
+  expectedClosingCents BigInt? // saldo esperado calculado no momento do fechamento
+  differenceCents    BigInt? // closingBalanceCents - expectedClosingCents
   closeReason        String? // código do motivo da diferença (lista fechada; obrigatório só acima da tolerância)
   closeReasonText    String? // texto livre SÓ quando o código é OUTRO (1 a 200); nunca vai para a auditoria
   closedByRole       String? // papel de quem fechou (OWNER/STAFF); nunca o e-mail
@@ -430,7 +598,9 @@ model CashMovement {
   createdByUserId String? // sem FK de propósito: o registro sobrevive ao usuário; a API devolve só o PAPEL, nunca o e-mail
   createdByRole String? // OWNER/STAFF no instante do lançamento
   createdAt     DateTime         @default(now())
+  idempotencyKey String? // API-27b (M3): Idempotency-Key do cliente; repetir a mesma chave no mesmo caixa devolve a mesma movimentação
 
+  @@unique([cashSessionId, idempotencyKey])
   @@index([cashSessionId])
 }
 
@@ -477,6 +647,8 @@ model Payment {
   reconcileNote     String? // estorno feito mas o pedido já estava finalizado: conciliação manual (nunca silencioso)
   refundManualAt    DateTime? // API-65: dono registrou que devolveu direto no app do Mercado Pago (o provedor NÃO foi chamado)
   refundManualCode  String? // API-65: código fechado do motivo; sem texto livre
+  refundAbandonedAt DateTime? // API-61: dono encerrou o estorno SEM devolver por aqui (o dinheiro continua como recebido); nulo = em curso
+  refundAbandonCode String? // API-61: código fechado do motivo (MP_RECUSA|PAGAMENTO_ANTIGO|CONTA_DESCONECTADA|ACERTADO_COM_CLIENTE|OUTRO); sem texto livre
   paymentAccountId  String? // conta do vendedor que criou a cobrança (API-07); pagamento antigo/da plataforma = null
   paymentAccount    PaymentAccount? @relation(fields: [paymentAccountId], references: [id], onDelete: SetNull)
   createdAt         DateTime      @default(now())
@@ -554,7 +726,8 @@ model Plan {
   code       String   @unique // ex.: "BASICO", "PRO"
   name       String
   priceCents Int // cobrança mensal
-  features   String[] // chaves de recurso liberadas (ver lib/subscription.ts)
+  features   String[] // chaves de recurso liberadas (só chaves "entregues": lib/features.ts)
+  limits     Json     @default("{}") // { maxUsers, maxPrinters }; null = sem limite (ADR-0003 §2.1)
   active     Boolean  @default(true)
   position   Int      @default(0)
   createdAt  DateTime @default(now())
@@ -576,6 +749,19 @@ model Subscription {
   updatedAt        DateTime           @updatedAt
 
   payments SubscriptionPayment[]
+}
+
+// "Quero ser avisado" (RN-B10-05): lojista tentou usar recurso que o plano não tem. Um registro por
+// loja e recurso; só mede demanda, não promete data nem preço.
+model FeatureInterest {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  feature   String
+  createdAt DateTime @default(now())
+
+  @@unique([storeId, feature])
+  @@unique([id, storeId]) // ADR-0009: base das FKs compostas por loja
 }
 
 // Cobrança PIX de uma assinatura (conta Mercado Pago da plataforma).
@@ -667,6 +853,7 @@ enum PrintJobStatus {
   PRINTED
   FAILED
   CANCELED
+  STALE // N6/RN-IMP-20: mais velho que a janela de retomada (12 h); não sai sozinho, o painel oferece "Imprimir agora"
 }
 
 model PrintJob {
@@ -679,6 +866,7 @@ model PrintJob {
   status           PrintJobStatus @default(PENDING)
   attempts         Int            @default(0)
   maxAttempts      Int            @default(3)
+  resumedAt        DateTime? // "Imprimir agora" (N6): a janela de 12 h passa a contar daqui, não da criação
   availableAt      DateTime       @default(now()) // só é entregue com availableAt <= agora (recuo por falha)
   claimedAt        DateTime?
   leaseUntil       DateTime? // vence pelo relógio do banco; vencida = pode ser reclamada por outro
@@ -696,4 +884,177 @@ model PrintJob {
   @@unique([id, storeId])
   @@index([storeId, status, availableAt, createdAt])
   @@index([orderId])
+}
+
+// API-26 (RN-ONB-03): token de verificação de e-mail. Só o hash SHA-256 vai ao banco (NG-06); uso único; um ativo por usuário.
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+enum OnboardingStepStatus {
+  DONE
+  SKIPPED
+}
+
+// API-26 (ONB.2): passo do checklist marcado pelo dono (feito ou pulado). Passo sem linha = pendente (ou concluído pelos dados da loja).
+model OnboardingStep {
+  storeId   String
+  store     Store                @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  step      String
+  status    OnboardingStepStatus
+  updatedAt DateTime             @updatedAt
+
+  @@id([storeId, step])
+}
+
+// API-26 (RN-ONB-06, CA-ONB-07): evento de ativação por loja, no máximo um de cada tipo.
+model ActivationEvent {
+  storeId    String
+  store      Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  kind       String
+  occurredAt DateTime
+
+  @@id([storeId, kind])
+}
+
+// API-18 / ADR-0010: imagem processada (WebP em larguras fixas) guardada no ObjectStorage sob stores/<storeId>/.
+// PENDING = em quarentena (objetos sendo gravados; nunca exposta); READY = publicada. PENDING velha é varrida.
+enum ImageKind {
+  PRODUCT
+  LOGO
+  COVER
+}
+
+enum ImageStatus {
+  PENDING
+  READY
+}
+
+model Image {
+  id        String      @id @default(cuid())
+  storeId   String
+  store     Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  kind      ImageKind
+  keyBase   String      // stores/<storeId>/<uuid>; as variantes são <keyBase>-<largura>.webp
+  widths    Int[]
+  bytes     Int
+  status    ImageStatus @default(PENDING)
+  createdAt DateTime    @default(now())
+
+  @@index([storeId, status, createdAt])
+}
+
+enum ReceiptKind {
+  TABLE // BASICO: conta virtual da mesa (API-24)
+  TAB // PRO: comanda (futuro)
+}
+
+// API-24 (ADR-0012, RN-MB-03/04): o FATO financeiro de receber a mesa. No BASICO: 1 ReceiptPayment, sem taxa de serviço, desconto nem divisão.
+// Imutável depois de gravado (correção = estorno registrado, P2).
+model Receipt {
+  id              String      @id @default(cuid())
+  storeId         String
+  store           Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  kind            ReceiptKind @default(TABLE)
+  tableId         String?
+  table           Table?      @relation(fields: [tableId, storeId], references: [id, storeId], onDelete: NoAction)
+  subtotalCents   Int
+  serviceFeeCents Int         @default(0)
+  discountCents   Int         @default(0)
+  totalCents      Int
+  receivedAt      DateTime    @default(now())
+  receivedByUserId String
+  cashSessionId   String?
+  orders          Order[]
+  payments        ReceiptPayment[]
+
+  @@index([storeId, receivedAt])
+  @@index([storeId, tableId])
+}
+
+model ReceiptPayment {
+  id             String             @id @default(cuid())
+  receiptId      String
+  receipt        Receipt            @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  storeId        String
+  method         OrderPaymentMethod
+  amountCents    Int
+  changeForCents Int? // dinheiro: "troco para"; o valor que conta no caixa é amountCents (o aplicado à conta)
+
+  @@index([receiptId])
+  @@index([storeId, method])
+
+// ---- API-25: back-office da plataforma (contas de equipe SEPARADAS dos usuários de loja) ----
+
+}
+
+enum PlatformRole {
+  ADMIN   // tudo, inclusive conceder/ajustar créditos
+  SUPPORT // lê lojas, suspende/reativa, estende trial, publica avisos; NÃO mexe em créditos
+}
+
+model PlatformAdmin {
+  id           String       @id @default(cuid())
+  email        String       @unique // sempre minúsculo
+  passwordHash String
+  role         PlatformRole @default(SUPPORT)
+  tokenVersion Int          @default(0)
+  disabledAt   DateTime?
+  createdAt    DateTime     @default(now())
+
+  auditLogs PlatformAuditLog[]
+  credits   AiCreditLedger[]
+}
+
+// Auditoria da equipe (RN-BKO-03). Imutável: trigger recusa UPDATE/DELETE. Sem FK para Store de propósito (o rastro sobrevive à loja).
+model PlatformAuditLog {
+  id        String        @id @default(cuid())
+  adminId   String
+  admin     PlatformAdmin @relation(fields: [adminId], references: [id], onDelete: Restrict)
+  storeId   String?
+  action    String
+  reason    String?
+  metadata  Json?
+  createdAt DateTime      @default(now())
+
+  @@index([storeId, createdAt])
+  @@index([adminId, createdAt])
+}
+
+enum AiCreditReason {
+  PURCHASE // crédito pago (pagamento recebido FORA do sistema; exige externalRef)
+  GRANT    // concessão sem pagamento (compensação), sempre com motivo; nunca cortesia automática do PRO
+  ADJUST   // ajuste (positivo ou negativo), sempre com motivo
+  RESERVE
+  CONSUME
+  RELEASE
+}
+
+// Livro-razão de créditos de IA por loja (ADR-0015 §3D). IMUTÁVEL: só INSERT (trigger recusa UPDATE/DELETE); saldo = SUM(delta).
+model AiCreditLedger {
+  id             String         @id @default(cuid())
+  storeId        String
+  store          Store          @relation(fields: [storeId], references: [id], onDelete: Restrict)
+  delta          Int
+  reason         AiCreditReason
+  note           String? // motivo curto, sanitizado
+  externalRef    String? // referência do pagamento recebido fora do sistema (sem dado de cartão)
+  priceCents     Int? // preço cobrado, opcional (nulo = sem cobrança registrada)
+  expiresAt      DateTime? // opcional; nulo = não expira (job de expiração desligado)
+  jobId          String?
+  idempotencyKey String
+  actorAdminId   String?
+  actorAdmin     PlatformAdmin? @relation(fields: [actorAdminId], references: [id], onDelete: Restrict)
+  createdAt      DateTime       @default(now())
+
+  @@unique([storeId, idempotencyKey])
+  @@index([storeId, createdAt])
 }

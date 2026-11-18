@@ -6,6 +6,8 @@
 #   3 api/web/postgres sem porta publicada           7 backup verificado gerado e saudável (B05)
 #   4 api/web rodam sem root
 # Sem TLS/DNS/e-mail/serviços externos. Porta do Caddy: SMOKE_PORT (padrão 55443, faixa da Hopper).
+# ARMADILHA (achada em 17/11): com pipefail, `printf "$var" | grep -q X` dá FALSO NEGATIVO quando o grep -q sai no 1º acerto e o printf leva SIGPIPE (log grande com
+# vários acertos). Num detector de vazamento isso esconde o vazamento. Para testar "contém" numa variável use `[[ "$var" == *"X"* ]]` ou `grep -c` (lê tudo).
 set -uo pipefail
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,6 +30,7 @@ EOF
 ROOTW="$(cygpath -m "$ROOT")"   # docker.exe (Windows) precisa de C:/...
 DC=(docker compose -p "$PROJ" -f "$ROOTW/infra/docker-compose.yml" -f "$ROOTW/infra/docker-compose.smoke.yml" --env-file "$ROOTW/infra/.smoke.env")
 check() { if [ "$1" = ok ]; then PASS=$((PASS+1)); echo "  [ok]    $2"; else FAILS=$((FAILS+1)); echo "  [FALHA] $2"; fi; }
+KRED=0   # vermelhos CONHECIDOS (abertos, visíveis, que não contam como falha nova); a linha final os mostra
 cleanup() {
   [ "${KEEP:-0}" = 1 ] && { echo "KEEP=1: stack mantida ($PROJ), porta $PORT"; return; }
   "${DC[@]}" down -v --remove-orphans >/dev/null 2>&1; docker rm -f "$PROJ-xffecho" >/dev/null 2>&1
@@ -66,7 +69,9 @@ w="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")"; [ "$w" 
 s="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/stores/nao-existe")"; [ "$s" = 404 ] && check ok "GET /stores/<inexistente> = 404 vindo da API" || check fail "GET /stores/<x> = $s"
 
 echo "== 3 nenhuma porta publicada fora do Caddy"
-pub="$(docker ps --filter "label=com.docker.compose.project=$PROJ" --format '{{.Names}}|{{.Ports}}' | grep -E '0\.0\.0\.0|::|127\.0\.0\.1' | grep -v caddy || true)"
+# Só os containers que o compose DESTA pilha lista (`ps -q`). NÃO filtrar por rótulo de projeto: a imagem meucardapio-web:smoke carrega o rótulo
+# do compose e todo `docker run` dela (de qualquer agente) o herda, passando no filtro (falso vermelho visto em 17/11, achado da Tesla).
+pub=""; for cid in $("${DC[@]}" ps -q); do p="$(docker inspect -f '{{.Name}}|{{range $k,$v := .NetworkSettings.Ports}}{{if $v}}{{$k}}->{{range $v}}{{.HostIp}}:{{.HostPort}} {{end}}{{end}}{{end}}' "$cid" | sed 's#^/##')"; case "$p" in *caddy*) ;; *"->"*) pub="$pub $p";; esac; done
 [ -z "$pub" ] && check ok "só o caddy publica porta (127.0.0.1:$PORT)" || check fail "portas publicadas: $pub"
 
 echo "== 4 não-root"
@@ -153,14 +158,14 @@ if docker image inspect "$img" 2>/dev/null | grep -qF "$SECRET"; then check fail
 html="$(curl -s "http://127.0.0.1:$PORT/")"; leak=0; n=0
 chunks="$(printf '%s' "$html" | grep -oE '/_next/static/[^"'"'"' )]+\.(js|css)' | sort -u | head -40)"
 for u in $chunks; do n=$((n+1)); if curl -s "http://127.0.0.1:$PORT$u" | grep -qF "$SECRET"; then leak=1; echo "   VAZOU em $u"; fi; done
-if printf '%s' "$html" | grep -qF "$SECRET"; then leak=1; echo "   VAZOU no HTML da home"; fi
+if [[ "$html" == *"$SECRET"* ]]; then leak=1; echo "   VAZOU no HTML da home"; fi
 if [ "$n" -ge 3 ] && [ "$leak" = 0 ]; then check ok "segredo ausente do HTML e de $n arquivos estáticos que o navegador baixa"; else check fail "vazamento ($leak) ou poucos arquivos conferidos ($n)"; fi
 # SSR de ponta a ponta: cadastra uma loja de teste e abre o cardápio dela; o nome só vem no HTML se o servidor do web alcançou a API
 slug="smoke-ssr-$RANDOM"
 smokeEmail="smoke$RANDOM@exemplo.invalid"; smokePass="SenhaLonga-12345"
 rc="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "{\"storeName\":\"Loja Smoke SSR\",\"slug\":\"$slug\",\"code\":\"SM$RANDOM\",\"email\":\"$smokeEmail\",\"password\":\"$smokePass\"}" "http://127.0.0.1:$PORT/auth/register")"
 page="$(curl -s -w '|%{http_code}' "http://127.0.0.1:$PORT/loja/$slug")"
-if [ "$rc" = 201 ] && [ "${page##*|}" = 200 ] && printf '%s' "$page" | grep -q "Loja Smoke SSR"; then check ok "SSR: /loja/$slug traz o nome da loja no HTML (o servidor do web alcançou a API por http://api:3001)"
+if [ "$rc" = 201 ] && [ "${page##*|}" = 200 ] && [[ "$page" == *"Loja Smoke SSR"* ]]; then check ok "SSR: /loja/$slug traz o nome da loja no HTML (o servidor do web alcançou a API por http://api:3001)"
 else check fail "SSR não trouxe a loja (cadastro=$rc, página=${page##*|}); o web pode estar caindo no plano B do navegador"; fi
 # LOGIN BEM-SUCEDIDO + ROTAS DO PAINEL que leem várias tabelas, com o cookie da sessão (INF-22): é o que um `--filter` que deixasse de fora um pacote de que a API precisa em
 # tempo de execução (db/Prisma client, shared-types, bcrypt) quebraria. O limite do /auth/login (8/min por IP) pode ainda estar valendo por causa da seção 6b: espera o Retry-After.
@@ -236,7 +241,7 @@ rm -f "$ENVF.sem"
 echo "== 9 limite de requisições por IP em /loja/* (SEC-26 / ST-44, ST-45, ST-48); fica no fim porque a rajada limita o IP do host por 1 min"
 # 9a visitantes DISTINTOS não se bloqueiam: 10 containers, cada um com o seu IP na rede, 100 requisições cada (< 120/min) => 0 x 429
 # Os 10 clientes precisam existir AO MESMO TEMPO: containers seguidos com --rm recebem o MESMO IP (o Docker reaproveita o que acabou
-# de sair; visto em 17/11: o Caddy via um IP só e, com razão, aplicou um balde só). Por isso cada um espera 10 s antes de pedir e o
+# de sair; visto em 17/11: o Caddy via um IP só e, com razão, aplicou um balde só). Por isso cada um espera 30 s antes de pedir (com a máquina sufocada, criar os 10 levou mais de 10 s e os primeiros já tinham saído quando li os IPs) e o
 # teste confere que os IPs são mesmo distintos; se não forem, o teste é inválido e falha dizendo isso.
 tot429=0; CIDS=()
 for n in 1 2 3 4 5 6 7 8 9 10; do
@@ -244,7 +249,7 @@ for n in 1 2 3 4 5 6 7 8 9 10; do
     const http=require('http');let c429=0,ok=0,i=0;
     const next=()=>{ if(i>=100){console.log(c429+' '+ok);return;} i++;
       http.get('http://caddy:80/loja/distinto-$n-'+i,r=>{ r.resume(); if(r.statusCode===429)c429++; else ok++; r.on('end',next); }).on('error',()=>{ ok++; next(); }); };
-    setTimeout(next,10000);")")
+    setTimeout(next,30000);")")
 done
 ipsd="$(for c in "${CIDS[@]}"; do docker inspect -f "{{(index .NetworkSettings.Networks \"${PROJ}_default\").IPAddress}}" "$c"; done | sort -u | wc -l | tr -d ' ')"
 for c in "${CIDS[@]}"; do
@@ -285,6 +290,48 @@ done
 # 9d ST-45 (IPv6): sem IPv6 na rede do smoke não há como testar com curl -6; confere que a zona agrupa IPv6 em /64 e que o módulo varre chaves (ST-49)
 grep -q 'ipv6_prefix 64' "$ROOT/infra/Caddyfile" && check ok "ST-45: a zona de limite agrupa IPv6 em /64 (ipv6_prefix 64); sem AAAA no piloto de qualquer forma" || check fail "ST-45: Caddyfile sem ipv6_prefix 64"
 grep -q 'sweep_interval' "$ROOT/infra/Caddyfile" && check ok "ST-49: varredura de chaves vencidas configurada (sweep_interval) e container com limite de memória" || check fail "ST-49: sem sweep_interval no Caddyfile"
+# 9f INF-19 / SEC-34 (R-1): limite de entrada em /auth/* por ORIGEM (IPv4 = IP; IPv6 = /48), 60/min nas rotas sensíveis. O 429 do Caddy tem corpo VAZIO; o da API tem JSON.
+echo "   9f /auth/*: espera 65 s para a janela do limite esvaziar (o login e o cadastro acima já contaram)..."
+sleep 65
+caddy429() {  # $1 = n pedidos, $2 = caminho, $3 = metodo; imprime: <429 do Caddy (sem x-ratelimit-limit)> <429 da API (com x-ratelimit-limit)> <outros>
+  local n="$1" p="$2" m="$3" c=0 a=0 o=0 i h code
+  for i in $(seq 1 "$n"); do
+    h="$(curl -s -D - -o /dev/null -X "$m" -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT$p" | tr -d '\r')"
+    code="$(printf '%s\n' "$h" | head -1 | awk '{print $2}')"
+    if [ "$code" = 429 ]; then if [[ "${h,,}" == *x-ratelimit-limit* ]]; then a=$((a+1)); else c=$((c+1)); fi; else o=$((o+1)); fi
+  done
+  echo "$c $a $o"
+}
+# uso normal (loja inteira atrás do mesmo IP): 28 pedidos em 1 min, abaixo do limite da API de CADA rota (forgot 5, login 8, inspect 10, reset 5): NENHUM 429, de nenhuma camada
+r1="$(caddy429 5 /auth/forgot-password POST)"; r2="$(caddy429 8 /auth/login POST)"; r3="$(caddy429 10 /auth/reset-password/inspect POST)"; r4="$(caddy429 5 /auth/reset-password POST)"
+if [[ "$r1" == "0 0 5" && "$r2" == "0 0 8" && "$r3" == "0 0 10" && "$r4" == "0 0 5" ]]; then check ok "9f uso normal: 28 pedidos às rotas sensíveis de um mesmo IP em 1 min: nenhuma resposta 429 (nem do Caddy, nem da API)"; else check fail "9f uso normal recebeu 429 (caddy api outros): forgot[$r1] login[$r2] inspect[$r3] reset[$r4]"; fi
+# /auth/me NÃO entra no limite (o painel o chama o tempo todo)
+rme="$(caddy429 80 /auth/me GET)"
+[ "${rme%% *}" = 0 ] && check ok "9f /auth/me: 80 pedidos, 0 respostas 429 do Caddy (fora do limite, como o painel precisa)" || check fail "9f /auth/me limitado pelo Caddy: $rme"
+# rajada: passa de 60/min na origem => 429 do Caddy com Retry-After
+rb="$(caddy429 100 /auth/forgot-password POST)"
+cb="${rb%% *}"
+curl -s -D - -o /dev/null -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT/auth/forgot-password" | tr -d '\r' | sed 's/^/      [cabeçalhos de um 429] /' | head -6
+if [ "$cb" -ge 20 ]; then check ok "9f rajada de 100 pedidos (mais que o limite de 60/min SOZINHA, então vale mesmo se a máquina lenta deixar o uso normal sair da janela): $cb respostas 429 do CADDY (corpo vazio; a origem passou de 60/min)"; else check fail "9f a rajada não foi limitada pelo Caddy ($rb)"; fi
+rh="$(curl -s -D - -o /dev/null -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT/auth/login" | tr -d '\r')"
+[[ "$rh" == *"429"* && "$rh" == *[Rr]etry-[Aa]fter* ]] && check ok "9f a resposta 429 do Caddy traz Retry-After" || check fail "9f 429 do Caddy sem Retry-After"
+# /loja e /health fora desta zona (zona própria)
+lrc="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health")"
+[ "$lrc" = 200 ] && check ok "9f /health segue livre com a zona de /auth esgotada" || check fail "9f /health devolveu $lrc"
+# variantes de URL (caixa e barra dupla) também caem na zona. A janela do limite é DESLIZANTE (1 min): sob carga a rajada acima pode levar mais de 1 min e a zona deixa de estar
+# esgotada quando as variantes rodam. Por isso cada variante é testada SOZINHA e RÁPIDA: esgota a zona por um caminho canônico (80 pedidos em paralelo, ~segundos) e testa a variante
+# em seguida (também em paralelo). 429 do Caddy = sem o cabeçalho x-ratelimit-limit (a API o emite).
+caddy429par() {  # $1 = n, $2 = caminho, $3 = método; imprime: <429 do Caddy> <429 da API> <outros>
+  seq 1 "$1" | xargs -P 20 -I{} curl -s -o /dev/null -w '%{http_code} [%header{x-ratelimit-limit}]\n' -X "$3" -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT$2" 2>/dev/null \
+    | awk '{ if ($1==429 && $2=="[]") c++; else if ($1==429) a++; else o++ } END { print c+0, a+0, o+0 }'
+}
+for v in '/AUTH/Forgot-Password' '//auth/forgot-password' '/auth/./forgot-password' '/auth/forgot-password/'; do
+  caddy429par 80 /auth/forgot-password POST >/dev/null
+  vr="$(caddy429par 10 "$v" POST)"
+  [ "${vr%% *}" -ge 1 ] && check ok "9f variante [$v]: 429 do Caddy (a zona esgotada vale também para ela)" || check fail "9f variante [$v] escapou da zona (resposta: $vr)"
+done
+# IPv6 /48 e a zona: sem IPv6 na rede do smoke (curl -6 não é possível), confere a configuração
+grep -q 'ipv6_prefix 48' "$ROOT/infra/Caddyfile" && check ok "9f a zona de /auth agrupa IPv6 em /48 (ipv6_prefix 48)" || check fail "9f Caddyfile sem ipv6_prefix 48 na zona de /auth"
 mem="$(docker inspect -f '{{.HostConfig.Memory}}' "$("${DC[@]}" ps -q caddy)")"
 [ "$mem" -gt 0 ] 2>/dev/null && check ok "ST-49: o container do Caddy tem teto de memória ($((mem/1024/1024)) MB)" || check fail "ST-49: container do Caddy sem limite de memória"
 
@@ -346,12 +393,12 @@ docker exec "$CID" sh -c 'touch /etc/caddy/x 2>/dev/null' && check fail "o Caddy
 docker exec "$CID" sh -c 'touch /data/.w && rm /data/.w && touch /config/.w && rm /config/.w' && check ok "/data (conta ACME) e /config são graváveis pelo usuário sem privilégio" || check fail "o Caddy sem root não consegue gravar em /data ou /config"
 for i in $(seq 1 20); do hs="$(docker inspect -f '{{.State.Health.Status}}' "$CID")"; [ "$hs" = healthy ] && break; sleep 3; done
 [ "$hs" = healthy ] && check ok "healthcheck do Caddy: healthy" || check fail "healthcheck do Caddy: $hs"
-# NG-16 (Deming): o log de acesso do Caddy também gravaria a URL com ?token=. O Caddyfile não tem `log`, então não deve gravar; confere
-# no comportamento: um valor único na query não pode aparecer nos logs do Caddy. (Sem controle positivo: se o Caddy não logasse NADA
-# por outro motivo, o teste também passaria; por isso o texto diz "não registra", não "redige".)
+# NG-16 (Deming): o log de ACESSO do Caddy também gravaria a URL com ?token=. O Caddyfile não tem `log` de site, então esse log NÃO EXISTE; confere
+# no comportamento: um valor único na query não pode aparecer nos logs do Caddy. ATENÇÃO: isto cobre SÓ o log de ACESSO. O log de ERRO (upstream
+# fora do ar) é outro caminho e é provado na seção 11 (C1, INF-19), com controle positivo. Este teste NÃO tem controle positivo.
 qtok="smoke-q-$RANDOM$RANDOM$RANDOM"
 curl -s -o /dev/null "http://127.0.0.1:$PORT/health?token=$qtok&code=$qtok"; sleep 2
-[ "$("${DC[@]}" logs caddy 2>&1 | grep -c "$qtok")" = 0 ] && check ok "NG-16: o Caddy não registra a URL com token/code na query (nenhuma linha de acesso nos logs)" || check fail "NG-16: o valor do token apareceu nos logs do Caddy"
+[ "$("${DC[@]}" logs caddy 2>&1 | grep -c "$qtok")" = 0 ] && check ok "NG-16: o log de ACESSO não existe: a URL com token/code na query não aparece nos logs do Caddy (o log de ERRO é a seção 11)" || check fail "NG-16: o valor do token apareceu nos logs do Caddy"
 # redes: o banco só existe na rede de dados (interna). Caddy e web não o enxergam; a API sim (controle positivo).
 # Prova por CONEXÃO ao IP do banco (um timeout de DNS não prova nada: o resolvedor do Docker demora a responder nomes que não conhece).
 ares="$("${DC[@]}" exec -T api node -e "require('dns').lookup('postgres',(e,a)=>console.log(e?'ERRO '+e.code:'ok '+a))" 2>&1 | tr -d '\r' | tail -1)"
@@ -370,5 +417,56 @@ echo "   módulo no binário: $(docker exec "$CID" caddy build-info 2>&1 | tr -d
 echo "   imagem final (id): $(docker inspect -f '{{.Image}}' "$CID")"
 docker exec "$CID" caddy build-info 2>&1 | tr -d '\r' | grep -qi 'caddy-ratelimit.*5625512f24f6' && check ok "o binário contém o módulo no commit travado 5625512f24f6" || check fail "build-info não mostra o commit esperado do módulo"
 
-echo; echo "RESULTADO: $PASS ok, $FAILS falhas"
+
+echo "== 11 C1 (INF-19): NENHUM segredo em log de contêiner nenhum (caddy, web e api), com a pilha de pé e depois com web e API derrubados"
+# Tem de ser a ÚLTIMA seção: derruba web e api. Valores ÚNICOS por execução, mandados a todas as rotas PELO CADDY (a porta publicada).
+#  V1 query do reset (web) | V2 token no CAMINHO do QR de mesa (web) | V3 x-order-token | V4 orderId no CAMINHO da API (a credencial do cliente, ST-70)
+#  V5 X-Mfa-Challenge | V6 X-Admin-Token | V7 Authorization | V8 Cookie | V9 ?token= na query da API
+# Contexto (medido em 17/11): o log de ERRO do Caddy gravava `request` inteiro com o upstream fora do ar (filtrado no Caddyfile desde a INF-19).
+# O web (`next start`) não escreve nada por requisição (medição da Tesla; por isso o controle do web é o STATUS da resposta, não uma linha de log).
+# A API loga `incoming request`/`request completed` com o CAMINHO cru: o V4 SAI EM CLARO ENQUANTO O ST-70 (SEC-31, Nightingale) NÃO FOR CORRIGIDO.
+KNOWN_RED_ST70="${KNOWN_RED_ST70:-1}"   # 1 = o vazamento do caminho da API (V4) é VERMELHO CONHECIDO (visível, não conta como falha). Ponha 0 quando a SEC-31 entrar.
+V1="smoke-v1-$RANDOM$RANDOM"; V2="smoke-v2-$RANDOM$RANDOM"; V3="smoke-v3-$RANDOM$RANDOM"; V4="smoke-v4-$RANDOM$RANDOM"; V5="smoke-v5-$RANDOM$RANDOM"
+V6="smoke-v6-$RANDOM$RANDOM"; V7="smoke-v7-$RANDOM$RANDOM"; V8="smoke-v8-$RANDOM$RANDOM"; V9="smoke-v9-$RANDOM$RANDOM"
+c11_envia() { # imprime os 3 códigos: web-query / web-caminho / api
+  local a b c
+  a="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "http://127.0.0.1:$PORT/reset-senha?token=$V1")"
+  b="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "http://127.0.0.1:$PORT/loja/x/m/$V2")"
+  c="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 -H "x-order-token: $V3" -H "X-Mfa-Challenge: $V5" -H "X-Admin-Token: $V6" -H "Authorization: $V7" -H "Cookie: sid=$V8" "http://127.0.0.1:$PORT/stores/x/orders/$V4/payment-status?token=$V9")"
+  echo "$a/$b/$c"
+}
+cA="$(c11_envia)"                      # momento A: pilha de pé
+"${DC[@]}" stop web api >/dev/null 2>&1
+cB="$(c11_envia)"                      # momento B: web e API fora do ar (o erro do proxy cai no log de erro do Caddy)
+sleep 2
+# autoverificação: A precisa ter ALCANÇADO web e API (nem 502 nem 429 nem 000); B precisa ser 502 nas 3. Senão o teste não provou nada.
+okA=1; for code in $(echo "$cA" | tr '/' ' '); do case "$code" in 502|429|000) okA=0;; esac; done
+if [ "$okA" = 1 ] && [ "$cB" = "502/502/502" ]; then check ok "as requisições chegaram ao web e à API com a pilha de pé ($cA) e voltaram 502 com eles fora do ar ($cB): o teste vale"
+else check fail "TESTE INVÁLIDO: esperava códigos que alcançam web/API com a pilha de pé (veio $cA; 429 = limite por IP ainda ativo) e 502/502/502 com eles fora (veio $cB)"; fi
+LOGC="$("${DC[@]}" logs caddy 2>&1)"; LOGW="$("${DC[@]}" logs web 2>&1)"; LOGA="$("${DC[@]}" logs api 2>&1)"
+cnt() { printf '%s' "$2" | grep -c -- "$1"; }
+# --- CADDY e WEB: nenhum dos 9 valores, em nenhum momento
+for svc in caddy web; do
+  case "$svc" in caddy) L="$LOGC";; web) L="$LOGW";; esac
+  n=0; for v in "$V1" "$V2" "$V3" "$V4" "$V5" "$V6" "$V7" "$V8" "$V9"; do n=$((n + $(cnt "$v" "$L"))); done
+  [ "$n" = 0 ] && check ok "C1 [$svc]: nenhum dos 9 valores únicos aparece no log do $svc (query, caminhos, 5 cabeçalhos)" || check fail "C1 [$svc]: $n ocorrência(s) de segredo no log do $svc"
+done
+# --- API: a query e os cabeçalhos NÃO podem aparecer (NG-16); o CAMINHO (V4) é o ST-70
+n=0; for v in "$V1" "$V2" "$V3" "$V5" "$V6" "$V7" "$V8" "$V9"; do n=$((n + $(cnt "$v" "$LOGA"))); done
+[ "$n" = 0 ] && check ok "C1 [api]: query (V9) e os 5 cabeçalhos (V3,V5..V8) não aparecem no log da API (NG-16)" || check fail "C1 [api]: $n ocorrência(s) de segredo de query/cabeçalho no log da API"
+nv4="$(cnt "$V4" "$LOGA")"
+if [ "$nv4" = 0 ]; then check ok "C1 [api]: o orderId no CAMINHO (V4) NÃO aparece no log da API (ST-70 corrigido; ponha KNOWN_RED_ST70=0 para travar)"
+elif [ "$KNOWN_RED_ST70" = 1 ]; then KRED=$((KRED+1)); echo "  [VERMELHO CONHECIDO] ST-70 (SEC-31, Nightingale): o orderId no CAMINHO apareceu $nv4 vez(es) no log da API (incoming request / request completed com o caminho cru). NÃO é falha nova: continua aberto"
+else check fail "C1 [api]: o orderId no CAMINHO (V4) aparece $nv4 vez(es) no log da API (ST-70)"; fi
+# --- CONTROLES POSITIVOS, um por serviço (provam que o log do serviço existe e que a ausência dos valores é significativa)
+nerr="$(printf '%s' "$LOGC" | grep -c '"logger":"http.log.error".*"status":502')"
+faltou=""; nred=0; for f in '/reset-senha/REDACTED' '/loja/REDACTED' '/stores/REDACTED'; do if [[ "$LOGC" == *"\"uri\":\"$f\""* ]]; then nred=$((nred+1)); else faltou="$faltou $f"; fi; done
+{ [ "$nerr" -ge 3 ] && [ "$nred" = 3 ]; } && check ok "controle [caddy]: o log de ERRO existe ($nerr linhas http.log.error 502) e o filtro agiu nas 3 rotas (uri reduzido; cabeçalhos removidos)" || { check fail "controle [caddy]: $nerr linha(s) de erro 502 e $nred/3 uri filtrados; FALTOU:$faltou (o filtro virou 'sem log' ou não agiu nessa rota)"; echo "   --- linhas http.log.error (já filtradas, seguras de mostrar):"; printf '%s' "$LOGC" | grep '"logger":"http.log.error"' | cut -c1-360 | head -6 | sed 's/^/   /'; }
+napi="$(printf '%s' "$LOGA" | grep -c 'payment-status')"
+[ "$napi" -ge 1 ] && check ok "controle [api]: o log da API registra a requisição ($napi linha(s) com a rota payment-status): a ausência dos valores de query/cabeçalho é significativa" || check fail "controle [api]: nenhuma linha de log da requisição à API (o teste não distingue 'redigido' de 'sem log')"
+# web: `next start` não escreve linha por requisição; o controle é a resposta (já conferida acima) e o log só ter a inicialização
+nweb="$(printf '%s' "$LOGW" | grep -c .)"
+echo "   controle [web]: sem linha por requisição (esperado no next start); o log do web tem $nweb linha(s) (inicialização); o controle é que o web RESPONDEU ($cA) com os valores na URL"
+
+echo; echo "RESULTADO: $PASS ok, $FAILS falhas, $KRED vermelho(s) conhecido(s)$([ "$KRED" -gt 0 ] && echo " (ST-70: ver acima; NÃO é sucesso total)")"
 [ "$FAILS" -eq 0 ]

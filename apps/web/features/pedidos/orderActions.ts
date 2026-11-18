@@ -86,6 +86,13 @@ export function isRefundPending(order: Order): boolean {
   return Boolean(order.payment?.refundPending) || order.payment?.status === "ESTORNO_PENDENTE";
 }
 
+// API-67: em LEGACY a impressora não avisa a cozinha de um cancelamento, então o dono cancelaria comida já impressa sem
+// que a cozinha saiba. A faixa só aparece com LEGACY EXPLÍCITO e `printedAt` presente: nunca em QUEUE, nunca com o campo
+// ausente (API antiga) ou com valor desconhecido (em dúvida, sem faixa para não alarmar à toa).
+export function kitchenNotWarned(order: Order): boolean {
+  return order.printMode === "LEGACY" && Boolean(order.printedAt);
+}
+
 export function deriveCardActions(order: Order): CardActions {
   const allowed = (order.allowedTransitions ?? []).map(fromAllowed);
   const blocked = (order.blocked ?? []).map((b) => fromBlocked(b, order.status));

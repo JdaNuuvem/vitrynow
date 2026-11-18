@@ -21,7 +21,7 @@ export const refundRetryJob: Job = {
     const claimed = await claimWithLock(db, JOB_LOCK_KEYS["refund.retry"], (tx) =>
       tx.$queryRaw<{ id: string }[]>`
         SELECT p."id" FROM "Payment" p
-         WHERE p."status" = 'ESTORNO_PENDENTE' AND p."providerPaymentId" IS NOT NULL AND p."refundAttempts" < ${MAX_REFUND_AUTO_ATTEMPTS} AND NOT (p."id" = ANY(${failed}::text[]))
+         WHERE p."status" = 'ESTORNO_PENDENTE' AND p."providerPaymentId" IS NOT NULL AND p."refundAttempts" < ${MAX_REFUND_AUTO_ATTEMPTS} AND p."refundAbandonedAt" IS NULL AND NOT (p."id" = ANY(${failed}::text[]))
          ORDER BY p."refundAttempts" ASC, p."refundRequestedAt" ASC NULLS FIRST LIMIT ${limit}`,
     );
     if (!claimed.acquired) break;

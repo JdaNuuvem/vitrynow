@@ -6,9 +6,11 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import websocket from "@fastify/websocket";
 import authPlugin from "./plugins/auth";
+import { withTextTooLongCode } from "./lib/textErrors";
 import healthRoutes from "./routes/health";
 import authRoutes from "./routes/auth";
 import storefrontRoutes from "./routes/storefront";
+import tableRoutes from "./routes/tables";
 import orderRoutes from "./modules/orders/orders.module";
 import manualOrderRoutes from "./routes/manualOrders";
 import deviceRoutes from "./routes/device";
@@ -17,6 +19,7 @@ import deviceAlertRoutes from "./modules/deviceAlerts/deviceAlerts.module";
 import deviceTokenRoutes from "./modules/deviceTokens/deviceTokens.module";
 import realtimeRoutes from "./routes/realtime";
 import catalogRoutes from "./modules/catalog/catalog.module";
+import mediaRoutes from "./modules/media/media.module";
 import cashierRoutes from "./routes/cashier";
 import couponRoutes from "./modules/coupons/coupons.module";
 import paymentRoutes from "./modules/payments/payments.module";
@@ -28,18 +31,28 @@ import auditRoutes from "./modules/audit/audit.module";
 import feedbackRoutes from "./routes/feedback";
 import subscriptionRoutes from "./routes/subscription";
 import noticeRoutes from "./routes/notices";
+import platformAuthPlugin from "./plugins/platformAuth";
+import platformRoutes from "./routes/platform";
 import mfaRoutes from "./routes/mfa";
-import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
+import deliveryZoneRoutes from "./routes/deliveryZones";
+import onboardingRoutes from "./routes/onboarding";
 import { clientKey } from "./lib/clientKey";
 import { isPrismaError, loggerOptions, redactLogUrl } from "./lib/logging";
 import { ORDER_TOKEN_HEADER } from "./lib/orderToken";
 import { currentKey } from "./lib/paymentCrypto";
 import { assertPaymentsBootConfig } from "./modules/storePayments/oauth";
+import { allowedOrigin, internalServiceSecrets, trustProxySetting } from "./lib/securityConfig";
+import { rateLimitKey, rateLimitMax } from "./lib/clientIp";
 import jobsPlugin from "./jobs/plugin";
 import pixAvailabilityPlugin from "./plugins/pixAvailability";
 import storePaymentRoutes from "./modules/storePayments/storePayments.module";
+import subscriptionGate from "./plugins/subscriptionGate";
+import storeHoursRoutes from "./modules/storeHours/storeHours.module";
+import optionGroupRoutes from "./modules/optionGroups/optionGroups.module";
+import menuRevalidationPlugin from "./plugins/menuRevalidation";
 
 export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = {}) {
+  const serviceSecrets = internalServiceSecrets(); // SEC-24: em produção, sem segredo de serviço válido a API nem sobe
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
   // e o rate limit deixa de contar o IP do proxy. Vazio = ignora X-Forwarded-For (não forjável).
   // Pagamentos por loja: modo/credenciais/chave inválidos derrubam o boot (não o 1º PIX). `code`/`state` do OAuth saem do log pelo `redactLogUrl` do SEC-31.
@@ -52,6 +65,9 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
     genReqId: () => nanoid(12),
     requestIdHeader: false,
   });
+
+  // SEC-24: uma linha por subida diz se o segredo de serviço está ligado (nunca o valor).
+  app.log.info({ serviceSecretCount: serviceSecrets.length }, serviceSecrets.length > 0 ? "serviço interno: ligado" : "serviço interno: desligado (none ou ausente)");
 
   // app.close() (graceful shutdown) também desconecta o Prisma — ele é um singleton
   // importado direto de @meucardapio/db, não um plugin fastify com ciclo de vida próprio.
@@ -81,6 +97,12 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
     return reply.send(error);
   });
 
+  // API-49: código TEXT_TOO_LONG nos 400 de validação. Hook SÍNCRONO (com `done`) de propósito: um onSend assíncrono atrasa o
+  // `reply.sent`, e os guardas que fazem `reply.code(403).send(...)` sem `return` (requireOwner etc.) deixariam a rota seguir.
+  app.addHook("onSend", (_request, reply, payload, done) => {
+    done(null, reply.statusCode === 400 && typeof payload === "string" ? withTextTooLongCode(payload) : payload);
+  });
+
   app.register(cors, {
     origin: allowedOrigin(),
     credentials: true,
@@ -92,11 +114,15 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   // Teto global por IP; rotas sensíveis (login, cadastro, pedido público, webhook) têm limites
   // mais estritos definidos na própria rota via `config.rateLimit`.
   // SEC-23: a chave do limite é o cliente normalizado (IPv6 /64, alias IPv4-mapeado ⇒ IPv4), não o endereço cru.
-  app.register(rateLimit, { max: 300, timeWindow: "1 minute", keyGenerator: (request) => clientKey(request.ip) });
+  app.register(rateLimit, { max: (_request, key) => rateLimitMax(String(key)), timeWindow: "1 minute", keyGenerator: (request) => rateLimitKey(request) });
   app.register(websocket);
   app.register(authPlugin);
+  app.register(platformAuthPlugin);
   app.register(jobsPlugin);
+  // Portão da assinatura (Consulta/Suspensão): precisa vir ANTES de qualquer rota, pois age no `onRoute`.
+  app.register(subscriptionGate);
   app.register(pixAvailabilityPlugin);
+  app.register(menuRevalidationPlugin);
 
   // Várias rotas são "ação sem corpo" (delete, revoke) chamadas com
   // Content-Type: application/json mas sem body — o parser padrão do Fastify rejeita
@@ -114,6 +140,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(healthRoutes);
   app.register(authRoutes);
   app.register(storefrontRoutes);
+  app.register(tableRoutes);
   app.register(orderRoutes);
   app.register(manualOrderRoutes);
   app.register(deviceRoutes);
@@ -122,6 +149,8 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(deviceTokenRoutes);
   app.register(realtimeRoutes);
   app.register(catalogRoutes);
+  app.register(mediaRoutes);
+  app.register(optionGroupRoutes);
   app.register(cashierRoutes);
   app.register(couponRoutes);
   app.register(paymentRoutes);
@@ -133,8 +162,12 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(feedbackRoutes);
   app.register(subscriptionRoutes);
   app.register(storePaymentRoutes);
+  app.register(storeHoursRoutes);
   app.register(noticeRoutes);
+  app.register(platformRoutes);
   app.register(mfaRoutes);
+  app.register(deliveryZoneRoutes);
+  app.register(onboardingRoutes);
 
   return app;
 }

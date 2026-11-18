@@ -215,3 +215,72 @@ describe("CancelOrderDialog: o foco não se perde enquanto roda (Deming, A2)", (
     release({ kind: "done" });
   });
 });
+
+
+// API-67: faixa só para LEGACY com pedido já impresso
+describe("CancelOrderDialog: faixa 'a cozinha não será avisada' (API-67)", () => {
+  const BANNER = "Este pedido já foi impresso e a impressora não avisa o cancelamento. Avise a cozinha.";
+  const banner = () => screen.queryByText(BANNER);
+
+  it("LEGACY com o pedido já impresso: mostra a faixa, como aviso (não como erro)", () => {
+    setup({ order: order({ status: "EM_PREPARO", printMode: "LEGACY", printedAt: "2026-11-17T12:00:00Z" }) });
+    expect(banner()).toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent(BANNER);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("o texto começa pelo fato (já foi impresso) e depois diz o que fazer, sem repetir 'cozinha' na abertura", () => {
+    setup({ order: order({ status: "EM_PREPARO", printMode: "LEGACY", printedAt: "2026-11-17T12:00:00Z" }) });
+    const text = screen.getByRole("note").textContent ?? "";
+    expect(text.startsWith("Este pedido já foi impresso")).toBe(true);
+    expect(text.endsWith("Avise a cozinha.")).toBe(true);
+  });
+
+  it("tem ícone de atenção decorativo (aria-hidden) à esquerda do texto, que não entra no nome acessível", () => {
+    setup({ order: order({ status: "EM_PREPARO", printMode: "LEGACY", printedAt: "2026-11-17T12:00:00Z" }) });
+    const note = screen.getByRole("note");
+    const icon = note.querySelector("svg");
+    expect(icon).not.toBeNull();
+    expect(icon).toHaveAttribute("aria-hidden", "true");
+    expect(note.firstElementChild).toBe(icon);
+    expect(note).toHaveTextContent(BANNER);
+  });
+
+  it("vale também ao RECUSAR um pedido pendente já impresso", () => {
+    setup({ order: order({ status: "PENDENTE", printMode: "LEGACY", printedAt: "2026-11-17T12:00:00Z" }) });
+    expect(banner()).toBeInTheDocument();
+  });
+
+  it("QUEUE NUNCA mostra a faixa, mesmo impresso", () => {
+    setup({ order: order({ status: "EM_PREPARO", printMode: "QUEUE", printedAt: "2026-11-17T12:00:00Z" }) });
+    expect(banner()).not.toBeInTheDocument();
+  });
+
+  it("LEGACY mas ainda NÃO impresso (printedAt nulo ou ausente): sem faixa", () => {
+    setup({ order: order({ printMode: "LEGACY", printedAt: null }) });
+    expect(banner()).not.toBeInTheDocument();
+  });
+
+  it("API antiga (sem printMode nem printedAt): sem faixa", () => {
+    setup({ order: order({ status: "EM_PREPARO" }) });
+    expect(banner()).not.toBeInTheDocument();
+  });
+
+  it("valor desconhecido de printMode: sem faixa (em dúvida, não alarma)", () => {
+    setup({ order: order({ printMode: "OUTRO" as unknown as "LEGACY", printedAt: "2026-11-17T12:00:00Z" }) });
+    expect(banner()).not.toBeInTheDocument();
+  });
+
+  it("a faixa não atrapalha o fluxo: o botão segue desabilitado até escolher o motivo e confirma normalmente", async () => {
+    const { onConfirm } = setup({ order: order({ status: "EM_PREPARO", printMode: "LEGACY", printedAt: "2026-11-17T12:00:00Z" }) });
+    expect(screen.getByRole("button", { name: /Cancelar pedido/ })).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(screen.getByRole("radio", { name: "Item em falta" }));
+    await userEvent.click(screen.getByRole("button", { name: /Cancelar pedido/ }));
+    expect(onConfirm).toHaveBeenCalled();
+  });
+
+  it("no cancelar e estornar também aparece", () => {
+    setup({ order: order({ ...refundOrder(), status: "EM_PREPARO", printMode: "LEGACY", printedAt: "2026-11-17T12:00:00Z" }), refund: true });
+    expect(banner()).toBeInTheDocument();
+  });
+});

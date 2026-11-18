@@ -85,6 +85,56 @@
   cursor: pointer;
 }
 
+/* 2 classes: o reset global `.panel-root p { margin: 0; padding: 0 }` anula seletor de uma classe só */
+.inicio-revenue .inicio-revenue__notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 8px 8px 8px 12px;
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+
+.inicio-revenue__notice p {
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.inicio-revenue__notice button {
+  flex-shrink: 0;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.inicio-revenue .inicio-revenue__facts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.inicio-revenue__facts p,
+.inicio-revenue .inicio-revenue__chart-note {
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.inicio-revenue .inicio-revenue__chart-note {
+  margin-top: 8px;
+}
+
 .inicio-revenue__chart {
   position: relative;
   width: 100%;

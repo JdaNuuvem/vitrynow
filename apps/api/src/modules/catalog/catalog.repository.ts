@@ -15,6 +15,8 @@ export type ProductData = {
   active?: boolean;
   featured?: boolean;
   position?: number;
+  soldOut?: boolean;
+  soldOutUntil?: Date | null;
 };
 // Adicional informado que não pertence ao produto (id de outro produto/loja ou inexistente).
 export class AdditionalNotInProductError extends Error {
@@ -34,11 +36,22 @@ export interface CatalogRepository {
   updateCategory(id: string, data: CategoryData): Promise<Category>;
   countProductsInCategory(categoryId: string): Promise<number>;
   deleteCategory(id: string): Promise<void>;
+  listCategoryNames(storeId: string): Promise<Array<{ id: string; name: string }>>;
+  listCategoryIds(storeId: string): Promise<string[]>;
+  nextCategoryPosition(storeId: string): Promise<number>;
+  setCategoryOrder(storeId: string, ids: string[]): Promise<void>;
+  moveProducts(storeId: string, fromCategoryId: string, toCategoryId: string): Promise<number>;
 
   findProduct(storeId: string, id: string): Promise<Product | null>;
   createProduct(storeId: string, data: ProductData & { name: string; priceCents: number }, additionals?: AdditionalData[]): Promise<ProductWithAdditionals>;
   updateProduct(id: string, data: ProductData, additionals?: AdditionalData[]): Promise<ProductWithAdditionals>;
   deleteProduct(id: string): Promise<void>;
+  countProducts(storeId: string): Promise<number>;
+  listProductIds(storeId: string, categoryId: string): Promise<string[]>;
+  nextProductPosition(categoryId: string): Promise<number>;
+  setProductOrder(storeId: string, categoryId: string, ids: string[]): Promise<void>;
+  /** Pedidos ainda em aberto (não concluídos nem cancelados) que têm o produto. */
+  countOpenOrdersWithProduct(productId: string): Promise<number>;
 }
 
 export class PrismaCatalogRepository implements CatalogRepository {
@@ -70,6 +83,34 @@ export class PrismaCatalogRepository implements CatalogRepository {
 
   async deleteCategory(id: string) {
     await this.db.category.delete({ where: { id } });
+  }
+
+  listCategoryNames(storeId: string) {
+    return this.db.category.findMany({ where: { storeId }, select: { id: true, name: true } });
+  }
+
+  async listCategoryIds(storeId: string) {
+    return (await this.db.category.findMany({ where: { storeId }, select: { id: true } })).map((c) => c.id);
+  }
+
+  async nextCategoryPosition(storeId: string) {
+    const last = await this.db.category.aggregate({ where: { storeId }, _max: { position: true } });
+    return (last._max.position ?? -1) + 1;
+  }
+
+  async setCategoryOrder(storeId: string, ids: string[]) {
+    await this.db.$transaction(ids.map((id, position) => this.db.category.updateMany({ where: { id, storeId }, data: { position } })));
+  }
+
+  async moveProducts(storeId: string, fromCategoryId: string, toCategoryId: string) {
+    // Os movidos entram no fim da categoria de destino, mantendo a ordem relativa.
+    return this.db.$transaction(async (tx) => {
+      const last = await tx.product.aggregate({ where: { categoryId: toCategoryId }, _max: { position: true } });
+      const moving = await tx.product.findMany({ where: { storeId, categoryId: fromCategoryId }, orderBy: { position: "asc" }, select: { id: true } });
+      let position = (last._max.position ?? -1) + 1;
+      for (const { id } of moving) await tx.product.update({ where: { id }, data: { categoryId: toCategoryId, position: position++ } });
+      return moving.length;
+    });
   }
 
   findProduct(storeId: string, id: string) {
@@ -115,5 +156,28 @@ export class PrismaCatalogRepository implements CatalogRepository {
 
   async deleteProduct(id: string) {
     await this.db.product.delete({ where: { id } });
+  }
+
+  countProducts(storeId: string) {
+    return this.db.product.count({ where: { storeId } });
+  }
+
+  async listProductIds(storeId: string, categoryId: string) {
+    return (await this.db.product.findMany({ where: { storeId, categoryId }, select: { id: true } })).map((p) => p.id);
+  }
+
+  async nextProductPosition(categoryId: string) {
+    const last = await this.db.product.aggregate({ where: { categoryId }, _max: { position: true } });
+    return (last._max.position ?? -1) + 1;
+  }
+
+  async setProductOrder(storeId: string, categoryId: string, ids: string[]) {
+    await this.db.$transaction(ids.map((id, position) => this.db.product.updateMany({ where: { id, storeId, categoryId }, data: { position } })));
+  }
+
+  countOpenOrdersWithProduct(productId: string) {
+    return this.db.order.count({
+      where: { status: { notIn: ["CONCLUIDO", "CANCELADO"] }, items: { some: { productId } } },
+    });
   }
 }

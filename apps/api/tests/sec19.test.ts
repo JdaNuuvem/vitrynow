@@ -61,6 +61,7 @@ describe("ST-02c — TRUST_PROXY_CIDR em produção", () => {
   it("produção sem TRUST_PROXY_CIDR derruba o boot, também pelo buildApp", () => {
     process.env.NODE_ENV = "production";
     process.env.MP_OAUTH_MODE = "off"; // API-07: sem PIX real, o boot de produção exige o modo declarado; aqui o que se testa é a guarda do proxy
+    process.env.API_INTERNAL_SECRET = "none"; // SEC-24: sem isto o boot recusa antes, por outra guarda; aqui se testa a do proxy
     delete process.env.TRUST_PROXY_CIDR;
     expect(() => trustProxySetting()).toThrow(/TRUST_PROXY_CIDR/);
     expect(() => buildApp()).toThrow(/TRUST_PROXY_CIDR/);

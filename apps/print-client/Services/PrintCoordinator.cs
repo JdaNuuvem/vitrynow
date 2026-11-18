@@ -33,6 +33,10 @@ namespace MeuCardapio.PrintClient.Services
             try
             {
                 // Tiquete sem itens e total zero e malformado: sai "SEM COBRANCA", mas fica registrado (o dono pode conferir no painel).
+                var alertOrderId = order.SourceOrderId ?? order.OrderId;
+                if (TicketBuilder.IsNothingToChargeConflict(order)) _device.ReportAlert(DeviceAlertCode.NothingToChargeConflict, alertOrderId);
+                if (TicketBuilder.IsNothingToChargeInvalid(order)) _device.ReportAlert(DeviceAlertCode.NothingToChargeInvalid, alertOrderId);
+                if (TicketBuilder.IsEmptyZeroTicket(order)) _device.ReportAlert(DeviceAlertCode.EmptyZeroTicket, alertOrderId);
                 if (TicketBuilder.IsNothingToChargeConflict(order)) Logger.Info("AVISO: pedido #" + order.Code + ": o servidor disse 'nada a cobrar' mas o total nao chegou presente e igual a zero; impresso pela regra normal (cobra). Conferir no painel.");
                 if (TicketBuilder.IsNothingToChargeInvalid(order)) Logger.Info("AVISO: pedido #" + order.Code + ": o campo nothingToCharge chegou com valor que nao e booleano; impresso pela regra normal (cobra). Conferir no painel.");
                 if (TicketBuilder.IsEmptyZeroTicket(order)) Logger.Info("AVISO: pedido #" + order.Code + " sem itens e com total zero; impresso como SEM COBRANCA. Conferir no painel.");

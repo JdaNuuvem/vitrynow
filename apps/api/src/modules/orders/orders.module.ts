@@ -1,11 +1,11 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "@meucardapio/db";
-import { orderHistoryQuerySchema, orderInternalNoteSchema, orderStatusSchema } from "@meucardapio/shared-types";
+import { orderHistoryQuerySchema, orderInternalNoteSchema, orderStatusSchema, TEXT_TOO_LONG_PREFIX } from "@meucardapio/shared-types";
 import { prismaAuditLogger } from "../../shared/audit";
 import { CodedError, useDomainErrors } from "../../shared/errors";
 import { publishToStore } from "../../realtime/hub";
 import { mfaProofAccepted, requireMfa } from "../../lib/mfaGate";
-import { MANUAL_REFUND_CODES, OrderService, type CancelReason, type PanelActor } from "./orders.service";
+import { ABANDON_CODES, MANUAL_REFUND_CODES, OrderService, type CancelReason, type PanelActor } from "./orders.service";
 import { assertHistoryRate } from "./orders.history";
 
 export const orderService = new OrderService(prisma, prismaAuditLogger, publishToStore);
@@ -61,11 +61,14 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
     const { id } = request.params as { id: string };
     const parsed = orderInternalNoteSchema.safeParse(request.body);
     if (!parsed.success) {
-      const tooLong = parsed.error.issues.some((i) => i.code === "too_big");
+      const tooLong = parsed.error.issues.some((i) => i.code === "too_big" || i.message.startsWith(TEXT_TOO_LONG_PREFIX));
       return reply.code(400).send(tooLong ? { error: "A observação pode ter até 500 caracteres.", code: "NOTE_TOO_LONG" } : { error: "Observação inválida.", code: "VALIDATION_ERROR" });
     }
     return orderService.setInternalNote(actorOf(request), id, parsed.data.note);
   });
+
+  // API-69: lista e contagem de estornos presos, só do OWNER. Rota estática: vence `/api/orders/:id`.
+  app.get("/api/orders/refund-stuck", auth, async (request) => orderService.listStuckRefunds(actorOf(request)));
 
   app.get("/api/orders/:id", auth, async (request) => {
     const { id } = request.params as { id: string };
@@ -81,9 +84,9 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/api/orders/:id/cancel", auth, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const body = (request.body ?? {}) as { reason?: CancelReason };
-    if (!(await guardRefund(request, reply, id))) return;
-    const result = await orderService.cancelByPanel(actorOf(request), id, body.reason);
+    const body = (request.body ?? {}) as { reason?: CancelReason; acknowledgeClosedCash?: unknown };
+    if (!(await guardRefund(request, reply, id))) return reply; // SEC-40: o helper ja enviou o 403: devolver `reply` (nao `undefined`)
+    const result = await orderService.cancelByPanel(actorOf(request), id, body.reason, body.acknowledgeClosedCash === true);
     return reply.code(result.refund === "PENDING" ? 202 : 200).send(result.refund === "NONE" ? { order: result.order } : result);
   });
 
@@ -107,6 +110,22 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(403).send({ error: "Confirmação de segurança necessária.", code: "MFA_REQUIRED", purpose: "refund" });
     }
     return orderService.registerManualRefund(actorOf(request), id, code);
+  });
+
+  // API-61: encerra o estorno preso SEM devolver por aqui (RN-ABD). OWNER + MFA; motivo por código (+ nota 1..200 fora da auditoria).
+  app.post("/api/orders/:id/refund/abandon", auth, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (request.user.role !== "OWNER") return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
+    const body = (request.body ?? {}) as { code?: unknown; note?: unknown };
+    const code = ABANDON_CODES.find((c) => c === body.code);
+    const note = typeof body.note === "string" ? body.note.trim() : undefined;
+    if (!code || (body.note !== undefined && (note === undefined || note.length < 1 || note.length > 200))) {
+      return reply.code(400).send({ error: "Informe o motivo.", code: "VALIDATION_ERROR" });
+    }
+    if (!(await mfaProofAccepted(request, "refund"))) {
+      return reply.code(403).send({ error: "Confirmação de segurança necessária.", code: "MFA_REQUIRED", purpose: "refund" });
+    }
+    return orderService.abandonRefund(actorOf(request), id, code, note);
   });
 
   app.post("/api/orders/:id/undo", auth, async (request) => {

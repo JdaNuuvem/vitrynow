@@ -1,7 +1,9 @@
+import { isSoldOutNow } from "../lib/soldOut";
 import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { createOrderSchema } from "@meucardapio/shared-types";
+import { applyFreeShipping } from "../lib/deliveryZones";
 import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
 import { publishToStore } from "../realtime/hub";
 import { gatewayForStore } from "../modules/storePayments/gateway";
@@ -11,6 +13,7 @@ import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { customerMessageFor, messageActorFor, moneyLineFor } from "../lib/cancelMessages";
 import { DomainError } from "../shared/errors";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
+import { buildMenuView } from "../lib/menuView";
 import { newOrderToken, orderTokenMatches, ORDER_TOKEN_HEADER } from "../lib/orderToken";
 
 const COUPON_EXHAUSTED_MESSAGE = "Esse cupom acabou.";
@@ -23,37 +26,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     const store = await prisma.store.findUnique({ where: { slug } });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });
 
-    const categories = await prisma.category.findMany({
-      where: { storeId: store.id },
-      orderBy: { position: "asc" },
-      include: {
-        products: {
-          // SEC-11: nunca confiar só na categoria — o produto precisa ser DESTA loja.
-          where: { active: true, storeId: store.id },
-          orderBy: { position: "asc" },
-          include: { additionals: true },
-        },
-      },
-    });
-
-    return {
-      store: {
-        name: store.name,
-        slug: store.slug,
-        logoUrl: store.logoUrl,
-        coverImageUrl: store.coverImageUrl,
-        primaryColor: store.primaryColor,
-        address: store.address,
-        whatsapp: store.whatsapp,
-        openingHours: store.openingHours,
-        minOrderCents: store.minOrderCents,
-        deliveryEnabled: store.deliveryEnabled,
-        pickupEnabled: store.pickupEnabled,
-        acceptingOrders: store.acceptingOrders,
-        deliveryFeeCents: store.deliveryFeeCents,
-      },
-      categories,
-    };
+    return buildMenuView(store);
   });
 
   app.post(
@@ -63,6 +36,9 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     const { slug } = request.params as { slug: string };
     const store = await prisma.store.findUnique({ where: { slug } });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });
+    if (store.platformSuspendedAt) {
+      return reply.code(409).send({ error: "A loja não está aceitando pedidos no momento.", code: "STORE_SUSPENDED" });
+    }
     if (!store.acceptingOrders) {
       return reply.code(409).send({ error: "A loja não está aceitando pedidos no momento.", code: "STORE_CLOSED" });
     }
@@ -102,7 +78,9 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja" });
     }
     // Produto pausado some do cardápio e não pode ser pedido por chamada direta (B08).
-    const unavailable = products.filter((p) => !p.active);
+    // API-17: esgotado hoje também é recusado (RN-B11-04), mesmo se escondido ou enviado direto à API.
+    const orderNow = new Date();
+    const unavailable = products.filter((p) => !p.active || isSoldOutNow(p, orderNow));
     if (unavailable.length > 0) {
       // Mesmo código/forma para B11, QR de mesa e pedido manual (contrato B3 §8, item 3).
       return reply.code(400).send({
@@ -168,9 +146,38 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       discountCents = Math.min(discountCents, subtotalCents);
     }
 
-    const deliveryFeeCents = input.type === "DELIVERY" ? store.deliveryFeeCents : 0;
+    // API-16 (B9): taxa por bairro, recalculada AQUI (o cliente só informa o bairro e a taxa que viu). Retirada nunca tem taxa.
+    let deliveryFeeCents = 0;
+    let zoneSnapshot: { name: string; etaMin: number | null; etaMax: number | null } | null = null;
+    if (input.type === "DELIVERY") {
+      const zoneCount = await prisma.deliveryZone.count({ where: { storeId: store.id } });
+      let baseFee = store.deliveryFeeCents; // sem bairros cadastrados: taxa única, como sempre (CA-B9-09)
+      let zoneFreeFrom: number | null = null;
+      if (zoneCount > 0) {
+        const activeZones = () => prisma.deliveryZone.findMany({ where: { storeId: store.id, active: true }, orderBy: { name: "asc" }, select: { id: true, name: true, feeCents: true } });
+        if (input.neighborhoodId) {
+          const zone = await prisma.deliveryZone.findFirst({ where: { id: input.neighborhoodId, storeId: store.id } });
+          if (!zone) return reply.code(400).send({ error: "Bairro não atendido por esta loja.", code: "NEIGHBORHOOD_NOT_FOUND" });
+          if (!zone.active) {
+            // bairro desativado enquanto o cliente montava o pedido: recusa com a lista atual, carrinho mantido
+            return reply.code(400).send({ error: "Este bairro não está mais disponível para entrega.", code: "NEIGHBORHOOD_UNAVAILABLE", details: { zones: await activeZones() } });
+          }
+          baseFee = zone.feeCents;
+          zoneFreeFrom = zone.freeFromCents;
+          zoneSnapshot = { name: zone.name, etaMin: zone.etaMinMinutes, etaMax: zone.etaMaxMinutes };
+        } else if (store.deliveryOutsideMode !== "DEFAULT_FEE") {
+          return reply.code(400).send({ error: "Escolha o bairro da entrega.", code: "NEIGHBORHOOD_REQUIRED", details: { zones: await activeZones() } });
+        }
+      }
+      // Frete grátis sobre o subtotal LÍQUIDO (itens menos desconto), RN-B9-05.
+      deliveryFeeCents = applyFreeShipping(baseFee, subtotalCents - discountCents, zoneFreeFrom, store.freeShippingFromCents);
+    }
     const tipCents = input.tipCents ?? 0;
     const totalCents = subtotalCents - discountCents + deliveryFeeCents + tipCents;
+    // RN-B9-03: a taxa mudou desde que o cliente viu (ou é outra): 409 com o novo valor; a tela pede confirmação.
+    if (input.expectedDeliveryFeeCents !== undefined && input.expectedDeliveryFeeCents !== deliveryFeeCents) {
+      return reply.code(409).send({ error: "A taxa de entrega mudou. Confira o novo total.", code: "DELIVERY_FEE_CHANGED", details: { deliveryFeeCents, totalCents } });
+    }
 
     // Total ZERO (cupom cobriu todos os itens e não há taxa nem gorjeta): pedido normal, SEM cobrança. A forma de pagamento
     // informada (inclusive PIX e "troco para") é IGNORADA, não existe PIX de R$ 0,00 e o provedor nunca é chamado (RN-CP-10/11).
@@ -218,6 +225,9 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         subtotalCents,
         discountCents,
         deliveryFeeCents,
+        deliveryZoneName: zoneSnapshot?.name,
+        deliveryEtaMinMinutes: zoneSnapshot?.etaMin,
+        deliveryEtaMaxMinutes: zoneSnapshot?.etaMax,
         tipCents,
         totalCents,
         paymentMethod,
@@ -346,7 +356,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     const { slug, orderId } = request.params as { slug: string; orderId: string };
     const store = await prisma.store.findUnique({ where: { slug }, select: { id: true, name: true } });
     const order = store
-      ? await prisma.order.findFirst({ where: { id: orderId, storeId: store.id }, include: { payment: { select: { status: true, amountCents: true } } } })
+      ? await prisma.order.findFirst({ where: { id: orderId, storeId: store.id }, include: { payment: { select: { status: true, amountCents: true, refundAbandonedAt: true } } } })
       : null;
     if (!store || !order || !orderTokenMatches(request.headers[ORDER_TOKEN_HEADER], order.publicTokenHash)) {
       return reply.code(404).send({ error: "pedido não encontrado" });
