@@ -1,8 +1,9 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
-import bcrypt from "bcryptjs";
 import { prisma } from "@meucardapio/db";
 import { anonymizeCustomerSchema, anonymizeTargetSchema } from "@meucardapio/shared-types";
-import { useDomainErrors } from "../../shared/errors";
+import { ServerBusyError, sendServerBusy, useDomainErrors } from "../../shared/errors";
+import { DUMMY_HASH, bcryptPasswordHasher as passwordHasher } from "../../shared/passwordHasher";
+import { clientKey } from "../../lib/clientKey";
 import { AccountAttemptCap } from "../../lib/accountAttemptCap";
 import { LoginThrottle } from "../../lib/loginThrottle";
 import { mfaEnforced } from "../../lib/mfa";
@@ -10,9 +11,6 @@ import { mfaProofAccepted } from "../../lib/mfaGate";
 import { PrivacyService, type PrivacyActor } from "./privacy.service";
 
 export const privacyService = new PrivacyService(prisma);
-
-// Hash de mentira para a comparação gastar o mesmo tempo quando o usuário não existe.
-const DUMMY_HASH = bcrypt.hashSync(`nao-existe-${Math.random()}-${Date.now()}`, 10);
 
 const actorOf = (request: FastifyRequest): PrivacyActor => ({ storeId: request.user.storeId, userId: request.user.userId, role: request.user.role });
 
@@ -52,7 +50,19 @@ async function reauthorize(request: FastifyRequest, reply: FastifyReply, current
     reply.header("Retry-After", String(slot.retryAfterSeconds)).code(429).send({ error: "Muitas tentativas. Aguarde um pouco e tente de novo.", code: "RATE_LIMITED" });
     return false;
   }
-  const ok = await bcrypt.compare(currentPassword, user?.passwordHash ?? DUMMY_HASH);
+  // Pela MESMA faixa do login (SEC-34): `DUMMY_HASH` se a conta não existe. Faixa cheia (503) ⇒ nenhuma senha foi testada: devolve as DUAS reservas.
+  let ok: boolean;
+  try {
+    ok = await passwordHasher.verify(currentPassword, user?.passwordHash ?? DUMMY_HASH, clientKey(request.ip));
+  } catch (error) {
+    if (error instanceof ServerBusyError) {
+      reauthThrottle.refund(key, request.ip);
+      reauthAccountCap.succeed(accountKey);
+      sendServerBusy(reply);
+      return false;
+    }
+    throw error;
+  }
   if (!ok || !user) {
     reply.code(403).send({ error: "Senha incorreta.", code: "PASSWORD_INVALID" });
     return false;

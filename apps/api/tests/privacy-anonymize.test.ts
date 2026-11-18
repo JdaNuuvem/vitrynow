@@ -2,6 +2,8 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { sendMfaCodeEmail } from "../src/lib/email";
+import { ServerBusyError } from "../src/shared/errors";
+import { bcryptPasswordHasher } from "../src/shared/passwordHasher";
 import { AccountAttemptCap } from "../src/lib/accountAttemptCap";
 import { login, makeApp, registerStore, resetDb } from "./helpers";
 
@@ -251,6 +253,25 @@ describe("privacidade: anonimizar cliente", { timeout: 60_000 }, () => {
     expect(json(await preview(ctx.owner, { phone: PHONE })).reauth).toBe("MFA");
     delete process.env.MFA_ENFORCED;
     expect((await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1 })).statusCode).toBe(200); // nenhuma tentativa foi gasta
+  });
+
+  it("SEC-34: a reautenticação passa pela faixa de hash; faixa cheia ⇒ 503 SERVER_BUSY, NENHUMA senha testada e as DUAS reservas (par e conta) voltam; nada é anonimizado", async () => {
+    const ctx = await setup();
+    await mk(ctx.storeId);
+    const busy = vi.spyOn(bcryptPasswordHasher, "verify").mockRejectedValue(new ServerBusyError());
+    try {
+      // 12 recusas seguidas: se a reserva não voltasse, o par fecharia em 5 (429) e o teto da conta em 10
+      for (let i = 0; i < 8; i++) {
+        const res = await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1 });
+        expect(res.statusCode, `ocupado ${i}`).toBe(503);
+        expect(json(res).code).toBe("SERVER_BUSY");
+        expect(res.headers["retry-after"]).toBeDefined();
+      }
+    } finally {
+      busy.mockRestore();
+    }
+    expect(await prisma.order.count({ where: { storeId: ctx.storeId, anonymizedAt: { not: null } } })).toBe(0);
+    expect((await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1 })).statusCode).toBe(200); // a faixa livre: passa, as reservas voltaram
   });
 
   it("auditoria em LOTES de 500 ids: 1.001 pedidos ⇒ 3 linhas (500+500+1), com todos os `orderIds` (reaplicação depois de restaurar backup) e sem dado pessoal", async () => {
