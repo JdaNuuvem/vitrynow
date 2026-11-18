@@ -72,12 +72,15 @@ export type Report = {
 const n = (value: bigint | number | null | undefined) => Number(value ?? 0);
 
 export async function buildReport(storeId: string, range: ReportRange): Promise<Report> {
-  const sale = Prisma.sql`o."status"::text = ANY(${[...SALE_STATUSES]})`;
+  const sale = Prisma.sql`o."status"::text = ANY(${[...SALE_STATUSES]}) AND o."type"::text <> 'MESA'`; // API-24: a venda da mesa é o RECEBIMENTO, não o pedido
   // Janela por instante (UTC) das 00:00 locais; o agrupamento por dia converte para o fuso da loja DENTRO do banco.
   const window = Prisma.sql`o."storeId" = ${storeId} AND o."awaitingPayment" = false AND o."createdAt" >= ${utc(range.fromUtc)} AND o."createdAt" < ${utc(range.toExclusiveUtc)}`;
   const localDay = Prisma.sql`to_char((o."createdAt" AT TIME ZONE 'UTC') AT TIME ZONE ${STORE_TIMEZONE}, 'YYYY-MM-DD')`;
 
-  const [totals, days, payments, types, products, deliverers, cash] = await Promise.all([
+  const rWindow = Prisma.sql`r."storeId" = ${storeId} AND r."receivedAt" >= ${utc(range.fromUtc)} AND r."receivedAt" < ${utc(range.toExclusiveUtc)}`;
+  const rDay = Prisma.sql`to_char((r."receivedAt" AT TIME ZONE 'UTC') AT TIME ZONE ${STORE_TIMEZONE}, 'YYYY-MM-DD')`;
+
+  const [totals, days, payments, types, products, deliverers, cash, rTotal, rDays, rPayments, rProducts] = await Promise.all([
     prisma.$queryRaw<
       {
         saleCount: bigint; revenue: bigint; discount: bigint; fee: bigint; tip: bigint; customers: bigint;
@@ -93,8 +96,8 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
         count(DISTINCT nullif(coalesce(o."customerPhone", o."customerName"), '')) FILTER (WHERE ${sale}) AS "customers",
         count(*) FILTER (WHERE o."status" = 'CANCELADO') AS "canceledCount",
         coalesce(sum(o."totalCents") FILTER (WHERE o."status" = 'CANCELADO'), 0)::bigint AS "canceledCents",
-        count(*) FILTER (WHERE o."status" = 'PENDENTE') AS "openCount",
-        coalesce(sum(o."totalCents") FILTER (WHERE o."status" = 'PENDENTE'), 0)::bigint AS "openCents"
+        count(*) FILTER (WHERE o."status" = 'PENDENTE' AND o."type"::text <> 'MESA') AS "openCount",
+        coalesce(sum(o."totalCents") FILTER (WHERE o."status" = 'PENDENTE' AND o."type"::text <> 'MESA'), 0)::bigint AS "openCents"
       FROM "Order" o WHERE ${window}`),
     prisma.$queryRaw<{ date: string; count: bigint; revenue: bigint }[]>(Prisma.sql`
       SELECT ${localDay} AS "date", count(*) AS "count", sum(o."totalCents" - o."tipCents")::bigint AS "revenue"
@@ -107,15 +110,14 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
       SELECT o."type"::text AS "bucket", count(*) AS "count", sum(o."totalCents" - o."tipCents")::bigint AS "revenue"
       FROM "Order" o WHERE ${window} AND ${sale} GROUP BY 1 ORDER BY 1`),
     // Receita do produto INCLUI as opções (CA-B14-04): (preço unitário + soma das opções da linha) x quantidade.
-    prisma.$queryRaw<{ name: string; quantity: bigint; revenue: bigint }[]>(Prisma.sql`
-      SELECT max(i."productName") AS "name", sum(i."quantity") AS "quantity",
+    prisma.$queryRaw<{ key: string; name: string; quantity: bigint; revenue: bigint }[]>(Prisma.sql`
+      SELECT coalesce(i."productId", i."productName") AS "key", max(i."productName") AS "name", sum(i."quantity") AS "quantity",
              sum((i."unitPriceCents" + coalesce(a."extra", 0)) * i."quantity")::bigint AS "revenue"
       FROM "OrderItem" i
       JOIN "Order" o ON o."id" = i."orderId"
       LEFT JOIN LATERAL (SELECT sum(x."priceCents") AS "extra" FROM "OrderItemAdditional" x WHERE x."orderItemId" = i."id") a ON true
       WHERE ${window} AND ${sale}
-      GROUP BY coalesce(i."productId", i."productName")
-      ORDER BY sum(i."quantity") DESC, max(i."productName") ASC LIMIT 10`),
+      GROUP BY 1`), // o top 10 sai depois de juntar com os produtos das mesas
     prisma.$queryRaw<{ name: string; count: bigint; revenue: bigint }[]>(Prisma.sql`
       SELECT d."name" AS "name", count(*) AS "count", sum(o."totalCents")::bigint AS "revenue"
       FROM "Order" o JOIN "Deliverer" d ON d."id" = o."delivererId"
@@ -127,11 +129,45 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
              coalesce(sum(m."amountCents") FILTER (WHERE m."type" = 'SANGRIA'), 0)::bigint AS "sangrias"
       FROM "CashSession" s LEFT JOIN "CashMovement" m ON m."cashSessionId" = s."id"
       WHERE s."storeId" = ${storeId} AND s."openedAt" >= ${utc(range.fromUtc)} AND s."openedAt" < ${utc(range.toExclusiveUtc)}`),
+    // API-24 (RN-MB-04): cada recebimento de mesa é UMA venda, reconhecida em receivedAt.
+    prisma.$queryRaw<{ count: bigint; revenue: bigint }[]>(Prisma.sql`SELECT count(*) AS "count", coalesce(sum(r."totalCents"), 0)::bigint AS "revenue" FROM "Receipt" r WHERE ${rWindow}`),
+    prisma.$queryRaw<{ date: string; count: bigint; revenue: bigint }[]>(Prisma.sql`SELECT ${rDay} AS "date", count(*) AS "count", sum(r."totalCents")::bigint AS "revenue" FROM "Receipt" r WHERE ${rWindow} GROUP BY 1`),
+    prisma.$queryRaw<{ bucket: string; count: bigint; revenue: bigint }[]>(Prisma.sql`SELECT p."method"::text AS "bucket", count(*) AS "count", sum(p."amountCents")::bigint AS "revenue" FROM "ReceiptPayment" p JOIN "Receipt" r ON r."id" = p."receiptId" WHERE ${rWindow} GROUP BY 1`),
+    prisma.$queryRaw<{ key: string; name: string; quantity: bigint; revenue: bigint }[]>(Prisma.sql`
+      SELECT coalesce(i."productId", i."productName") AS "key", max(i."productName") AS "name", sum(i."quantity") AS "quantity",
+             sum((i."unitPriceCents" + coalesce(a."extra", 0)) * i."quantity")::bigint AS "revenue"
+      FROM "OrderItem" i JOIN "Order" o ON o."id" = i."orderId" JOIN "Receipt" r ON r."id" = o."receiptId"
+      LEFT JOIN LATERAL (SELECT sum(x."priceCents") AS "extra" FROM "OrderItemAdditional" x WHERE x."orderItemId" = i."id") a ON true
+      WHERE ${rWindow} AND o."status" <> 'CANCELADO' GROUP BY 1`),
   ]);
 
   const t = totals[0];
-  const orderCount = n(t.saleCount);
-  const revenueCents = n(t.revenue);
+  const receipts = { count: n(rTotal[0].count), revenue: n(rTotal[0].revenue) };
+  const orderCount = n(t.saleCount) + receipts.count;
+  const revenueCents = n(t.revenue) + receipts.revenue;
+  // pedidos + recebimentos de mesa
+  const mergeBuckets = (base: Record<string, Bucket>, extra: { bucket: string; count: bigint; revenue: bigint }[]) => {
+    for (const r of extra) {
+      base[r.bucket] ??= { count: 0, revenueCents: 0 };
+      base[r.bucket].count += n(r.count);
+      base[r.bucket].revenueCents += n(r.revenue);
+    }
+    return base;
+  };
+  const dayMap = new Map(days.map((r) => [r.date, { date: r.date, orderCount: n(r.count), revenueCents: n(r.revenue) }]));
+  for (const r of rDays) {
+    const e = dayMap.get(r.date) ?? { date: r.date, orderCount: 0, revenueCents: 0 };
+    e.orderCount += n(r.count);
+    e.revenueCents += n(r.revenue);
+    dayMap.set(r.date, e);
+  }
+  const productMap = new Map<string, { productName: string; quantity: number; revenueCents: number }>();
+  for (const r of [...products, ...rProducts]) {
+    const e = productMap.get(r.key) ?? { productName: r.name, quantity: 0, revenueCents: 0 };
+    e.quantity += n(r.quantity);
+    e.revenueCents += n(r.revenue);
+    productMap.set(r.key, e);
+  }
   const toBuckets = (rows: { bucket: string; count: bigint; revenue: bigint }[]) =>
     Object.fromEntries(rows.map((r) => [r.bucket, { count: n(r.count), revenueCents: n(r.revenue) }])) as Record<string, Bucket>;
   return {
@@ -147,10 +183,10 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
     customerCount: n(t.customers),
     deliveryFeeCents: n(t.fee),
     tipCents: n(t.tip),
-    byPaymentMethod: toBuckets(payments),
-    byDay: days.map((r) => ({ date: r.date, orderCount: n(r.count), revenueCents: n(r.revenue) })),
-    byType: toBuckets(types),
-    topProducts: products.map((r) => ({ productName: r.name, quantity: n(r.quantity), revenueCents: n(r.revenue) })),
+    byPaymentMethod: mergeBuckets(toBuckets(payments), rPayments),
+    byDay: [...dayMap.values()].sort((a, b) => a.date.localeCompare(b.date)),
+    byType: receipts.count > 0 ? { ...toBuckets(types), MESA: { count: receipts.count, revenueCents: receipts.revenue } } : toBuckets(types),
+    topProducts: [...productMap.values()].sort((a, b) => b.quantity - a.quantity || a.productName.localeCompare(b.productName)).slice(0, 10),
     byDeliverer: deliverers.map((r) => ({ delivererName: r.name, orderCount: n(r.count), revenueCents: n(r.revenue) })),
     cashSummary: { sessionCount: n(cash[0].sessions), suprimentosCents: n(cash[0].suprimentos), sangriasCents: n(cash[0].sangrias) },
     canceledCount: n(t.canceledCount),

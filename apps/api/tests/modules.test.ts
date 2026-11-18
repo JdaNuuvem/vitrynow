@@ -56,8 +56,9 @@ describe("módulos em camadas — contrato HTTP", () => {
   });
 
   it("produto: edita preço e adicionais na mesma chamada", async () => {
+    const categoryId = json(await call("POST", "/api/catalog/categories", { name: "Burgers" })).category.id;
     const product = json(
-      await call("POST", "/api/catalog/products", { name: "Burger", priceCents: 1500, additionals: [{ name: "Bacon", priceCents: 400 }] }),
+      await call("POST", "/api/catalog/products", { categoryId, name: "Burger", priceCents: 1500, additionals: [{ name: "Bacon", priceCents: 400 }] }),
     ).product;
     const edited = json(
       await call("POST", `/api/catalog/products/${product.id}`, {

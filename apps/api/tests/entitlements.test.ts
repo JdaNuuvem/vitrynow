@@ -193,7 +193,7 @@ describe("limite de impressoras e aviso de interesse (integração)", () => {
     app.inject({ method: "POST", url: "/api/store/feature-interest", headers: cookie ? { cookie } : {}, payload: { feature } });
 
   it("GET /api/store/subscription traz fase, limites e acesso; o teste não libera equipe", async () => {
-    const { cookie } = await registerStore(app);
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
     const body = JSON.parse((await app.inject({ method: "GET", url: "/api/store/subscription", headers: { cookie: cookie! } })).body);
     expect(body.subscription).toMatchObject({
       state: "trial",
@@ -206,7 +206,7 @@ describe("limite de impressoras e aviso de interesse (integração)", () => {
   });
 
   it("CA-B10-02: BASICO aceita a 1ª chave de impressora e recusa a 2ª com 402 LIMIT_REACHED", async () => {
-    const { cookie } = await registerStore(app);
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
     expect((await createToken(cookie!)).statusCode).toBe(200);
 
     const second = await createToken(cookie!, "Outro PC");
@@ -216,7 +216,7 @@ describe("limite de impressoras e aviso de interesse (integração)", () => {
   });
 
   it("chave revogada não conta: revogar libera criar outra", async () => {
-    const { cookie } = await registerStore(app);
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
     const first = JSON.parse((await createToken(cookie!)).body).token;
     expect((await createToken(cookie!)).statusCode).toBe(402);
 
@@ -226,15 +226,15 @@ describe("limite de impressoras e aviso de interesse (integração)", () => {
   });
 
   it("o limite é por loja: a chave de uma loja não consome a vaga de outra", async () => {
-    const a = await registerStore(app);
-    const b = await registerStore(app);
+    const a = await registerStore(app, { plan: "BASICO" });
+    const b = await registerStore(app, { plan: "BASICO" });
     expect((await createToken(a.cookie!)).statusCode).toBe(200);
     expect((await createToken(b.cookie!)).statusCode).toBe(200);
     expect((await createToken(a.cookie!)).statusCode).toBe(402);
   });
 
   it("plano sem limite (PRO) cria quantas chaves quiser", async () => {
-    const { cookie } = await registerStore(app);
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
     const subscription = await prisma.subscription.findFirstOrThrow();
     await activateSubscription({ subscriptionId: subscription.id, planCode: "PRO" });
 
@@ -245,7 +245,7 @@ describe("limite de impressoras e aviso de interesse (integração)", () => {
     const original = await prisma.plan.findUniqueOrThrow({ where: { code: "PRO" } });
     await prisma.plan.update({ where: { code: "PRO" }, data: { limits: { maxUsers: 3, maxPrinters: null } } });
     try {
-      const { cookie } = await registerStore(app);
+      const { cookie } = await registerStore(app, { plan: "BASICO" });
       const subscription = await prisma.subscription.findFirstOrThrow();
       await activateSubscription({ subscriptionId: subscription.id, planCode: "PRO" });
 
@@ -274,7 +274,7 @@ describe("limite de impressoras e aviso de interesse (integração)", () => {
   });
 
   it("SEC-21: a janela do limite se fecha sempre (402, sucesso, erro): 30 pedidos seguidos não travam", async () => {
-    const { cookie } = await registerStore(app);
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
     for (let i = 0; i < 30; i++) {
       const response = await createToken(cookie!, `PC ${i}`);
       expect(response.statusCode, `tentativa ${i}`).toBe(i === 0 ? 200 : 402);
@@ -282,20 +282,20 @@ describe("limite de impressoras e aviso de interesse (integração)", () => {
   });
 
   it("CA-B10-04: 'Quero ser avisado' 3 vezes grava 1 registro por loja e recurso", async () => {
-    const { cookie } = await registerStore(app);
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
     for (let i = 0; i < 3; i++) expect((await interest(cookie, "scheduled_orders")).statusCode).toBe(200);
     expect(await prisma.featureInterest.count()).toBe(1);
 
     expect((await interest(cookie, "whatsapp_auto")).statusCode).toBe(200);
     expect(await prisma.featureInterest.count()).toBe(2);
 
-    const other = await registerStore(app);
+    const other = await registerStore(app, { plan: "BASICO" });
     expect((await interest(other.cookie, "scheduled_orders")).statusCode).toBe(200);
     expect(await prisma.featureInterest.count()).toBe(3);
   });
 
   it("aviso de interesse: recurso desconhecido ⇒ 400, sem login ⇒ 401, plano que já inclui ⇒ 409", async () => {
-    const { cookie } = await registerStore(app);
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
     expect((await interest(cookie, "inventado")).statusCode).toBe(400);
     expect((await interest(cookie, undefined)).statusCode).toBe(400);
     expect((await interest(undefined, "scheduled_orders")).statusCode).toBe(401);
@@ -309,7 +309,7 @@ describe("limite de impressoras e aviso de interesse (integração)", () => {
   });
 
   it("aviso de interesse só vale para recurso do PRO: recurso do BASICO (table_qr) ⇒ 409 e nada é gravado", async () => {
-    const { cookie } = await registerStore(app);
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
     const response = await interest(cookie, "table_qr");
     expect(response.statusCode).toBe(409);
     expect(JSON.parse(response.body).code).toBe("FEATURE_ALREADY_AVAILABLE");
@@ -317,7 +317,7 @@ describe("limite de impressoras e aviso de interesse (integração)", () => {
   });
 
   it("402 de recurso trancado traz a chave em `feature` e em `details.feature`", async () => {
-    const { cookie } = await registerStore(app);
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
     const response = await app.inject({
       method: "POST",
       url: "/api/users",

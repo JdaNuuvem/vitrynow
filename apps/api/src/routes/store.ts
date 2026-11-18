@@ -62,6 +62,7 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
 
     const { logoUrl, coverImageUrl, primaryColor, customDomain, address, whatsapp, openingHours, ...rest } = parsed.data;
+    // SEC-14 (ST-18): o domínio é ÚNICO no banco; quem decide é o índice (sem "consultar e depois gravar"), então duas lojas simultâneas não passam as duas.
     const store = await prisma.store.update({
       where: { id: storeId },
       data: {
@@ -93,7 +94,13 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
         hideSoldOutProducts: true,
         deliveryFeeCents: true,
       },
+    }).catch((error: unknown) => {
+      const known = error as { code?: string; meta?: { target?: string[] | string } };
+      const target = Array.isArray(known.meta?.target) ? known.meta.target.join(",") : String(known.meta?.target ?? "");
+      if (known.code === "P2002" && target.includes("customDomain")) return null;
+      throw error;
     });
+    if (!store) return reply.code(409).send({ error: "este domínio já está em uso por outra loja", code: "CUSTOM_DOMAIN_TAKEN" });
     logAudit({ storeId, userId: request.user.userId, action: "store.settings_update", targetType: "Store", targetId: storeId, metadata: parsed.data });
     return { store };
   });

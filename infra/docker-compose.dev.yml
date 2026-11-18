@@ -11,5 +11,16 @@ services:
     volumes:
       - postgres_dev_data:/var/lib/postgresql/data
 
+  # INF-10 / ADR-0010: storage S3-compativel LOCAL para exercitar o upload (API-18). SO dev, sem credenciais reais;
+  # escuta apenas em 127.0.0.1. (minio/minio e minio/mc nao puxam mais do Docker Hub: validado pelo Hopper no PR #78.)
+  # O bucket e criado na subida; leitura anonima ja funciona. Producao usa outro provedor (decisao do Claudio).
+  s3mock:
+    image: adobe/s3mock:5.2.3
+    restart: unless-stopped
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: cardapio-media
+    ports:
+      - "127.0.0.1:59000:9090"
+
 volumes:
   postgres_dev_data:

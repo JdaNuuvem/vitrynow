@@ -318,9 +318,16 @@ rh="$(curl -s -D - -o /dev/null -X POST -H 'Content-Type: application/json' -d '
 # /loja e /health fora desta zona (zona própria)
 lrc="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health")"
 [ "$lrc" = 200 ] && check ok "9f /health segue livre com a zona de /auth esgotada" || check fail "9f /health devolveu $lrc"
-# variantes de URL (caixa e barra dupla) também caem na zona
+# variantes de URL (caixa e barra dupla) também caem na zona. A janela do limite é DESLIZANTE (1 min): sob carga a rajada acima pode levar mais de 1 min e a zona deixa de estar
+# esgotada quando as variantes rodam. Por isso cada variante é testada SOZINHA e RÁPIDA: esgota a zona por um caminho canônico (80 pedidos em paralelo, ~segundos) e testa a variante
+# em seguida (também em paralelo). 429 do Caddy = sem o cabeçalho x-ratelimit-limit (a API o emite).
+caddy429par() {  # $1 = n, $2 = caminho, $3 = método; imprime: <429 do Caddy> <429 da API> <outros>
+  seq 1 "$1" | xargs -P 20 -I{} curl -s -o /dev/null -w '%{http_code} [%header{x-ratelimit-limit}]\n' -X "$3" -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT$2" 2>/dev/null \
+    | awk '{ if ($1==429 && $2=="[]") c++; else if ($1==429) a++; else o++ } END { print c+0, a+0, o+0 }'
+}
 for v in '/AUTH/Forgot-Password' '//auth/forgot-password' '/auth/./forgot-password' '/auth/forgot-password/'; do
-  vr="$(caddy429 6 "$v" POST)"
+  caddy429par 80 /auth/forgot-password POST >/dev/null
+  vr="$(caddy429par 10 "$v" POST)"
   [ "${vr%% *}" -ge 1 ] && check ok "9f variante [$v]: 429 do Caddy (a zona esgotada vale também para ela)" || check fail "9f variante [$v] escapou da zona (resposta: $vr)"
 done
 # IPv6 /48 e a zona: sem IPv6 na rede do smoke (curl -6 não é possível), confere a configuração

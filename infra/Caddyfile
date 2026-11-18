@@ -45,6 +45,11 @@
 		respond "not found" 404
 	}
 
+	# API-25: o back-office da plataforma (/api/platform/*) também fica fora da internet pública: só rede interna ou túnel SSH.
+	handle /api/platform/* {
+		respond "not found" 404
+	}
+
 	# Caddy descarta qualquer X-Forwarded-For enviado pelo cliente e envia à API o IP real da
 	# conexão (comportamento padrão do reverse_proxy sem `trusted_proxies`). É isso que permite
 	# a API usar trustProxy + rate limit por IP sem que o cliente possa forjar o IP (B04).

@@ -2,6 +2,7 @@ import { Prisma, type prisma as prismaClient } from "@meucardapio/db";
 import { HISTORY_PERIODS, HISTORY_STATUS_FILTERS } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
 import { parseLocalDate, safeTimeZone, startOfStoreDay } from "../../lib/storeTime";
+import { MAX_REFUND_AUTO_ATTEMPTS } from "../../lib/refundPolicy";
 import { maskPhone, recentWindowCutoff } from "./orders.view";
 import { utc } from "../../lib/sqlTime";
 import type { Role } from "../../lib/orderStateMachine";
@@ -125,6 +126,8 @@ export type HistoryRow = {
   paymentMethod: string | null;
   paymentStatus: string | null;
   refundPending: boolean;
+  refundAbandoned: boolean;
+  refundStuck: boolean;
   notPrinted: boolean;
 };
 
@@ -199,7 +202,7 @@ export async function searchOrderHistory(
     where: { id: { in: pageIds }, storeId },
     select: {
       id: true, code: true, createdAt: true, customerName: true, customerPhone: true, type: true, totalCents: true, status: true,
-      awaitingPayment: true, paymentMethod: true, printedAt: true, payment: { select: { status: true, refundAbandonedAt: true } },
+      awaitingPayment: true, paymentMethod: true, printedAt: true, payment: { select: { status: true, refundAbandonedAt: true, refundAttempts: true } },
     },
   });
   const byId = new Map(found.map((o) => [o.id, o]));
@@ -225,6 +228,8 @@ export async function searchOrderHistory(
       paymentMethod: o.paymentMethod,
       paymentStatus,
       refundPending: paymentStatus === "ESTORNO_PENDENTE" && !o.payment?.refundAbandonedAt,
+      refundAbandoned: !!o.payment?.refundAbandonedAt, // marca "Estorno não concluído" (RN-ABD-04)
+      refundStuck: paymentStatus === "ESTORNO_PENDENTE" && !o.payment?.refundAbandonedAt && (o.payment?.refundAttempts ?? 0) >= MAX_REFUND_AUTO_ATTEMPTS,
       notPrinted: o.printedAt === null && !o.awaitingPayment && o.status !== "CANCELADO",
     };
   });

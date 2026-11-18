@@ -150,7 +150,7 @@ describe("relatórios (rotas)", () => {
     const { cookie, storeId } = await setup("rel-e", "RE1");
     await seed(storeId, { subtotal: 1000, createdAt: "2026-11-10T15:00:00Z", phone: "11111" });
     await seed(storeId, { subtotal: 2000, createdAt: "2026-11-11T15:00:00Z", phone: "11111", paymentMethod: "PIX" });
-    await seed(storeId, { subtotal: 3000, createdAt: "2026-11-11T16:00:00Z", phone: null, name: "Ana", paymentMethod: null, type: "MESA" });
+    await seed(storeId, { subtotal: 3000, createdAt: "2026-11-11T16:00:00Z", phone: null, name: "Ana", paymentMethod: null, type: "DELIVERY" });
     await seed(storeId, { subtotal: 4000, createdAt: "2026-11-11T17:00:00Z", phone: null, name: null, paymentMethod: "DINHEIRO" });
     await seed(storeId, { subtotal: 5000, tip: 500, discount: 5000, createdAt: "2026-11-11T18:00:00Z", paymentMethod: "PIX" }); // total só gorjeta... desconto cobre tudo
     const r = await summary(cookie, "from=2026-11-10&to=2026-11-11");
@@ -160,6 +160,22 @@ describe("relatórios (rotas)", () => {
     expect(sum(Object.values(r.byType))).toBe(r.revenueCents);
     expect(r.customerCount).toBe(3); // 11111 (2 pedidos), Ana (sem telefone) e o telefone gerado do último; sem telefone e sem nome não conta
     expect(r.byPaymentMethod.NAO_IDENTIFICADO).toEqual({ count: 1, revenueCents: 3000 });
+  });
+
+  it("API-24 (RN-MB-04): pedido de MESA não é venda; o RECEBIMENTO é, no dia de receivedAt, com suas formas de pagamento e produtos", async () => {
+    const { cookie, storeId } = await setup("rel-m", "RM1");
+    const user = await prisma.user.findFirstOrThrow({ where: { storeId } });
+    const receipt = await prisma.receipt.create({ data: { storeId, subtotalCents: 5000, totalCents: 5500, serviceFeeCents: 500, receivedAt: new Date("2026-11-05T02:50:00Z"), receivedByUserId: user.id } }); // 23:50 de 04/11 na loja
+    await prisma.receiptPayment.createMany({ data: [{ receiptId: receipt.id, storeId, method: "PIX", amountCents: 3000 }, { receiptId: receipt.id, storeId, method: "DINHEIRO", amountCents: 2500 }] });
+    const mesaOrder = await seed(storeId, { type: "MESA", subtotal: 5000, createdAt: "2026-11-03T15:00:00Z", items: [{ name: "Pizza", qty: 2, unit: 2500, extras: [500] }] });
+    await prisma.order.update({ where: { id: mesaOrder.id }, data: { receiptId: receipt.id } });
+    await seed(storeId, { type: "MESA", status: "PENDENTE", subtotal: 900, createdAt: "2026-11-04T15:00:00Z" });
+    const r = await summary(cookie, "from=2026-11-03&to=2026-11-04");
+    expect([r.orderCount, r.revenueCents, r.openCount]).toEqual([1, 5500, 0]); // 1 recebimento; pedido de mesa e mesa pendente fora
+    expect(r.byDay).toEqual([{ date: "2026-11-04", orderCount: 1, revenueCents: 5500 }]);
+    expect(r.byType).toEqual({ MESA: { count: 1, revenueCents: 5500 } });
+    expect(r.byPaymentMethod).toEqual({ PIX: { count: 1, revenueCents: 3000 }, DINHEIRO: { count: 1, revenueCents: 2500 } });
+    expect(r.topProducts).toEqual([{ productName: "Pizza", quantity: 2, revenueCents: 2 * 3000 }]);
   });
 
   it("entregador: pedidos e valor por entregador; só vendas", async () => {

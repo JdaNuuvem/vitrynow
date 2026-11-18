@@ -67,6 +67,9 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
     return orderService.setInternalNote(actorOf(request), id, parsed.data.note);
   });
 
+  // API-69: lista e contagem de estornos presos, só do OWNER. Rota estática: vence `/api/orders/:id`.
+  app.get("/api/orders/refund-stuck", auth, async (request) => orderService.listStuckRefunds(actorOf(request)));
+
   app.get("/api/orders/:id", auth, async (request) => {
     const { id } = request.params as { id: string };
     return { order: await orderService.detail(actorOf(request), id) };
@@ -81,9 +84,9 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/api/orders/:id/cancel", auth, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const body = (request.body ?? {}) as { reason?: CancelReason };
-    if (!(await guardRefund(request, reply, id))) return;
-    const result = await orderService.cancelByPanel(actorOf(request), id, body.reason);
+    const body = (request.body ?? {}) as { reason?: CancelReason; acknowledgeClosedCash?: unknown };
+    if (!(await guardRefund(request, reply, id))) return reply; // SEC-40: o helper ja enviou o 403: devolver `reply` (nao `undefined`)
+    const result = await orderService.cancelByPanel(actorOf(request), id, body.reason, body.acknowledgeClosedCash === true);
     return reply.code(result.refund === "PENDING" ? 202 : 200).send(result.refund === "NONE" ? { order: result.order } : result);
   });
 

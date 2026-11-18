@@ -51,7 +51,7 @@ describe("lista central de rotas — contrato (CA-B17-08)", () => {
     await extra.ready();
     expect(extra.routeRegistry.find((r) => r.url === "/api/zz-rota-nova")).toMatchObject({ classified: false, audience: "panel" });
 
-    const { cookie } = await registerStore(extra);
+    const { cookie } = await registerStore(extra, { plan: "BASICO" });
     await prisma.subscription.updateMany({ data: { trialEndsAt: new Date(Date.now() - DAY) } });
     const blocked = await extra.inject({ method: "POST", url: "/api/zz-rota-nova", headers: { cookie: cookie! }, payload: {} });
     expect(blocked.statusCode).toBe(403);
@@ -68,7 +68,7 @@ describe("Consulta e Suspensão por rota (integração)", () => {
   beforeEach(async () => {
     app = makeApp();
     await app.ready();
-    cookie = (await registerStore(app, { slug: "loja-fase", code: "FS1" })).cookie!;
+    cookie = (await registerStore(app, { slug: "loja-fase", code: "FS1", plan: "BASICO" })).cookie!;
   });
   afterEach(async () => {
     await app.close();
@@ -273,11 +273,13 @@ describe("Consulta e Suspensão por rota (integração)", () => {
   it("CA-MX-05 / reativação imediata: pagar na Consulta ou na Suspensão libera a loja na requisição seguinte", async () => {
     const subscription = await prisma.subscription.findFirstOrThrow();
 
+    let rodada = 0; // API-56: nome de categoria e unico por loja; cada fase cria a sua
     for (const phase of [toReadOnly, toSuspended]) {
+      rodada += 1;
       await phase();
-      expect(codeOf(await inject("POST", "/api/catalog/categories", { name: "Bloqueada" }))).toMatch(/READ_ONLY|SUSPENDED/);
+      expect(codeOf(await inject("POST", "/api/catalog/categories", { name: `Bloqueada ${rodada}` }))).toMatch(/READ_ONLY|SUSPENDED/);
       await activateSubscription({ subscriptionId: subscription.id, planCode: "BASICO" });
-      expect((await inject("POST", "/api/catalog/categories", { name: "Liberada" })).statusCode).toBe(201);
+      expect((await inject("POST", "/api/catalog/categories", { name: `Liberada ${rodada}` })).statusCode).toBe(201);
       await prisma.subscription.update({ where: { id: subscription.id }, data: { status: "TRIAL", currentPeriodEnd: null } });
     }
   });
@@ -330,7 +332,7 @@ describe("Consulta e Suspensão por rota (integração)", () => {
         instance.get("/api/zz-export", { preHandler: instance.requirePanelAuth }, async () => ({ csv: "ok" }));
       });
       await extra.ready();
-      const owner = (await registerStore(extra)).cookie!;
+      const owner = (await registerStore(extra, { plan: "BASICO" })).cookie!;
       const get = () => extra.inject({ method: "GET", url: "/api/zz-export", headers: { cookie: owner } });
       expect((await get()).statusCode).toBe(200);
       await toReadOnly();

@@ -31,7 +31,12 @@ async function summarizeSession(db: Db | typeof prisma, storeId: string, session
     },
     select: { type: true, status: true, totalCents: true, deliveryFeeCents: true, tipCents: true, paymentMethod: true, createdAt: true, paidAt: true, awaitingPayment: true },
   });
-  return computeCashSummary(session, orders, session.closedAt ?? new Date());
+  // API-24: o recebimento da mesa entra pelo `receivedAt` (a venda da mesa é o recebimento, não o pedido).
+  const receipts = await db.receipt.findMany({
+    where: { storeId, receivedAt: { gte: session.openedAt, ...(session.closedAt ? { lte: session.closedAt } : {}) } },
+    select: { id: true, receivedAt: true, totalCents: true, serviceFeeCents: true, payments: { select: { method: true, amountCents: true, changeForCents: true } } },
+  });
+  return computeCashSummary(session, orders, session.closedAt ?? new Date(), receipts);
 }
 
 // A API devolve a movimentação com TIPO, valor, motivo, PAPEL e HORA de quem lançou: nunca o id do usuário nem o e-mail (CA-CX-22).
@@ -47,12 +52,14 @@ const movementView = (m: SessionWithMovements["movements"][number]) => ({
 });
 // NENHUMA resposta do caixa, para nenhum papel, devolve id de usuário (só papel e hora, CA-CX-22) nem o retrato interno: tira os campos por nome
 // em um lugar só, usado por todas as visões da sessão.
-const withoutInternals = <T extends { openedByUserId: string; closedByUserId: string | null; summarySnapshot: Prisma.JsonValue | null }>(s: T) => {
-  const { openedByUserId: _opened, closedByUserId: _closed, summarySnapshot: _snapshot, ...rest } = s;
+// API-27b (CA-CX-29): esperado e diferença são de 64 bits (BigInt no banco). Na resposta saem como número seguro; acima de MAX_SAFE_INTEGER, como TEXTO.
+export const safeCents = (v: bigint | null): number | string | null => (v === null ? null : v <= BigInt(Number.MAX_SAFE_INTEGER) && v >= -BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : v.toString());
+const withoutInternals = <T extends { openedByUserId: string; closedByUserId: string | null; summarySnapshot: Prisma.JsonValue | null; expectedClosingCents: bigint | null; differenceCents: bigint | null }>(s: T) => {
+  const { openedByUserId: _opened, closedByUserId: _closed, summarySnapshot: _snapshot, expectedClosingCents, differenceCents, ...rest } = s;
   void _opened;
   void _closed;
   void _snapshot;
-  return rest;
+  return { ...rest, expectedClosingCents: safeCents(expectedClosingCents), differenceCents: safeCents(differenceCents) };
 };
 const sessionView = (s: SessionWithMovements) => ({ ...withoutInternals(s), movements: s.movements.map(movementView) });
 
@@ -129,7 +136,7 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
       () => prisma.cashSession.findFirst({ where: { id, storeId }, include: { movements: { orderBy: { createdAt: "desc" } } } }),
       "caixa não encontrado",
     );
-    if (!session) return;
+    if (!session) return reply; // `findOwnedOrNotFound` já enviou o 404
     // Caixa FECHADO: o OWNER recebe o retrato CONGELADO no fechamento (não recalcula; pedidos cancelados depois não mudam o histórico,
     // RN-CX-15); o STAFF recebe só abertura, fechamento, horários e papel, sem resumo nem movimentações (CA-CX-27).
     if (session.closedAt && role !== "OWNER") return { session: closedSessionView(session, role), summary: null };
@@ -239,14 +246,33 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
     // Motivo ANTES de tocar no banco: sem motivo (ou de outro tipo) nada é criado (CA-CX-20/21).
     const { reason, reasonText } = validateMovementReason(type, parsed.data.reason, parsed.data.reasonText);
 
+    // M3 (API-27b): `Idempotency-Key` opcional contra duplo clique e reenvio de rede. Mesma chave + mesmo conteúdo => a MESMA movimentação (200, sem
+    // novo lançamento nem nova auditoria); mesma chave com conteúdo diferente => 409 IDEMPOTENCY_KEY_REUSED.
+    const rawKey = request.headers["idempotency-key"];
+    const idempotencyKey = typeof rawKey === "string" && rawKey.length > 0 ? rawKey : null;
+    if (rawKey !== undefined && (idempotencyKey === null || !/^[A-Za-z0-9_-]{8,80}$/.test(idempotencyKey))) {
+      return reply.code(400).send({ error: "Idempotency-Key inválida.", code: "VALIDATION_ERROR" });
+    }
+
     const open = await prisma.cashSession.findFirst({ where: { storeId, closedAt: null }, select: { id: true } });
     if (!open) return reply.code(409).send({ error: "não há caixa aberto", code: "CASH_REQUIRED" });
+    let replayed = false;
 
     const movement = await prisma.$transaction(
       async (tx) => {
         // Trava o caixa: duas sangrias simultâneas se enfileiram e a segunda enxerga o saldo já reduzido (RN-CX-10).
         const rows = await tx.$queryRaw<{ closedAt: Date | null }[]>`SELECT "closedAt" FROM "CashSession" WHERE "id" = ${open.id} AND "storeId" = ${storeId} FOR UPDATE`;
         if (!rows[0] || rows[0].closedAt) throw new CodedError(409, "CASH_REQUIRED", "não há caixa aberto");
+        if (idempotencyKey) {
+          const previous = await tx.cashMovement.findUnique({ where: { cashSessionId_idempotencyKey: { cashSessionId: open.id, idempotencyKey } } });
+          if (previous) {
+            if (previous.type !== type || previous.amountCents !== amountCents || previous.reason !== reason || previous.reasonText !== reasonText) {
+              throw new CodedError(409, "IDEMPOTENCY_KEY_REUSED", "Esta chave já foi usada em outra movimentação.");
+            }
+            replayed = true;
+            return previous;
+          }
+        }
         if (type === "SANGRIA") {
           if (role !== "OWNER") {
             // Limite ÚNICO do dono, aplicado à SOMA das sangrias do STAFF neste caixa (turno) incluindo a que chega, dentro da trava da linha do
@@ -266,7 +292,7 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
           }
         }
         const created = await tx.cashMovement.create({
-          data: { cashSessionId: open.id, type, amountCents, notes: parsed.data.notes ?? null, reason, reasonText, createdByUserId: userId, createdByRole: role },
+          data: { cashSessionId: open.id, type, amountCents, notes: parsed.data.notes ?? null, reason, reasonText, createdByUserId: userId, createdByRole: role, idempotencyKey },
         });
         // Auditoria: tipo, valor e o CÓDIGO do motivo; o texto livre do `OUTRO` NÃO vai para o log. Dentro da transação (R2).
         await auditInTx(tx, { storeId, userId, action: "cashier.movement", targetType: "CashMovement", targetId: created.id, metadata: { type, amountCents, reason, role } });
@@ -274,7 +300,8 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
       },
       { maxWait: 10_000, timeout: 20_000 },
     );
-    return reply.code(201).send({ movement: movementView({ ...movement }) });
+    if (replayed) reply.header("Idempotent-Replay", "true");
+    return reply.code(replayed ? 200 : 201).send({ movement: movementView({ ...movement }) });
   });
 
   // Limite de sangria do STAFF por lançamento (RN-CX-09/23): só o OWNER muda, e a mudança fica na auditoria.
