@@ -105,6 +105,31 @@ describe("API-21 — dinheiro recebido no caixa", () => {
     expect((await atual(b)).expectedBalanceCents).toBe(5000);
   });
 
+  it("AVISO DE MUDANÇA DE REGRA (RN-MIG-04b): só em caixa aberto ANTES da migração, uma vez por usuário; dispensar é idempotente; caixa novo e fechado ⇒ null", async () => {
+    const l = await loja();
+    const staffEmail = `s-${Math.random().toString(36).slice(2, 8)}@t.com`;
+    await app.inject({ method: "POST", url: "/api/users", headers: { cookie: l.owner }, payload: { email: staffEmail, password: "provisoria-12" } });
+    const staff = ((await app.inject({ method: "POST", url: "/auth/login", payload: { email: staffEmail, password: "provisoria-12" } })).headers["set-cookie"] as string).split(";")[0];
+    const vista = async (cookie: string) => json(await app.inject({ method: "GET", url: "/api/cashier/current", headers: { cookie } })).ruleChangeNotice;
+    expect(await vista(l.owner)).toBeNull(); // sem caixa
+    await abrir(l);
+    expect(await vista(l.owner)).toBeNull(); // caixa novo (versão 2)
+    await prisma.cashSession.updateMany({ where: { storeId: l.store.id }, data: { cashRuleVersion: 1 } }); // como um caixa aberto na migração
+    const aviso = { id: "CASH_RECEIVED_V1", text: "O cálculo do caixa mudou: agora só conta o dinheiro já recebido." };
+    expect(await vista(l.owner)).toEqual(aviso);
+    expect(await vista(staff)).toEqual(aviso);
+    const d = () => app.inject({ method: "POST", url: "/api/cashier/notices/CASH_RECEIVED_V1/dismiss", headers: { cookie: l.owner } });
+    expect((await d()).statusCode).toBe(200);
+    expect((await d()).statusCode).toBe(200); // idempotente
+    expect(await vista(l.owner)).toBeNull();
+    expect(await vista(staff)).toEqual(aviso); // a dispensa é POR USUÁRIO
+    expect((await app.inject({ method: "POST", url: "/api/cashier/notices/OUTRO/dismiss", headers: { cookie: l.owner } })).statusCode).toBe(404);
+    expect((await app.inject({ method: "POST", url: "/api/cashier/notices/CASH_RECEIVED_V1/dismiss" })).statusCode).toBe(401);
+    expect(await prisma.userNoticeDismissal.count()).toBe(1);
+    await fechar(l, 10000);
+    expect(await vista(staff)).toBeNull(); // caixa fechado
+  });
+
   it("cancelar pedido em andamento tira o 'a receber' sem mexer no esperado", async () => {
     const l = await loja();
     await abrir(l);
