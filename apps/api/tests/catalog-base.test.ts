@@ -267,7 +267,7 @@ describe("migração 20261117130000 (produto órfão → 'Sem categoria' oculta)
     // roda o SQL da migração (idempotente para o que já foi tratado)
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
-    const sql = readFileSync(join(__dirname, "../../../packages/db/prisma/migrations/20261117130000_api56_categoria_obrigatoria/migration.sql"), "utf-8");
+    const sql = readFileSync(join(__dirname, "../../../packages/db/prisma/migrations/20261117340000_api56_categoria_obrigatoria/migration.sql"), "utf-8");
     const run = async () => {
       for (const statement of sql.split(/;\s*\n/).map((s) => s.replace(/--.*$/gm, "").trim()).filter(Boolean)) await prisma.$executeRawUnsafe(statement);
     };
