@@ -260,9 +260,10 @@ describe("privacidade: anonimizar cliente", { timeout: 60_000 }, () => {
     await mk(ctx.storeId);
     const busy = vi.spyOn(bcryptPasswordHasher, "verify").mockRejectedValue(new ServerBusyError());
     try {
-      // 12 recusas seguidas: se a reserva não voltasse, o par fecharia em 5 (429) e o teto da conta em 10
-      for (let i = 0; i < 8; i++) {
-        const res = await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1 });
+      // 2 ondas de 8 recusas (a rota limita 10/min; o relógio do rate-limit da rota é reiniciado entre elas com outro IP): 16 > 10 do teto da
+      // conta e > 5 do par. Se uma reserva não voltasse, a 6ª (par) ou a 11ª (conta) já viraria 429.
+      for (let i = 0; i < 16; i++) {
+        const res = await app.inject({ method: "POST", url: "/api/privacy/anonymize", headers: { cookie: ctx.owner }, remoteAddress: `198.51.100.${1 + Math.floor(i / 8)}`, payload: { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1, currentPassword: SENHA } });
         expect(res.statusCode, `ocupado ${i}`).toBe(503);
         expect(json(res).code).toBe("SERVER_BUSY");
         expect(res.headers["retry-after"]).toBeDefined();
