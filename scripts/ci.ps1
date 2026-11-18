@@ -125,7 +125,10 @@ function Get-RamoAfastado($ramos) {  # ramo mais afastado da MEDIANA dos ramos: 
   if (-not $ramos -or $ramos.Count -lt 3) { return $null }
   $v = @($ramos.Values | Sort-Object); $med = $v[[int][math]::Floor($v.Count / 2)]
   $pior = $ramos.GetEnumerator() | Sort-Object { [math]::Abs($_.Value - $med) } -Descending | Select-Object -First 1
-  [pscustomobject]@{ Nome = $pior.Key; Delta = [math]::Round($pior.Value - $med, 0) }
+  # CONJUNTO dos ramos a mais de 35 ms da mediana (INF-20c): com 2 ramos empatados no afastamento o "mais afastado" sozinho desempata ao acaso e a salvaguarda ficava
+  # cega; o conjunto não depende de desempate. Defeito real = algum ramo está em TODOS os conjuntos das falhas.
+  $conj = @($ramos.GetEnumerator() | Where-Object { [math]::Abs($_.Value - $med) -gt 35 } | ForEach-Object { $_.Key } | Sort-Object)
+  [pscustomobject]@{ Nome = $pior.Key; Delta = [math]::Round($pior.Value - $med, 0); Conj = $conj }
 }
 function Invoke-TimingTest {  # roda SÓ o teste de tempo; devolve @{ Ok; Valor; Tipo; Texto; Cpu; Lista; Ramo; DeltaTxt }
   $cpu = Get-CpuAgora
@@ -151,7 +154,7 @@ function Invoke-TimingTest {  # roda SÓ o teste de tempo; devolve @{ Ok; Valor;
   $lista = if ($ramos.Count) { (($ramos.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$([math]::Round($_.Value))" }) -join ' ') + ' (ms)' } else { 'ramos não medidos' }
   # Texto = como mostrar o valor: "diferença X ms (limite 35)", "tempo X ms ABAIXO do piso" ou "não medido".
   $texto = if (-not $valor) { 'não medido' } elseif ($tipo -eq 'piso') { "tempo $valor ms ABAIXO do piso" } else { "diferença $valor ms (limite 35)" }
-  [pscustomobject]@{ Ok = $passou; Valor = $valor; Tipo = $tipo; Texto = $texto; Cpu = $cpu; Lista = $lista; Ramo = $(if ($af) { $af.Nome } else { '' }); DeltaTxt = $(if ($af) { '{0:+#;-#;0}' -f $af.Delta } else { '' }) }
+  [pscustomobject]@{ Ok = $passou; Valor = $valor; Tipo = $tipo; Texto = $texto; Cpu = $cpu; Lista = $lista; Ramo = $(if ($af) { $af.Nome } else { '' }); Conj = $(if ($af) { $af.Conj } else { @() }); DeltaTxt = $(if ($af) { '{0:+#;-#;0}' -f $af.Delta } else { '' }) }
 }
 function Format-Tentativa([int]$n, $r) {
   "   tentativa ${n}: CPU $($r.Cpu)% | $(if ($r.Ok) { 'passou' } else { 'FALHOU' }) | $($r.Lista) | $(if ($r.Ramo) { "ramo mais afastado da mediana: $($r.Ramo) ($($r.DeltaTxt) ms)" } else { 'ramo: n/d' })"
@@ -179,15 +182,19 @@ if ($continue -and -not $SkipTests) {
     # REPOUSO (INF-20b, decisão do Atlas 17/11): o teste falha ~7% das rodadas por RUÍDO com a máquina compartilhada (medido: CPU do host 0-49%, picos de 400-1159 ms que
     # estouram o piso), então 2 falhas seguidas NÃO bastam. Mais 3 rodadas; BLOQUEIA se >= 2 das 3 falharem, OU se o MESMO ramo foi o mais afastado em TODAS as falhas (um
     # defeito real é sempre o mesmo ramo; ruído cai em ramos variados). Todas as tentativas (valores e CPU) ficam impressas. O Atlas revê a regra se o bloqueio por ruído passar de 1 em 20 CIs.
-    Write-Host '   repouso, 2 falhas seguidas: rodando mais 3 vezes. Bloqueia se >= 2 das 3 falharem OU se o mesmo ramo for o mais afastado em todas as falhas.'
+    Write-Host '   repouso, 2 falhas seguidas: rodando mais 3 vezes. Bloqueia se >= 2 das 3 falharem OU se algum ramo ficar a mais de 35 ms da mediana em todas as falhas.'
     for ($i = 3; $i -le 5; $i++) { $r = Invoke-TimingTest; $tent.Add($r); Write-Host (Format-Tentativa $i $r) }
     $falhasDepois = @($tent | Select-Object -Skip 2 | Where-Object { -not $_.Ok }).Count
     $falhas = @($tent | Where-Object { -not $_.Ok })
-    $ramosFalha = @($falhas | ForEach-Object { $_.Ramo } | Select-Object -Unique)
-    $mesmoRamo = ($ramosFalha.Count -eq 1 -and [bool]$ramosFalha[0])
+    # ramos comuns a TODAS as falhas (interseção dos conjuntos > 35 ms da mediana); falha sem ramo medido = interseção vazia
+    $comuns = $null
+    foreach ($fl in $falhas) { $c = @($fl.Conj); if ($null -eq $comuns) { $comuns = $c } else { $comuns = @($comuns | Where-Object { $c -contains $_ }) } }
+    $comuns = @($comuns)
+    $mesmoRamo = ($comuns.Count -gt 0)
+    $ramosFalha = $comuns
     if ($falhasDepois -ge 2) { throw "teste de tempo falhou 2 vezes seguidas E $falhasDepois das 3 rodadas seguintes (em repouso, CPU $($carga.Cpu)%): é defeito (SEGURANÇA, o tempo de resposta distingue contas); não afrouxe o limite nem o piso. Valores acima" }
-    if ($mesmoRamo) { throw "teste de tempo: o MESMO ramo ($($ramosFalha[0])) foi o mais afastado em todas as $($falhas.Count) falhas, mesmo com $falhasDepois de 3 falhando depois: tem cara de defeito real (SEGURANÇA); valores acima" }
-    Write-Host "   AVISO: $($falhas.Count) falhas em $($tent.Count) rodadas, mas só $falhasDepois das 3 últimas e em ramos diferentes ($(($falhas | ForEach-Object { if ($_.Ramo) { $_.Ramo } else { 'n/d' } }) -join ', ')): ruído provável, NÃO bloqueia. Conte este aviso: o Atlas revê a regra se o ruído bloquear mais de 1 CI em 20."
+    if ($mesmoRamo) { throw "teste de tempo: o MESMO ramo ($($ramosFalha -join ', ')) ficou a mais de 35 ms da mediana em todas as $($falhas.Count) falhas, mesmo com $falhasDepois de 3 falhando depois: tem cara de defeito real (SEGURANÇA); valores acima" }
+    Write-Host "   AVISO: $($falhas.Count) falhas em $($tent.Count) rodadas, mas só $falhasDepois das 3 últimas e em ramos diferentes ($(($falhas | ForEach-Object { if ($_.Conj.Count) { $_.Conj -join '+' } else { 'nenhum' } }) -join ', ')): ruído provável, NÃO bloqueia. Conte este aviso: o Atlas revê a regra se o ruído bloquear mais de 1 CI em 20."
     $global:LASTEXITCODE = 0
   }
 }
