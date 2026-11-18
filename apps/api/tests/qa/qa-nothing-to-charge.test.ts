@@ -99,7 +99,7 @@ describe("QA-27 nothingToCharge (API-66)", () => {
     const id = await pedidoGratis(c);
     const kitchen = await claim(c);
     expect(kitchen.kind).toBe("ORDER_KITCHEN");
-    expect(ticketDe(kitchen)).toMatchObject({ ticketSchemaVersion: 3, totalCents: 0, nothingToCharge: true });
+    expect(ticketDe(kitchen)).toMatchObject({ ticketSchemaVersion: 4, totalCents: 0, nothingToCharge: true });
     expect((await ack(c, kitchen.id)).statusCode).toBe(200);
     expect((await app.inject({ method: "POST", url: `/api/orders/${id}/cancel`, headers: { cookie: c.owner }, payload: { reason: { code: "ITEM_EM_FALTA" } } })).statusCode).toBe(200);
     const aviso = await claim(c);

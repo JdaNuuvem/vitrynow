@@ -1,6 +1,8 @@
 // NG-16 / NG-11: redação de segredos nas linhas de log. O serializador padrão do Fastify não loga cabeçalhos, mas
 // qualquer `log.info({ req })`/serializador futuro os traria: o token do pedido, a sessão, o MFA e o token do admin
 // nunca podem aparecer em texto. `censor` fixo; testado em tests/order-token.test.ts.
+import { clientIpOf } from "./clientIp";
+
 export const REDACT_PATHS = [
   'req.headers["x-order-token"]',
   'req.headers["x-mfa-challenge"]',
@@ -296,7 +298,7 @@ export function loggerOptions() {
     serializers: {
       // mesmo formato do serializador padrão do Fastify (método, URL, host, IP), com o MODELO da rota e a query sem segredos
       req(request: { method?: string; url?: string; routeOptions?: { url?: string }; hostname?: string; ip?: string; socket?: { remotePort?: number } }) {
-        return { method: request.method, url: routeLogUrl(request), hostname: clip(request.hostname, LOG_HOSTNAME_MAX), remoteAddress: request.ip, remotePort: request.socket?.remotePort };
+        return { method: request.method, url: routeLogUrl(request), hostname: clip(request.hostname, LOG_HOSTNAME_MAX), ip: clientIpOf(request as unknown as Parameters<typeof clientIpOf>[0]), remotePort: request.socket?.remotePort };
       },
       // o tipo do Fastify exige type/message/stack; o conteúdo real (sem message/stack para erro do Prisma) é o de `safeError`
       err: ((error: unknown) => {
