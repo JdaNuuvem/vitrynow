@@ -273,6 +273,41 @@ done
 # 9d ST-45 (IPv6): sem IPv6 na rede do smoke não há como testar com curl -6; confere que a zona agrupa IPv6 em /64 e que o módulo varre chaves (ST-49)
 grep -q 'ipv6_prefix 64' "$ROOT/infra/Caddyfile" && check ok "ST-45: a zona de limite agrupa IPv6 em /64 (ipv6_prefix 64); sem AAAA no piloto de qualquer forma" || check fail "ST-45: Caddyfile sem ipv6_prefix 64"
 grep -q 'sweep_interval' "$ROOT/infra/Caddyfile" && check ok "ST-49: varredura de chaves vencidas configurada (sweep_interval) e container com limite de memória" || check fail "ST-49: sem sweep_interval no Caddyfile"
+# 9f INF-19 / SEC-34 (R-1): limite de entrada em /auth/* por ORIGEM (IPv4 = IP; IPv6 = /48), 60/min nas rotas sensíveis. O 429 do Caddy tem corpo VAZIO; o da API tem JSON.
+echo "   9f /auth/*: espera 65 s para a janela do limite esvaziar (o login e o cadastro acima já contaram)..."
+sleep 65
+caddy429() {  # $1 = n pedidos, $2 = caminho, $3 = metodo; imprime: <429 do Caddy (sem x-ratelimit-limit)> <429 da API (com x-ratelimit-limit)> <outros>
+  local n="$1" p="$2" m="$3" c=0 a=0 o=0 i h code
+  for i in $(seq 1 "$n"); do
+    h="$(curl -s -D - -o /dev/null -X "$m" -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT$p" | tr -d '\r')"
+    code="$(printf '%s\n' "$h" | head -1 | awk '{print $2}')"
+    if [ "$code" = 429 ]; then if [[ "${h,,}" == *x-ratelimit-limit* ]]; then a=$((a+1)); else c=$((c+1)); fi; else o=$((o+1)); fi
+  done
+  echo "$c $a $o"
+}
+# uso normal (loja inteira atrás do mesmo IP): 28 pedidos em 1 min, abaixo do limite da API de CADA rota (forgot 5, login 8, inspect 10, reset 5): NENHUM 429, de nenhuma camada
+r1="$(caddy429 5 /auth/forgot-password POST)"; r2="$(caddy429 8 /auth/login POST)"; r3="$(caddy429 10 /auth/reset-password/inspect POST)"; r4="$(caddy429 5 /auth/reset-password POST)"
+if [[ "$r1" == "0 0 5" && "$r2" == "0 0 8" && "$r3" == "0 0 10" && "$r4" == "0 0 5" ]]; then check ok "9f uso normal: 28 pedidos às rotas sensíveis de um mesmo IP em 1 min: nenhuma resposta 429 (nem do Caddy, nem da API)"; else check fail "9f uso normal recebeu 429 (caddy api outros): forgot[$r1] login[$r2] inspect[$r3] reset[$r4]"; fi
+# /auth/me NÃO entra no limite (o painel o chama o tempo todo)
+rme="$(caddy429 80 /auth/me GET)"
+[ "${rme%% *}" = 0 ] && check ok "9f /auth/me: 80 pedidos, 0 respostas 429 do Caddy (fora do limite, como o painel precisa)" || check fail "9f /auth/me limitado pelo Caddy: $rme"
+# rajada: passa de 60/min na origem => 429 do Caddy com Retry-After
+rb="$(caddy429 60 /auth/forgot-password POST)"
+cb="${rb%% *}"
+curl -s -D - -o /dev/null -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT/auth/forgot-password" | tr -d '\r' | sed 's/^/      [cabeçalhos de um 429] /' | head -6
+if [ "$cb" -ge 20 ]; then check ok "9f rajada de 60 pedidos (88 no minuto nas rotas contadas; esperado ~28 acima de 60): $cb respostas 429 do CADDY (corpo vazio; a origem passou de 60/min)"; else check fail "9f a rajada não foi limitada pelo Caddy ($rb)"; fi
+rh="$(curl -s -D - -o /dev/null -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT/auth/login" | tr -d '\r')"
+[[ "$rh" == *"429"* && "$rh" == *[Rr]etry-[Aa]fter* ]] && check ok "9f a resposta 429 do Caddy traz Retry-After" || check fail "9f 429 do Caddy sem Retry-After"
+# /loja e /health fora desta zona (zona própria)
+lrc="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health")"
+[ "$lrc" = 200 ] && check ok "9f /health segue livre com a zona de /auth esgotada" || check fail "9f /health devolveu $lrc"
+# variantes de URL (caixa e barra dupla) também caem na zona
+for v in '/AUTH/Forgot-Password' '//auth/forgot-password' '/auth/./forgot-password' '/auth/forgot-password/'; do
+  vr="$(caddy429 6 "$v" POST)"
+  [ "${vr%% *}" -ge 1 ] && check ok "9f variante [$v]: 429 do Caddy (a zona esgotada vale também para ela)" || check fail "9f variante [$v] escapou da zona (resposta: $vr)"
+done
+# IPv6 /48 e a zona: sem IPv6 na rede do smoke (curl -6 não é possível), confere a configuração
+grep -q 'ipv6_prefix 48' "$ROOT/infra/Caddyfile" && check ok "9f a zona de /auth agrupa IPv6 em /48 (ipv6_prefix 48)" || check fail "9f Caddyfile sem ipv6_prefix 48 na zona de /auth"
 mem="$(docker inspect -f '{{.HostConfig.Memory}}' "$("${DC[@]}" ps -q caddy)")"
 [ "$mem" -gt 0 ] 2>/dev/null && check ok "ST-49: o container do Caddy tem teto de memória ($((mem/1024/1024)) MB)" || check fail "ST-49: container do Caddy sem limite de memória"
 
