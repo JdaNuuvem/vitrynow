@@ -16,6 +16,8 @@ env:
   # A suite apaga tabelas: so aceita banco "_test" em 127.0.0.1 na faixa 55440-55459 (apps/api/tests/dbGuard.ts).
   TEST_DATABASE_URL: postgresql://meucardapio:meucardapio@127.0.0.1:55440/meucardapio_test?schema=public
   DATABASE_URL: postgresql://meucardapio:meucardapio@127.0.0.1:55440/meucardapio_test?schema=public
+  # a suite da API passa de 2 GB de heap (padrao do Node): estourava com 'heap out of memory'
+  NODE_OPTIONS: --max-old-space-size=6144
 
 jobs:
   backend:
@@ -93,4 +95,5 @@ jobs:
         run: pnpm --filter '@meucardapio/web' test
       - name: Build
         run: pnpm --filter '@meucardapio/web' run build
+
 
