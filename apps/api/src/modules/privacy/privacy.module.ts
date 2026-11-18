@@ -22,7 +22,7 @@ const actorOf = (request: FastifyRequest): PrivacyActor => ({ storeId: request.u
  */
 /**
  * Chave geral das ações de privacidade que mexem em dado real (ADR-0014): DESLIGADA por padrão. Só liga em DEV/teste até o parecer
- * jurídico (LGPD P1-P17). Lida a cada requisição. Desligada: 404 FEATURE_DISABLED (a rota "não existe").
+ * jurídico (LGPD P1-P17). Lida UMA vez no boot da instância (ao registrar o plugin) e fica fixa. Em produção o `check-env --prod` recusa ligada sem `PRIVACY_ACTIONS_LEGAL_OK=true`. Desligada: 404 FEATURE_DISABLED (a rota "não existe").
  */
 export const privacyActionsEnabled = () => process.env.PRIVACY_ACTIONS_ENABLED === "true";
 const featureOff = (reply: FastifyReply) => reply.code(404).send({ error: "Recurso indisponível.", code: "FEATURE_DISABLED" });
@@ -83,8 +83,10 @@ async function reauthorize(request: FastifyRequest, reply: FastifyReply, current
 // (routePolicy.ts, API-09) deve classificar estas rotas como liberadas na Consulta e bloqueadas na Suspensão.
 const privacyRoutes: FastifyPluginAsync = async (app) => {
   useDomainErrors(app);
+  const enabled = privacyActionsEnabled(); // fixo no boot
+  // preHandler GLOBAL do plugin roda antes dos preHandlers da rota (auth, reautenticação) e de qualquer leitura de banco: sem oráculo.
   app.addHook("preHandler", async (_request, reply) => {
-    if (!privacyActionsEnabled()) return featureOff(reply);
+    if (!enabled) return featureOff(reply);
   });
   const limit = { rateLimit: { max: 10, timeWindow: "1 minute" } };
 
