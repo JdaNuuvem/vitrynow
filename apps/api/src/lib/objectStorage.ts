@@ -98,6 +98,16 @@ const isDevLikeEnv = (env: NodeJS.ProcessEnv) => env.NODE_ENV === "development" 
  */
 export function assertStorageBootConfig(env: NodeJS.ProcessEnv = process.env): void {
   if (isDevLikeEnv(env)) return;
+  // ADR-0017: uploads em disco local do servidor; sem S3. O driver em disco é entregue à parte (API-18c).
+  const driver = env.STORAGE_DRIVER || "s3";
+  if (driver !== "s3" && driver !== "local") throw new Error(`STORAGE_DRIVER inválido: "${driver}" (use "local" ou "s3").`);
+  if (driver === "local") {
+    const missingLocal = ["STORAGE_LOCAL_DIR", "STORAGE_PUBLIC_BASE_URL"].filter((name) => !env[name]);
+    if (missingLocal.length > 0) throw new Error(`Storage em disco não configurado: faltam ${missingLocal.join(", ")}.`);
+    if (!/^(\/|[A-Za-z]:[\\/])/.test(env.STORAGE_LOCAL_DIR ?? "")) throw new Error("STORAGE_LOCAL_DIR deve ser um caminho absoluto.");
+    if (!/^https:\/\//.test(env.STORAGE_PUBLIC_BASE_URL ?? "")) throw new Error("STORAGE_PUBLIC_BASE_URL deve ser https:// fora de dev/teste (URL pública das imagens).");
+    return;
+  }
   const missing = ["STORAGE_S3_ENDPOINT", "STORAGE_S3_BUCKET", "STORAGE_S3_ACCESS_KEY_ID", "STORAGE_S3_SECRET_ACCESS_KEY", "STORAGE_PUBLIC_BASE_URL"].filter((name) => !env[name]);
   if (missing.length > 0) throw new Error(`Storage de imagens não configurado fora de dev/teste: faltam ${missing.join(", ")}. O Fake em memória só roda em dev/teste.`);
   if (!/^https:\/\//.test(env.STORAGE_PUBLIC_BASE_URL ?? "")) throw new Error("STORAGE_PUBLIC_BASE_URL deve ser https:// fora de dev/teste (URL pública das imagens).");
@@ -105,6 +115,7 @@ export function assertStorageBootConfig(env: NodeJS.ProcessEnv = process.env): v
 
 export function createObjectStorageFromEnv(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
   assertStorageBootConfig(env);
+  if (env.STORAGE_DRIVER === "local" && !isDevLikeEnv(env)) throw new Error("STORAGE_DRIVER=local: o driver em disco ainda não foi entregue (API-18c, Dev Upload).");
   const endpoint = env.STORAGE_S3_ENDPOINT;
   if (!endpoint) return new InMemoryObjectStorage(env.STORAGE_PUBLIC_BASE_URL);
   const need = (name: string) => {
