@@ -1,5 +1,5 @@
 import type { WebSocket } from "ws";
-import { DEVICE_ALERT_MONEY_CODES, type WsServerMessage } from "@meucardapio/shared-types";
+import { DEVICE_ALERT_MONEY_CODES, WS_AUDIENCE, type WsServerMessage } from "@meucardapio/shared-types";
 
 // Pub/sub em memória: um canal por loja. Usado tanto pelo painel (kanban em tempo
 // real, substitui o pollSales de 60s do original) quanto pelo print-client (substitui
@@ -113,7 +113,10 @@ function deliver(storeId: string, message: WsServerMessage, ownersOnly: boolean)
   if (!set) return;
   const payload = JSON.stringify(message);
   for (const socket of set) {
-    if (ownersOnly && socketRoles.get(socket) !== "OWNER") continue;
+    const role = socketRoles.get(socket);
+    if (ownersOnly && role !== "OWNER") continue;
+    // API-47: a audiência é do TIPO da mensagem, não de quem publica. A impressora só recebe o que o tipo declara para `device`.
+    if (role === "DEVICE" ? WS_AUDIENCE[message.type] === "panel" : role !== "OWNER" && role !== "STAFF") continue; // papel ausente/desconhecido: nada (fail-closed)
     if (socket.readyState === socket.OPEN) socket.send(payload);
   }
 }
@@ -132,6 +135,7 @@ export function publishToPanel(storeId: string, message: WsServerMessage): void 
   for (const socket of set) {
     const role = socketRoles.get(socket);
     if (role !== "OWNER" && !(role === "STAFF" && !ownersOnly)) continue;
+    if (WS_AUDIENCE[message.type] === "device") continue;
     if (socket.readyState === socket.OPEN) socket.send(payload);
   }
 }
