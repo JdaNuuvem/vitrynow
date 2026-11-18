@@ -248,6 +248,7 @@ model Order {
   publicTokenHash String? @unique
   // API-21 (RN-CX-01/02): quando o dinheiro deste pedido foi RECEBIDO. O caixa conta dinheiro só a partir daqui; null = ainda não recebido.
   paidAt        DateTime?
+  cashRefundMovementId String? @unique // API-59 (RN-CX-14): DEVOLUCAO criada no caixa ATUAL ao cancelar pedido de caixa ja fechado; unico = idempotencia
   paidAtApproximate Boolean @default(false) // true = `paidAt` estimado pela migração (sem o instante real); novos pedidos gravam o real
   storeId       String
   store         Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
