@@ -96,8 +96,14 @@ describe("SEC-40 — varredura: nenhum envio de resposta sem `return` em guarda"
       if (ALLOWED.has(path.basename(file))) continue;
       const lines = readFileSync(file, "utf8").split(/\r?\n/);
       lines.forEach((line, i) => {
-        if (!/^\s*(?:await\s+)?reply(?:\.[a-zA-Z]+\([^)]*\))*\.send\(/.test(line)) return;
-        if (/^\s*return\b/.test(line)) return;
+        // SEC-40b: o envio também pode vir depois de `if (...)`/`else` na MESMA linha (`if (role !== "OWNER") reply.code(403).send(...)`). Só conta como defeito na POSIÇÃO DE COMANDO
+        // (início da linha, depois de `if (...)`/`else`, `;`, `{` ou `}`) e sem `return` antes; arrow (`=>`) e ternário (`?`/`:`) já devolvem o valor.
+        const m = /^(.*?)(?:await\s+)?reply(?:\.[a-zA-Z]+\([^)]*\))*\.send\(/.exec(line);
+        if (!m) return;
+        const prefix = m[1];
+        const statement = prefix.trim() === "" || /\b(?:if|while)\s*\(.*\)\s*$/.test(prefix) || /\belse\s*$/.test(prefix) || /[;{}]\s*$/.test(prefix);
+        if (!statement) return;
+        if (/\breturn\b/.test(prefix)) return;
         const next = lines.slice(i + 1).find((l) => l.trim() !== "") ?? "";
         if (/^\s*return (null|false)\b/.test(next)) return; // auxiliar: devolve null/false
         offenders.push(`${path.relative(srcDir, file)}:${i + 1}: ${line.trim().slice(0, 90)}`);
