@@ -5,6 +5,14 @@ export const DEFAULT_MAX_ATTEMPTS = 3; // por job; configurável por loja numa e
 export const BACKOFF_SECONDS = [15, 60, 300] as const; // recuo depois de FAILED: 15 s, 60 s, 5 min (§8.3)
 export const MAX_REPRINTS_PER_ORDER = 10; // limite por pedido (D4-5)
 
+// N6 / RN-IMP-20: janela de retomada. Job mais velho que isto NÃO sai sozinho: vira STALE e o painel oferece "Imprimir agora".
+export const DEFAULT_STALE_HOURS = 12;
+export function staleWindowSeconds(): number {
+  const configured = Number(process.env.PRINT_STALE_HOURS);
+  const hours = Number.isFinite(configured) && configured > 0 && configured <= 168 ? configured : DEFAULT_STALE_HOURS;
+  return Math.round(hours * 3600);
+}
+
 export function leaseSeconds(): number {
   const configured = Number(process.env.PRINT_LEASE_SECONDS);
   return Number.isFinite(configured) && configured >= 1 && configured <= 900 ? Math.floor(configured) : DEFAULT_LEASE_SECONDS;

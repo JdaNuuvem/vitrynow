@@ -665,6 +665,7 @@ enum PrintJobStatus {
   PRINTED
   FAILED
   CANCELED
+  STALE // N6/RN-IMP-20: mais velho que a janela de retomada (12 h); não sai sozinho, o painel oferece "Imprimir agora"
 }
 
 model PrintJob {
@@ -677,6 +678,7 @@ model PrintJob {
   status           PrintJobStatus @default(PENDING)
   attempts         Int            @default(0)
   maxAttempts      Int            @default(3)
+  resumedAt        DateTime? // "Imprimir agora" (N6): a janela de 12 h passa a contar daqui, não da criação
   availableAt      DateTime       @default(now()) // só é entregue com availableAt <= agora (recuo por falha)
   claimedAt        DateTime?
   leaseUntil       DateTime? // vence pelo relógio do banco; vencida = pode ser reclamada por outro

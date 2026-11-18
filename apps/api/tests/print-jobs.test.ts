@@ -275,7 +275,7 @@ describe("API-12 — PrintJob", () => {
     const row = (await jobsOf(id))[0];
     expect(row).toMatchObject({ status: "FAILED", attempts: 3 });
     expect(ws("print.job_failed")).toHaveLength(1);
-    expect(JSON.parse(ws("print.job_failed")[0])).toEqual({ type: "print.job_failed", jobId: row.id });
+    expect(JSON.parse(ws("print.job_failed")[0])).toEqual({ type: "print.job_failed", jobId: row.id, code: expect.any(String) });
     await releaseBackoff(row.id);
     expect(json(await claim(token))).toEqual({ job: null, mode: "QUEUE" });
   });
