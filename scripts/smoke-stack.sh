@@ -292,10 +292,10 @@ if [[ "$r1" == "0 0 5" && "$r2" == "0 0 8" && "$r3" == "0 0 10" && "$r4" == "0 0
 rme="$(caddy429 80 /auth/me GET)"
 [ "${rme%% *}" = 0 ] && check ok "9f /auth/me: 80 pedidos, 0 respostas 429 do Caddy (fora do limite, como o painel precisa)" || check fail "9f /auth/me limitado pelo Caddy: $rme"
 # rajada: passa de 60/min na origem => 429 do Caddy com Retry-After
-rb="$(caddy429 60 /auth/forgot-password POST)"
+rb="$(caddy429 100 /auth/forgot-password POST)"
 cb="${rb%% *}"
 curl -s -D - -o /dev/null -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT/auth/forgot-password" | tr -d '\r' | sed 's/^/      [cabeçalhos de um 429] /' | head -6
-if [ "$cb" -ge 20 ]; then check ok "9f rajada de 60 pedidos (88 no minuto nas rotas contadas; esperado ~28 acima de 60): $cb respostas 429 do CADDY (corpo vazio; a origem passou de 60/min)"; else check fail "9f a rajada não foi limitada pelo Caddy ($rb)"; fi
+if [ "$cb" -ge 20 ]; then check ok "9f rajada de 100 pedidos (mais que o limite de 60/min SOZINHA, então vale mesmo se a máquina lenta deixar o uso normal sair da janela): $cb respostas 429 do CADDY (corpo vazio; a origem passou de 60/min)"; else check fail "9f a rajada não foi limitada pelo Caddy ($rb)"; fi
 rh="$(curl -s -D - -o /dev/null -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT/auth/login" | tr -d '\r')"
 [[ "$rh" == *"429"* && "$rh" == *[Rr]etry-[Aa]fter* ]] && check ok "9f a resposta 429 do Caddy traz Retry-After" || check fail "9f 429 do Caddy sem Retry-After"
 # /loja e /health fora desta zona (zona própria)
