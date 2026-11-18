@@ -30,13 +30,14 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/orders/:id/deliverer": "finish",
   "POST /api/orders/:id/reprint": "finish", // API-12b: 2ª via de pedido JÁ recebido (STAFF só até 24 h; a regra é da rota)
   "POST /api/orders/:id/internal-note": "blocked", // API-54: anotação da equipe é cadastro, não encerra pedido
-  // (POST /api/orders, pedido manual da API-13, entra aqui como "blocked" quando o PR #57 chegar: RN-B2-13)
+  "POST /api/orders": "blocked", // API-13: pedido MANUAL é pedido novo (RN-B2-13): Consulta 403 READ_ONLY, Suspensão 402
 
   // — Caixa: fechar pode (RN-A-01); abrir e movimentar não —
   "POST /api/cashier/close": "finish",
   "POST /api/cashier/open": "blocked",
   "POST /api/cashier/movements": "blocked",
   "PUT /api/cashier/staff-withdrawal-limit": "blocked", // API-27: configuração do caixa
+  "POST /api/cashier/notices/:id/dismiss": "allowed", // API-27: dispensar um aviso é ação pessoal, não cria nem altera dado de negócio
 
   // — Cadastro e configuração: nada disso na Consulta —
   "POST /api/catalog/categories": "blocked",
@@ -55,6 +56,8 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/store/availability": "blocked",
   "POST /api/users": "blocked",
   "POST /api/users/:id/delete": "blocked",
+  "POST /api/store/payments/mercadopago/connect": "blocked", // API-07: conectar a conta de PIX é configuração (sem loja ativa não conecta)
+  "POST /api/store/payments/mercadopago/disconnect": "blocked", // API-07: idem
   "PUT /api/store/print-mode": "blocked", // API-12b: modo de impressão é configuração
   "POST /api/print-jobs/test": "blocked", // API-12: teste de impressora é configuração
   "POST /api/device-tokens": "blocked",

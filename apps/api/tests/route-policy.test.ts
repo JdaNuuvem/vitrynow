@@ -163,6 +163,9 @@ describe("Consulta e Suspensão por rota (integração)", () => {
 
   it("classes das rotas novas (API-12b, API-19, API-27, API-54, SEC-29): reprint termina pedido recebido; configuração e anotação são bloqueadas; tracking e inspect do link são livres", () => {
     expect(PANEL_ROUTE_POLICY["POST /api/orders/:id/reprint"]).toBe("finish");
+    expect(PANEL_ROUTE_POLICY["POST /api/orders"]).toBe("blocked"); // API-13: pedido manual é pedido NOVO (RN-B2-13)
+    expect(PANEL_ROUTE_POLICY["POST /api/cashier/notices/:id/dismiss"]).toBe("allowed");
+    for (const key of ["POST /api/store/payments/mercadopago/connect", "POST /api/store/payments/mercadopago/disconnect"]) expect(PANEL_ROUTE_POLICY[key], key).toBe("blocked");
     for (const key of ["POST /api/orders/:id/internal-note", "PUT /api/store/print-mode", "POST /api/print-jobs/test", "PUT /api/cashier/staff-withdrawal-limit"]) expect(PANEL_ROUTE_POLICY[key], key).toBe("blocked");
     expect(PUBLIC_ROUTE_POLICY["GET /stores/:slug/orders/:orderId/tracking"]).toBe("public-allowed");
     expect(PUBLIC_ROUTE_POLICY["POST /auth/reset-password/inspect"]).toBe("exempt");
