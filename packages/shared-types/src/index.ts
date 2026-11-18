@@ -137,7 +137,11 @@ export const wsServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("payment.reconcile_needed"), orderId: z.string() }),
   // Fila de impressão (ADR-0004): só "acorde e peça job"; nenhum dado de pedido ou cliente no canal.
   z.object({ type: z.literal("print.available") }),
-  z.object({ type: z.literal("print.job_failed"), jobId: z.string() }),
+  // N8: eventos do PAINEL (só ids, contagens e código fechado; nenhum dado de pedido, cliente ou texto livre). O device NÃO os recebe (hub.publishToPanel).
+  z.object({ type: z.literal("print.job_failed"), jobId: z.string(), code: z.enum(["PRINTER_OFFLINE", "NO_PAPER", "DRIVER_ERROR", "PRINTER_NOT_FOUND", "OTHER"]).optional() }),
+  z.object({ type: z.literal("print.claimed"), jobId: z.string() }),
+  z.object({ type: z.literal("print.printed"), jobId: z.string(), orderId: z.string().optional() }),
+  z.object({ type: z.literal("print.stale"), count: z.number().int().positive() }),
   // Caixa (CA-CX-28): o STAFF fechou com diferença ACIMA da tolerância. SÓ o id do caixa (sem valor, papel nem motivo; o dono busca o detalhe na tela do caixa fechado). Entregue só a conexões de OWNER (realtime/hub.ts).
   z.object({ type: z.literal("cashier.difference_over_tolerance"), sessionId: z.string() }),
   // PC-24: alerta de dispositivo para o painel do dono. Só o CÓDIGO (a frase sai do código no painel); nada de pedido, cliente ou texto livre.

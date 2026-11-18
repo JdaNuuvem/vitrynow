@@ -123,6 +123,19 @@ export function publishToStore(storeId: string, message: WsServerMessage): void 
   deliver(storeId, message, isOwnerOnly(message));
 }
 
+/** Só o PAINEL da loja (OWNER e STAFF); a impressora (DEVICE) nunca recebe. Para eventos de impressão do painel (N8). */
+export function publishToPanel(storeId: string, message: WsServerMessage): void {
+  const set = channels.get(storeId);
+  if (!set) return;
+  const ownersOnly = isOwnerOnly(message);
+  const payload = JSON.stringify(message);
+  for (const socket of set) {
+    const role = socketRoles.get(socket);
+    if (role !== "OWNER" && !(role === "STAFF" && !ownersOnly)) continue;
+    if (socket.readyState === socket.OPEN) socket.send(payload);
+  }
+}
+
 /** Só as conexões de OWNER da loja (STAFF e impressoras não recebem). */
 export function publishToOwners(storeId: string, message: WsServerMessage): void {
   deliver(storeId, message, true);

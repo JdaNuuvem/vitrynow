@@ -13,6 +13,7 @@ import {
   FAILURE_MESSAGES,
   MAX_REPRINTS_PER_ORDER,
   leaseSeconds,
+  staleWindowSeconds,
   normalizeFailureCode,
   sanitizeDeviceText,
   type FailureCode,
@@ -40,7 +41,22 @@ export class PrintJobService {
     private readonly audit: AuditLogger,
     private readonly publish: (storeId: string, message: WsServerMessage) => void,
     private readonly now: () => Date = () => new Date(),
+    // Eventos print.* do PAINEL (N8): a impressora não os recebe. Por padrão usa o mesmo publicador (testes unitários).
+    private readonly publishPanel: (storeId: string, message: WsServerMessage) => void = publish,
   ) {}
+
+  // N6 (RN-IMP-20): o que passou da janela de retomada (12 h; vale desde a criação ou desde o "Imprimir agora") vira STALE e NÃO é entregue.
+  // Roda DENTRO de uma transação que já tomou o lock da loja. Devolve quantos jobs mudaram (para o aviso ao painel).
+  private async sweepStale(tx: Pick<Prisma.TransactionClient, "$queryRaw">, storeId: string): Promise<number> {
+    const rows = await tx.$queryRaw<{ id: string }[]>`
+      UPDATE "PrintJob"
+         SET "status" = 'STALE', "leaseUntil" = NULL, "updatedAt" = ${NOW}
+       WHERE "storeId" = ${storeId}
+         AND ("status" = 'PENDING' OR ("status" = 'CLAIMED' AND "leaseUntil" <= ${NOW}))
+         AND COALESCE("resumedAt", "createdAt") < ${NOW} - make_interval(secs => ${staleWindowSeconds()}::double precision)
+      RETURNING "id"`;
+    return rows.length;
+  }
 
   // ───────────── Dispositivo: claim ─────────────
   async claim(storeId: string, tokenId: string): Promise<{ job: ClaimedJob | null; mode: PrintMode }> {
@@ -54,7 +70,10 @@ export class PrintJobService {
         // com PRINT_IN_PROGRESS), ou a troca termina antes (e o claim relê o modo aqui dentro e não entrega nada em LEGACY).
         await lockPrintMode(tx, storeId);
         const modeNow = await loadPrintMode(tx, storeId);
-        if (modeNow === "LEGACY") return { row: null as ClaimRow | null, remaining: 0, dead: [] as string[], mode: modeNow };
+        if (modeNow === "LEGACY") return { row: null as ClaimRow | null, remaining: 0, dead: [] as { id: string; code: string | null }[], mode: modeNow, staled: 0 };
+
+        // N6: antes de qualquer entrega, o que passou da janela de 12 h sai da fila (STALE). Em seguida o claim só enxerga o que está dentro dela.
+        const staled = await this.sweepStale(tx, storeId);
 
         // Serializa os claims do MESMO token (lock consultivo por transação): sem isto, duas chamadas simultâneas da
         // mesma impressora (ex.: retry depois de timeout) passam juntas pela checagem "já tenho um job?" e cada uma
@@ -69,15 +88,15 @@ export class PrintJobService {
             FROM "PrintJob"
            WHERE "storeId" = ${storeId} AND "status" = 'CLAIMED' AND "claimedByTokenId" = ${tokenId} AND "leaseUntil" > ${NOW}
            ORDER BY "createdAt" ASC, "id" ASC LIMIT 1`;
-        if (again[0]) return { row: again[0] as ClaimRow | null, remaining: again[0].remaining, dead: [] as string[], mode: modeNow };
+        if (again[0]) return { row: again[0] as ClaimRow | null, remaining: again[0].remaining, dead: [] as { id: string; code: string | null }[], mode: modeNow, staled };
 
         // 2) Lease vencida e sem tentativas sobrando: falha DEFINITIVA (alerta ao painel), em vez de voltar à fila para sempre.
-        const dead = await tx.$queryRaw<{ id: string }[]>`
+        const dead = await tx.$queryRaw<{ id: string; lastErrorCode: string | null }[]>`
           UPDATE "PrintJob"
              SET "status" = 'FAILED', "leaseUntil" = NULL, "ackStatus" = NULL,
                  "lastErrorCode" = COALESCE("lastErrorCode", 'OTHER'), "updatedAt" = ${NOW}
            WHERE "storeId" = ${storeId} AND "status" = 'CLAIMED' AND "leaseUntil" <= ${NOW} AND "attempts" >= "maxAttempts"
-          RETURNING "id"`;
+          RETURNING "id", "lastErrorCode"`;
 
         // 3) Próximo job: PENDING já liberado (availableAt) ou CLAIMED com lease vencida (outro dono caiu). Um único UPDATE
         //    com SKIP LOCKED: dois consumidores concorrentes nunca pegam o mesmo job.
@@ -96,13 +115,15 @@ export class PrintJobService {
                     FOR UPDATE SKIP LOCKED LIMIT 1)
              AND "storeId" = ${storeId}
           RETURNING "id", "kind", "orderId", "attempts", "reprintNumber", ${lease}::int AS "remaining"`;
-        return { row: (claimed[0] ?? null) as ClaimRow | null, remaining: lease, dead: dead.map((d) => d.id), mode: modeNow };
+        return { row: (claimed[0] ?? null) as ClaimRow | null, remaining: lease, dead: dead.map((d) => ({ id: d.id, code: d.lastErrorCode })), mode: modeNow, staled };
       },
       { maxWait: 10_000, timeout: 20_000 },
     );
 
-    for (const id of taken.dead) this.publish(storeId, { type: "print.job_failed", jobId: id });
+    for (const d of taken.dead) this.publishPanel(storeId, { type: "print.job_failed", jobId: d.id, code: normalizeFailureCode(d.code) });
+    if (taken.staled > 0) this.publishPanel(storeId, { type: "print.stale", count: taken.staled });
     if (!taken.row) return { job: null, mode: taken.mode };
+    this.publishPanel(storeId, { type: "print.claimed", jobId: taken.row.id });
     return { job: await this.toClaimed(storeId, taken.row, taken.remaining), mode: taken.mode };
   }
 
@@ -154,7 +175,10 @@ export class PrintJobService {
         }
         return row;
       });
-      if (done) return { ok: true };
+      if (done) {
+        this.publishPanel(storeId, { type: "print.printed", jobId: done.id, ...(done.orderId ? { orderId: done.orderId } : {}) });
+        return { ok: true };
+      }
       return this.ackRejected(storeId, tokenId, jobId, "PRINTED");
     }
 
@@ -171,7 +195,7 @@ export class PrintJobService {
          AND "status" = 'CLAIMED' AND "leaseUntil" > ${NOW}
       RETURNING "id", "status"`;
     if (failed[0]) {
-      if (failed[0].status === "FAILED") this.publish(storeId, { type: "print.job_failed", jobId });
+      if (failed[0].status === "FAILED") this.publishPanel(storeId, { type: "print.job_failed", jobId, code });
       return { ok: true };
     }
     return this.ackRejected(storeId, tokenId, jobId, "FAILED");
@@ -249,6 +273,66 @@ export class PrintJobService {
     });
     this.publish(actor.storeId, { type: "print.available" });
     return this.view(created);
+  }
+
+  // N6 "Imprimir agora": devolve à fila um job STALE (passou da janela de 12 h). Mesma regra de divulgação de contato da 2ª via; ordem de
+  // travas lockPrintMode (compartilhado) → pedido → PrintJob; a transição é um UPDATE condicional (dois cliques = 1 efeito).
+  async printNow(actor: { storeId: string; userId: string; role: "OWNER" | "STAFF" }, jobId: string) {
+    await this.requireQueueMode(actor.storeId);
+    const job = await this.db.printJob.findFirst({ where: { id: jobId, storeId: actor.storeId }, select: { id: true, kind: true, orderId: true } });
+    if (!job) throw err(404, "PRINT_JOB_NOT_FOUND", "job não encontrado"); // idêntico para inexistente e de outra loja
+    if (job.orderId) {
+      const found = await this.db.order.findFirst({
+        where: { id: job.orderId, storeId: actor.storeId },
+        select: { id: true, status: true, customerPhone: true, address: true },
+      });
+      if (!found) throw err(404, "PRINT_JOB_NOT_FOUND", "job não encontrado");
+      if (found.status === "CANCELADO" && job.kind !== "ORDER_CANCEL_NOTICE") throw err(409, "ORDER_CANCELED", "Pedido cancelado: não há o que imprimir.");
+      const closing = await this.db.orderStatusHistory.findFirst({ where: { orderId: job.orderId }, orderBy: { seq: "desc" }, select: { createdAt: true } });
+      const decision = await authorizeContactView({ db: this.db, audit: this.audit, now: this.now }, actor, found, closing?.createdAt ?? null);
+      if (decision.unavailable) throw err(503, "CONTACT_AUDIT_UNAVAILABLE", "Não foi possível registrar o acesso ao contato do cliente. Tente de novo.");
+      if (decision.access === "MASKED") throw err(403, "FORBIDDEN_ROLE", "Só o dono pode imprimir agora um pedido antigo.");
+    }
+    const moved = await this.db.$transaction(
+      async (tx) => {
+        await lockPrintMode(tx, actor.storeId);
+        if (job.orderId) {
+          const [row] = await tx.$queryRaw<{ status: string }[]>`SELECT "status"::text AS "status" FROM "Order" WHERE "id" = ${job.orderId} AND "storeId" = ${actor.storeId} FOR UPDATE`;
+          if (!row) throw err(404, "PRINT_JOB_NOT_FOUND", "job não encontrado");
+          if (row.status === "CANCELADO" && job.kind !== "ORDER_CANCEL_NOTICE") throw err(409, "ORDER_CANCELED", "Pedido cancelado: não há o que imprimir.");
+        }
+        const rows = await tx.$queryRaw<{ id: string }[]>`
+          UPDATE "PrintJob"
+             SET "status" = 'PENDING', "attempts" = 0, "availableAt" = ${NOW}, "resumedAt" = ${NOW}, "claimedByTokenId" = NULL, "leaseUntil" = NULL,
+                 "ackStatus" = NULL, "lastErrorCode" = NULL, "lastError" = NULL, "updatedAt" = ${NOW}
+           WHERE "id" = ${jobId} AND "storeId" = ${actor.storeId} AND "status" = 'STALE'
+          RETURNING "id"`;
+        return rows.length === 1;
+      },
+      { maxWait: 15_000, timeout: 30_000 },
+    );
+    const current = await this.db.printJob.findFirstOrThrow({ where: { id: jobId, storeId: actor.storeId } });
+    if (moved) {
+      this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "print.print_now", targetType: "PrintJob", targetId: jobId });
+      this.publish(actor.storeId, { type: "print.available" });
+      return this.view(current);
+    }
+    // Não estava STALE: quem chegou antes já o devolveu à fila (ou ele já saiu) ⇒ idempotente; cancelado/falho definitivo não volta.
+    if (current.status === "PENDING" || current.status === "CLAIMED" || current.status === "PRINTED") return this.view(current);
+    throw err(409, "PRINT_JOB_NOT_STALE", "Este trabalho não está esperando para imprimir agora.");
+  }
+
+  // Resumo para o aviso do painel (RN-IMP-20: "{n} pedidos não saíram na impressora"). Varre a janela também sem impressora conectada.
+  async summary(storeId: string): Promise<{ stale: number }> {
+    let staled = 0;
+    if ((await loadPrintMode(this.db, storeId)) === "QUEUE") {
+      staled = await this.db.$transaction(async (tx) => {
+        await lockPrintMode(tx, storeId);
+        return this.sweepStale(tx, storeId);
+      });
+      if (staled > 0) this.publishPanel(storeId, { type: "print.stale", count: staled });
+    }
+    return { stale: await this.db.printJob.count({ where: { storeId, status: "STALE" } }) };
   }
 
   async createTest(actor: { storeId: string; userId: string }) {
