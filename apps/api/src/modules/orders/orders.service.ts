@@ -20,6 +20,7 @@ import {
   type Actor as ActorKind,
   type Role,
 } from "../../lib/orderStateMachine";
+import { MAX_REFUND_AUTO_ATTEMPTS, refundAutoRetryable } from "../../lib/refundPolicy";
 import { toPanelOrder, type ContactAccess } from "./orders.view";
 import { authorizeContactView } from "./contactAccess";
 import { assertPhoneSearchRate, HISTORY_STAFF_FULL_PHONE_DIGITS, OPEN_ORDER_STATUSES, parseSearch, recordPhoneRefusal, searchOrderHistory, type HistoryQuery } from "./orders.history";
@@ -55,8 +56,7 @@ type CancelOrigin = {
 
 // Teto de tentativas AUTOMÁTICAS de estorno (o job de conciliação da API-06 para aqui; o "Tentar estorno" manual do dono segue valendo).
 // Ao atingir o teto o alerta é emitido UMA vez (auditoria + log), para a loja e a operação resolverem com o Mercado Pago.
-export const MAX_REFUND_AUTO_ATTEMPTS = 5;
-export const refundAutoRetryable = (payment: { refundAttempts: number }) => payment.refundAttempts < MAX_REFUND_AUTO_ATTEMPTS;
+export { MAX_REFUND_AUTO_ATTEMPTS, refundAutoRetryable };
 
 // Código do erro do provedor para o log (diagnóstico do CL-13 e da conciliação): SÓ status HTTP e código de causa, em lista
 // restrita de caracteres. Nunca a mensagem, a descrição nem o corpo (podem trazer dado do pagador ou do pedido).
@@ -627,6 +627,7 @@ export class OrderService {
         targetId: order.id,
         metadata: { attempts: MAX_REFUND_AUTO_ATTEMPTS },
       });
+      this.publish(order.storeId, { type: "payment.refund_stuck", orderId: order.id }); // API-69: o painel mostra o selo na hora (sem valor)
     }
   }
 
@@ -667,6 +668,18 @@ export class OrderService {
     if (order.payment?.status !== "ESTORNO_PENDENTE") throw err(409, "NOT_REFUND_PENDING", "Este pedido não tem estorno pendente.");
     const refund = await this.attemptRefund(order.payment.id);
     return { order: await this.get(actor, orderId), refund };
+  }
+
+  // API-69 (RN-REF-02/04): lista e contagem de "Estornos presos", SÓ do OWNER. Preso = estorno pendente, acima do teto automático e não encerrado.
+  async listStuckRefunds(actor: PanelActor) {
+    if (actor.role !== "OWNER") throw err(403, "FORBIDDEN_ROLE", "Peça ao dono.");
+    const rows = await this.db.order.findMany({
+      where: { storeId: actor.storeId, payment: { is: { status: "ESTORNO_PENDENTE", refundAttempts: { gte: MAX_REFUND_AUTO_ATTEMPTS }, refundAbandonedAt: null } } },
+      select: { id: true, code: true, createdAt: true, totalCents: true, payment: { select: { amountCents: true } } },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: 200,
+    });
+    return { count: rows.length, orders: rows.map((o) => ({ id: o.id, code: o.code, createdAt: o.createdAt.toISOString(), amountCents: o.payment?.amountCents ?? o.totalCents })) };
   }
 
   // API-61 (RN-ABD): "Encerrar sem estorno". Só OWNER, só com estorno preso (>= teto de tentativas automáticas). Cancela o pedido e
