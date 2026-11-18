@@ -154,6 +154,7 @@ model Store {
   deviceAlerts DeviceAlert[]
   subscription Subscription?
   paymentAccounts PaymentAccount[]
+  optionGroups OptionGroup[]
   counter      StoreCounter?
   printJobs    PrintJob[]
   onboardingSteps OnboardingStep[]
@@ -265,9 +266,11 @@ model Product {
   soldOut      Boolean     @default(false) // API-17 (B11): esgotado; vale até soldOutUntil (null = até reativar)
   soldOutUntil DateTime?
   additionals ProductAdditional[]
+  optionGroups ProductOptionGroup[]
   orderItems  OrderItem[]
   createdAt   DateTime     @default(now())
 
+  @@unique([id, storeId]) // ADR-0009: base das FKs compostas por loja (ProductOptionGroup)
   @@index([storeId])
   @@index([categoryId])
 }
@@ -355,6 +358,7 @@ model OrderItem {
   notes        String?
 
   additionals  OrderItemAdditional[]
+  options      OrderItemOption[]
 
   @@index([orderId])
 }
@@ -416,6 +420,75 @@ model PaymentOAuthState {
   createdAt DateTime  @default(now())
 
   @@index([expiresAt])
+// ---- B8: grupos de opções e variações (API-15, ADR-0009: FKs compostas por loja) ----
+
+enum OptionPriceMode {
+  SUM  // o preço da opção se SOMA ao do produto (Borda +R$ 8); é o comportamento dos adicionais
+  BASE // o preço da opção É o preço do produto (Pizza P/M/G); no máximo um grupo BASE por produto, sempre 1..1
+}
+
+// Grupo de opções da loja, reutilizável em vários produtos ("Tamanho", "Borda", "Molhos").
+model OptionGroup {
+  id           String          @id @default(cuid())
+  storeId      String
+  store        Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  name         String
+  helpText     String?
+  minSelect    Int             @default(0) // 0 = opcional; >= 1 = obrigatório
+  maxSelect    Int? // null = sem limite (adicionais legados)
+  maxPerOption Int             @default(1) // quantidade máxima de cada opção ("até 2 bacons")
+  priceMode    OptionPriceMode @default(SUM)
+  source       String          @default("MANUAL") // "LEGACY_ADDITIONALS" = espelho de ProductAdditional (fase expand)
+  createdAt    DateTime        @default(now())
+
+  options  Option[]
+  products ProductOptionGroup[]
+
+  @@unique([id, storeId])
+  @@index([storeId])
+}
+
+model Option {
+  id         String      @id @default(cuid())
+  storeId    String
+  groupId    String
+  group      OptionGroup @relation(fields: [groupId, storeId], references: [id, storeId], onDelete: Cascade)
+  name       String
+  priceCents Int
+  active     Boolean     @default(true) // false = indisponível (some da escolha, RN-B8-05)
+  position   Int         @default(0)
+  createdAt  DateTime    @default(now())
+
+  @@unique([id, storeId])
+  @@index([groupId])
+}
+
+// Vínculo produto ↔ grupo, com a ordem em que o cliente vê os grupos.
+model ProductOptionGroup {
+  productId String
+  groupId   String
+  storeId   String
+  product   Product     @relation(fields: [productId, storeId], references: [id, storeId], onDelete: Cascade)
+  group     OptionGroup @relation(fields: [groupId, storeId], references: [id, storeId], onDelete: Cascade)
+  position  Int         @default(0)
+
+  @@id([productId, groupId])
+  @@index([storeId])
+  @@index([groupId])
+}
+
+// Cópia da opção escolhida (RN-B8-07): nome do grupo, nome, preço e quantidade no momento do pedido.
+model OrderItemOption {
+  id          String          @id @default(cuid())
+  orderItemId String
+  orderItem   OrderItem       @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  groupName   String
+  name        String
+  priceCents  Int // preço unitário da opção (no grupo BASE, o preço-base da variação)
+  quantity    Int             @default(1)
+  priceMode   OptionPriceMode @default(SUM)
+
+  @@index([orderItemId])
 }
 
 model OrderStatusHistory {

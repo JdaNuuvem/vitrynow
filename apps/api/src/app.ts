@@ -44,6 +44,7 @@ import pixAvailabilityPlugin from "./plugins/pixAvailability";
 import storePaymentRoutes from "./modules/storePayments/storePayments.module";
 import subscriptionGate from "./plugins/subscriptionGate";
 import storeHoursRoutes from "./modules/storeHours/storeHours.module";
+import optionGroupRoutes from "./modules/optionGroups/optionGroups.module";
 
 export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = {}) {
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
@@ -137,6 +138,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(realtimeRoutes);
   app.register(catalogRoutes);
   app.register(mediaRoutes);
+  app.register(optionGroupRoutes);
   app.register(cashierRoutes);
   app.register(couponRoutes);
   app.register(paymentRoutes);
