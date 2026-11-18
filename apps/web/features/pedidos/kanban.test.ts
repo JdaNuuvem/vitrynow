@@ -80,3 +80,66 @@ describe("rótulos de status", () => {
     expect(statusLabel("PRONTO")).toBe("Pronto");
   });
 });
+
+// RN-KB-04 (Leonardo): em Novos, Em preparo, Prontos e Em entrega o pedido que espera há mais tempo fica no TOPO;
+// Concluídos: o mais recente primeiro. A API devolve createdAt decrescente e a tela não reordenava.
+describe("ordem das colunas (RN-KB-04, WEB-29)", () => {
+  const at = (minutesAgo: number) => new Date(Date.parse("2026-11-17T20:00:00.000Z") - minutesAgo * 60_000).toISOString();
+  const timed = (id: string, status: string, minutesAgo: number, extra: Partial<Order> = {}): Order => ({ ...order(id, status), createdAt: at(minutesAgo), ...extra });
+  const ids = (list: Order[]) => list.map((o) => o.id);
+
+  it("Novos: 5 pedidos fora de ordem, o que espera há mais tempo (vermelho) vai para o topo", () => {
+    // a API manda createdAt decrescente (o mais novo primeiro): 2, 6, 9, 14, 25 min
+    const fromApi = [timed("n2", "PENDENTE", 2), timed("n6", "PENDENTE", 6), timed("n9", "PENDENTE", 9), timed("n14", "PENDENTE", 14), timed("n25", "PENDENTE", 25)];
+    expect(ids(groupOrders(fromApi).byStatus.PENDENTE)).toEqual(["n25", "n14", "n9", "n6", "n2"]);
+  });
+
+  it("não depende da ordem em que a lista chega", () => {
+    const shuffled = [timed("b", "PENDENTE", 9), timed("e", "PENDENTE", 2), timed("a", "PENDENTE", 25), timed("d", "PENDENTE", 6), timed("c", "PENDENTE", 14)];
+    expect(ids(groupOrders(shuffled).byStatus.PENDENTE)).toEqual(["a", "c", "b", "d", "e"]);
+  });
+
+  it.each(["CONFIRMADO", "EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA"])("%s: o mais antigo primeiro", (status) => {
+    const list = [timed("novo", status, 3), timed("velho", status, 40), timed("meio", status, 15)];
+    expect(ids(groupOrders(list).byStatus[status])).toEqual(["velho", "meio", "novo"]);
+  });
+
+  it("Concluídos: o mais RECENTE primeiro", () => {
+    const list = [timed("c1", "CONCLUIDO", 300), timed("c2", "CONCLUIDO", 10), timed("c3", "CONCLUIDO", 120)];
+    expect(ids(groupOrders(list).byStatus.CONCLUIDO)).toEqual(["c2", "c3", "c1"]);
+  });
+
+  it("usa a hora em que ENTROU no estado (statusChangedAt), não a de criação", () => {
+    // p1 foi criado há 60 min mas entrou em Pronto há 5; p2 foi criado há 30 e entrou em Pronto há 20: p2 espera mais
+    const list = [timed("p1", "PRONTO", 60, { statusChangedAt: at(5) }), timed("p2", "PRONTO", 30, { statusChangedAt: at(20) })];
+    expect(ids(groupOrders(list).byStatus.PRONTO)).toEqual(["p2", "p1"]);
+  });
+
+  it("sem nenhuma hora: vai para o fim e mantém a ordem em que chegou", () => {
+    const list = [order("s1", "PENDENTE"), timed("t1", "PENDENTE", 30), order("s2", "PENDENTE"), timed("t2", "PENDENTE", 5)];
+    expect(ids(groupOrders(list).byStatus.PENDENTE)).toEqual(["t1", "t2", "s1", "s2"]);
+  });
+
+  it("empate de hora: conserva a ordem em que chegou (não embaralha)", () => {
+    const list = [timed("a", "PENDENTE", 10), timed("b", "PENDENTE", 10), timed("c", "PENDENTE", 10)];
+    expect(ids(groupOrders(list).byStatus.PENDENTE)).toEqual(["a", "b", "c"]);
+  });
+
+  it("hora inválida não quebra a ordenação", () => {
+    const list = [timed("ok", "PENDENTE", 5), { ...order("ruim", "PENDENTE"), createdAt: "isto não é data" }];
+    expect(ids(groupOrders(list).byStatus.PENDENTE)).toEqual(["ok", "ruim"]);
+  });
+
+  it("'Outros' também fica do mais antigo ao mais novo", () => {
+    const list = [timed("x2", "ESTADO_NOVO", 3), timed("x1", "ESTADO_NOVO", 30)];
+    expect(ids(groupOrders(list).others)).toEqual(["x1", "x2"]);
+  });
+
+  it("ordenar não perde nem duplica pedido e não altera a lista original", () => {
+    const list = [timed("a", "PENDENTE", 3), timed("b", "PENDENTE", 30), timed("c", "PRONTO", 7)];
+    const snapshot = ids(list);
+    const groups = groupOrders(list);
+    expect(ids(list)).toEqual(snapshot);
+    expect(ids([...groups.byStatus.PENDENTE, ...groups.byStatus.PRONTO]).sort()).toEqual(["a", "b", "c"]);
+  });
+});

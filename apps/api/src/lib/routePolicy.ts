@@ -27,6 +27,7 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/orders/:id/undo": "finish", // API-02: desfazer dentro da janela
   "POST /api/orders/:id/status": "finish", // legado (alias deprecated até WEB-05)
   "POST /api/orders/:id/refund": "finish",
+  "POST /api/orders/:id/payment/check": "finish", // conferir o pagamento de pedido JA recebido (PIX aguardando); nao cria pedido novo
   "POST /api/orders/:id/deliverer": "finish",
   "POST /api/orders/:id/reprint": "finish", // API-12b: 2ª via de pedido JÁ recebido (STAFF só até 24 h; a regra é da rota)
   "POST /api/orders/:id/internal-note": "blocked", // API-54: anotação da equipe é cadastro, não encerra pedido

@@ -1,5 +1,26 @@
 {
 	email {$ACME_EMAIL}
+
+	# INF-19 / C1 (Nightingale, Sun Tzu): o log de ERRO padrão do Caddy (`http.log.error`, que existe MESMO sem diretiva `log`) grava o
+	# objeto `request` inteiro quando o upstream falha (web ou API fora do ar): URL com ?token=, token no CAMINHO (QR de mesa, link de
+	# acompanhamento) e cabeçalhos custom (x-order-token, x-mfa-challenge, x-admin-token) saíam EM CLARO. Medido em 17/11 (Caddy 2.11.9):
+	# só Authorization/Cookie/Set-Cookie/Proxy-Authorization saem REDACTED por padrão. Filtro SEGURO POR PADRÃO (não é lista negra): apaga
+	# TODOS os cabeçalhos e deixa só o primeiro segmento do caminho, sem query. Aplica-se ao logger PADRÃO (erros do proxy e logs de
+	# runtime). ATENÇÃO: um `log` de SITE tem encoder PRÓPRIO e NÃO herda este filtro: quem ligar log de acesso precisa repetir o filtro
+	# lá. Provado por scripts/smoke-stack.sh (seção 11, upstream fora do ar) e, isolado, para a resposta abortada no meio
+	# (`http.handlers.reverse_proxy`, 17/11). Os `delete` de resposta abaixo são DEFENSIVOS: nenhum cenário medido gravou esses campos.
+	log {
+		output stderr
+		format filter {
+			wrap json
+			fields {
+				request>headers delete
+				request>uri regexp ^(/[^/?]*).*$ $1/REDACTED
+				resp_headers delete
+				headers delete
+			}
+		}
+	}
 }
 
 {$DOMAIN} {
@@ -37,7 +58,22 @@
 	handle /api/* {
 		reverse_proxy api:3001
 	}
+	# INF-19 / SEC-34 (R-1 da Nightingale): o limite de login da API é por IP (8/min); quem usa MUITAS origens (ou um /48 inteiro de IPv6) enche a faixa de hash (SEC-34)
+	# sem passar do limite de nenhuma. Este limite fica na ENTRADA e AGREGA por origem: IPv4 = o próprio IP; IPv6 = o prefixo /48 (um atacante com um /48 tem 2^80 endereços).
+	# 60/min por origem em TODAS as rotas sensíveis juntas (as da API somam 38/min no pior caso por IP; ~1,5x): uma loja inteira atrás do mesmo NAT, em uso normal, não chega
+	# perto; quem passa recebe 429 com Retry-After e corpo VAZIO (a API responde 429 com JSON: assim o smoke distingue os dois). `/auth/me` e logout NÃO entram (o painel os chama
+	# o tempo todo). Prefixos com * cobrem /auth/reset-password/inspect; o matcher `path` do Caddy é sem distinção de caixa.
 	handle /auth/* {
+		@auth_sensivel path /auth/login* /auth/register* /auth/forgot-password* /auth/reset-password*
+		rate_limit @auth_sensivel {
+			zone auth_por_origem {
+				key {remote_host}
+				events 60
+				window 1m
+				ipv6_prefix 48
+			}
+			sweep_interval 1m
+		}
 		reverse_proxy api:3001
 	}
 	handle /stores/* {
