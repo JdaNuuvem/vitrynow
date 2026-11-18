@@ -182,6 +182,7 @@ export const WS_AUDIENCE: Record<WsServerMessage["type"], WsAudience> = {
   "payment.refund_pending": "panel",
   "payment.refund_done": "panel",
   "payment.refund_stuck": "panel", // API-69 x API-47 (lote 1): so orderId; o hub o entrega SO ao OWNER (OWNER_ONLY_TYPES)
+  "table.alert": "panel", // API-22 x API-47 (lote 2): chamar atendente/pedir conta; sem dado pessoal; so o painel (nunca o aparelho)
   "payment.reconcile_needed": "panel",
   "print.available": "both",
   "print.job_failed": "panel",
