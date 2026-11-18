@@ -573,6 +573,10 @@ export const storeScheduleSchema = z.object({
 });
 export type StoreScheduleInput = z.infer<typeof storeScheduleSchema>;
 export const updateStoreHoursSchema = z.object({ schedule: storeScheduleSchema.nullable() });
+// Tempo médio de preparo por modalidade (RN-PZ-01): 5 a 240 minutos; null limpa (sem previsão; nada é inventado).
+const prepMinutesSchema = z.number().int().min(5).max(240).nullable();
+export const updatePrepTimesSchema = z.object({ deliveryMinutes: prepMinutesSchema, pickupMinutes: prepMinutesSchema });
+export type UpdatePrepTimesInput = z.infer<typeof updatePrepTimesSchema>;
 export const storeStatusActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("PAUSE"), minutes: z.union([z.literal(15), z.literal(30), z.literal(60)]) }),
   z.object({ action: z.literal("CLOSE_TODAY") }),
