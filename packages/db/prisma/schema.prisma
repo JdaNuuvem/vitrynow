@@ -942,6 +942,8 @@ model Image {
   createdAt DateTime    @default(now())
 
   @@index([storeId, status, createdAt])
+}
+
 enum ReceiptKind {
   TABLE // BASICO: conta virtual da mesa (API-24)
   TAB // PRO: comanda (futuro)
