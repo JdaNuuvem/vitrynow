@@ -47,6 +47,7 @@ describe("privacidade: anonimizar cliente", { timeout: 60_000 }, () => {
     const { cookie, response } = await registerStore(app);
     const storeId = json(response).store.id as string;
     const invited = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: cookie! }, payload: { email: `staff-pv-${Date.now()}-${seq++}@t.com`, password: "provisoria1" } });
+    expect(invited.statusCode, invited.body).toBe(200);
     const staff = (await login(app, json(invited).user.email, "provisoria1")).cookie!;
     return { owner: cookie!, staff, storeId };
   }
@@ -273,6 +274,29 @@ describe("privacidade: anonimizar cliente", { timeout: 60_000 }, () => {
     }
     expect(await prisma.order.count({ where: { storeId: ctx.storeId, anonymizedAt: { not: null } } })).toBe(0);
     expect((await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1 })).statusCode).toBe(200); // a faixa livre: passa, as reservas voltaram
+  });
+
+  it("RN-PV-10 (classe `export` na routePolicy): em CONSULTA e em SUSPENSÃO o DONO consegue ver a prévia e anonimizar (é obrigação legal, não depende de pagamento); o STAFF continua sem poder", async () => {
+    const ctx = await setup();
+    await mk(ctx.storeId);
+    const DIA = 24 * 3_600_000;
+    // CONSULTA: o teste grátis venceu há 2 dias; SUSPENSÃO: há mais de 8 dias
+    for (const [fase, dias, esperados] of [["CONSULTA", 2, 1], ["SUSPENSÃO", 9, 1]] as const) {
+      await prisma.subscription.updateMany({ data: { status: "TRIAL", trialEndsAt: new Date(Date.now() - dias * DIA) } });
+      const prev = await preview(ctx.owner, { phone: PHONE });
+      expect(prev.statusCode, `${fase} prévia`).toBe(200);
+      expect(json(prev).orders, fase).toBe(esperados);
+      const staff = await preview(ctx.staff, { phone: PHONE });
+      expect([402, 403], `${fase} STAFF`).toContain(staff.statusCode); // STAFF nunca: 402 SUSPENDED ou 403 FORBIDDEN_ROLE
+      expect(await prisma.order.count({ where: { storeId: ctx.storeId, anonymizedAt: { not: null } } }), `${fase}: a prévia não anonimiza`).toBe(0);
+    }
+    // na Suspensão o dono ANONIMIZA de fato
+    const res = await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1 });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(json(res)).toEqual({ anonymized: 1, nothingToRemove: false });
+    // e o STAFF, mesmo na Suspensão, não executa nada
+    const staffRun = await app.inject({ method: "POST", url: "/api/privacy/anonymize", headers: { cookie: ctx.staff }, payload: { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1, currentPassword: "provisoria1" } });
+    expect([402, 403]).toContain(staffRun.statusCode);
   });
 
   it("auditoria em LOTES de 500 ids: 1.001 pedidos ⇒ 3 linhas (500+500+1), com todos os `orderIds` (reaplicação depois de restaurar backup) e sem dado pessoal", async () => {

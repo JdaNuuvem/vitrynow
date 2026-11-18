@@ -28,6 +28,9 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/orders/:id/status": "finish", // legado (alias deprecated até WEB-05)
   "POST /api/orders/:id/refund": "finish",
   "POST /api/orders/:id/deliverer": "finish",
+  "POST /api/orders/:id/refund/abandon": "finish", // API-61: encerrar sem estorno é desfecho de pedido JÁ recebido
+  "POST /api/orders/:id/payment/check": "finish", // API-55: conferir o pagamento de pedido já recebido
+  "POST /api/print-jobs/:id/print-now": "finish", // imprimir agora um pedido já recebido
   "POST /api/orders/:id/reprint": "finish", // API-12b: 2ª via de pedido JÁ recebido (STAFF só até 24 h; a regra é da rota)
   "POST /api/orders/:id/internal-note": "blocked", // API-54: anotação da equipe é cadastro, não encerra pedido
   "POST /api/orders": "blocked", // API-13: pedido MANUAL é pedido novo (RN-B2-13): Consulta 403 READ_ONLY, Suspensão 402
@@ -56,8 +59,18 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/store/availability": "blocked",
   "POST /api/users": "blocked",
   "POST /api/users/:id/delete": "blocked",
+  // LGPD (API-52a, RN-PV-10): anonimizar é obrigação legal e NÃO pode depender de pagamento: liberada na Consulta e, na Suspensão, só para OWNER.
+  "POST /api/privacy/anonymize/preview": "export",
+  "POST /api/privacy/anonymize": "export",
   "POST /api/store/payments/mercadopago/connect": "blocked", // API-07: conectar a conta de PIX é configuração (sem loja ativa não conecta)
   "POST /api/store/payments/mercadopago/disconnect": "blocked", // API-07: idem
+  "POST /api/delivery-zones": "blocked", // API-16: bairro/taxa de entrega é cadastro
+  "POST /api/delivery-zones/:id": "blocked", // API-16: bairro/taxa de entrega é cadastro
+  "POST /api/delivery-zones/:id/delete": "blocked", // API-16: bairro/taxa de entrega é cadastro
+  "POST /api/delivery-zones/import": "blocked", // API-16: bairro/taxa de entrega é cadastro
+  "POST /api/delivery-zones/config": "blocked", // API-16: bairro/taxa de entrega é cadastro
+  "PUT /api/store/manual-discount-limit": "blocked", // API-13: configuração do limite do desconto manual
+  "POST /api/catalog/products/:id/sold-out": "blocked", // API-17: cadastro do catálogo
   "PUT /api/store/print-mode": "blocked", // API-12b: modo de impressão é configuração
   "POST /api/print-jobs/test": "blocked", // API-12: teste de impressora é configuração
   "POST /api/device-tokens": "blocked",
