@@ -75,6 +75,7 @@ export function toPanelOrder(
     customerName: order.customerName,
     // Contato: lista = telefone mascarado e sem endereço; detalhe = completo ou mascarado conforme papel e idade.
     customerPhone: full ? order.customerPhone : maskPhone(order.customerPhone),
+    anonymized: order.anonymizedAt !== null, // LGPD: dado pessoal removido a pedido (a tela mostra "Cliente removido a pedido")
     hasPhone: !!order.customerPhone,
     address: full ? order.address : null,
     hasAddress: !!order.address,

@@ -29,6 +29,8 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/orders/:id/refund": "finish",
   "POST /api/orders/:id/payment/check": "finish", // conferir o pagamento de pedido JA recebido (PIX aguardando); nao cria pedido novo
   "POST /api/orders/:id/deliverer": "finish",
+  "POST /api/orders/:id/refund/abandon": "finish", // API-61: encerrar sem estorno é desfecho de pedido JÁ recebido
+  "POST /api/print-jobs/:id/print-now": "allowed", // N6: reimprimir tíquete antigo (STALE) reduz prejuízo; vale na Consulta (decisão da main, mantida)
   "POST /api/orders/:id/reprint": "finish", // API-12b: 2ª via de pedido JÁ recebido (STAFF só até 24 h; a regra é da rota)
   "POST /api/orders/:id/internal-note": "blocked", // API-54: anotação da equipe é cadastro, não encerra pedido
   "POST /api/orders": "blocked", // API-13: pedido MANUAL é pedido novo (RN-B2-13): Consulta 403 READ_ONLY, Suspensão 402
@@ -59,8 +61,18 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/store/status": "blocked", // pausar/fechar por hoje: na Consulta já não há pedido novo para pausar
   "POST /api/users": "blocked",
   "POST /api/users/:id/delete": "blocked",
+  // LGPD (API-52a, RN-PV-10): anonimizar é obrigação legal e NÃO pode depender de pagamento: liberada na Consulta e, na Suspensão, só para OWNER.
+  "POST /api/privacy/anonymize/preview": "export",
+  "POST /api/privacy/anonymize": "export",
   "POST /api/store/payments/mercadopago/connect": "blocked", // API-07: conectar a conta de PIX é configuração (sem loja ativa não conecta)
   "POST /api/store/payments/mercadopago/disconnect": "blocked", // API-07: idem
+  "POST /api/delivery-zones": "blocked", // API-16: bairro/taxa de entrega é cadastro
+  "POST /api/delivery-zones/:id": "blocked", // API-16: bairro/taxa de entrega é cadastro
+  "POST /api/delivery-zones/:id/delete": "blocked", // API-16: bairro/taxa de entrega é cadastro
+  "POST /api/delivery-zones/import": "blocked", // API-16: bairro/taxa de entrega é cadastro
+  "POST /api/delivery-zones/config": "blocked", // API-16: bairro/taxa de entrega é cadastro
+  "PUT /api/store/manual-discount-limit": "blocked", // API-13: configuração do limite do desconto manual
+  "POST /api/catalog/products/:id/sold-out": "blocked", // API-17: cadastro do catálogo
   "PUT /api/store/print-mode": "blocked", // API-12b: modo de impressão é configuração
   "POST /api/print-jobs/test": "blocked", // API-12: teste de impressora é configuração
   "POST /api/device-tokens": "blocked",
@@ -87,16 +99,7 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "GET /api/store/subscription/payments/:id": "billing",
 
   // — Lote 1 (Atlas): rotas que apareceram quando as branches se encontraram; classe conservadora, revisar com o dono de cada uma —
-  "POST /api/orders/:id/refund/abandon": "finish", // API-61: encerrar pedido sem estorno (OWNER; encerra o que ja foi recebido)
   "POST /api/orders/:id/refund/manual": "finish", // API-65: registrar estorno feito no app do Mercado Pago (OWNER+MFA; encerra o que ja foi recebido)
-  "PUT /api/store/manual-discount-limit": "blocked", // SEC-15: configuracao
-  "POST /api/print-jobs/:id/print-now": "allowed", // N6: reimprimir tiquete antigo (STALE) reduz prejuizo; vale na Consulta
-  "POST /api/catalog/products/:id/sold-out": "blocked", // API-17: cadastro
-  "POST /api/delivery-zones": "blocked", // API-16: configuracao
-  "POST /api/delivery-zones/:id": "blocked",
-  "POST /api/delivery-zones/:id/delete": "blocked",
-  "POST /api/delivery-zones/import": "blocked",
-  "POST /api/delivery-zones/config": "blocked",
   "POST /api/auth/verify-email/resend": "billing", // API-26: conta, tambem liberado na Suspensao
   "POST /api/onboarding/steps/:step": "blocked", // API-26: cadastro guiado
   // — Lote 2 (Atlas): rotas das branches integradas; classes conservadoras, a revisar com cada dono (Nightingale/Leonardo) —

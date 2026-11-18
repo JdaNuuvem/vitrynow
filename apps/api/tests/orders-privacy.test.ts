@@ -131,7 +131,7 @@ describe("API-54a — lista, ações e detalhe", () => {
     const [o] = json(await app.inject({ method: "GET", url: "/api/orders", headers: { cookie: ctx.owner } })).orders;
     expect(Object.keys(o).sort()).toEqual(
       [
-        "address", "allowedTransitions", "awaitingPayment", "blocked", "cancel", "canUndo", "canceledAt", "changeForCents", "code", "contactMasked", "createdAt",
+        "address", "allowedTransitions", "anonymized", "awaitingPayment", "blocked", "cancel", "canUndo", "canceledAt", "changeForCents", "code", "contactMasked", "createdAt",
         "customerName", "customerPhone", "delivererId", "deliverer", "deliveryFeeCents", "discountCents", "hasAddress", "hasPhone", "id", "items", "notes",
         "paymentMethod", "payment", "printedAt", "serverNow", "status", "source", "statusChangedAt", "subtotalCents", "tableId", "tipCents", "totalCents", "type", "undoUntil", "updatedAt",
       ].sort(),

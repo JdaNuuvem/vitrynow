@@ -153,6 +153,7 @@ model Store {
   deliverers   Deliverer[]
   auditLogs    AuditLog[]
   deviceAlerts DeviceAlert[]
+  feedbacks    Feedback[]
   subscription Subscription?
   paymentAccounts PaymentAccount[]
   optionGroups OptionGroup[]
@@ -348,6 +349,7 @@ model Order {
   canceledAt        DateTime?
   couponReleasedAt  DateTime? // idempotência da devolução do cupom (ADR-0007)
   refundLockedAt    DateTime? // estorno em curso: congela o pedido NA PRÓPRIA linha (ver ADR-0007 §11); nula = livre
+  anonymizedAt      DateTime? // LGPD (API-52, ADR-0014): quando o dado pessoal do cliente foi removido (nome, telefone, endereço, observações); valores, itens e datas ficam
   internalNote      String? // observação interna da loja (API-54): nunca vai ao cliente, ao tíquete nem a lista; só ao detalhe do painel
   // API-13 (pedido manual, RN-B2-09/10): quem lançou e por onde; a chave de idempotência da abertura do formulário (única por loja)
   source            OrderSource @default(CLIENTE)
@@ -691,6 +693,18 @@ model DeviceAlert {
 
 // Log de ações sensíveis (quem fez o quê) — não é feature de produto, é rastro pra
 // investigar disputa/incidente depois (ex.: "quem revogou essa chave", "quem fechou o caixa").
+// Mensagem livre do lojista ao time do produto (API-52, ADR-0014 §3.4): tabela PRÓPRIA, nunca dentro do AuditLog (o texto pode ter dado pessoal).
+model Feedback {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  userId    String?
+  message   String
+  createdAt DateTime @default(now())
+
+  @@index([storeId, createdAt])
+}
+
 model AuditLog {
   id         String   @id @default(cuid())
   storeId    String

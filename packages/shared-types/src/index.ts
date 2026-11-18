@@ -513,6 +513,28 @@ export const createFeedbackSchema = z.object({
 });
 export type CreateFeedbackInput = z.infer<typeof createFeedbackSchema>;
 
+// ---- Privacidade: anonimizar cliente (API-52, RN-PV-01..10) ----
+// Motivo por CÓDIGO, nunca texto livre (a auditoria não pode guardar dado pessoal): quem pediu a anonimização.
+export const ANONYMIZE_REASONS = ["HOLDER_REQUEST", "STORE_DECISION", "ACCOUNT_CLOSURE"] as const;
+export const anonymizeTargetSchema = z
+  .object({
+    phone: z.string().trim().min(8).max(30).optional(),
+    orderCode: z.string().trim().min(1).max(20).optional(),
+  })
+  .refine((v) => Boolean(v.phone) !== Boolean(v.orderCode), { message: "Informe o telefone OU o código do pedido." });
+export const anonymizeCustomerSchema = z
+  .object({
+    phone: z.string().trim().min(8).max(30).optional(),
+    orderCode: z.string().trim().min(1).max(20).optional(),
+    reason: z.enum(ANONYMIZE_REASONS),
+    // A confirmação REPETE o efeito: quantos pedidos o dono viu na prévia. Se o número mudou, nada é feito (409).
+    expectedOrders: z.number().int().min(1).max(10_000),
+    // Reautenticação SEM MFA ativa (com MFA vale o código no header x-mfa-challenge). Nunca é registrada.
+    currentPassword: z.string().min(1).max(200).optional(),
+  })
+  .refine((v) => Boolean(v.phone) !== Boolean(v.orderCode), { message: "Informe o telefone OU o código do pedido." });
+export type AnonymizeCustomerInput = z.infer<typeof anonymizeCustomerSchema>;
+
 // ---- Loja disponível/fechada ----
 
 export const storeAvailabilitySchema = z.object({ acceptingOrders: z.boolean() });
@@ -565,7 +587,7 @@ export type CreateNoticeInput = z.infer<typeof createNoticeSchema>;
 // ---- Confirmação de segurança (MFA por e-mail) ----
 
 // SEC-13: ações irreversíveis ou de controle de acesso. Cada uma exige um código de uso único com ESTA finalidade (MFA_ENFORCED).
-export const MFA_PURPOSES = ["refund", "change_password", "delete_user", "connect_payment", "disconnect_payment", "device_token_create", "device_token_revoke", "cancel_subscription", "invite_owner"] as const;
+export const MFA_PURPOSES = ["refund", "change_password", "delete_user", "connect_payment", "disconnect_payment", "device_token_create", "device_token_revoke", "cancel_subscription", "invite_owner", "anonymize_customer"] as const;
 export const mfaPurposeSchema = z.enum(MFA_PURPOSES);
 export type MfaPurpose = z.infer<typeof mfaPurposeSchema>;
 
