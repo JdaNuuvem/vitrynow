@@ -9,6 +9,10 @@ import { useImpressoras } from "./useImpressoras";
 
 const push = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
+// runProtected real faz o passo de MFA (testado em features/seguranca); aqui basta repassar a ação.
+vi.mock("@/features/seguranca/SecurityConfirmProvider", () => ({
+  useSecurityConfirm: () => ({ runProtected: async (_purpose: string, action: (options?: unknown) => Promise<unknown>) => action() }),
+}));
 
 const row: DeviceToken = { id: "t1", label: "Balcão", revokedAt: null, lastSeenAt: null, online: false, tokenPreview: "mcd_t1_…ab12" };
 
