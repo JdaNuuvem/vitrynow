@@ -14,7 +14,7 @@ describe("QA limites de plano sob concorrência", () => {
   afterAll(async () => { await prisma.$disconnect(); });
 
   it("D33 (ST-35 / SEC-21) 8 criações paralelas de chave de impressora no BASICO (limite 1) criam EXATAMENTE 1", async () => {
-    const { cookie, response } = await registerStore(app);
+    const { cookie, response } = await registerStore(app, { plan: "BASICO" });
     const storeId = JSON.parse(response.body).store.id as string;
     const resultados = await Promise.all(
       Array.from({ length: 8 }, (_, i) =>
