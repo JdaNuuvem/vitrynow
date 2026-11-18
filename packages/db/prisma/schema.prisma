@@ -154,6 +154,7 @@ model Store {
   auditLogs    AuditLog[]
   deviceAlerts DeviceAlert[]
   feedbacks    Feedback[]
+  doNotContact DoNotContact[]
   subscription Subscription?
   paymentAccounts PaymentAccount[]
   optionGroups OptionGroup[]
@@ -703,6 +704,18 @@ model Feedback {
   createdAt DateTime @default(now())
 
   @@index([storeId, createdAt])
+}
+
+// Lista de "não contatar" (API-52d, ADR-0014): só o HASH do telefone (HMAC com sal da plataforma), por loja. Sobrevive à anonimização do pedido.
+model DoNotContact {
+  id        String   @id @default(cuid())
+  storeId   String
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  phoneHash String
+  reason    String // código (ex.: ANONYMIZED), nunca texto livre
+  createdAt DateTime @default(now())
+
+  @@unique([storeId, phoneHash])
 }
 
 model AuditLog {

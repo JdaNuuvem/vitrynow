@@ -71,8 +71,9 @@ caso "MP_OAUTH_MODE=fake reprova fora de dev" 1 "só para desenvolvimento" "$(ba
 caso "MP_OAUTH_MODE inválido reprova" 1 "inválido" "$(base; echo MP_OAUTH_MODE=talvez)"
 caso "chave do PIX preenchida com o modo off: aviso, não erro" 0 "MP_OAUTH_MODE=off a ignora" "$(base; echo "PAYMENT_ENC_KEY=$S4")"
 caso "PRIVACY_ACTIONS_ENABLED=true sem PRIVACY_ACTIONS_LEGAL_OK reprova" 1 "PRIVACY_ACTIONS_LEGAL_OK" "$(base; echo PRIVACY_ACTIONS_ENABLED=true)"
-caso "PRIVACY_ACTIONS_ENABLED=true com PRIVACY_ACTIONS_LEGAL_OK=true passa" 0 "" "$(base; echo PRIVACY_ACTIONS_ENABLED=true; echo PRIVACY_ACTIONS_LEGAL_OK=true)"
+caso "PRIVACY_ACTIONS_ENABLED=true com PRIVACY_ACTIONS_LEGAL_OK=true passa" 0 "" "$(base; echo PRIVACY_ACTIONS_ENABLED=true; echo PRIVACY_ACTIONS_LEGAL_OK=true; echo PRIVACY_HASH_SALT=$S5)"
 caso "PRIVACY_ACTIONS_ENABLED desligada passa" 0 "" "$(base; echo PRIVACY_ACTIONS_ENABLED=false)"
+caso "PRIVACY_ACTIONS_ENABLED=true sem PRIVACY_HASH_SALT reprova" 1 "PRIVACY_HASH_SALT" "$(base; echo PRIVACY_ACTIONS_ENABLED=true; echo PRIVACY_ACTIONS_LEGAL_OK=true)"
 
 echo; echo "RESULTADO: $PASS ok, $FAILS falhas"
 [ "$FAILS" -eq 0 ]

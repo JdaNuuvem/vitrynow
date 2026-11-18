@@ -59,6 +59,8 @@ https_url WEB_ORIGIN; https_url NEXT_PUBLIC_API_URL
 [ "$(get APP_VERSION)" = "local" ] && warn "APP_VERSION=local: sem versão fixa não há como voltar para a imagem anterior"
 # LGPD (ADR-0014, API-52b): as ações de privacidade só ligam em produção com a confirmação jurídica explícita (parecer P1-P17)
 [ "$(get PRIVACY_ACTIONS_ENABLED)" = "true" ] && [ "$(get PRIVACY_ACTIONS_LEGAL_OK)" != "true" ] && bad "PRIVACY_ACTIONS_ENABLED=true exige PRIVACY_ACTIONS_LEGAL_OK=true (parecer jurídico LGPD); sem ele, deixe desligada"
+PHS="$(get PRIVACY_HASH_SALT)"
+[ "$(get PRIVACY_ACTIONS_ENABLED)" = "true" ] && [ "${#PHS}" -lt 16 ] && bad "PRIVACY_ACTIONS_ENABLED=true exige PRIVACY_HASH_SALT (16+ caracteres, segredo; sem ele a lista de não contatar não funciona)"
 [ "$(get MFA_ENFORCED)" != "true" ] && warn "MFA_ENFORCED não é true: ligue antes do primeiro cliente real (SEC-13)"
 
 # --- PIX por loja (API-07)
