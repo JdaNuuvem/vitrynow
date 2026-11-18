@@ -76,16 +76,21 @@ caso "PRIVACY_ACTIONS_ENABLED desligada passa" 0 "" "$(base; echo PRIVACY_ACTION
 caso "PRIVACY_ACTIONS_ENABLED=true sem PRIVACY_HASH_SALT reprova" 1 "PRIVACY_HASH_SALT" "$(base; echo PRIVACY_ACTIONS_ENABLED=true; echo PRIVACY_ACTIONS_LEGAL_OK=true)"
 
 # --- INF-19/C2: --prod transforma os riscos em ERRO (e sem --prod continuam avisos)
-PRODOK() { base; echo MFA_ENFORCED=true; echo RESEND_API_KEY=re_chave_ficticia_para_o_teste; }
+STORAGE() { echo STORAGE_S3_ENDPOINT=https://s3.exemplo.invalid; echo STORAGE_S3_BUCKET=cardapio-media; echo STORAGE_S3_ACCESS_KEY_ID=AKIAFICTICIA; echo STORAGE_S3_SECRET_ACCESS_KEY=chave-secreta-ficticia-do-teste; echo STORAGE_PUBLIC_BASE_URL=https://cdn.exemplo.invalid/cardapio-media; }
+PRODOK() { base; echo MFA_ENFORCED=true; echo RESEND_API_KEY=re_chave_ficticia_para_o_teste; STORAGE; }
 caso "sem --prod: MFA desligada, sem e-mail e APP_VERSION=local são só aviso" 0 "RESEND_API_KEY vazia" "$(base | troca APP_VERSION local)"
 ARGS=--prod
 caso "--prod: configuração completa passa" 0 "OK:" "$(PRODOK)"
-caso "--prod: MFA_ENFORCED ausente reprova" 1 "MFA_ENFORCED não é true" "$(base; echo RESEND_API_KEY=re_chave_ficticia_para_o_teste)"
+caso "--prod: MFA_ENFORCED ausente reprova" 1 "MFA_ENFORCED não é true" "$(base; echo RESEND_API_KEY=re_chave_ficticia_para_o_teste; STORAGE)"
 caso "--prod: MFA_ENFORCED=false reprova" 1 "MFA_ENFORCED não é true" "$(PRODOK | troca MFA_ENFORCED false)"
 caso "--prod: APP_VERSION=local reprova" 1 "APP_VERSION=local" "$(PRODOK | troca APP_VERSION local)"
-caso "--prod: RESEND_API_KEY vazia reprova" 1 "RESEND_API_KEY vazia" "$(base; echo MFA_ENFORCED=true; echo RESEND_API_KEY=)"
-caso "--prod: os três riscos juntos dão 3 erros" 1 "3 erro(s)" "$(base | troca APP_VERSION local)"
+caso "--prod: RESEND_API_KEY vazia reprova" 1 "RESEND_API_KEY vazia" "$(base; echo MFA_ENFORCED=true; echo RESEND_API_KEY=; STORAGE)"
+caso "--prod: os quatro riscos juntos (sem MFA, sem e-mail, APP_VERSION=local, sem storage) dão 4 erros" 1 "4 erro(s)" "$(base | troca APP_VERSION local)"
+caso "--prod: sem NENHUMA variável de storage reprova e lista as 5" 1 "faltam STORAGE_S3_ENDPOINT STORAGE_S3_BUCKET STORAGE_S3_ACCESS_KEY_ID STORAGE_S3_SECRET_ACCESS_KEY STORAGE_PUBLIC_BASE_URL" "$(PRODOK | sem STORAGE_S3_ENDPOINT | sem STORAGE_S3_BUCKET | sem STORAGE_S3_ACCESS_KEY_ID | sem STORAGE_S3_SECRET_ACCESS_KEY | sem STORAGE_PUBLIC_BASE_URL)"
+caso "--prod: faltar só a chave secreta do storage reprova e nomeia a variável" 1 "faltam STORAGE_S3_SECRET_ACCESS_KEY" "$(PRODOK | sem STORAGE_S3_SECRET_ACCESS_KEY)"
+caso "--prod: STORAGE_PUBLIC_BASE_URL http (sem TLS) reprova" 1 "STORAGE_PUBLIC_BASE_URL deve começar com https://" "$(PRODOK | troca STORAGE_PUBLIC_BASE_URL http://cdn.exemplo.invalid/x)"
 ARGS=
+caso "sem --prod: storage ausente é só aviso" 0 "storage S3 das imagens incompleto" "$(base)"
 # --- INF-19/C4: ADMIN_TOKEN fraco reprova sempre; vazio é permitido
 caso "ADMIN_TOKEN curto reprova mesmo sem --prod" 1 "ADMIN_TOKEN curto" "$(base; echo ADMIN_TOKEN=curto123)"
 caso "ADMIN_TOKEN forte passa" 0 "" "$(base; echo ADMIN_TOKEN=$S5)"
