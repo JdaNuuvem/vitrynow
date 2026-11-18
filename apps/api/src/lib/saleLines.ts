@@ -9,6 +9,11 @@
 export const SALE_STATUSES = ["CONFIRMADO", "EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA", "CONCLUIDO"] as const;
 const isSaleStatus = (status: string) => (SALE_STATUSES as readonly string[]).includes(status);
 
+/** Este pedido é VENDA? (B14.1: status de venda e fora de "aguardando pagamento online"). O relatório e o caixa usam ESTA regra. */
+export const isSale = (o: { status: string; awaitingPayment: boolean }) => isSaleStatus(o.status) && !o.awaitingPayment;
+/** Faturamento do pedido = total − gorjeta (a gorjeta é do entregador, não da loja). */
+export const saleRevenueCents = (o: { totalCents: number; tipCents: number }) => o.totalCents - o.tipCents;
+
 export type SaleOrder = {
   id: string;
   type: "DELIVERY" | "BALCAO" | "MESA";
