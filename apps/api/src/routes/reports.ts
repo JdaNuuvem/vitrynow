@@ -4,23 +4,47 @@ import { isSale, saleRevenueCents } from "../lib/saleLines";
 
 const STORE_TIMEZONE = "America/Sao_Paulo";
 
+// SEC-16 — o relatório lê pedidos em memória: sem teto, um período enorme (ou um dono malicioso/descuidado) derruba a API e vira extração em massa.
+// Janela máxima e teto de pedidos por consulta; passou disso, 400/422 com a instrução de reduzir o período (nunca resposta parcial silenciosa).
+// O resumo só traz agregados e nomes de produto/entregador: nenhum telefone, nome de cliente ou endereço sai daqui (teste trava).
+export const REPORT_MAX_WINDOW_DAYS = 366;
+export const REPORT_MAX_ORDERS = 20_000;
+/** Só para teste: baixa o teto sem criar 20 mil pedidos. */
+export const reportLimits = { maxOrders: REPORT_MAX_ORDERS };
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 // Relatório de vendas por período — autenticado pelo painel.
 const reportRoutes: FastifyPluginAsync = async (app) => {
   app.get("/api/reports/summary", { preHandler: app.requirePanelAuth }, async (request, reply) => {
     const { storeId } = request.user;
-    const query = request.query as { from?: string; to?: string };
+    const query = request.query as { from?: unknown; to?: unknown };
+    if ((query.from !== undefined && typeof query.from !== "string") || (query.to !== undefined && typeof query.to !== "string")) {
+      return reply.code(400).send({ error: "datas inválidas" });
+    }
 
-    const from = query.from ? new Date(query.from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const from = query.from ? new Date(query.from) : new Date(Date.now() - 30 * DAY_MS);
     const to = query.to ? new Date(query.to) : new Date();
     if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
       return reply.code(400).send({ error: "datas inválidas" });
     }
+    if (from.getTime() > to.getTime()) {
+      return reply.code(400).send({ error: "A data inicial é depois da final.", code: "REPORT_RANGE_INVALID" });
+    }
+    if (to.getTime() - from.getTime() > REPORT_MAX_WINDOW_DAYS * DAY_MS) {
+      return reply.code(400).send({ error: `Escolha um período de no máximo ${REPORT_MAX_WINDOW_DAYS} dias.`, code: "REPORT_WINDOW_TOO_LARGE", details: { maxDays: REPORT_MAX_WINDOW_DAYS } });
+    }
     // inclui o dia final inteiro
-    const toInclusive = new Date(to.getTime() + 24 * 60 * 60 * 1000);
+    const toInclusive = new Date(to.getTime() + DAY_MS);
+
+    const total = await prisma.order.count({ where: { storeId, awaitingPayment: false, createdAt: { gte: from, lt: toInclusive } } });
+    if (total > reportLimits.maxOrders) {
+      return reply.code(422).send({ error: "Há pedidos demais nesse período. Escolha um intervalo menor.", code: "REPORT_TOO_LARGE", details: { maxOrders: reportLimits.maxOrders } });
+    }
 
     const inPeriod = await prisma.order.findMany({
       where: { storeId, awaitingPayment: false, createdAt: { gte: from, lt: toInclusive } },
       include: { items: true, deliverer: true },
+      take: reportLimits.maxOrders + 1, // defesa: pedidos que entraram entre o count e a leitura não passam do teto
     });
     // API-21 (B14.1, mesma regra do caixa): VENDA = CONFIRMADO..CONCLUIDO (PENDENTE é "em aberto", CANCELADO é à parte); faturamento = total − gorjeta.
     const orders = inPeriod.filter(isSale);
