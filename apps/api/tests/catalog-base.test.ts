@@ -238,7 +238,7 @@ describe("catálogo base (API-56)", () => {
   });
 });
 
-describe("migração 20261117130000 (produto órfão → 'Sem categoria' oculta)", () => {
+describe("migração 20261117340000 (produto órfão → 'Sem categoria' oculta)", () => {
   afterAll(async () => {
     await resetDb();
     await prisma.$disconnect();
