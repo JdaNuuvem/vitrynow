@@ -202,20 +202,32 @@ describe("API-22 — mesa e QR", () => {
     expect(outroIp.statusCode).toBe(201);
   });
 
-  it("D2-2: teto de pedidos PENDENTE por mesa (papel): acima dele 429 TABLE_PENDING_LIMIT; outra mesa não é afetada; aceitar libera", async () => {
+  it("C2: teto de 10 pedidos ABERTOS por mesa (papel): acima dele 429 TABLE_BUSY; outra mesa não é afetada; concluir libera; call-waiter segue livre", async () => {
     const l = await loja();
     const t = await mesa(l);
     const outra = await mesa(l, "2");
-    for (let i = 0; i < 15; i++) {
-      await prisma.order.create({ data: { storeId: l.store.id, tableId: t.id, code: `P${i}`, type: "MESA", source: "QR_MESA", status: "PENDENTE", subtotalCents: 100, totalCents: 100 } });
+    const estados = ["PENDENTE", "CONFIRMADO", "EM_PREPARO", "PENDENTE", "CONFIRMADO", "EM_PREPARO", "PENDENTE", "CONFIRMADO", "EM_PREPARO", "PENDENTE"] as const;
+    for (const [i, status] of estados.entries()) {
+      await prisma.order.create({ data: { storeId: l.store.id, tableId: t.id, code: `P${i}`, type: "MESA", source: "QR_MESA", status, subtotalCents: 100, totalCents: 100 } });
     }
+    await prisma.order.create({ data: { storeId: l.store.id, tableId: t.id, code: "PRONTO1", type: "MESA", source: "QR_MESA", status: "PRONTO", subtotalCents: 100, totalCents: 100 } });
     const cheio = await pedir(l, t);
-    expect([cheio.statusCode, json(cheio).code]).toEqual([429, "TABLE_PENDING_LIMIT"]);
+    expect([cheio.statusCode, json(cheio).code]).toEqual([429, "TABLE_BUSY"]);
     expect((await pedir(l, outra)).statusCode).toBe(201);
-    const um = await prisma.order.findFirstOrThrow({ where: { storeId: l.store.id, tableId: t.id } });
-    await prisma.order.update({ where: { id: um.id }, data: { status: "CONFIRMADO" } });
+    expect((await app.inject({ method: "POST", url: `/stores/${l.store.slug}/tables/${t.qrToken}/call-waiter` })).statusCode).toBe(200);
+    const um = await prisma.order.findFirstOrThrow({ where: { storeId: l.store.id, tableId: t.id, code: "P0" } });
+    await prisma.order.update({ where: { id: um.id }, data: { status: "CONCLUIDO" } });
     resetLimits();
     expect((await pedir(l, t)).statusCode).toBe(201);
+  });
+
+  it("R1: x-device-token fora do formato (fixação) é ignorado e o servidor emite outro; o token fixado nunca vira o do aparelho", async () => {
+    const l = await loja();
+    const t = await mesa(l);
+    const r = json(await pedir(l, t, {}, { "x-device-token": "mcd_fixado-pelo-atacante" }));
+    expect(r.deviceToken).toMatch(/^mcd_[A-Za-z0-9_-]{43}$/);
+    expect(r.deviceToken).not.toBe("mcd_fixado-pelo-atacante");
+    expect(json(await minhas(l, t, { "x-device-token": "mcd_fixado-pelo-atacante" })).orders).toEqual([]);
   });
 
   it("mesa com pedido não se apaga (409); sem pedido, apaga; o pedido aparece no painel com origem e mesa, sem o hash do aparelho", async () => {

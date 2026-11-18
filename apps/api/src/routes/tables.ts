@@ -19,7 +19,8 @@ import { CodedError, useDomainErrors } from "../shared/errors";
 
 export const DEVICE_TOKEN_HEADER = "x-device-token";
 const MAX_TOKEN_LENGTH = 200;
-const QR_PENDING_CAP = 15; // D2-2: teto de pedidos PENDENTE (já impressos, sem aceite) por mesa; acima disso o QR recusa até a equipe aceitar/recusar (cada pedido gasta papel)
+const DEVICE_TOKEN_FORMAT = /^mcd_[A-Za-z0-9_-]{43}$/; // R1: token fora do formato nunca é aceito (fixação de token); emite-se um novo
+const QR_OPEN_CAP = 10; // Atlas/Nightingale C2: teto de pedidos ABERTOS (PENDENTE, CONFIRMADO, EM_PREPARO) por mesa: o QR imprime ao chegar e cada pedido gasta papel. Editável pela plataforma
 const QR_BURST_PENDING = 5; // RN-MB-08: tantos pedidos PENDENTE na mesa => alerta no painel (não bloqueia o cliente)
 const newDeviceToken = () => {
   const token = "mcd_" + randomBytes(32).toString("base64url");
@@ -43,7 +44,7 @@ async function resolveTable(slug: string, qrToken: string) {
 
 function deviceTokenOf(request: FastifyRequest): string | null {
   const raw = request.headers[DEVICE_TOKEN_HEADER];
-  return typeof raw === "string" && raw.length > 0 && raw.length <= MAX_TOKEN_LENGTH ? raw : null;
+  return typeof raw === "string" && raw.length <= MAX_TOKEN_LENGTH && DEVICE_TOKEN_FORMAT.test(raw) ? raw : null;
 }
 
 const tableView = (t: { id: string; label: string; qrToken: string; active: boolean; position: number }, slug: string) => ({
@@ -141,7 +142,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (!parsed.success) return reply.code(400).send({ error: "Corpo inválido.", code: "VALIDATION_ERROR", fields: parsed.error.flatten().fieldErrors });
     const { qrOrderingEnabled, qrOrdersNeedApproval, confirmNoApproval } = parsed.data;
     if (qrOrdersNeedApproval === false && !confirmNoApproval) {
-      throw new CodedError(400, "CONFIRMATION_REQUIRED", "Qualquer pessoa com o QR poderá mandar pedido direto para a cozinha. Confirme para desligar o aceite.");
+      throw new CodedError(400, "CONFIRMATION_REQUIRED", "Sem o aceite, qualquer pessoa com o QR poderá lançar pedidos já aceitos, que entram direto no andamento da cozinha. Confirme para desligar o aceite.");
     }
     const store = await prisma.store.update({ where: { id: storeId }, data: { qrOrderingEnabled, qrOrdersNeedApproval }, select: { qrOrderingEnabled: true, qrOrdersNeedApproval: true } });
     logAudit({ storeId, userId, action: "store.qr_settings", targetType: "Store", targetId: storeId, metadata: { qrOrderingEnabled, qrOrdersNeedApproval } });
@@ -167,7 +168,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (!found) return notFound(reply);
     const { table, store } = found;
     // D2-2: limite duplo — rígido por (mesa, IP), generoso por mesa (não derruba a mesa inteira por um abusador).
-    if (limited(`qr-order:${table.id}:${clientKey(request.ip)}`, 6) || limited(`qr-order-table:${table.id}`, 60)) return tooMany(reply);
+    if (limited(`qr-order:${table.id}:${clientKey(request.ip)}`, 6) || limited(`qr-order-table:${table.id}`, 12)) return tooMany(reply);
 
     if (!store.qrOrderingEnabled) return reply.code(409).send({ error: "Esta loja não recebe pedidos pelo QR. Chame o atendente.", code: "QR_ORDERING_DISABLED" });
     if (!store.acceptingOrders) return reply.code(409).send({ error: "A loja não está aceitando pedidos no momento.", code: "STORE_CLOSED" });
@@ -210,8 +211,8 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.code(400).send({ error: `pedido mínimo é R$ ${(store.minOrderCents / 100).toFixed(2)}`, code: "MIN_ORDER" });
     }
 
-    if ((await prisma.order.count({ where: { storeId: store.id, tableId: table.id, status: "PENDENTE" } })) >= QR_PENDING_CAP) {
-      return reply.code(429).send({ error: "Há muitos pedidos aguardando esta mesa. Chame o atendente.", code: "TABLE_PENDING_LIMIT" });
+    if ((await prisma.order.count({ where: { storeId: store.id, tableId: table.id, status: { in: ["PENDENTE", "CONFIRMADO", "EM_PREPARO"] } } })) >= QR_OPEN_CAP) {
+      return reply.code(429).send({ error: "Há muitos pedidos abertos nesta mesa. Chame o atendente.", code: "TABLE_BUSY" });
     }
 
     // Token do aparelho: reaproveita o enviado; senão emite um novo (devolvido UMA vez). Só o hash vai ao banco.
