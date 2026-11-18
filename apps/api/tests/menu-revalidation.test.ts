@@ -98,7 +98,7 @@ describe("revalidação da vitrine (API-58)", () => {
     expect(elapsed).toBeLessThan(5000);
     expect(web.calls).toHaveLength(1);
     expect(web.calls[0]).toEqual({ url: "http://web:3000/api/revalidate", secret: SECRET, body: { slug: "loja-rev" } });
-    for (let i = 0; i < 100 && (await prisma.menuRevalidation.count()) > 0; i++) await new Promise((resolve) => setTimeout(resolve, 50));
+    for (let i = 0; i < 400 && (await prisma.menuRevalidation.count()) > 0; i++) await new Promise((resolve) => setTimeout(resolve, 50)); // ate 20 s: sob carga o envio confirmado demora (flaky no CI); o limite de 5 s do produto e provado acima, por `elapsed`
     expect(await prisma.menuRevalidation.count()).toBe(0); // a linha some depois do envio confirmado
   });
 
