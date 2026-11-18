@@ -9,6 +9,7 @@ const SAMPLES: WsServerMessage[] = [
   { type: "order.cancel_notice", orderId: "o" },
   { type: "payment.refund_pending", orderId: "o" },
   { type: "payment.refund_done", orderId: "o" },
+  { type: "payment.refund_stuck", orderId: "o" },
   { type: "payment.reconcile_needed", orderId: "o" },
   { type: "print.available" },
   { type: "print.job_failed", jobId: "j", code: "NO_PAPER" },
@@ -17,6 +18,7 @@ const SAMPLES: WsServerMessage[] = [
   { type: "print.stale", count: 2 },
   { type: "cashier.difference_over_tolerance", sessionId: "s" },
   { type: "device.alert", code: "MODE_UNCONFIRMED" },
+  { type: "table.alert", tableId: "t", kind: "CALL_WAITER" },
   { type: "ping" },
 ];
 
@@ -45,7 +47,7 @@ describe("API-47 — hub WS por audiência", () => {
     const staff = connect("loja-ws-2", "STAFF");
     for (const m of SAMPLES) publishToStore("loja-ws-2", m);
     expect(owner()).toEqual(SAMPLES.map((m) => m.type));
-    expect(staff()).toEqual(SAMPLES.map((m) => m.type).filter((t) => t !== "cashier.difference_over_tolerance"));
+    expect(staff()).toEqual(SAMPLES.map((m) => m.type).filter((t) => t !== "cashier.difference_over_tolerance" && t !== "payment.refund_stuck"));
   });
 
   it("publishToPanel não alcança a impressora nem com tipo `both`", () => {

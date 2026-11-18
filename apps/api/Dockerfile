@@ -1,4 +1,5 @@
-FROM node:24-alpine AS build
+# Base FIXA por digest (INF-26): node 24.22.3 / alpine. Atualizar so de proposito (docs/RUNBOOK-infra.md, 'Atualizar a imagem base do Node').
+FROM node:24-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS build
 WORKDIR /repo
 RUN corepack enable
 # openssl TAMBÉM no build: com ele o Prisma baixa (na instalação) os engines do OpenSSL 3.0, os mesmos que a imagem final usa.
@@ -32,7 +33,7 @@ RUN pnpm --filter @meucardapio/shared-types build
 RUN pnpm --filter @meucardapio/db build
 RUN pnpm --filter @meucardapio/api build
 
-FROM node:24-alpine
+FROM node:24-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
 WORKDIR /repo
 RUN corepack enable
 # Sem isso, o Prisma não consegue detectar a versão do OpenSSL em runtime (comando
