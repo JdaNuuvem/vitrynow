@@ -9,6 +9,7 @@
 #   1. serviços: rodando, saudáveis (se têm healthcheck) e sem reinício (RestartCount > 0 = crash loop ou queda)
 #   2. /health da API por dentro da rede
 #   3. último backup verificado (LAST_OK) com menos de 26 h
+#   3b. fotos em disco local (ADR-0017): uso do disco onde está o volume /uploads (> 80% = ALERTA) e quantas fotos há
 #   4. logs da API na janela: [hashlane] SERVER_BUSY (fila de hash cheia), [*_floor_exceeded] por TAXA (> 1% dos pedidos da rota, mínimo 3 casos; Sun Tzu),
 #      [estorno] (erro de estorno), [audit] falha (auditoria que não gravou), respostas 5xx por taxa (> 1% das respostas, mínimo 5)
 # NÃO cobre: disco/memória do servidor (use o monitoramento do provedor), certificado TLS, nem a fila de impressão (alerta central do PC-24 é outro canal).
@@ -47,6 +48,13 @@ if [[ "$ultimo" =~ ^[0-9]+$ ]]; then
   idade=$(( $(date -u +%s) - ultimo ))
   if [ "$idade" -le 93600 ]; then ok "último backup verificado há $(( idade / 3600 )) h"; else alerta "último backup verificado há $(( idade / 3600 )) h (limite 26 h)"; fi
 else alerta "nenhum backup verificado encontrado (LAST_OK ausente ou ilegível)"; fi
+
+echo "== fotos (disco local, ADR-0017)"
+uso="$("${DC[@]}" exec -T api df -P /uploads 2>/dev/null | tail -1 | awk '{print $5}' | tr -d '%\r\n')"
+if [[ "$uso" =~ ^[0-9]+$ ]]; then
+  nfotos="$("${DC[@]}" exec -T api find /uploads -type f 2>/dev/null | wc -l | tr -d ' \r\n')"
+  if [ "$uso" -ge 80 ]; then alerta "disco das fotos com $uso% de uso (limite 80%): $nfotos foto(s); amplie o disco ou revise o limite por loja"; else ok "disco das fotos com $uso% de uso, $nfotos foto(s)"; fi
+else alerta "não consegui medir o disco das fotos (docker compose exec api df -P /uploads falhou: volume não montado?)"; fi
 
 echo "== logs da API (últimos $MIN min)"
 LOG="$("${DC[@]}" logs --since "${MIN}m" --no-color api 2>/dev/null)"
