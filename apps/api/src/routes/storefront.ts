@@ -14,12 +14,18 @@ import { customerMessageFor, messageActorFor, moneyLineFor } from "../lib/cancel
 import { DomainError } from "../shared/errors";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
 import { buildMenuView } from "../lib/menuView";
+import { limited, tooMany } from "../lib/slidingLimit";
 import { newOrderToken, orderTokenMatches, ORDER_TOKEN_HEADER } from "../lib/orderToken";
 
 const COUPON_EXHAUSTED_MESSAGE = "Esse cupom acabou.";
 class CouponExhaustedError extends Error {}
 
 // Rotas públicas do cardápio (sem autenticação) — equivalente ao /online/{slug} do original.
+// NG-08: tetos do pedido público (por loja e por telefone); ver o comentário no uso.
+export const PUBLIC_ORDERS_PER_STORE_PER_MINUTE = 60;
+export const MAX_PENDING_PER_PHONE = 3;
+const PENDING_WINDOW_MS = 30 * 60 * 1000;
+
 const storefrontRoutes: FastifyPluginAsync = async (app) => {
   app.get("/stores/:slug/menu", async (request, reply) => {
     const { slug } = request.params as { slug: string };
@@ -46,6 +52,17 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     const parsed = createOrderSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     const input = parsed.data;
+
+    // NG-08 (B19): anti-abuso do pedido público. Cada pedido pode imprimir um tíquete (papel físico) assim que chega, então o limite por IP (acima) não basta:
+    // quem troca de IP (rede móvel, VPN) inundaria a cozinha. Dois tetos a mais, ANTES de qualquer escrita: (1) por LOJA, somando todos os IPs; (2) por TELEFONE,
+    // pedidos ainda PENDENTES (não aceitos) na última meia hora. Cliente real raramente tem 3 pedidos não aceitos de uma vez. A recusa é o 429 padrão (sem dizer qual teto).
+    if (limited(`public-order-store:${store.id}`, PUBLIC_ORDERS_PER_STORE_PER_MINUTE)) return tooMany(reply);
+    if (input.customerPhone) {
+      const pendingOfPhone = await prisma.order.count({
+        where: { storeId: store.id, customerPhone: input.customerPhone, status: "PENDENTE", source: "CLIENTE", createdAt: { gte: new Date(Date.now() - PENDING_WINDOW_MS) } },
+      });
+      if (pendingOfPhone >= MAX_PENDING_PER_PHONE) return tooMany(reply);
+    }
 
     // Mesa só entra por QR/comanda (API-22). Esta rota genérica não tem mesa: recusa até lá (API-60).
     // MESA não depende de pickupEnabled/deliveryEnabled (loja só de salão é válida).
