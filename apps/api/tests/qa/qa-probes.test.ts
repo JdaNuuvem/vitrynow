@@ -4,7 +4,7 @@
 import { createHmac } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { makeApp, registerStore, resetDb, orderTokenHeader } from "../helpers";
+import { makeApp, registerStore, resetDb, orderTokenHeader, useMockedProvider } from "../helpers";
 import { subscribe } from "../../src/realtime/hub";
 import { mapMpStatus } from "../../src/lib/mercadopago";
 import { activateSubscription } from "../../src/lib/subscription";
@@ -60,6 +60,7 @@ describe("QA probes — API", () => {
   let app: ReturnType<typeof makeApp>;
 
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     app = makeApp();
     await app.ready();
@@ -292,10 +293,10 @@ describe("QA probes — API", () => {
   });
 
   it("D22 webhook de assinatura em paralelo ativa o plano UMA vez (30 dias, não 60)", async () => {
-    const ctx = await setupStore();
+    const ctx = await setupStore({ plan: "BASICO" });
     const pix = fakePix();
     createPix.mockResolvedValueOnce(pix);
-    const checkout = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: ctx.cookie }, payload: { planCode: "PRO" } });
+    const checkout = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: ctx.cookie }, payload: { planCode: "BASICO" } });
     expect(checkout.statusCode).toBe(201);
     getPayment.mockResolvedValue(await remoteFor(pix.providerPaymentId, "approved"));
     await Promise.all([webhook(pix.providerPaymentId), webhook(pix.providerPaymentId), webhook(pix.providerPaymentId)]);
@@ -419,18 +420,24 @@ describe("QA probes — API", () => {
   });
 
   // ───────────── Relatórios (cobertura que não existia) ─────────────
-  it("D17 relatório soma só pedidos não cancelados e fecha com a lista de pedidos", async () => {
+  it("D17 relatório (B14.1): venda = pedido aceito (PENDENTE fica 'em aberto', CANCELADO à parte); faturamento = total − gorjeta; fecha com a lista de pedidos", async () => {
     const ctx = await setupStore();
     const o1 = JSON.parse((await order(ctx.slug, { type: "BALCAO", paymentMethod: "DINHEIRO", items: [{ productId: ctx.productId, quantity: 2 }] })).body);
-    await order(ctx.slug, { type: "DELIVERY", address: "Rua B, 2", customerPhone: "11999999999", paymentMethod: "CREDITO", items: [{ productId: ctx.productId, quantity: 1 }] });
+    const o2 = JSON.parse((await order(ctx.slug, { type: "DELIVERY", address: "Rua B, 2", customerPhone: "11999999999", paymentMethod: "CREDITO", tipCents: 200, items: [{ productId: ctx.productId, quantity: 1 }] })).body);
     const o3 = JSON.parse((await order(ctx.slug, { type: "BALCAO", items: [{ productId: ctx.productId, quantity: 1 }] })).body);
+    await order(ctx.slug, { type: "BALCAO", paymentMethod: "DINHEIRO", items: [{ productId: ctx.productId, quantity: 1 }] }); // fica PENDENTE: "em aberto"
+    for (const id of [o1.orderId, o2.orderId]) await app.inject({ method: "POST", url: `/api/orders/${id}/transition`, headers: { cookie: ctx.cookie }, payload: { to: "CONFIRMADO" } });
     await app.inject({ method: "POST", url: `/api/orders/${o3.orderId}/status`, headers: { cookie: ctx.cookie }, payload: { status: "CANCELADO" } });
     const res = await app.inject({ method: "GET", url: "/api/reports/summary", headers: { cookie: ctx.cookie } });
     expect(res.statusCode).toBe(200);
     const r = JSON.parse(res.body);
     expect(r.orderCount).toBe(2);
-    expect(r.revenueCents).toBe(3000 + 1500);
+    expect(r.revenueCents).toBe(3000 + 1500); // o 2º pedido tem R$ 2,00 de gorjeta: fica fora do faturamento
+    expect(r.tipCents).toBe(200);
+    expect(r.ruleChangedAt).toBe("2026-11-18T00:00:00.000Z"); // a tela sabe a partir de quando a conta mudou
+    expect([r.canceledCount, r.canceledCents, r.openCount, r.openCents]).toEqual([1, 1500, 1, 1500]);
     expect(r.byPaymentMethod.DINHEIRO).toEqual({ count: 1, revenueCents: 3000 });
+    expect(r.byPaymentMethod.CREDITO).toEqual({ count: 1, revenueCents: 1500 });
     expect((await app.inject({ method: "GET", url: "/api/reports/summary?from=lixo", headers: { cookie: ctx.cookie } })).statusCode).toBe(400);
     expect((await app.inject({ method: "GET", url: "/api/reports/summary" })).statusCode).toBe(401);
     void o1;

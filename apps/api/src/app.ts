@@ -6,10 +6,12 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import websocket from "@fastify/websocket";
 import authPlugin from "./plugins/auth";
+import { withTextTooLongCode } from "./lib/textErrors";
 import healthRoutes from "./routes/health";
 import authRoutes from "./routes/auth";
 import storefrontRoutes from "./routes/storefront";
 import orderRoutes from "./modules/orders/orders.module";
+import manualOrderRoutes from "./routes/manualOrders";
 import deviceRoutes from "./routes/device";
 import printJobRoutes from "./modules/printJobs/printJobs.module";
 import deviceAlertRoutes from "./modules/deviceAlerts/deviceAlerts.module";
@@ -29,15 +31,23 @@ import privacyRoutes from "./modules/privacy/privacy.module";
 import subscriptionRoutes from "./routes/subscription";
 import noticeRoutes from "./routes/notices";
 import mfaRoutes from "./routes/mfa";
+import deliveryZoneRoutes from "./routes/deliveryZones";
 import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
 import { clientKey } from "./lib/clientKey";
 import { isPrismaError, loggerOptions, redactLogUrl } from "./lib/logging";
 import { ORDER_TOKEN_HEADER } from "./lib/orderToken";
+import { currentKey } from "./lib/paymentCrypto";
+import { assertPaymentsBootConfig } from "./modules/storePayments/oauth";
 import jobsPlugin from "./jobs/plugin";
+import pixAvailabilityPlugin from "./plugins/pixAvailability";
+import storePaymentRoutes from "./modules/storePayments/storePayments.module";
+import subscriptionGate from "./plugins/subscriptionGate";
 
 export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = {}) {
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
   // e o rate limit deixa de contar o IP do proxy. Vazio = ignora X-Forwarded-For (não forjável).
+  // Pagamentos por loja: modo/credenciais/chave inválidos derrubam o boot (não o 1º PIX). `code`/`state` do OAuth saem do log pelo `redactLogUrl` do SEC-31.
+  assertPaymentsBootConfig(process.env, currentKey);
   // ST-76: o id padrão do Fastify é um contador sequencial (`req-1`, `req-2`…) e o 5xx devolve esse id ao cliente (ST-75): dois erros espaçados
   // mediriam o tráfego da API desde o boot. Id aleatório curto, e `requestIdHeader: false` para NÃO aceitar o `request-id` do cliente como id do log.
   const app = Fastify({
@@ -75,6 +85,12 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
     return reply.send(error);
   });
 
+  // API-49: código TEXT_TOO_LONG nos 400 de validação. Hook SÍNCRONO (com `done`) de propósito: um onSend assíncrono atrasa o
+  // `reply.sent`, e os guardas que fazem `reply.code(403).send(...)` sem `return` (requireOwner etc.) deixariam a rota seguir.
+  app.addHook("onSend", (_request, reply, payload, done) => {
+    done(null, reply.statusCode === 400 && typeof payload === "string" ? withTextTooLongCode(payload) : payload);
+  });
+
   app.register(cors, {
     origin: allowedOrigin(),
     credentials: true,
@@ -90,6 +106,9 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(websocket);
   app.register(authPlugin);
   app.register(jobsPlugin);
+  // Portão da assinatura (Consulta/Suspensão): precisa vir ANTES de qualquer rota, pois age no `onRoute`.
+  app.register(subscriptionGate);
+  app.register(pixAvailabilityPlugin);
 
   // Várias rotas são "ação sem corpo" (delete, revoke) chamadas com
   // Content-Type: application/json mas sem body — o parser padrão do Fastify rejeita
@@ -108,6 +127,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(authRoutes);
   app.register(storefrontRoutes);
   app.register(orderRoutes);
+  app.register(manualOrderRoutes);
   app.register(deviceRoutes);
   app.register(printJobRoutes);
   app.register(deviceAlertRoutes);
@@ -125,8 +145,10 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(feedbackRoutes);
   app.register(privacyRoutes);
   app.register(subscriptionRoutes);
+  app.register(storePaymentRoutes);
   app.register(noticeRoutes);
   app.register(mfaRoutes);
+  app.register(deliveryZoneRoutes);
 
   return app;
 }

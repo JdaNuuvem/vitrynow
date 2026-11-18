@@ -50,6 +50,8 @@ export type Order = {
   status: OrderStatus;
   customerName: string | null;
   totalCents: number;
+  // Gorjeta dentro do total (não é receita da loja, B14.1). A lista do painel manda; versões antigas não.
+  tipCents?: number;
   items: OrderItem[];
   delivererId: string | null;
   payment: OrderPayment | null;
@@ -63,6 +65,10 @@ export type Order = {
   // Quando o pedido entrou no estado atual (ISO). A API de hoje NÃO manda este campo: sem ele a tela só
   // calcula o tempo de pedido NOVO, a partir de createdAt (lacuna registrada para o Turing).
   statusChangedAt?: string;
+  // API-67: como a loja imprime (LEGACY: o cliente local pergunta ao servidor; QUEUE: fila com confirmação) e quando o pedido
+  // foi impresso na cozinha. A API de hoje NÃO manda estes campos (Turing): sem eles nenhuma faixa aparece.
+  printMode?: "LEGACY" | "QUEUE";
+  printedAt?: string | null;
 };
 
 export type Deliverer = { id: string; name: string; phone: string | null; active: boolean };

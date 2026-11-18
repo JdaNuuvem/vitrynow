@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { createCategorySchema, createProductSchema, updateProductSchema } from "@meucardapio/shared-types";
+import { createCategorySchema, createProductSchema, setSoldOutSchema, updateProductSchema } from "@meucardapio/shared-types";
 import { useDomainErrors } from "../../shared/errors";
 import type { CatalogService } from "./catalog.service";
 
@@ -48,6 +48,14 @@ export function buildCatalogRoutes(service: CatalogService): FastifyPluginAsync 
       const parsed = updateProductSchema.safeParse(request.body);
       if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
       return { product: await service.updateProduct(request.user.storeId, id, parsed.data) };
+    });
+
+    // API-17 (B11): "Esgotado hoje" em 1 toque; OWNER e STAFF (CA-B11-05); grava auditoria (RN-B11-07).
+    app.post("/api/catalog/products/:id/sold-out", auth, async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const parsed = setSoldOutSchema.safeParse(request.body);
+      if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+      return { product: await service.setSoldOut(request.user, id, parsed.data) };
     });
 
     app.post("/api/catalog/products/:id/delete", auth, async (request) => {

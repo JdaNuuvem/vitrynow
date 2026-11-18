@@ -78,6 +78,7 @@ namespace MeuCardapio.PrintClient
             ReclaimedBySameOwner();
             BadJobDoesNotBlockQueue();
             TestJobWithTicket();
+            AlertsToCentral();
             CoordinatorWarnings();
             LegacyUnchanged();
             ModeFollowsServer();
@@ -779,6 +780,245 @@ namespace MeuCardapio.PrintClient
         }
 
         static PrintableOrder ZeroTotalForLog() { return SelfTestPrint.ZeroTotal(); }
+
+        // PC-24 (cliente): avisos do cliente vao ao servidor em POST /api/device/alerts. Lista fechada, corpo estrito, sem PII, dedupe, nunca bloqueia, nunca decide nada.
+        const string Cuid1 = "ck4l2m0q10000abcdefghijkl", Cuid2 = "ck4l2m0q20000abcdefghijkl", Cuid3 = "ck4l2m0q30000abcdefghijkl";
+        static readonly string[] AllowedAlertKeys = { "code", "orderId", "clientVersion" };
+
+        // Rig ja INICIADO: o DeviceClient so tem BaseAddress depois do Start (como o app); sem isso o alerta e descartado em silencio.
+        static Rig StartedRig(FakeApi api, VirtualPrintTarget printer, string ledgerPath, string token, bool usePrintJobs = true)
+        {
+            var r = new Rig(api, printer, ledgerPath, token, usePrintJobs: usePrintJobs);
+            r.Start();
+            return r;
+        }
+
+        static PrintableOrder ConflictOrder(string cuid, string code, string localId)
+        {
+            var o = Order(localId, code); o.TotalCents = 5000; o.NothingToCharge = true; o.OrderId = localId; o.SourceOrderId = cuid;
+            return o;
+        }
+
+        static Newtonsoft.Json.Linq.JObject OneAlert(FakeApi api, int index = 0)
+        {
+            var all = api.AlertSnapshot();
+            return all.Length > index ? Newtonsoft.Json.Linq.JObject.Parse(all[index]) : null;
+        }
+
+        static void AlertsToCentral()
+        {
+            Func<string, string> dirOf = x => Tmp();
+            var dir = Tmp();
+            try
+            {
+                // 1) conflito do servidor: 1 alerta, corpo ESTRITO, orderId valido, versao no regex, Bearer da impressora
+                using (var api = new FakeApi())
+                using (var rig = StartedRig(api, new VirtualPrintTarget(Path.Combine(dir, "a1")), null, "mcd_impressora1_segredo"))
+                {
+                    rig.Coordinator.Handle(ConflictOrder(Cuid1, "7401", "loc-1"));
+                    bool got = WaitFor(() => api.AlertCalls >= 1, 10000);
+                    var a = OneAlert(api);
+                    Check("alerta: o conflito do servidor (nothingToCharge=true com total R$ 50) envia 1 alerta NOTHING_TO_CHARGE_CONFLICT", got && api.AlertCalls == 1 && a != null && (string)a["code"] == "NOTHING_TO_CHARGE_CONFLICT");
+                    Check("alerta: o corpo tem SO code, orderId e clientVersion (schema estrito), orderId = o cuid real e a versao casa com o regex", a != null && a.Properties().All(pr => AllowedAlertKeys.Contains(pr.Name)) && (string)a["orderId"] == Cuid1 && System.Text.RegularExpressions.Regex.IsMatch((string)a["clientVersion"], "^[0-9A-Za-z._-]{1,20}$"));
+                    Check("alerta: vai com o Bearer da impressora e o corpo e pequeno (< 200 bytes)", api.Has(r => r.StartsWith("POST /api/device/alerts") && r.EndsWith("auth=Bearer mcd_impressora1_segredo")) && api.AlertSnapshot()[0].Length < 200);
+                }
+
+                // 2) varredura de PII: nada do cliente, dos itens, da loja nem valores no corpo cru
+                using (var api = new FakeApi())
+                using (var rig = StartedRig(api, new VirtualPrintTarget(Path.Combine(dir, "a2")), null, "mcd_impressora1_segredo"))
+                {
+                    var o = ConflictOrder(Cuid1, "7402", "loc-2"); o.CustomerName = "Fulana Segredo"; o.CustomerPhone = "(11) 98888-7777"; o.Address = "Rua Reservada 123"; o.Notes = "OBS-SECRETA";
+                    rig.Coordinator.Handle(o);
+                    WaitFor(() => api.AlertCalls >= 1, 10000);
+                    var raw = api.AlertSnapshot().FirstOrDefault() ?? "";
+                    Check("alerta: o corpo NAO leva nome, telefone, endereco, observacao, itens, loja nem valores", raw.Length > 0 && !raw.Contains("Fulana") && !raw.Contains("98888") && !raw.Contains("Reservada") && !raw.Contains("OBS-SECRETA") && !raw.Contains("Calabresa") && !raw.Contains("Pizzaria") && !raw.Contains("5000") && !raw.Contains("7402"));
+                }
+
+                // 3) os outros dois avisos
+                using (var api = new FakeApi())
+                using (var rig = StartedRig(api, new VirtualPrintTarget(Path.Combine(dir, "a3")), null, "mcd_impressora1_segredo"))
+                {
+                    var inv = Newtonsoft.Json.JsonConvert.DeserializeObject<PrintableOrder>("{\"orderId\":\"" + Cuid2 + "\",\"code\":\"7403\",\"type\":\"BALCAO\",\"nothingToCharge\":\"lixo\",\"totalCents\":5000,\"items\":[{\"productName\":\"A\",\"quantity\":2,\"unitPriceCents\":2500}]}");
+                    inv.SourceOrderId = Cuid2;
+                    var empty = new PrintableOrder { OrderId = "loc-3b", SourceOrderId = Cuid3, Code = "7404", Type = "BALCAO", TotalCents = 0, Items = new List<PrintableOrderItem>() };
+                    rig.Coordinator.Handle(inv); rig.Coordinator.Handle(empty);
+                    bool got = WaitFor(() => api.AlertCalls >= 2, 10000);
+                    var codes = api.AlertSnapshot().Select(x => (string)Newtonsoft.Json.Linq.JObject.Parse(x)["code"]).OrderBy(x => x).ToArray();
+                    Check("alerta: nothingToCharge corrompido => NOTHING_TO_CHARGE_INVALID e tiquete sem itens com total zero => EMPTY_ZERO_TICKET", got && string.Join(",", codes) == "EMPTY_ZERO_TICKET,NOTHING_TO_CHARGE_INVALID");
+                }
+
+                // 4) dedupe: o mesmo alerta repetido 6 vezes sai UMA vez; outro pedido sai de novo
+                using (var api = new FakeApi())
+                using (var rig = StartedRig(api, new VirtualPrintTarget(Path.Combine(dir, "a4")), null, "mcd_impressora1_segredo"))
+                {
+                    for (int i = 0; i < 6; i++) rig.Coordinator.Handle(ConflictOrder(Cuid1, "7405", "loc-4-" + i));
+                    WaitFor(() => api.AlertCalls >= 1, 10000); System.Threading.Thread.Sleep(500);
+                    int first = api.AlertCalls;
+                    rig.Coordinator.Handle(ConflictOrder(Cuid2, "7406", "loc-4x"));
+                    bool second = WaitFor(() => api.AlertCalls >= 2, 10000);
+                    Check("alerta: o MESMO alerta (codigo + pedido) repetido 6 vezes sai UMA vez; outro pedido sai de novo (alertas: " + first + " e depois " + api.AlertCalls + ")", first == 1 && second && api.AlertCalls == 2);
+                }
+
+                // 5) lista fechada: o que nao esta na lista NUNCA sai (QUEUE_WITHOUT_PRINTER e so do servidor)
+                using (var api = new FakeApi())
+                using (var rig = StartedRig(api, new VirtualPrintTarget(Path.Combine(dir, "a5")), null, "mcd_impressora1_segredo"))
+                {
+                    bool any = false;
+                    foreach (var bad in new string[] { "QUEUE_WITHOUT_PRINTER", "lixo", "", null, "nothing_to_charge_conflict", "MODE_UNCONFIRMED ", "<script>" })
+                        any |= rig.Device.ReportAlert(bad, Cuid1);
+                    System.Threading.Thread.Sleep(400);
+                    Check("alerta: codigo fora da lista (QUEUE_WITHOUT_PRINTER, lixo, vazio, nulo, minuscula, com espaco, html) NUNCA sai", !any && api.AlertCalls == 0 && DeviceAlertCode.All.Length == 5 && !DeviceAlertCode.All.Contains("QUEUE_WITHOUT_PRINTER"));
+                }
+
+                // 6) orderId so com o formato de cuid; senao o alerta sai SEM o id
+                using (var api = new FakeApi())
+                using (var rig = StartedRig(api, new VirtualPrintTarget(Path.Combine(dir, "a6")), null, "mcd_impressora1_segredo"))
+                {
+                    rig.Device.AlertDedupeWindow = TimeSpan.Zero;
+                    var badIds = new string[] { "job:abc", "abc", Cuid1.ToUpperInvariant(), "c" + new string('a', 40), "ck4l2m0q10000abcdefghijk\n", "../../etc", null };
+                    int expected = 0;
+                    foreach (var id in badIds) { rig.Device.ReportAlert(DeviceAlertCode.EmptyZeroTicket, id); expected++; WaitFor(() => api.AlertCalls >= expected, 10000); }
+                    var bodies = api.AlertSnapshot().Select(x => Newtonsoft.Json.Linq.JObject.Parse(x)).ToArray();
+                    Check("alerta: orderId fora do formato de cuid (job:, curto, maiusculo, longo, com quebra de linha, caminho, nulo) sai SEM orderId (" + bodies.Length + " alertas)", bodies.Length == badIds.Length && bodies.All(b => b["orderId"] == null));
+                }
+
+                // 7) NUNCA bloqueia a impressao: o servidor de alertas demora 6 s, o Handle volta rapido e o papel sai
+                using (var api = new FakeApi { AlertDelayMs = 6000 })
+                {
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "a7"));
+                    using (var rig = StartedRig(api, printer, null, "mcd_impressora1_segredo"))
+                    {
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
+                        rig.Coordinator.Handle(ConflictOrder(Cuid1, "7407", "loc-7"));
+                        long ms = sw.ElapsedMilliseconds;
+                        Check("alerta: com o servidor de alertas lento (6 s) o Handle volta em menos de 2 s e o papel sai (" + ms + " ms)", ms < 2000 && Paper(printer, "7407") == 1);
+                    }
+                }
+
+                // 8) aviso de cancelamento, tiquete de teste e pedido normal NAO geram alerta
+                using (var api = new FakeApi())
+                using (var rig = StartedRig(api, new VirtualPrintTarget(Path.Combine(dir, "a8")), null, "mcd_impressora1_segredo"))
+                {
+                    var c = SelfTestPrint.CancelFromApi(); c.OrderId = "loc-8a"; c.SourceOrderId = Cuid1; c.TotalCents = 5000; c.NothingToCharge = true;
+                    var t = SelfTestPrint.TestFromClient(); t.OrderId = "loc-8b"; t.SourceOrderId = Cuid2; t.TotalCents = 5000; t.NothingToCharge = true;
+                    var n = Order("n", "7408"); n.OrderId = "loc-8c"; n.SourceOrderId = Cuid3;
+                    rig.Coordinator.Handle(c); rig.Coordinator.Handle(t); rig.Coordinator.Handle(n);
+                    System.Threading.Thread.Sleep(600);
+                    Check("alerta: aviso de cancelamento, tiquete de teste e pedido normal NAO geram alerta", api.AlertCalls == 0);
+                }
+
+                // 9) 401 no alerta: nao quebra nada; um 401 isolado nao pausa a impressora
+                using (var api = new FakeApi { AlertStatus = 401 })
+                {
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "a9"));
+                    using (var rig = StartedRig(api, printer, null, "mcd_impressora1_segredo"))
+                    {
+                        rig.Coordinator.Handle(ConflictOrder(Cuid1, "7409", "loc-9"));
+                        WaitFor(() => api.AlertCalls >= 1, 10000); System.Threading.Thread.Sleep(300);
+                        Check("alerta: resposta 401 ao alerta nao quebra a impressao e um 401 isolado nao pausa a impressora", Paper(printer, "7409") == 1 && !rig.Device.IsRevoked);
+                    }
+                }
+
+                // 10) 404 (API sem a rota): para de tentar por um prazo
+                using (var api = new FakeApi { AlertStatus = 404 })
+                using (var rig = StartedRig(api, new VirtualPrintTarget(Path.Combine(dir, "a10")), null, "mcd_impressora1_segredo"))
+                {
+                    rig.Coordinator.Handle(ConflictOrder(Cuid1, "7410", "loc-10a"));
+                    WaitFor(() => api.AlertCalls >= 1, 10000); System.Threading.Thread.Sleep(300);
+                    rig.Coordinator.Handle(ConflictOrder(Cuid2, "7411", "loc-10b"));
+                    System.Threading.Thread.Sleep(600);
+                    Check("alerta: 404 (API sem a rota) suprime os alertas seguintes pelo prazo (chamadas: " + api.AlertCalls + ")", api.AlertCalls == 1);
+                }
+
+                // 11) alertas de modo: MODE_UNCONFIRMED uma vez, MODE_RECOVERED so depois; sem corpo alem de code/versao
+                using (var api = new FakeApi())
+                {
+                    api.PrintMode = "LEGACY"; api.ConfigStatus = 500;
+                    var o = Order("m", "7412"); LegacyOrder(api, o);
+                    using (var rig = StartedRig(api, new VirtualPrintTarget(Path.Combine(dir, "a11")), null, "mcd_impressora1_segredo", usePrintJobs: false))
+                    {
+                        Check("alerta: MODE_RECOVERED sem MODE_UNCONFIRMED anterior NAO sai", !rig.Device.ReportAlert(DeviceAlertCode.ModeRecovered));
+                        rig.Device.ConfigFailuresBeforeWarning = 3;
+                        
+                        bool unconfirmed = WaitFor(() => rig.Device.ModeUnconfirmed && api.AlertCalls >= 1, 20000);
+                        System.Threading.Thread.Sleep(500);
+                        var u = OneAlert(api);
+                        Check("alerta: falha seguida da config envia MODE_UNCONFIRMED UMA vez, so com code e versao (sem orderId)", unconfirmed && api.AlertCalls == 1 && (string)u["code"] == "MODE_UNCONFIRMED" && u["orderId"] == null);
+                        api.ConfigStatus = 200;
+                        bool recovered = WaitFor(() => !rig.Device.ModeUnconfirmed && api.AlertCalls >= 2, 20000);
+                        var r2 = OneAlert(api, 1);
+                        Check("alerta: a config voltando envia MODE_RECOVERED UMA vez", recovered && api.AlertCalls == 2 && (string)r2["code"] == "MODE_RECOVERED");
+                    }
+                }
+
+                // 11b) o MODE_UNCONFIRMED que se perdeu (500) e REENVIADO enquanto o modo segue sem confirmar; depois de entregue, nao repete
+                using (var api = new FakeApi { AlertStatus = 500 })
+                {
+                    api.PrintMode = "LEGACY"; api.ConfigStatus = 500;
+                    var o = Order("mr", "7414"); LegacyOrder(api, o);
+                    using (var rig = StartedRig(api, new VirtualPrintTarget(Path.Combine(dir, "a11b")), null, "mcd_impressora1_segredo", usePrintJobs: false))
+                    {
+                        rig.Device.ConfigFailuresBeforeWarning = 3; rig.Device.ModeAlertRetry = TimeSpan.FromMilliseconds(300);
+                        bool lost = WaitFor(() => rig.Device.ModeUnconfirmed && api.AlertCalls >= 1, 20000);
+                        api.AlertStatus = 204;
+                        bool resent = WaitFor(() => api.AlertCalls >= 2 && api.AlertSnapshot().Count(b => (string)Newtonsoft.Json.Linq.JObject.Parse(b)["code"] == "MODE_UNCONFIRMED") >= 2, 30000);
+                        int calls = api.AlertCalls; System.Threading.Thread.Sleep(1500);
+                        Check("alerta: MODE_UNCONFIRMED perdido (500) e reenviado enquanto o modo segue sem confirmar (chamadas: " + calls + ")", lost && resent);
+                        Check("alerta: MODE_UNCONFIRMED entregue (204) NAO se repete (chamadas antes/depois: " + calls + "/" + api.AlertCalls + ")", api.AlertCalls == calls);
+                        // MODE_RECOVERED perdido: a config volta, o alerta falha, e e reenviado na proxima resposta
+                        api.AlertStatus = 500; api.ConfigStatus = 200; int before = api.AlertCalls;
+                        bool recLost = WaitFor(() => api.AlertCalls > before, 20000);
+                        api.AlertStatus = 204;
+                        bool recResent = WaitFor(() => api.AlertSnapshot().Count(b => (string)Newtonsoft.Json.Linq.JObject.Parse(b)["code"] == "MODE_RECOVERED") >= 2, 30000);
+                        int after = api.AlertCalls; System.Threading.Thread.Sleep(1500);
+                        Check("alerta: MODE_RECOVERED perdido (500) e reenviado na config seguinte, depois nao repete", recLost && recResent && api.AlertCalls == after);
+                    }
+                }
+
+                // 11c) 400/422 (servidor recusou o corpo): descarte DEFINITIVO, o alerta de modo NAO e reenviado a cada 60 s para sempre
+                foreach (int refused in new int[] { 400, 422 })
+                using (var api = new FakeApi { AlertStatus = refused })
+                {
+                    api.PrintMode = "LEGACY"; api.ConfigStatus = 500;
+                    var o = Order("mx" + refused, "74" + (refused - 360)); LegacyOrder(api, o);
+                    using (var rig = StartedRig(api, new VirtualPrintTarget(Path.Combine(dir, "a11c" + refused)), null, "mcd_impressora1_segredo", usePrintJobs: false))
+                    {
+                        rig.Device.ConfigFailuresBeforeWarning = 3; rig.Device.ModeAlertRetry = TimeSpan.FromMilliseconds(200);
+                        bool first = WaitFor(() => rig.Device.ModeUnconfirmed && api.AlertCalls >= 1, 20000);
+                        System.Threading.Thread.Sleep(2500);   // 12 janelas de reenvio; a config segue falhando
+                        Check("alerta: resposta " + refused + " ao MODE_UNCONFIRMED e descarte definitivo, sem reenvio (chamadas: " + api.AlertCalls + ")", first && api.AlertCalls == 1);
+                    }
+                }
+
+                // 12) teto de alertas em voo: uma rajada de pedidos distintos nao inunda o servidor nem trava nada
+                using (var api = new FakeApi { AlertDelayMs = 2500 })
+                {
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "a12"));
+                    using (var rig = StartedRig(api, printer, null, "mcd_impressora1_segredo"))
+                    {
+                        int sent = 0;
+                        for (int i = 0; i < 30; i++) if (rig.Device.ReportAlert(DeviceAlertCode.NothingToChargeConflict, "ck4l2m0q" + (10000 + i).ToString("00000") + "abcdefghijkl")) sent++;
+                        Check("alerta: rajada de 30 pedidos distintos com o servidor lento: no maximo 5 em voo (enviados: " + sent + ")", sent == 5);
+                    }
+                }
+
+                // 13) modo FILA: o alerta leva o id REAL do pedido (nao a chave job:<id>)
+                using (var api = new FakeApi())
+                {
+                    var o = Order("q", "7413"); o.OrderId = Cuid1; o.TotalCents = 5000; o.NothingToCharge = true;
+                    api.AddJob("q1", o);
+                    var printer = new VirtualPrintTarget(Path.Combine(dir, "a13"));
+                    using (var rig = StartedRig(api, printer, null, "mcd_impressora1_segredo"))
+                    {
+                        
+                        bool done = WaitFor(() => api.JobState("q1") == "PRINTED" && api.AlertCalls >= 1, 20000);
+                        var a = OneAlert(api);
+                        Check("alerta: no modo fila o alerta leva o id REAL do pedido (cuid), nunca a chave job:<id>", done && a != null && (string)a["orderId"] == Cuid1 && (string)a["code"] == "NOTHING_TO_CHARGE_CONFLICT");
+                    }
+                }
+            }
+            finally { Clean(dir); }
+        }
 
         // 12) UsePrintJobs desligado (padrao): o cliente continua no /pending e nunca chama o claim
         static void LegacyUnchanged()

@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { prisma } from "@meucardapio/db";
 import { MAX_REFUND_AUTO_ATTEMPTS, providerErrorCode, refundAutoRetryable } from "../src/modules/orders/orders.service";
 import { orderService } from "../src/modules/orders/orders.module";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { makeApp, registerStore, resetDb, useMockedProvider } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -17,6 +17,7 @@ const getPayment = vi.mocked(mp.getPayment);
 describe("API-06a — estorno travado", () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     app = makeApp();
     await app.ready();
@@ -80,13 +81,13 @@ describe("API-06a — estorno travado", () => {
     expect((await cancelar(c)).statusCode).toBe(202); // tentativa 1
     for (let i = 2; i < MAX_REFUND_AUTO_ATTEMPTS; i++) await tentar(c);
     const antes = await prisma.payment.findUniqueOrThrow({ where: { id: c.paymentId } });
-    expect(antes.refundAttempts).toBe(MAX_REFUND_AUTO_ATTEMPTS - 1);
+    expect(antes.refundAttempts).toBe(4); // literal: com teto 6 este número seria 5 e o alerta sairia tarde
     expect(refundAutoRetryable(antes)).toBe(true);
     expect(await stuckRows(c.store.id)).toBe(0);
     await tentar(c); // cruza o teto
     await vi.waitFor(async () => expect(await stuckRows(c.store.id)).toBe(1));
     const depois = await prisma.payment.findUniqueOrThrow({ where: { id: c.paymentId } });
-    expect(depois.refundAttempts).toBe(MAX_REFUND_AUTO_ATTEMPTS);
+    expect(depois.refundAttempts).toBe(5);
     expect(refundAutoRetryable(depois)).toBe(false); // o job automático (API-06) para aqui
     await tentar(c);
     await tentar(c); // o manual do dono continua sendo possível...
@@ -94,12 +95,32 @@ describe("API-06a — estorno travado", () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(await stuckRows(c.store.id)).toBe(1); // ...e o alerta NÃO se repete
     const row = await prisma.auditLog.findFirstOrThrow({ where: { storeId: c.store.id, action: "order.refund_stuck" } });
-    expect(row.metadata).toEqual({ attempts: MAX_REFUND_AUTO_ATTEMPTS });
+    expect(row.metadata).toEqual({ attempts: 5 });
     // por fim o provedor volta e o estorno conclui mesmo depois do teto
     refundPayment.mockResolvedValue(undefined);
     const ok = await tentar(c);
     expect(ok.statusCode, ok.body).toBe(200);
     expect((await prisma.payment.findUniqueOrThrow({ where: { id: c.paymentId } })).status).toBe("REEMBOLSADO");
+  });
+
+  it("falha TARDIA com o pagamento já REEMBOLSADO: contador e alerta ficam intactos (o UPDATE só vale com status ESTORNO_PENDENTE)", async () => {
+    const c = await pedidoPagoPendenteDeEstorno();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    // um estorno anterior terminou no meio: o contador está em teto-1, e a PRÓXIMA falha, se contada, cruzaria o teto e alertaria
+    await prisma.payment.update({ where: { id: c.paymentId }, data: { refundAttempts: 4 } });
+    // enquanto esta tentativa fala com o provedor, outra via conclui o estorno (REEMBOLSADO) e só então a chamada falha
+    refundPayment.mockImplementation(async () => {
+      await prisma.payment.update({ where: { id: c.paymentId }, data: { status: "REEMBOLSADO" } });
+      throw new Error("falha tardia");
+    });
+    getPayment.mockRejectedValue(new Error("falha tardia"));
+    await cancelar(c);
+    await new Promise((r) => setTimeout(r, 300));
+    const p = await prisma.payment.findUniqueOrThrow({ where: { id: c.paymentId } });
+    expect(p.status).toBe("REEMBOLSADO");
+    expect(p.refundAttempts).toBe(4); // não contou a falha de um pagamento que já não está pendente
+    expect(p.refundLastError).toBeNull();
+    expect(await stuckRows(c.store.id)).toBe(0); // e não alertou
   });
 
   it("tentativas simultâneas que cruzam o teto emitem UM alerta só", async () => {

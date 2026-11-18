@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { FakePixGateway } from "../src/modules/storePayments/gateway";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
 describe("pedido no storefront + cupom", () => {
@@ -93,6 +94,7 @@ describe("pedido no storefront + cupom", () => {
   it("falha de PIX (sem MP_ACCESS_TOKEN em teste) cancela o pedido SEM apagá-lo e devolve o uso do cupom", async () => {
     const { cookie } = await registerStore(app, { slug: "loja-pix", code: "PIX1" });
     const productId = await setupProduct(cookie!, "loja-pix");
+    FakePixGateway.failNext = new Error("provedor fora do ar"); // PIX por loja (API-07): a falha do provedor vem do gateway fake da loja (antes: ausência de MP_ACCESS_TOKEN)
 
     await app.inject({
       method: "POST",

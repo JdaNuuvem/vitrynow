@@ -2,7 +2,8 @@
 // Mercado Pago é SEMPRE mockado.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { login, makeApp, registerStore, resetDb, orderTokenHeader } from "./helpers";
+import { activateSubscription } from "../src/lib/subscription";
+import { login, makeApp, registerStore, resetDb, orderTokenHeader, useMockedProvider } from "./helpers";
 import { subscribe } from "../src/realtime/hub";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
@@ -16,19 +17,21 @@ const getPayment = vi.mocked(mp.getPayment);
 
 type App = ReturnType<typeof makeApp>;
 
-describe("API-02 — estados do pedido", () => {
+// Folga de prazo para máquina carregada (CI, várias suítes em paralelo): testes simples chegaram a levar 19 s e estouravam os 15 s. Só o prazo muda, nenhuma asserção.
+describe("API-02 — estados do pedido", { timeout: 60_000 }, () => {
   let app: App;
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     refundPayment.mockResolvedValue(undefined);
     cancelPayment.mockResolvedValue(undefined);
     app = makeApp();
     await app.ready();
-  });
+  }, 60_000);
   afterEach(async () => {
     await app.close();
     await resetDb();
-  });
+  }, 60_000);
   afterAll(async () => {
     await prisma.$disconnect();
   });
@@ -47,6 +50,9 @@ describe("API-02 — estados do pedido", () => {
   type Ctx = Awaited<ReturnType<typeof setup>>;
 
   async function staffCookie(ctx: Ctx) {
+    // Equipe é recurso do PRO (API-08): a loja de teste ativa o PRO antes de convidar.
+    const subscription = await prisma.subscription.findFirstOrThrow({ where: { storeId: ctx.storeId } });
+    await activateSubscription({ subscriptionId: subscription.id, planCode: "PRO" });
     const invited = await app.inject({ method: "POST", url: "/api/users", headers: { cookie: ctx.cookie }, payload: { email: `staff-${Date.now()}@t.com`, password: "provisoria1" } });
     expect(invited.statusCode).toBe(201);
     const email = json(invited).user.email as string;

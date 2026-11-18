@@ -79,6 +79,21 @@ const TARGETS = {
       return (await tx.deviceAlert.aggregate({ _min: { expiresAt: true } }))._min.expiresAt;
     },
   },
+  // API-07 / ADR-0011 §4: `state` do OAuth do Mercado Pago (só o hash; uso único; vale 10 min). Vencido ou usado é lixo técnico.
+  PaymentOAuthState: {
+    async claim(tx, cutoff, limit) {
+      const rows = await tx.$queryRaw<{ id: string }[]>`
+        SELECT "id" FROM "PaymentOAuthState" WHERE "expiresAt" < ${utc(cutoff)}
+        ORDER BY "expiresAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED`;
+      return rows.map((row) => row.id);
+    },
+    async remove(tx, ids) {
+      return (await tx.paymentOAuthState.deleteMany({ where: { id: { in: ids } } })).count;
+    },
+    async oldestExpiry(tx) {
+      return (await tx.paymentOAuthState.aggregate({ _min: { expiresAt: true } }))._min.expiresAt;
+    },
+  },
 } satisfies Record<string, Target>;
 
 export type TechTable = keyof typeof TARGETS;
@@ -101,6 +116,14 @@ export const techCleanupJob: Job = {
         processed += removed;
         log.info({ job: "tech.cleanup", table, removed }, "tech.cleanup.removed");
       }
+      // API-13 (LGPD, Nightingale/Atlas): a impressão digital da idempotência do pedido manual só serve por minutos; depois da retenção o valor é zerado
+      // (a janela útil acabou e o hash derivado de dados do cliente não deve ficar guardado). NÃO apaga nem altera o pedido: só esta coluna.
+      const scrubbed = await tx.$executeRaw`
+        UPDATE "Order" SET "manualBodyHash" = NULL
+         WHERE "id" IN (SELECT "id" FROM "Order" WHERE "manualBodyHash" IS NOT NULL AND "createdAt" < ${utc(cutoff)}
+                         ORDER BY "createdAt" LIMIT ${limit} FOR UPDATE SKIP LOCKED)`;
+      if (scrubbed > 0) log.info({ job: "tech.cleanup", column: "Order.manualBodyHash", scrubbed }, "tech.cleanup.scrubbed");
+      processed += scrubbed;
       return processed;
     });
     return { processed: claimed.acquired ? claimed.value : 0 };
