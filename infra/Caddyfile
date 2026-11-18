@@ -85,6 +85,21 @@
 	handle /health {
 		reverse_proxy api:3001
 	}
+	# Fotos do cardápio em DISCO LOCAL (ADR-0017). O volume é montado SOMENTE LEITURA em /srv/uploads. Só serve o formato exato que a API gera
+	# (stores/<loja>/<uuid>-<largura>.webp): qualquer outro caminho (listagem, ".." , %2e, outra extensão, maiúsculas) é 404. Sem `browse`: nunca lista pasta.
+	# O nome é aleatório e IMUTÁVEL (foto nova = nome novo), então o cache é longo; nosniff e CSP vazia: o navegador não interpreta o arquivo como página.
+	handle /media/* {
+		@foto path_regexp foto ^/media/(stores/[A-Za-z0-9_-]{1,64}/[a-f0-9-]{36}-[0-9]{2,5}\.webp)$
+		handle @foto {
+			rewrite * /{re.foto.1}
+			header Cache-Control "public, max-age=31536000, immutable"
+			header X-Content-Type-Options "nosniff"
+			header Content-Security-Policy "default-src 'none'; sandbox"
+			root * /srv/uploads
+			file_server
+		}
+		respond "not found" 404
+	}
 	# SEC-26 / ST-44: o cardápio público (/loja/*) faz o web chamar a API por slug; sem limite, varrer /loja/<aleatório> esgota
 	# o balde de serviço da API. Limite POR IP REAL (remote_host da conexão: o X-Forwarded-For do cliente não conta). 120/min
 	# cobre um restaurante inteiro atrás do mesmo Wi-Fi; quem passa disso recebe 429 com Retry-After. /health e a API não são afetados.
