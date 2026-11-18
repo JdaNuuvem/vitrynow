@@ -67,6 +67,9 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
     return orderService.setInternalNote(actorOf(request), id, parsed.data.note);
   });
 
+  // API-69: lista e contagem de estornos presos, só do OWNER. Rota estática: vence `/api/orders/:id`.
+  app.get("/api/orders/refund-stuck", auth, async (request) => orderService.listStuckRefunds(actorOf(request)));
+
   app.get("/api/orders/:id", auth, async (request) => {
     const { id } = request.params as { id: string };
     return { order: await orderService.detail(actorOf(request), id) };

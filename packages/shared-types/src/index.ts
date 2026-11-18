@@ -132,6 +132,8 @@ export const wsServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("order.cancel_notice"), orderId: z.string() }),
   z.object({ type: z.literal("payment.refund_pending"), orderId: z.string() }),
   z.object({ type: z.literal("payment.refund_done"), orderId: z.string() }),
+  // API-69 (RN-REF-01): o estorno cruzou o teto de tentativas automáticas. SÓ o id do pedido (sem valor, regra do canal); sai UMA vez.
+  z.object({ type: z.literal("payment.refund_stuck"), orderId: z.string() }),
   z.object({ type: z.literal("payment.reconcile_needed"), orderId: z.string() }),
   // Fila de impressão (ADR-0004): só "acorde e peça job"; nenhum dado de pedido ou cliente no canal.
   z.object({ type: z.literal("print.available") }),

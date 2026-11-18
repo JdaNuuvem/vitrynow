@@ -1,4 +1,5 @@
 import type { Order, OrderItem, Payment, Deliverer } from "@meucardapio/db";
+import { MAX_REFUND_AUTO_ATTEMPTS } from "../../lib/refundPolicy";
 
 // Visão do pedido para o PAINEL (PRD-15, Nightingale API-54a). Regra geral: resposta de pedido SEMPRE por allowlist —
 // o objeto é montado campo a campo, NUNCA com spread de linha do Prisma. Um campo novo na tabela não chega ao navegador
@@ -110,6 +111,8 @@ export function toPanelOrder(
       expiresAt: order.payment.expiresAt,
       refundPending: order.payment.status === "ESTORNO_PENDENTE" && !order.payment.refundAbandonedAt,
       refundAbandoned: !!order.payment.refundAbandonedAt,
+      // API-69 (RN-REF-02): selo "Estorno preso" para OWNER e STAFF; nunca o contador nem o texto do erro.
+      refundStuck: order.payment.status === "ESTORNO_PENDENTE" && !order.payment.refundAbandonedAt && order.payment.refundAttempts >= MAX_REFUND_AUTO_ATTEMPTS,
       reconcileRequired: !!order.payment.reconcileNote,
     },
     allowedTransitions: extras.allowedTransitions,
