@@ -3,9 +3,11 @@
 import { useCallback, useEffect, useState } from "react";
 import type { PlanOffer, Subscription } from "@/core/domain/subscription";
 import { usePanelServices } from "@/core/services/PanelServices";
+import { useSecurityConfirm } from "@/features/seguranca/SecurityConfirmProvider";
 
 export function useSubscription() {
   const { subscription: gateway } = usePanelServices();
+  const { runProtected } = useSecurityConfirm();
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [plans, setPlans] = useState<PlanOffer[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -22,11 +24,11 @@ export function useSubscription() {
   }, [reload]);
 
   const cancel = useCallback(async (): Promise<string | null> => {
-    const result = await gateway.cancel();
+    const result = await runProtected("cancel_subscription", (options) => gateway.cancel(options));
     if (!result.ok) return result.error;
     setSubscription(result.data.subscription);
     return null;
-  }, [gateway]);
+  }, [gateway, runProtected]);
 
   return { subscription, plans, error, reload, cancel };
 }
