@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 
 // Erros de regra de negócio. Os serviços lançam estes (sem saber de HTTP); a tradução para
 // status + corpo { error } acontece em useDomainErrors, na borda.
@@ -28,6 +28,18 @@ export class CodedError extends DomainError {
   }
 }
 
+// SEC-34: a faixa de hash de senha está cheia. Corpo, código e `Retry-After` são SEMPRE os mesmos (nada depende da conta, da fila nem da origem:
+// o 503 não vira oráculo). Quem recebe tenta de novo; nenhum dado foi gravado.
+export const SERVER_BUSY_RETRY_AFTER_SECONDS = 2;
+export class ServerBusyError extends CodedError {
+  constructor() {
+    super(503, "SERVER_BUSY", "Servidor ocupado. Tente de novo em instantes.");
+  }
+}
+export function sendServerBusy(reply: FastifyReply) {
+  return reply.header("Retry-After", String(SERVER_BUSY_RETRY_AFTER_SECONDS)).code(503).send({ error: "Servidor ocupado. Tente de novo em instantes.", code: "SERVER_BUSY" });
+}
+
 export class UnauthorizedError extends DomainError {
   constructor(message: string) {
     super(401, message);
@@ -50,6 +62,7 @@ export class ConflictError extends DomainError {
 // para DomainError. Qualquer outro erro segue o tratamento padrão do Fastify.
 export function useDomainErrors(app: FastifyInstance) {
   app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof ServerBusyError) return sendServerBusy(reply);
     if (error instanceof DomainError) {
       return reply.code(error.statusCode).send({ error: error.message, ...(error.code ? { code: error.code } : {}), ...error.extra });
     }
