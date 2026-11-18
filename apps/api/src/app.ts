@@ -45,6 +45,7 @@ import storePaymentRoutes from "./modules/storePayments/storePayments.module";
 import subscriptionGate from "./plugins/subscriptionGate";
 import storeHoursRoutes from "./modules/storeHours/storeHours.module";
 import optionGroupRoutes from "./modules/optionGroups/optionGroups.module";
+import menuRevalidationPlugin from "./plugins/menuRevalidation";
 
 export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = {}) {
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
@@ -112,6 +113,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   // Portão da assinatura (Consulta/Suspensão): precisa vir ANTES de qualquer rota, pois age no `onRoute`.
   app.register(subscriptionGate);
   app.register(pixAvailabilityPlugin);
+  app.register(menuRevalidationPlugin);
 
   // Várias rotas são "ação sem corpo" (delete, revoke) chamadas com
   // Content-Type: application/json mas sem body — o parser padrão do Fastify rejeita

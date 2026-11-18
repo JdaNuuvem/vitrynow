@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@meucardapio/db";
 import { JobRunner, type JobRunnerOptions } from "./runner";
 import { mpTokenRefreshJob } from "./mpTokenRefresh";
+import { menuRevalidateJob } from "./menuRevalidate";
 import { techCleanupJob } from "./techCleanup";
 import { queueWatchJob } from "./queueWatch";
 import { paymentExpireJob } from "./paymentExpire";
@@ -14,6 +15,7 @@ import type { Job } from "./types";
  * único, intervalo e limite.
  */
 export const registeredJobs: Job[] = [techCleanupJob, queueWatchJob, paymentExpireJob, paymentReconcileJob, refundRetryJob, mpTokenRefreshJob];
+export const registeredJobs: Job[] = [techCleanupJob, menuRevalidateJob];
 
 export function createJobRunner(options: JobRunnerOptions & { db: PrismaClient }, jobs: Job[] = registeredJobs): JobRunner {
   const runner = new JobRunner(options);

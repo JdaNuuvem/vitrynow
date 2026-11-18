@@ -12,6 +12,7 @@ export const JOB_LOCK_KEYS = {
   "message.outbox": 7008n,
   "tech.cleanup": 7009n,
   "print.queue_watch": 7010n,
+  "menu.revalidate": 7010n,
 } as const;
 
 export type JobName = keyof typeof JOB_LOCK_KEYS;
