@@ -54,6 +54,8 @@ export type Entitlements = {
   phase: Phase;
   /** Fim da Consulta (início da Suspensão); `null` em TRIAL/ACTIVE. */
   readOnlyEndsAt: string | null;
+  /** Quando a fase muda se nada acontecer: fim do teste/período (TRIAL/ACTIVE) ou da Consulta; `null` em SUSPENDED. */
+  nextPhaseAt: string | null;
   features: Feature[];
   limits: PlanLimits;
   access: Access;
@@ -112,9 +114,12 @@ export function resolveEntitlements(
 ): Entitlements {
   const { phase, readOnlyEndsAt } = phaseOf(subscription, now);
   const effectivePlan = phase === "TRIAL" ? basicPlan : (subscription.plan ?? basicPlan);
+  const nextPhaseAt =
+    phase === "TRIAL" ? subscription.trialEndsAt : phase === "ACTIVE" ? subscription.currentPeriodEnd : phase === "READ_ONLY" ? readOnlyEndsAt : null;
   return {
     phase,
     readOnlyEndsAt: readOnlyEndsAt?.toISOString() ?? null,
+    nextPhaseAt: nextPhaseAt?.toISOString() ?? null,
     features: phase === "TRIAL" || phase === "ACTIVE" ? planFeatures(effectivePlan) : [],
     limits: planLimits(effectivePlan),
     access: accessFor(phase),
