@@ -226,7 +226,7 @@ out="$(up grande.png)"; [ "${out##*|}" = 413 ] && check ok "9h arquivo de ~9,5 M
 out="$(up foto.png PRODUCT image/png '../../../etc/evil.png')"; code="${out##*|}"; resp="${out%|*}"
 if [ "$code" = 201 ]; then
   IMGID="$(printf '%s' "$resp" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)"
-  mapfile -t VURLS < <(printf '%s' "$resp" | grep -o 'http[^"]*\.webp')
+  mapfile -t VURLS < <(printf '%s' "$resp" | grep -o 'http[^"]*\.webp' | sort -u)   # o campo `url` repete a maior variante: dedup
   check ok "9h upload válido (nome do arquivo com ../../ é ignorado): 201, ${#VURLS[@]} variante(s)"
   [[ "${VURLS[0]}" =~ /media/stores/[A-Za-z0-9_-]+/[a-f0-9-]{36}-[0-9]+\.webp$ ]] && [[ "${VURLS[0]}" != *evil* && "${VURLS[0]}" != *..* ]] && check ok "9h a URL pública é /media/stores/<loja>/<uuid>-<largura>.webp (nada do nome enviado)" || check fail "9h URL inesperada: ${VURLS[0]}"
 else IMGID=""; VURLS=(); check fail "9h upload válido falhou: $out"; fi
@@ -239,7 +239,11 @@ if [ "${#VURLS[@]}" -ge 1 ]; then
   p0="/${VURLS[0]#*://*/}"; SHA_SERV="$(curl -s "http://127.0.0.1:$PORT$p0" | sha256sum | cut -d' ' -f1)"
   perm="$("${DC[@]}" exec -T api sh -c "stat -c '%a %U' /uploads${p0#/media}" | tr -d '\r')"; [ "$perm" = "644 node" ] && check ok "9h arquivo no volume com modo 644, dono node" || check fail "9h arquivo no volume: '$perm'"
   [ "$(nfotos)" = "$((N0 + ${#VURLS[@]}))" ] && check ok "9h o volume ganhou exatamente ${#VURLS[@]} arquivo(s) (um por variante)" || check fail "9h arquivos no volume: $(nfotos) (esperado $((N0 + ${#VURLS[@]})))"
-  tr_out="$(curl -s --path-as-is -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/media/stores/x/..${p0#/media/stores}")"; { [ "$tr_out" = 404 ] || [ "$tr_out" = 400 ]; } && check ok "9h traversal na leitura ('..' antes do caminho real): $tr_out" || check fail "9h traversal na leitura devolveu $tr_out"
+  # '..' que ESCAPA da raiz, partindo de um caminho real (um '..' que volta ao próprio arquivo legítimo é servido, como a URL normal: não é fuga)
+  badt=""; for tp in "/media/stores/x/../../../../etc/passwd" "${p0}/../../../../../etc/passwd" "/media/stores/x/..%2f..%2f..%2f..%2fetc/passwd"; do
+    to="$(curl -s --path-as-is -w '|%{http_code}' "http://127.0.0.1:$PORT$tp")"; { [ "${to##*|}" = 404 ] || [ "${to##*|}" = 400 ]; } && [[ "$to" != *"root:"* ]] || badt="$badt [$tp -> ${to##*|}]"
+  done
+  [ -z "$badt" ] && check ok "9h traversal que escapa da raiz, a partir de caminho real: negado (404/400), sem vazar /etc/passwd" || check fail "9h traversal na leitura:$badt"
   # persistência: reiniciar a API e o Caddy não apaga a foto
   "${DC[@]}" restart api caddy >/dev/null 2>&1; for t in $(seq 1 40); do [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health")" = 200 ] && break; sleep 3; done
   [ "$(curl -s "http://127.0.0.1:$PORT$p0" | sha256sum | cut -d' ' -f1)" = "$SHA_SERV" ] && check ok "9h a foto continua igual (mesmo sha256) depois de reiniciar API e Caddy" || check fail "9h a foto mudou ou sumiu depois do restart"
