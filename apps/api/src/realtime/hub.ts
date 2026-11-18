@@ -116,7 +116,9 @@ function deliver(storeId: string, message: WsServerMessage, ownersOnly: boolean)
     const role = socketRoles.get(socket);
     if (ownersOnly && role !== "OWNER") continue;
     // API-47: a audiência é do TIPO da mensagem, não de quem publica. A impressora só recebe o que o tipo declara para `device`.
-    if (role === "DEVICE" ? WS_AUDIENCE[message.type] === "panel" : role !== "OWNER" && role !== "STAFF") continue; // papel ausente/desconhecido: nada (fail-closed)
+    // LISTA DE PERMISSÃO (fail-closed): DEVICE só recebe tipo que declara `device`/`both`; tipo fora do mapa não chega a ninguém além do painel.
+    const audience = WS_AUDIENCE[message.type] as string | undefined;
+    if (role === "DEVICE" ? audience !== "device" && audience !== "both" : role !== "OWNER" && role !== "STAFF") continue; // papel ausente/desconhecido: nada
     if (socket.readyState === socket.OPEN) socket.send(payload);
   }
 }
@@ -135,7 +137,8 @@ export function publishToPanel(storeId: string, message: WsServerMessage): void 
   for (const socket of set) {
     const role = socketRoles.get(socket);
     if (role !== "OWNER" && !(role === "STAFF" && !ownersOnly)) continue;
-    if (WS_AUDIENCE[message.type] === "device") continue;
+    const audience = WS_AUDIENCE[message.type] as string | undefined;
+    if (audience !== "panel" && audience !== "both") continue; // permissão explícita; tipo fora do mapa não sai por aqui
     if (socket.readyState === socket.OPEN) socket.send(payload);
   }
 }

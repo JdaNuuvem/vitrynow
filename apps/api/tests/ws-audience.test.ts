@@ -71,4 +71,14 @@ describe("API-47 — hub WS por audiência", () => {
     publishToStore("loja-ws-4", { type: "order.created", orderId: "o" });
     expect(x()).toEqual([]);
   });
+
+  it("tipo FORA do mapa de audiência (fail-closed): o dispositivo e o publishToPanel não o entregam; só publishToStore chega ao painel", () => {
+    const device = connect("loja-ws-5", "DEVICE");
+    const owner = connect("loja-ws-5", "OWNER");
+    const desconhecido = { type: "tipo.novo.sem.audiencia" } as unknown as WsServerMessage;
+    publishToStore("loja-ws-5", desconhecido);
+    publishToPanel("loja-ws-5", desconhecido);
+    expect(device()).toEqual([]);
+    expect(owner()).toEqual(["tipo.novo.sem.audiencia"]);
+  });
 });
