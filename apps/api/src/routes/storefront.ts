@@ -14,6 +14,7 @@ import { customerMessageFor, messageActorFor, moneyLineFor } from "../lib/cancel
 import { DomainError } from "../shared/errors";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
 import { newOrderToken, orderTokenMatches, ORDER_TOKEN_HEADER } from "../lib/orderToken";
+import { publicCategory, publicStore } from "../lib/publicDto";
 
 const COUPON_EXHAUSTED_MESSAGE = "Esse cupom acabou.";
 class CouponExhaustedError extends Error {}
@@ -47,25 +48,8 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         .filter((product) => !(store.hideSoldOutProducts && product.soldOut)),
     }));
 
-    return {
-      store: {
-        name: store.name,
-        slug: store.slug,
-        logoUrl: store.logoUrl,
-        coverImageUrl: store.coverImageUrl,
-        primaryColor: store.primaryColor,
-        address: store.address,
-        whatsapp: store.whatsapp,
-        openingHours: store.openingHours,
-        minOrderCents: store.minOrderCents,
-        deliveryEnabled: store.deliveryEnabled,
-        pickupEnabled: store.pickupEnabled,
-        acceptingOrders: store.acceptingOrders,
-        deliveryFeeCents: store.deliveryFeeCents,
-        hideSoldOutProducts: store.hideSoldOutProducts,
-      },
-      categories: visibleCategories,
-    };
+    // SEC-18: resposta so pela lista de permissao (lib/publicDto.ts); `soldOut` ja e o valor EFETIVO calculado acima (API-17).
+    return { store: publicStore(store), categories: visibleCategories.map(publicCategory) };
   });
 
   app.post(
