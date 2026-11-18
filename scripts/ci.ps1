@@ -108,8 +108,14 @@ if ($continue) {
 #     tem ~7% de ruído por rodada nesta máquina compartilhada; defeito real é sempre o mesmo ramo). Valores, ramos e CPU de cada tentativa ficam impressos;
 #   * sob carga CONHECIDA => espera 20 s e roda mais 3 vezes: 3 de 3 => não bloqueia (aviso com os números); senão BLOQUEIA.
 # Padrão do nome em ASCII (. no lugar de ê): sem BOM o PowerShell 5.1 lê o .ps1 como ANSI e o acento viraria lixo.
-$timingFile = 'tests/reset-email-confirmation.test.ts'
-$timingPattern = 'MESMO\stempo\snas\str.s\srecusas'
+# LISTA dos testes de tempo (INF-20c): cada um roda isolado, com a MESMA regra, e TODOS são excluídos da suíte paralela. O 2º (SEC-39, ex-ST-57) só existe depois que a SEC-39
+# entrar na main; arquivo ausente = AVISO impresso (não some em silêncio). O parser lê as chaves do JSON de TEMPO_RAMOS, então ramos novos não exigem mudança aqui.
+$timingTests = @(
+  @{ Nome = 'redefinição de senha'; File = 'tests/reset-email-confirmation.test.ts'; Pattern = 'MESMO\stempo\snas\str.s\srecusas' },
+  @{ Nome = 'esqueci a senha (SEC-39)'; File = 'tests/forgot-password-tempo.test.ts'; Pattern = 'MESMO\stempo\spara\sconta\sexistente' }
+)
+$timingFile = $timingTests[0].File
+$timingPattern = $timingTests[0].Pattern
 function Get-CargaConhecida {  # devolve @{ Cpu=<int|-1>; Outras=<n suítes vitest alheias>; Alta=<bool> }
   $vals = @(); for ($i = 0; $i -lt 3; $i++) { try { $vals += [int](Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average } catch { }; Start-Sleep -Seconds 1 }
   $cpu = if ($vals.Count) { [int](($vals | Measure-Object -Average).Average) } else { -1 }
@@ -159,8 +165,12 @@ function Invoke-TimingTest {  # roda SÓ o teste de tempo; devolve @{ Ok; Valor;
 function Format-Tentativa([int]$n, $r) {
   "   tentativa ${n}: CPU $($r.Cpu)% | $(if ($r.Ok) { 'passou' } else { 'FALHOU' }) | $($r.Lista) | $(if ($r.Ramo) { "ramo mais afastado da mediana: $($r.Ramo) ($($r.DeltaTxt) ms)" } else { 'ramo: n/d' })"
 }
+foreach ($tt in $timingTests) {
+if (-not $continue -or $SkipTests) { break }
+if (-not (Test-Path (Join-Path $repo "apps/api/$($tt.File)"))) { Write-Host "AVISO: teste de tempo '$($tt.Nome)' ausente ($($tt.File)): não roda neste commit." -ForegroundColor Yellow; continue }
+$timingFile = $tt.File; $timingPattern = $tt.Pattern
 if ($continue -and -not $SkipTests) {
-  $continue = Step 'teste de tempo (SEGURANÇA), isolado, antes da suíte' {
+  $continue = Step "teste de tempo (SEGURANÇA), isolado, antes da suíte: $($tt.Nome)" {
     $carga = Get-CargaConhecida
     Write-Host "   carga antes: CPU $($carga.Cpu)%, outras suítes vitest: $($carga.Outras) => $(if ($carga.Alta) { 'CARGA CONHECIDA (CPU >= 60%)' } else { 'repouso (CPU < 60%)' })"
     $tent = New-Object System.Collections.Generic.List[object]
@@ -198,13 +208,14 @@ if ($continue -and -not $SkipTests) {
     $global:LASTEXITCODE = 0
   }
 }
+}
 
 if ($continue -and -not $SkipTests) {
   $continue = Step 'testes da API' {
     $env:TEST_DATABASE_URL = $testUrl
     # A suíte principal PULA só o teste de tempo (ele roda sozinho, antes; ver 4b). -t negativo, ASCII e sem espaços; node direto (o shim do pnpm quebra argumentos).
     Push-Location (Join-Path $repo 'apps/api')
-    try { node node_modules/vitest/vitest.mjs run -t ('^((?!' + $timingPattern + ').)*$') } finally { Pop-Location }
+    try { node node_modules/vitest/vitest.mjs run -t ('^((?!' + (($timingTests | ForEach-Object { $_.Pattern }) -join '|') + ').)*$') } finally { Pop-Location }
   }
 }
 if ($continue -and -not $SkipTests) {
