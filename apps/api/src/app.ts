@@ -32,11 +32,17 @@ import { allowedOrigin, trustProxySetting } from "./lib/securityConfig";
 import { clientKey } from "./lib/clientKey";
 import { isPrismaError, loggerOptions, redactLogUrl } from "./lib/logging";
 import { ORDER_TOKEN_HEADER } from "./lib/orderToken";
+import { currentKey } from "./lib/paymentCrypto";
+import { assertPaymentsBootConfig } from "./modules/storePayments/oauth";
 import jobsPlugin from "./jobs/plugin";
+import pixAvailabilityPlugin from "./plugins/pixAvailability";
+import storePaymentRoutes from "./modules/storePayments/storePayments.module";
 
 export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = {}) {
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
   // e o rate limit deixa de contar o IP do proxy. Vazio = ignora X-Forwarded-For (não forjável).
+  // Pagamentos por loja: modo/credenciais/chave inválidos derrubam o boot (não o 1º PIX). `code`/`state` do OAuth saem do log pelo `redactLogUrl` do SEC-31.
+  assertPaymentsBootConfig(process.env, currentKey);
   // ST-76: o id padrão do Fastify é um contador sequencial (`req-1`, `req-2`…) e o 5xx devolve esse id ao cliente (ST-75): dois erros espaçados
   // mediriam o tráfego da API desde o boot. Id aleatório curto, e `requestIdHeader: false` para NÃO aceitar o `request-id` do cliente como id do log.
   const app = Fastify({
@@ -89,6 +95,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(websocket);
   app.register(authPlugin);
   app.register(jobsPlugin);
+  app.register(pixAvailabilityPlugin);
 
   // Várias rotas são "ação sem corpo" (delete, revoke) chamadas com
   // Content-Type: application/json mas sem body — o parser padrão do Fastify rejeita
@@ -123,6 +130,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(auditRoutes);
   app.register(feedbackRoutes);
   app.register(subscriptionRoutes);
+  app.register(storePaymentRoutes);
   app.register(noticeRoutes);
   app.register(mfaRoutes);
 

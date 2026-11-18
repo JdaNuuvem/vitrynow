@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { prisma } from "@meucardapio/db";
 import { TICKET_SCHEMA_VERSION } from "@meucardapio/shared-types";
 import { buildPrintableOrder, buildTestTicket, nothingToCharge } from "../src/lib/printable";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { makeApp, registerStore, resetDb, useMockedProvider } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -16,6 +16,7 @@ import * as mp from "../src/lib/mercadopago";
 describe("API-66 — nothingToCharge no tíquete", () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     app = makeApp();
     await app.ready();
