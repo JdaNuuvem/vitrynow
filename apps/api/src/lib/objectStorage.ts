@@ -90,7 +90,21 @@ export class S3ObjectStorage implements ObjectStorage {
 
 // Lê a configuração do ambiente. Sem STORAGE_S3_ENDPOINT usa o Fake em memória (dev sem MinIO e testes):
 // nunca há credencial real no código; o segredo vem do ambiente/arquivo (INF-09).
+const isDevLikeEnv = (env: NodeJS.ProcessEnv) => env.NODE_ENV === "development" || env.NODE_ENV === "test";
+
+/**
+ * Falha ALTO no boot (não no 1º upload), como `assertPaymentsBootConfig`: fora de dev/teste (NODE_ENV ausente conta como produção)
+ * exige S3 de verdade; nunca cai em silêncio no Fake em memória (as imagens sumiriam no próximo restart).
+ */
+export function assertStorageBootConfig(env: NodeJS.ProcessEnv = process.env): void {
+  if (isDevLikeEnv(env)) return;
+  const missing = ["STORAGE_S3_ENDPOINT", "STORAGE_S3_BUCKET", "STORAGE_S3_ACCESS_KEY_ID", "STORAGE_S3_SECRET_ACCESS_KEY", "STORAGE_PUBLIC_BASE_URL"].filter((name) => !env[name]);
+  if (missing.length > 0) throw new Error(`Storage de imagens não configurado fora de dev/teste: faltam ${missing.join(", ")}. O Fake em memória só roda em dev/teste.`);
+  if (!/^https:\/\//.test(env.STORAGE_PUBLIC_BASE_URL ?? "")) throw new Error("STORAGE_PUBLIC_BASE_URL deve ser https:// fora de dev/teste (URL pública das imagens).");
+}
+
 export function createObjectStorageFromEnv(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
+  assertStorageBootConfig(env);
   const endpoint = env.STORAGE_S3_ENDPOINT;
   if (!endpoint) return new InMemoryObjectStorage(env.STORAGE_PUBLIC_BASE_URL);
   const need = (name: string) => {
