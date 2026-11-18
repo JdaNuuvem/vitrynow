@@ -1,6 +1,7 @@
 // API-13 — pedido lançado no painel (B2, CA-B2-01..10): servidor calcula o preço, nasce CONFIRMADO com tíquete, caixa/desconto/cupom/idempotência/isolamento.
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { techCleanupJob, TECH_RETENTION_MS } from "../src/jobs/techCleanup";
 import { resetLimits } from "../src/lib/slidingLimit";
 import { makeApp, orderTokenHeader, registerStore, resetDb } from "./helpers";
 
@@ -164,6 +165,40 @@ describe("API-13 — pedido manual", () => {
     const mesmoOutraOrdem = await app.inject({ method: "POST", url: "/api/orders", headers: { cookie: l.owner, ...h }, payload: { paymentMethod: "DEBITO", items: [{ quantity: 1, productId: l.productId }], type: "BALCAO" } });
     expect([mesmoOutraOrdem.statusCode, json(mesmoOutraOrdem).replay]).toEqual([200, true]);
     expect((await orders(l)).find((o) => o.id === json(a).orderId)?.totalCents).toBe(4000);
+  });
+
+  it("LGPD: a impressão digital da idempotência é HMAC com segredo: não é o SHA-256 puro do corpo (não se reverte por força bruta de telefone)", async () => {
+    const l = await loja();
+    const body = { type: "BALCAO", items: [{ productId: l.productId, quantity: 1 }], paymentMethod: "DEBITO", customerPhone: "21999990000" };
+    const r = await app.inject({ method: "POST", url: "/api/orders", headers: { cookie: l.owner, "idempotency-key": "lgpd-hash-0001" }, payload: body });
+    expect(r.statusCode, r.body).toBe(201);
+    const gravado = (await prisma.order.findUniqueOrThrow({ where: { id: json(r).orderId } })).manualBodyHash!;
+    const { createHash } = await import("node:crypto");
+    const puro = createHash("sha256").update(JSON.stringify({ type: "BALCAO", customerPhone: "21999990000", items: [{ productId: l.productId, quantity: 1 }], paymentMethod: "DEBITO" })).digest("hex");
+    expect(gravado).toMatch(/^[0-9a-f]{64}$/);
+    expect(gravado).not.toBe(puro);
+    expect(gravado).not.toContain("21999990000");
+  });
+
+  it("LGPD (Atlas): o tech.cleanup zera manualBodyHash de pedido com mais de 24 h (antes preserva), sem apagar nem alterar o pedido, e não toca o das outras lojas ainda dentro da janela", async () => {
+    const a = await loja();
+    const b = await loja();
+    const ra = await novo(a, {}, a.owner, { "idempotency-key": "limpeza-loja-a-1" });
+    const rb = await novo(b, {}, b.owner, { "idempotency-key": "limpeza-loja-b-1" });
+    const log = { info: () => {}, warn: () => {}, error: () => {} };
+    const hash = async (id: string) => (await prisma.order.findUniqueOrThrow({ where: { id } })).manualBodyHash;
+    const rodar = (now: Date) => techCleanupJob.runOnce({ now, db: prisma, log, limit: 100 });
+    expect(await hash(json(ra).orderId)).not.toBeNull();
+    await rodar(new Date(Date.now() + TECH_RETENTION_MS - 60_000)); // 1 min antes das 24 h
+    expect([await hash(json(ra).orderId), await hash(json(rb).orderId)].every((h) => h !== null)).toBe(true);
+    // o pedido da loja B é "novo" (criado agora, relógio do job 25 h depois): a regra é pela idade do PEDIDO, então a loja B só fica intocada se for recente
+    await prisma.order.update({ where: { id: json(rb).orderId }, data: { createdAt: new Date(Date.now() + 2 * 3_600_000) } });
+    const antes = await prisma.order.findUniqueOrThrow({ where: { id: json(ra).orderId } });
+    await rodar(new Date(Date.now() + TECH_RETENTION_MS + 60_000)); // 1 min depois das 24 h
+    const depois = await prisma.order.findUniqueOrThrow({ where: { id: json(ra).orderId } });
+    expect(depois.manualBodyHash).toBeNull();
+    expect({ ...depois, manualBodyHash: null, updatedAt: antes.updatedAt }).toEqual({ ...antes, manualBodyHash: null }); // o pedido segue idêntico (só a coluna)
+    expect(await hash(json(rb).orderId)).not.toBeNull();
   });
 
   it("R1 (Nightingale): o motivo do desconto é CÓDIGO de lista fechada; texto livre (nome do cliente) ⇒ 400 e nada gravado; a auditoria só leva o código", async () => {

@@ -6,7 +6,8 @@ import { toOrderPaymentMethod } from "../lib/paymentMethod";
 import { newOrderToken } from "../lib/orderToken";
 import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { publishToStore } from "../realtime/hub";
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
+import { getJwtSecret } from "../lib/securityConfig";
 import { logAudit } from "../lib/audit";
 import { limited, tooMany } from "../lib/slidingLimit";
 import { CodedError, useDomainErrors } from "../shared/errors";
@@ -19,7 +20,9 @@ const MANUAL_ORDERS_PER_MINUTE = 60;
 // Impressão digital CANÔNICA do corpo (chaves em ordem): mesmo conteúdo = mesma impressão, qualquer que seja a ordem dos campos.
 const canonical = (v: unknown): string =>
   Array.isArray(v) ? `[${v.map(canonical).join(",")}]` : v && typeof v === "object" ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`).join(",")}}` : JSON.stringify(v) ?? "null";
-const bodyHash = (v: unknown) => createHash("sha256").update(canonical(v)).digest("hex");
+// HMAC com chave derivada do segredo do servidor (LGPD, Nightingale): o corpo tem nome, telefone e endereço do cliente; um SHA-256 puro de telefone se
+// reverte por força bruta com o banco na mão. Com o segredo, o valor gravado não é reversível e não liga o pedido a um telefone conhecido.
+const bodyHash = (v: unknown) => createHmac("sha256", createHmac("sha256", getJwtSecret()).update("manual-order-body-v1").digest()).update(canonical(v)).digest("hex");
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{8,100}$/;
 
 function replayOrConflict(reply: FastifyReply, existing: { id: string; code: string; manualBodyHash: string | null }, fingerprint: string) {
