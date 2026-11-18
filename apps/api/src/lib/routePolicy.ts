@@ -28,11 +28,15 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/orders/:id/status": "finish", // legado (alias deprecated até WEB-05)
   "POST /api/orders/:id/refund": "finish",
   "POST /api/orders/:id/deliverer": "finish",
+  "POST /api/orders/:id/reprint": "finish", // API-12b: 2ª via de pedido JÁ recebido (STAFF só até 24 h; a regra é da rota)
+  "POST /api/orders/:id/internal-note": "blocked", // API-54: anotação da equipe é cadastro, não encerra pedido
+  // (POST /api/orders, pedido manual da API-13, entra aqui como "blocked" quando o PR #57 chegar: RN-B2-13)
 
   // — Caixa: fechar pode (RN-A-01); abrir e movimentar não —
   "POST /api/cashier/close": "finish",
   "POST /api/cashier/open": "blocked",
   "POST /api/cashier/movements": "blocked",
+  "PUT /api/cashier/staff-withdrawal-limit": "blocked", // API-27: configuração do caixa
 
   // — Cadastro e configuração: nada disso na Consulta —
   "POST /api/catalog/categories": "blocked",
@@ -51,6 +55,8 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/store/availability": "blocked",
   "POST /api/users": "blocked",
   "POST /api/users/:id/delete": "blocked",
+  "PUT /api/store/print-mode": "blocked", // API-12b: modo de impressão é configuração
+  "POST /api/print-jobs/test": "blocked", // API-12: teste de impressora é configuração
   "POST /api/device-tokens": "blocked",
   // Matriz do Leonardo (leonardo/matriz-rotas-por-fase.md): revogar chave é "cadastro" ⇒ bloqueado na
   // Consulta. Risco anotado no quadro: chave vazada só pode ser revogada depois de reativar.
@@ -90,6 +96,7 @@ export const PUBLIC_ROUTE_POLICY: Record<string, PublicPolicy> = {
   "POST /auth/logout": "exempt", // sair é sempre permitido, inclusive suspenso (RN-A-03)
   "POST /auth/forgot-password": "exempt",
   "POST /auth/reset-password": "exempt",
+  "POST /auth/reset-password/inspect": "exempt", // SEC-29: confere o link antes de pedir a senha nova
   // Webhook do Mercado Pago: segue processando em qualquer fase (é o que reativa e concilia o PIX).
   "POST /api/payments/webhook": "exempt",
   // Admin da plataforma por x-admin-token (some com o back-office, API-25).
@@ -99,6 +106,8 @@ export const PUBLIC_ROUTE_POLICY: Record<string, PublicPolicy> = {
   "GET /stores/:slug/menu": "public-menu",
   "GET /stores/:slug/orders/:orderId/payment-status": "public-allowed",
   "POST /stores/:slug/orders/:orderId/cancel": "public-allowed",
+  // API-19: o cliente acompanha o pedido que já fez, também com a loja em Consulta/Suspensão (decisão do Atlas).
+  "GET /stores/:slug/orders/:orderId/tracking": "public-allowed",
 };
 
 export const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
