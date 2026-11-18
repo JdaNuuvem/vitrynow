@@ -257,17 +257,32 @@ describe("API-27 — caixa: regras do servidor", () => {
     expect(await movementsCount(ctx.storeId)).toBe(1);
   });
 
-  it("RN-CX-18: dois fechamentos simultâneos ⇒ UM fechamento (200) e o outro 409 CASH_ALREADY_CLOSED; fechar de novo ⇒ 404 CASH_REQUIRED; movimentar sem caixa aberto ⇒ 409 CASH_REQUIRED", async () => {
+  it("RN-CX-18: dois fechamentos simultâneos ⇒ UM fechamento (200) e o outro 409 CASH_ALREADY_CLOSED; fechar de novo ⇒ 409 CASH_ALREADY_CLOSED; movimentar sem caixa aberto ⇒ 409 CASH_REQUIRED", async () => {
     const ctx = await setup(10000);
     const [a, b] = await Promise.all([close(ctx.owner, { closingBalanceCents: 10000 }), close(ctx.owner, { closingBalanceCents: 10000 })]);
     expect([a.statusCode, b.statusCode].sort()).toEqual([200, 409]);
     expect(json(a.statusCode === 409 ? a : b).code).toBe("CASH_ALREADY_CLOSED");
     expect(await prisma.cashSession.count({ where: { storeId: ctx.storeId, closedAt: { not: null } } })).toBe(1);
     const de_novo = await close(ctx.owner, { closingBalanceCents: 10000 });
-    expect([de_novo.statusCode, json(de_novo).code]).toEqual([404, "CASH_REQUIRED"]);
+    expect([de_novo.statusCode, json(de_novo).code]).toEqual([409, "CASH_ALREADY_CLOSED"]); // a ordem em que o perdedor chega NÃO muda a resposta
     const mov = await move(ctx.owner, { type: "SUPRIMENTO", amountCents: 500, reason: "TROCO" });
     expect([mov.statusCode, json(mov).code]).toEqual([409, "CASH_REQUIRED"]);
   });
+
+  it("FECHAMENTO DETERMINÍSTICO: loja que nunca teve caixa ⇒ 404 CASH_REQUIRED; 20 rodadas de dois fechamentos simultâneos ⇒ sempre [200, 409 CASH_ALREADY_CLOSED], nunca 404", async () => {
+    const ctx = await setup(-1);
+    const nunca = await close(ctx.owner, { closingBalanceCents: 0 });
+    expect([nunca.statusCode, json(nunca).code]).toEqual([404, "CASH_REQUIRED"]);
+    for (let i = 0; i < 20; i += 1) {
+      expect((await app.inject({ method: "POST", url: "/api/cashier/open", headers: { cookie: ctx.owner }, payload: { openingBalanceCents: 1000 } })).statusCode, `abrir ${i}`).toBe(201);
+      const rs = await Promise.all([close(ctx.owner, { closingBalanceCents: 1000 }), close(ctx.owner, { closingBalanceCents: 1000 })]);
+      expect(rs.map((r) => r.statusCode).sort(), `rodada ${i}`).toEqual([200, 409]);
+      expect(json(rs.find((r) => r.statusCode === 409)!).code).toBe("CASH_ALREADY_CLOSED");
+    }
+    // o outro caixa (de OUTRA loja) não é afetado pelo fechamento desta
+    const outra = await setup(500);
+    expect((await close(outra.owner, { closingBalanceCents: 500 })).statusCode).toBe(200);
+  }, 120000);
 
   it("fechar × movimentar SIMULTÂNEOS: o retrato do fechamento é consistente (a movimentação entrou no esperado OU foi recusada com CASH_REQUIRED, nunca ficou de fora do esperado)", async () => {
     const ctx = await setup(-1);
