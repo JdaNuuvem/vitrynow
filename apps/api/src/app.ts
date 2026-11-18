@@ -37,6 +37,7 @@ import mfaRoutes from "./routes/mfa";
 import deliveryZoneRoutes from "./routes/deliveryZones";
 import onboardingRoutes from "./routes/onboarding";
 import { clientKey } from "./lib/clientKey";
+import { captchaMode } from "./lib/captcha";
 import { isPrismaError, loggerOptions, redactLogUrl } from "./lib/logging";
 import { ORDER_TOKEN_HEADER } from "./lib/orderToken";
 import { currentKey } from "./lib/paymentCrypto";
@@ -52,6 +53,7 @@ import optionGroupRoutes from "./modules/optionGroups/optionGroups.module";
 import menuRevalidationPlugin from "./plugins/menuRevalidation";
 
 export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = {}) {
+  captchaMode(); // NG-08: modo inválido, ou `fake` fora de dev/teste, derruba o boot
   const serviceSecrets = internalServiceSecrets(); // SEC-24: em produção, sem segredo de serviço válido a API nem sobe
   // trustProxy só para a(s) rede(s) do Caddy (TRUST_PROXY_CIDR): request.ip vira o cliente real
   // e o rate limit deixa de contar o IP do proxy. Vazio = ignora X-Forwarded-For (não forjável).
