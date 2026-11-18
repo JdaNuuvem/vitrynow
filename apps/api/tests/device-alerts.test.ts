@@ -366,6 +366,16 @@ describe("PC-24 — alertas de dispositivo", () => {
     expect((await rows(outra.storeId)).length).toBe(0);
   });
 
+  it("lagMs do detector RODA no banco de verdade (sem coluna ambígua) e mede o job mais antigo pendente em QUEUE", async () => {
+    const ctx = await setup();
+    expect(await queueWatchJob.lagMs!({ now: new Date(), db: prisma, log } as never)).toBeNull();
+    await prisma.store.update({ where: { id: ctx.storeId }, data: { printMode: "QUEUE" } });
+    const o = await order(ctx);
+    await velho(o.orderId, 30);
+    const lag = await queueWatchJob.lagMs!({ now: new Date(), db: prisma, log } as never);
+    expect(lag).toBeGreaterThanOrEqual(29 * 60_000);
+  });
+
   it("P1 DETECTOR com 230 lojas paradas: as 230 recebem alerta (vários lotes no MESMO tick) e, com lotes curtos, o tick seguinte começa pelas que NUNCA foram alertadas", async () => {
     const N = 230;
     const quando = new Date(Date.now() - 30 * 60_000);

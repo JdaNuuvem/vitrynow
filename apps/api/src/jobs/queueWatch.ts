@@ -55,7 +55,7 @@ export const queueWatchJob: Job = {
   },
   async lagMs({ now, db }) {
     const rows = await db.$queryRaw<{ oldest: Date | null }[]>`
-      SELECT min("createdAt") AS oldest FROM "PrintJob" j JOIN "Store" s ON s."id" = j."storeId"
+      SELECT min(j."createdAt") AS oldest FROM "PrintJob" j JOIN "Store" s ON s."id" = j."storeId"
        WHERE s."printMode" = 'QUEUE' AND j."status" = 'PENDING' AND j."kind" <> 'TEST'`;
     const oldest = rows[0]?.oldest;
     return oldest ? Math.max(0, now.getTime() - oldest.getTime()) : null;
