@@ -6,7 +6,8 @@ import { prisma } from "@meucardapio/db";
 import { printableOrderSchema } from "@meucardapio/shared-types";
 import { BACKOFF_SECONDS, FAILURE_CODES, backoffSeconds, normalizeFailureCode, sanitizeDeviceText } from "../src/lib/printJobs";
 import { subscribe } from "../src/realtime/hub";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { activateSubscription } from "../src/lib/subscription";
+import { makeApp, registerStore, resetDb, useMockedProvider } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -47,6 +48,7 @@ describe("regras puras da fila", () => {
 describe("API-12 — PrintJob", () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     app = makeApp();
     await app.ready();
@@ -66,6 +68,8 @@ describe("API-12 — PrintJob", () => {
     const { id: storeId, slug } = json(response).store;
     // A fila só opera com a loja em modo QUEUE (ADR-0004 §8.12); o padrão é LEGACY.
     await prisma.store.update({ where: { id: storeId }, data: { printMode: "QUEUE" } });
+    // API-08: o BASICO limita a 1 impressora; este arquivo exercita a FILA com várias, então a loja de teste é PRO (o limite tem teste próprio em entitlements.test.ts).
+    await activateSubscription({ subscriptionId: (await prisma.subscription.findFirstOrThrow({ where: { storeId } })).id, planCode: "PRO" });
     const cat = json(await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie: cookie! }, payload: { name: "X" } })).category.id;
     const productId = json(
       await app.inject({ method: "POST", url: "/api/catalog/products", headers: { cookie: cookie! }, payload: { categoryId: cat, name: "P", priceCents: 1000 } }),
@@ -274,7 +278,7 @@ describe("API-12 — PrintJob", () => {
     const row = (await jobsOf(id))[0];
     expect(row).toMatchObject({ status: "FAILED", attempts: 3 });
     expect(ws("print.job_failed")).toHaveLength(1);
-    expect(JSON.parse(ws("print.job_failed")[0])).toEqual({ type: "print.job_failed", jobId: row.id });
+    expect(JSON.parse(ws("print.job_failed")[0])).toEqual({ type: "print.job_failed", jobId: row.id, code: expect.any(String) });
     await releaseBackoff(row.id);
     expect(json(await claim(token))).toEqual({ job: null, mode: "QUEUE" });
   });

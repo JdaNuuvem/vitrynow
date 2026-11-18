@@ -76,17 +76,22 @@ export class DeviceAlertService {
       firstAt: r.firstAt.toISOString(),
       lastAt: r.lastAt.toISOString(),
     }));
-    return { alerts, banner: this.banner(rows, now) };
+    // A FAIXA não pode depender das 100 linhas mais recentes (130 alertas novos de outro código escondiam um `MODE_UNCONFIRMED` ainda válido):
+    // o último instante de CADA código sai do banco, de todas as linhas dentro da retenção.
+    const maxima = await this.db.deviceAlert.groupBy({ by: ["code"], where: { storeId, lastAt: { gte: new Date(now.getTime() - ALERT_RETENTION_MS) } }, _max: { lastAt: true } });
+    const lastByCode = new Map<DeviceAlertCode, Date>();
+    for (const g of maxima) if (g._max.lastAt) lastByCode.set(g.code, g._max.lastAt);
+    return { alerts, banner: this.banner(lastByCode, now) };
   }
 
   // Faixa do painel = OU de dois sinais INDEPENDENTES. O `MODE_RECOVERED` do cliente só encerra o `MODE_UNCONFIRMED` do cliente; nunca
   // apaga o `QUEUE_WITHOUT_PRINTER` do detector do servidor (telemetria não confiável não desliga alerta do servidor).
-  private banner(rows: { code: DeviceAlertCode; lastAt: Date }[], now: Date) {
-    const last = (code: DeviceAlertCode) => rows.filter((r) => r.code === code).reduce<Date | null>((a, r) => (!a || r.lastAt > a ? r.lastAt : a), null);
+  private banner(lastByCode: Map<DeviceAlertCode, Date>, now: Date) {
+    const last = (code: DeviceAlertCode) => lastByCode.get(code) ?? null;
     const unconfirmed = last("MODE_UNCONFIRMED");
     const recovered = last("MODE_RECOVERED");
     const server = last("QUEUE_WITHOUT_PRINTER");
-    const money = rows.some((r) => DEVICE_ALERT_MONEY_CODES.includes(r.code) && now.getTime() - r.lastAt.getTime() < 24 * 3_600_000);
+    const money = [...lastByCode].some(([code, lastAt]) => DEVICE_ALERT_MONEY_CODES.includes(code) && now.getTime() - lastAt.getTime() < 24 * 3_600_000);
     return {
       needsAttention: {
         queueWithoutPrinter: !!server && now.getTime() - server.getTime() < ALERT_WINDOW_MS, // o detector re-emite a cada minuto enquanto vale

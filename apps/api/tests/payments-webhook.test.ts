@@ -6,7 +6,7 @@ import { prisma } from "@meucardapio/db";
 import { mapMpStatus } from "../src/lib/mercadopago";
 import { PAYMENT_STATUSES, canMovePayment, isFinalPayment, originsFor } from "../src/lib/paymentStateMachine";
 import { subscribe } from "../src/realtime/hub";
-import { makeApp, registerStore, resetDb, orderTokenHeader } from "./helpers";
+import { makeApp, registerStore, resetDb, orderTokenHeader, useMockedProvider } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -62,19 +62,21 @@ describe("máquina de estados do pagamento", () => {
 });
 
 // ───────────── Integração ─────────────
-describe("API-03 — webhook e PIX", () => {
+// Folga para máquina carregada (CI, suíte em paralelo): um timeout de 15 s num teste derrubava os seguintes em cascata. Só o prazo muda, nenhuma asserção.
+describe("API-03 — webhook e PIX", { timeout: 60_000 }, () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     refundPayment.mockResolvedValue(undefined);
     cancelPayment.mockResolvedValue(undefined);
     app = makeApp();
     await app.ready();
-  });
+  }, 60_000);
   afterEach(async () => {
     await app.close();
     await resetDb();
-  });
+  }, 60_000);
   afterAll(async () => {
     await prisma.$disconnect();
   });
@@ -142,6 +144,8 @@ describe("API-03 — webhook e PIX", () => {
     const o = await orderOf(orderId);
     expect({ awaiting: o?.awaitingPayment, status: o?.status, payment: o?.payment?.status }).toEqual({ awaiting: false, status: "PENDENTE", payment: "APROVADO" });
     expect(ws.count("order.created")).toBe(1);
+    expect(o?.paidAt).not.toBeNull(); // API-21: a aprovação grava o instante real em que o PIX foi recebido
+    expect(o?.paidAtApproximate).toBe(false);
   });
 
   it("não aprova quando valor, moeda ou referência do provedor divergem do que gravamos (nem quando faltam)", async () => {
@@ -488,7 +492,7 @@ describe("API-03 — webhook e PIX", () => {
     seq += 1;
     const providerPaymentId = `mp-sub-${Date.now()}-${seq}`;
     createPix.mockResolvedValueOnce({ providerPaymentId, status: "pending", pixQrCode: "x", pixQrCodeBase64: "y", expiresAt: new Date(Date.now() + 60_000) });
-    const res = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: ctx.cookie }, payload: { planCode: "PRO" } });
+    const res = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: ctx.cookie }, payload: { planCode: "BASICO" } }); // PRO está inativo até lançar (ADR-0003 §2.6)
     expect(res.statusCode).toBe(201);
     const sp = await prisma.subscriptionPayment.findUniqueOrThrow({ where: { providerPaymentId } });
     return { providerPaymentId, sp };

@@ -13,8 +13,8 @@ describe("QA limites de plano sob concorrência", () => {
   afterEach(async () => { await app.close(); await resetDb(); });
   afterAll(async () => { await prisma.$disconnect(); });
 
-  bug("D33 (ST-35 / SEC-21) 8 criações paralelas de chave de impressora no BASICO (limite 1) criam EXATAMENTE 1", async () => {
-    const { cookie, response } = await registerStore(app);
+  it("D33 (ST-35 / SEC-21) 8 criações paralelas de chave de impressora no BASICO (limite 1) criam EXATAMENTE 1", async () => {
+    const { cookie, response } = await registerStore(app, { plan: "BASICO" });
     const storeId = JSON.parse(response.body).store.id as string;
     const resultados = await Promise.all(
       Array.from({ length: 8 }, (_, i) =>
@@ -24,6 +24,8 @@ describe("QA limites de plano sob concorrência", () => {
     const criadas = await prisma.deviceToken.count({ where: { storeId, revokedAt: null } });
     const codigos = resultados.map((r) => r.statusCode).sort().join(",");
     expect(criadas, `status: ${codigos}`).toBe(1);
-    expect(resultados.filter((r) => r.statusCode === 201).length).toBe(1);
+    // a criação responde 200 hoje (contrato atual de /api/device-tokens); aceita 201 se um dia mudar
+    expect(resultados.filter((r) => r.statusCode === 200 || r.statusCode === 201).length).toBe(1);
+    expect(resultados.filter((r) => r.statusCode === 402).length).toBe(7);
   });
 });

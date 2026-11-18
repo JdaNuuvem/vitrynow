@@ -10,16 +10,21 @@ const order = (overrides: Partial<CashOrderInput>): CashOrderInput => ({
   deliveryFeeCents: 0,
   tipCents: 0,
   paymentMethod: "DINHEIRO",
+  createdAt: new Date("2026-11-18T10:05:00Z"),
+  paidAt: new Date("2026-11-18T10:06:00Z"), // dinheiro RECEBIDO dentro da sessão (RN-CX-01)
+  awaitingPayment: false,
   ...overrides,
 });
+const SESSION = { openedAt: new Date("2026-11-18T10:00:00Z"), closedAt: null };
+const NOW = new Date("2026-11-18T12:00:00Z");
 
 describe("computeCashSummary", () => {
   it("soma só vendas em dinheiro ao saldo esperado e separa por forma de pagamento", () => {
-    const summary = computeCashSummary({ openingBalanceCents: 5000, movements: [] }, [
+    const summary = computeCashSummary({ ...SESSION, openingBalanceCents: 5000, movements: [] }, [
       order({ totalCents: 2000 }),
       order({ totalCents: 3000, paymentMethod: "PIX" }),
       order({ totalCents: 500, paymentMethod: null }),
-    ]);
+    ], NOW);
     expect(summary.cashSalesCents).toBe(2000);
     expect(summary.expectedCents).toBe(7000);
     expect(summary.byPaymentMethod.PIX).toEqual({ count: 1, revenueCents: 3000 });
@@ -30,6 +35,7 @@ describe("computeCashSummary", () => {
   it("aplica suprimentos e sangrias e ignora pedidos cancelados", () => {
     const summary = computeCashSummary(
       {
+        ...SESSION,
         openingBalanceCents: 1000,
         movements: [
           { type: "SUPRIMENTO", amountCents: 500 },
@@ -37,6 +43,7 @@ describe("computeCashSummary", () => {
         ],
       },
       [order({ totalCents: 800 }), order({ totalCents: 9999, status: "CANCELADO" })],
+      NOW,
     );
     expect(summary.expectedCents).toBe(1000 + 800 + 500 - 200);
     expect(summary.sales.canceledCount).toBe(1);
@@ -45,10 +52,10 @@ describe("computeCashSummary", () => {
   });
 
   it("acumula taxa de entrega, gorjeta e totais por tipo de pedido", () => {
-    const summary = computeCashSummary({ openingBalanceCents: 0, movements: [] }, [
+    const summary = computeCashSummary({ ...SESSION, openingBalanceCents: 0, movements: [] }, [
       order({ type: "DELIVERY", totalCents: 2200, deliveryFeeCents: 500, tipCents: 200 }),
       order({ type: "MESA", totalCents: 1000 }),
-    ]);
+    ], NOW);
     expect(summary.sales.deliveryFeeCents).toBe(500);
     expect(summary.sales.tipCents).toBe(200);
     expect(summary.sales.byType.DELIVERY).toEqual({ count: 1, revenueCents: 2200 });
@@ -105,9 +112,21 @@ describe("caixa com vendas em dinheiro (integração)", () => {
 
     await app.inject({ method: "POST", url: "/api/cashier/movements", headers: { cookie }, payload: { type: "SUPRIMENTO", amountCents: 1000, notes: "reforço", reason: "TROCO" } });
 
-    const current = JSON.parse((await app.inject({ method: "GET", url: "/api/cashier/current", headers: { cookie } })).body);
+    const cashNow = async () => JSON.parse((await app.inject({ method: "GET", url: "/api/cashier/current", headers: { cookie } })).body);
+    // PENDENTE em dinheiro não é dinheiro recebido nem "a receber" (RN-CX-03)
+    expect(await cashNow().then((c) => [c.summary.cashSalesCents, c.summary.toReceiveCents])).toEqual([0, 0]);
+    const saleId = JSON.parse(sale.body).orderId as string;
+    // entrega aceita e em andamento: o dinheiro AINDA NÃO está na gaveta, só aparece como "a receber" (informativo)
+    for (const to of ["CONFIRMADO", "EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA"]) {
+      expect((await app.inject({ method: "POST", url: `/api/orders/${saleId}/transition`, headers: { cookie }, payload: { to } })).statusCode).toBe(200);
+    }
+    expect(await cashNow().then((c) => [c.summary.cashSalesCents, c.summary.toReceiveCents])).toEqual([0, 2200]);
+    // concluída (pago na entrega): o dinheiro entra
+    expect((await app.inject({ method: "POST", url: `/api/orders/${saleId}/transition`, headers: { cookie }, payload: { to: "CONCLUIDO" } })).statusCode).toBe(200);
+    const current = await cashNow();
     // 1500 (item) + 500 (taxa de entrega) + 200 (gorjeta) = 2200 em dinheiro
     expect(current.summary.cashSalesCents).toBe(2200);
+    expect(current.summary.toReceiveCents).toBe(0);
     expect(current.summary.sales.deliveryFeeCents).toBe(500);
     expect(current.summary.sales.tipCents).toBe(200);
     expect(current.summary.byPaymentMethod.DEBITO.revenueCents).toBe(1500);

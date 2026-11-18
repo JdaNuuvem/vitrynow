@@ -481,18 +481,20 @@ describe("ResetPasswordPage: confirmação do e-mail por digitação (ST-67)", (
     expect(screen.getByRole("alert")).toHaveTextContent(REFUSED);
     expect(document.body.textContent).not.toMatch(/\b[1-5] de 5\b|restam|tentativas restantes|expirou|morreu|inválido/i);
     expect(screen.getByRole("link", { name: "Pedir um novo link" })).toBeInTheDocument();
-  });
+    // Digita 5 vezes de verdade (~3 s em repouso): o limite padrão de 5 s estourava com a máquina carregada (rodada de 62 s, 17/11).
+  }, 30_000);
 
   it("UI-PW-13: 429 mostra 'Muitas tentativas…', desabilita campos e botão, sem contador e sem o link de refazer", async () => {
     setup("/reset-senha#token=abc123", { reset: { ok: false, status: 429, error: "Too Many Requests" } });
     await typeAndSend("SenhaDigitada1");
-    expect(await screen.findByRole("alert")).toHaveTextContent("Muitas tentativas. Aguarde alguns minutos e tente de novo.");
+    // Espera de 5 s (e não 1 s, o padrão) pelo alerta: com a máquina carregada o envio demorava e o teste falhava sem motivo.
+    expect(await screen.findByRole("alert", {}, { timeout: 5000 })).toHaveTextContent("Muitas tentativas. Aguarde alguns minutos e tente de novo.");
     expect(await emailField()).toBeDisabled();
     expect(await field()).toBeDisabled();
     expect(screen.getByRole("button", { name: "Salvar nova senha" })).toBeDisabled();
     expect(screen.queryByRole("link", { name: "Pedir um novo link" })).not.toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/\d+ ?(s|seg|min)\b.*restan/i);
-  });
+  }, 15_000);
 
   it("erro do servidor ou da rede (5xx/503) mostra o texto da rede e NÃO acusa e-mail nem link", async () => {
     setup("/reset-senha#token=abc123", { reset: { ok: false, status: 503, error: "Não foi possível conectar ao servidor. Verifique sua internet e tente de novo." } });
