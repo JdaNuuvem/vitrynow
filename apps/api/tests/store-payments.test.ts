@@ -29,7 +29,7 @@ describe("PIX por loja — conexão, estado e desconexão (HTTP)", () => {
     setOAuthProvider(fake);
     app = makeApp();
     await app.ready();
-    const registered = await registerStore(app, { slug: "loja-pix", code: "PX1" });
+    const registered = await registerStore(app, { slug: "loja-pix", code: "PX1", pix: false });
     cookie = registered.cookie!;
     storeId = JSON.parse(registered.response.body).store.id;
   });
@@ -126,7 +126,7 @@ describe("PIX por loja — conexão, estado e desconexão (HTTP)", () => {
   it("state preso à SESSÃO que iniciou (linking CSRF): outro login do mesmo dono não consegue concluir", async () => {
     const owner = await prisma.user.findFirstOrThrow({ where: { storeId } });
     const { state, code } = await startConnect();
-    const otherSession = (await login(app, owner.email, "senha123")).cookie!;
+    const otherSession = (await login(app, owner.email, "senha12345")).cookie!;
     expect(otherSession).not.toBe(cookie);
     const attempt = await callback(code, state, otherSession);
     expect(attempt.headers.location).toContain("OAUTH_STATE_INVALID");
@@ -136,7 +136,7 @@ describe("PIX por loja — conexão, estado e desconexão (HTTP)", () => {
   });
 
   it("state de OUTRA loja não conecta esta loja", async () => {
-    const other = await registerStore(app, { slug: "outra-pix", code: "PX2" });
+    const other = await registerStore(app, { slug: "outra-pix", code: "PX2", pix: false });
     const foreign = await startConnect(other.cookie!);
     const attempt = await callback(foreign.code, foreign.state);
     expect(attempt.headers.location).toContain("OAUTH_STATE_INVALID");
@@ -172,7 +172,7 @@ describe("PIX por loja — conexão, estado e desconexão (HTTP)", () => {
 
   it("o MESMO vendedor em duas lojas: a segunda é recusada com mensagem genérica (MP_ACCOUNT_IN_USE) e a primeira segue intacta", async () => {
     await connect("fake:vendedor-1");
-    const other = await registerStore(app, { slug: "outra-pix", code: "PX2" });
+    const other = await registerStore(app, { slug: "outra-pix", code: "PX2", pix: false });
     const attempt = await connect("fake:vendedor-1", other.cookie!);
     expect(attempt.headers.location).toContain("MP_ACCOUNT_IN_USE");
     expect(await prisma.paymentAccount.count({ where: { status: "CONNECTED" } })).toBe(1);

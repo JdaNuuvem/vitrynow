@@ -1,5 +1,6 @@
 import { prisma } from "@meucardapio/db";
 import { buildApp } from "../src/app";
+import { encryptSecret } from "../src/lib/paymentCrypto";
 import { assertSafeToReset } from "./dbGuard";
 
 // NG-16: o token do pedido só existe na resposta da criação. Os testes que depois consultam/cancelam como cliente
@@ -66,9 +67,28 @@ export async function resetDb() {
 
 let storeSeq = 0;
 
+/**
+ * API-07 (G3): sem conta do Mercado Pago CONECTADA a loja não vende PIX (409 PIX_UNAVAILABLE). Conecta uma conta FAKE direto no banco
+ * (tokens cifrados como em produção; o gateway fake não fala com a rede). `registerStore` já a conecta por padrão, para os testes de
+ * pedido/PIX de outros donos continuarem exercitando o PIX; passe `{ pix: false }` para testar a loja SEM conta.
+ */
+export async function connectPixAccount(storeId: string, seller = `vendedor-${storeId.slice(-6)}`) {
+  const ctx = (field: string) => ({ storeId, provider: "mercadopago", field });
+  return prisma.paymentAccount.create({
+    data: {
+      storeId,
+      sellerUserId: seller,
+      status: "CONNECTED",
+      accessTokenEnc: encryptSecret(`fake-access-${seller}`, ctx("accessToken")),
+      refreshTokenEnc: encryptSecret(`fake-refresh-${seller}`, ctx("refreshToken")),
+      expiresAt: new Date(Date.now() + 90 * 24 * 3_600_000),
+    },
+  });
+}
+
 export async function registerStore(
   app: ReturnType<typeof makeApp>,
-  overrides: Partial<{ storeName: string; slug: string; code: string; email: string; password: string }> = {},
+  overrides: Partial<{ storeName: string; slug: string; code: string; email: string; password: string; pix: boolean }> = {},
 ) {
   storeSeq += 1;
   const body = {
@@ -82,6 +102,10 @@ export async function registerStore(
   // Diagnóstico do flake de cadastro (QA-14): se vier 5xx ou 429, registra o corpo para achar a causa.
   if (response.statusCode >= 500 || response.statusCode === 429) console.error("[registerStore] resposta inesperada", response.statusCode, response.body.slice(0, 300));
   const cookie = (response.headers["set-cookie"] as string | undefined)?.split(";")[0];
+  if (overrides.pix !== false && response.statusCode === 201) {
+    const storeId = (JSON.parse(response.body) as { store?: { id?: string } }).store?.id;
+    if (storeId) await connectPixAccount(storeId);
+  }
   return { response, cookie, credentials: body };
 }
 
