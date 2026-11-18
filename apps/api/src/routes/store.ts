@@ -26,6 +26,7 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
         deliveryEnabled: true,
         pickupEnabled: true,
         acceptingOrders: true,
+        hideSoldOutProducts: true,
         deliveryFeeCents: true,
       },
     });
@@ -89,6 +90,7 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
         deliveryEnabled: true,
         pickupEnabled: true,
         acceptingOrders: true,
+        hideSoldOutProducts: true,
         deliveryFeeCents: true,
       },
     });

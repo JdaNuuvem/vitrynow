@@ -226,6 +226,14 @@ export type CreateProductInput = z.infer<typeof createProductSchema>;
 export const updateProductSchema = createProductSchema.partial();
 export type UpdateProductInput = z.infer<typeof updateProductSchema>;
 
+// ---- Esgotado hoje (API-17 / B11) ----
+export const SOLD_OUT_DURATIONS = ["TODAY", "MANUAL"] as const; // até o fim de hoje (padrão) | até eu reativar
+export const setSoldOutSchema = z.object({
+  soldOut: z.boolean(),
+  duration: z.enum(SOLD_OUT_DURATIONS).optional(),
+});
+export type SetSoldOutInput = z.infer<typeof setSoldOutSchema>;
+
 // ---- Histórico de pedidos e observação interna (API-54) ----
 export const HISTORY_PERIODS = ["today", "yesterday", "7d", "30d", "custom"] as const;
 export const HISTORY_STATUS_FILTERS = ["ALL", "ABERTO", "CONCLUIDO", "CANCELADO", "AGUARDANDO_PAGAMENTO", "PAGAMENTO_EXPIRADO"] as const;
@@ -322,6 +330,7 @@ export const updateStoreSettingsSchema = z.object({
   minOrderCents: z.number().int().nonnegative().max(100_000_000).optional(),
   deliveryEnabled: z.boolean().optional(),
   pickupEnabled: z.boolean().optional(),
+  hideSoldOutProducts: z.boolean().optional(),
   deliveryFeeCents: z.number().int().nonnegative().max(10_000_000).optional(),
 });
 export type UpdateStoreSettingsInput = z.infer<typeof updateStoreSettingsSchema>;
