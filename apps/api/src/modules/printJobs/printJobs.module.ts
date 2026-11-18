@@ -43,7 +43,7 @@ const printJobRoutes: FastifyPluginAsync = async (app) => {
     if (request.user.role === "OWNER") return;
     if (limited(`denied:${request.user.userId}`, 10)) return tooMany(reply);
     await printModeService.recordDenied(request.user, (request.body as { mode?: unknown } | null)?.mode);
-    reply.code(403).send({ error: "ação restrita ao dono da loja" });
+    return reply.code(403).send({ error: "ação restrita ao dono da loja" });
   };
   app.put("/api/store/print-mode", { preHandler: [app.requirePanelAuth, ownerOrRecordDenied] }, async (request, reply) => {
     if (limited(`mode:${request.user.storeId}`, 10)) return tooMany(reply); // balde da LOJA (10 trocas por minuto)
