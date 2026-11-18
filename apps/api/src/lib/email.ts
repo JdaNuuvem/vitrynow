@@ -109,3 +109,23 @@ export async function sendLoginAlertEmail(input: { to: string }) {
   });
   if (error) console.error(`[email] falha ao enviar aviso de tentativas de login para ${maskEmail(input.to)}:`, error);
 }
+
+// API-07 (ADR-0001 §3.4): a conta do Mercado Pago da loja pede reconexão. Sem isso o PIX some do cardápio e o dono não sabe.
+// Texto fixo, sem dado do vendedor nem do provedor.
+export async function sendPaymentReconnectEmail(input: { to: string }) {
+  const resend = client();
+  if (!resend) {
+    console.warn(`[email] RESEND_API_KEY não configurado — aviso de reconexão do Mercado Pago para ${input.to}`);
+    return;
+  }
+  const { error } = await resend.emails.send({
+    from: FROM,
+    to: input.to,
+    subject: "Reconecte seu Mercado Pago — MeuCardapio",
+    html: `
+      <p>O PIX da sua loja foi desligado porque a conexão com o seu Mercado Pago precisa ser refeita.</p>
+      <p>Entre no painel, abra <b>Pagamentos</b> e conecte de novo. Pedidos já pagos continuam sendo conciliados.</p>
+    `,
+  });
+  if (error) console.error(`[email] falha ao enviar aviso de reconexão para ${input.to}:`, error);
+}

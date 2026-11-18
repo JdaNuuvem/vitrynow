@@ -6,7 +6,7 @@ import { prisma } from "@meucardapio/db";
 import { printableOrderSchema } from "@meucardapio/shared-types";
 import { BACKOFF_SECONDS, FAILURE_CODES, backoffSeconds, normalizeFailureCode, sanitizeDeviceText } from "../src/lib/printJobs";
 import { subscribe } from "../src/realtime/hub";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { makeApp, registerStore, resetDb, useMockedProvider } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -47,6 +47,7 @@ describe("regras puras da fila", () => {
 describe("API-12 — PrintJob", () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     app = makeApp();
     await app.ready();
@@ -89,7 +90,7 @@ describe("API-12 — PrintJob", () => {
   const releaseBackoff = (id: string) => prisma.printJob.update({ where: { id }, data: { availableAt: new Date(Date.now() - 1000) } });
   const sockets = (storeId: string) => {
     const sent: string[] = [];
-    subscribe(storeId, { readyState: 1, OPEN: 1, send: (m: string) => sent.push(m), on: vi.fn() } as never);
+    subscribe(storeId, { readyState: 1, OPEN: 1, send: (m: string) => sent.push(m), on: vi.fn() } as never, "OWNER");
     return (type: string) => sent.filter((m) => JSON.parse(m).type === type);
   };
 

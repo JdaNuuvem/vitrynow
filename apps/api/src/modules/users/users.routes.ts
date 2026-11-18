@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { changePasswordSchema, createStaffUserSchema } from "@meucardapio/shared-types";
+import { clientKey } from "../../lib/clientKey";
 import { requireMfa } from "../../lib/mfaGate";
 import { SESSION_COOKIE, sessionCookieOptions, signSession } from "../../lib/session";
 import { disconnectUser } from "../../realtime/hub";
@@ -23,7 +24,7 @@ export function buildUserRoutes(service: UsersService): FastifyPluginAsync {
       async (request, reply) => {
         const parsed = createStaffUserSchema.safeParse(request.body);
         if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
-        const user = await service.invite(request.user.storeId, parsed.data);
+        const user = await service.invite(request.user.storeId, parsed.data, clientKey(request.ip));
         return reply.code(201).send({ user });
       },
     );
@@ -45,7 +46,7 @@ export function buildUserRoutes(service: UsersService): FastifyPluginAsync {
       async (request, reply) => {
         const parsed = changePasswordSchema.safeParse(request.body);
         if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
-        const { tokenVersion } = await service.changePassword(request.user.userId, parsed.data);
+        const { tokenVersion } = await service.changePassword(request.user.userId, parsed.data, clientKey(request.ip));
         // Derruba as OUTRAS sessões e sockets; este dispositivo recebe cookie na versão nova.
         disconnectUser(request.user.userId);
         reply.setCookie(SESSION_COOKIE, signSession(app, { id: request.user.userId, tokenVersion }), sessionCookieOptions());
