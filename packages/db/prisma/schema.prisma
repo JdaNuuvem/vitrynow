@@ -379,6 +379,7 @@ model Order {
   @@index([storeId, createdAt]) // histórico e kanban por período (API-54)
   @@index([storeId, tableId, status])
   @@index([storeId, deviceTokenHash])
+  @@index([receiptId]) // API-24: o CREATE INDEX da migracao 500000 tem que existir no schema (drift 0)
   @@index([couponId])
   @@index([delivererId])
 }
