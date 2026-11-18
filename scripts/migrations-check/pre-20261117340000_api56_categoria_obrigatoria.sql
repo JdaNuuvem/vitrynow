@@ -1,4 +1,4 @@
--- Dados ANTES da 20261117130000_api56_categoria_obrigatoria (produto sem categoria). Tudo fictício.
+-- Dados ANTES da 20261117340000_api56_categoria_obrigatoria (produto sem categoria). Tudo fictício.
 INSERT INTO "Store" ("id","name","slug","code","updatedAt") VALUES
   ('ct_a','Loja A','loja-ct-a','9401', now()), ('ct_b','Loja B','loja-ct-b','9402', now()),
   ('ct_c','Loja C','loja-ct-c','9403', now()), ('ct_d','Loja D','loja-ct-d','9404', now());

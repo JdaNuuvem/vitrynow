@@ -1,7 +1,9 @@
 import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { checkoutPlanSchema } from "@meucardapio/shared-types";
+import { requireVerifiedEmail } from "../lib/emailVerification";
 import { logAudit } from "../lib/audit";
+import { requireMfa } from "../lib/mfaGate";
 import { createPixPayment } from "../lib/mercadopago";
 import { isFeature, isProFeature } from "../lib/features";
 import { getEntitlements, getStoreSubscription, getSubscriptionView } from "../lib/subscription";
@@ -49,7 +51,7 @@ const subscriptionRoutes: FastifyPluginAsync = async (app) => {
 
   app.post(
     "/api/store/subscription/checkout",
-    { preHandler: [app.requirePanelAuth, app.requireOwner], config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    { preHandler: [app.requirePanelAuth, app.requireOwner, requireVerifiedEmail], config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const { storeId, userId } = request.user;
       const parsed = checkoutPlanSchema.safeParse(request.body);
@@ -111,7 +113,7 @@ const subscriptionRoutes: FastifyPluginAsync = async (app) => {
     return { status: payment.status, subscription: await getSubscriptionView(request.user.storeId) };
   });
 
-  app.post("/api/store/subscription/cancel", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request, reply) => {
+  app.post("/api/store/subscription/cancel", { preHandler: [app.requirePanelAuth, app.requireOwner, requireMfa("cancel_subscription")] }, async (request, reply) => {
     const { storeId, userId } = request.user;
     const subscription = await getStoreSubscription(storeId);
     if (subscription.status !== "ACTIVE") {

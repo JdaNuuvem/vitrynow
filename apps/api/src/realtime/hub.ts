@@ -86,7 +86,7 @@ const socketRoles = new WeakMap<WebSocket, SocketRole>();
 // Mensagens que só o OWNER pode receber (RN-CX-22): sinalizam dado que o STAFF não vê. A restrição vive AQUI, por tipo, e não em quem publica:
 // nenhum chamador consegue esquecê-la. Regra do canal da loja: evento novo não leva valor monetário, dado pessoal nem segredo; o detalhe vem
 // por rota autenticada com o papel certo.
-const OWNER_ONLY_TYPES: ReadonlySet<WsServerMessage["type"]> = new Set(["cashier.difference_over_tolerance"]);
+const OWNER_ONLY_TYPES: ReadonlySet<WsServerMessage["type"]> = new Set(["cashier.difference_over_tolerance", "payment.refund_stuck"]);
 
 // `device.alert` com código de DINHEIRO também é de dono: o código denuncia a regra de não cobrar (PC-24); os demais (fila sem impressora, modo
 // não confirmado) seguem a todos. O filtro é pelo conteúdo do tipo, aqui, para valer a qualquer publicador (rota, job).

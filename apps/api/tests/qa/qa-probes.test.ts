@@ -293,7 +293,7 @@ describe("QA probes — API", () => {
   });
 
   it("D22 webhook de assinatura em paralelo ativa o plano UMA vez (30 dias, não 60)", async () => {
-    const ctx = await setupStore({ plan: "BASICO" }); // parte do teste grátis: com o PRO por padrão o período já valeria 30 dias antes do checkout
+    const ctx = await setupStore({ plan: "BASICO" });
     const pix = fakePix();
     createPix.mockResolvedValueOnce(pix);
     const checkout = await app.inject({ method: "POST", url: "/api/store/subscription/checkout", headers: { cookie: ctx.cookie }, payload: { planCode: "BASICO" } });

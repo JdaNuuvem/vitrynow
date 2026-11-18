@@ -179,7 +179,8 @@ export function requireFeature(feature: Feature) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const entitlements = await getRequestEntitlements(request, request.user.storeId);
     if (!entitlements.features.includes(feature)) {
-      reply
+      // SEC-40: `return` na guarda (nao so enviar): um onSend lento nao pode deixar o handler rodar depois do 402.
+      return reply
         .code(402)
         .send({ error: "Este recurso não está disponível no seu plano.", code: "FEATURE_LOCKED", feature, details: { feature } });
     }
