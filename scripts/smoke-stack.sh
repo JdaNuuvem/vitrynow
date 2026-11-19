@@ -258,6 +258,43 @@ if [ -n "$IMGID" ]; then
   [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT$p0")" = 404 ] && [ "$(nfotos)" = "$N0" ] && check ok "9h depois de apagar: 404 no /media e o volume volta a $N0 arquivo(s)" || check fail "9h imagem apagada ainda servida ou arquivos restantes ($(nfotos))"
 fi
 rm -rf "$UPD"
+echo "== 9i upload: papel STAFF, cota por loja e falha de gravação (INF-31, ADR-0017)"
+UPD="$ROOTW/infra/.smoke-upload9i"; rm -rf "$UPD"; mkdir -p "$UPD"; node "$ROOTW/scripts/smoke-fixtures/gera-png.mjs" "$UPD/foto.png" 96 96
+upj() { curl -s -b "$1" -w '|%{http_code}' -F "file=@$UPD/foto.png;type=image/png" "http://127.0.0.1:$PORT/api/media/images?kind=$2"; }
+psqlq() { "${DC[@]}" exec -T postgres psql -U meucardapio -d meucardapio -At -v ON_ERROR_STOP=1 "$@" | tr -d '\r'; }
+LOJA="$(psqlq -c "select \"storeId\" from \"User\" where email='$smokeEmail'")"
+SH="$("${DC[@]}" exec -T api node -e "process.stdout.write(require('bcrypt').hashSync('SenhaStaff-12345',10))" | tr -d '\r')"
+STAFF="staff-smoke$RANDOM@exemplo.invalid"
+printf "INSERT INTO \"User\"(id,\"storeId\",email,\"passwordHash\",role,\"tokenVersion\",\"createdAt\") VALUES ('stf'||substr(md5(random()::text),1,20),'%s','%s','%s','STAFF',0,now());" "$LOJA" "$STAFF" "$SH" | "${DC[@]}" exec -T postgres psql -U meucardapio -d meucardapio -v ON_ERROR_STOP=1 >/dev/null 2>&1 && check ok "9i funcionário STAFF criado direto no banco (a loja de teste nasce em BASICO e o convite exige plano PRO)" || check fail "9i não consegui criar o STAFF"
+jar2="$ROOTW/infra/.smoke.cookies.staff"; rm -f "$jar2"; src=0
+for t in 1 2 3 4; do src="$(curl -s -o /dev/null -w '%{http_code}' -c "$jar2" -X POST -H 'Content-Type: application/json' -d "{\"email\":\"$STAFF\",\"password\":\"SenhaStaff-12345\"}" "http://127.0.0.1:$PORT/auth/login")"; [ "$src" != 429 ] && break; sleep 20; done
+[ "$src" = 200 ] && grep -q mc_session "$jar2" && check ok "9i o STAFF entra (login 200)" || check fail "9i login do STAFF devolveu $src"
+for k in LOGO COVER; do out="$(upj "$jar2" $k)"; [[ "${out##*|}" = 403 && "$out" == *FORBIDDEN_ROLE* ]] && check ok "9i STAFF enviando $k: 403 FORBIDDEN_ROLE (identidade da loja é só do dono)" || check fail "9i STAFF enviando $k: $out"; done
+N1="$(nfotos 2>/dev/null || "${DC[@]}" exec -T api sh -c 'find /uploads -type f | wc -l' | tr -d ' \r\n')"
+out="$(upj "$jar2" PRODUCT)"; [ "${out##*|}" = 201 ] && check ok "9i STAFF enviando foto de PRODUTO: 201 (permitido)" || check fail "9i STAFF enviando PRODUTO: $out"
+SID="$(printf '%s' "${out%|*}" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)"
+out="$(curl -s -b "$jar2" -X POST -w '|%{http_code}' "http://127.0.0.1:$PORT/api/media/images/$SID/delete")"; [ "${out##*|}" = 403 ] && check ok "9i STAFF apagando imagem: 403 (só o dono apaga)" || check fail "9i STAFF apagando imagem: $out"
+curl -s -b "$jar" -X POST -o /dev/null "http://127.0.0.1:$PORT/api/media/images/$SID/delete"
+# cota por loja: enche a loja até o teto (500) com linhas READY e confere que o próximo upload é recusado SEM gravar arquivo
+NIMG="$(psqlq -c "select count(*) from \"Image\" where \"storeId\"='$LOJA'")"; TETO=500
+psqlq -c "insert into \"Image\"(id,\"storeId\",kind,\"keyBase\",widths,bytes,status,\"createdAt\") select 'cota'||g,'$LOJA','PRODUCT','stores/$LOJA/cota'||g,ARRAY[320],1,'READY',now() from generate_series(1,$TETO-$NIMG) g" >/dev/null
+N2="$("${DC[@]}" exec -T api sh -c 'find /uploads -type f | wc -l' | tr -d ' \r\n')"
+out="$(upj "$jar" PRODUCT)"; [[ "${out##*|}" = 409 && "$out" == *IMAGE_QUOTA_EXCEEDED* ]] && check ok "9i loja no teto de $TETO imagens: 409 IMAGE_QUOTA_EXCEEDED" || check fail "9i cota: $out"
+[ "$("${DC[@]}" exec -T api sh -c 'find /uploads -type f | wc -l' | tr -d ' \r\n')" = "$N2" ] && check ok "9i a recusa por cota NÃO gravou arquivo no volume" || check fail "9i a recusa por cota deixou arquivo no volume"
+psqlq -c "delete from \"Image\" where \"storeId\"='$LOJA' and id like 'cota%'" >/dev/null
+# falha de gravação (permissão na pasta da loja): NÃO é disco cheio de verdade, mas exercita o mesmo caminho de erro de gravação
+"${DC[@]}" exec -T -u root api sh -c "mkdir -p /uploads/stores/$LOJA && chmod 555 /uploads/stores/$LOJA" >/dev/null 2>&1
+out="$(upj "$jar" PRODUCT)"; code="${out##*|}"
+{ [ "$code" != 201 ] && [[ "$code" =~ ^[45] ]] && [[ "$out" != */uploads* && "$out" != *EACCES* && "$out" != *"node_modules"* ]]; } && check ok "9i falha de gravação: o upload NÃO é aceito ($code) e a resposta não vaza caminho nem erro interno" || check fail "9i falha de gravação: $out"
+rest="$("${DC[@]}" exec -T api sh -c "find /uploads -name '*.tmp*' -o -name '*.partial*' | wc -l; find /uploads -type f | wc -l" | tr -d '\r' | tr '\n' ' ')"
+[ "$rest" = "0 $N2 " ] && check ok "9i depois da falha: nenhum arquivo temporário e nenhum arquivo novo no volume" || check fail "9i sobrou arquivo depois da falha de gravação: '$rest' (esperado '0 $N2 ')"
+pend="$(psqlq -c "select count(*) from \"Image\" where \"storeId\"='$LOJA' and status='PENDING'")"
+echo "   (informativo: linhas PENDING deixadas pela falha = $pend; o job de limpeza as varre depois de QUARENTENA)"
+"${DC[@]}" exec -T -u root api sh -c "chmod 755 /uploads/stores/$LOJA" >/dev/null 2>&1
+psqlq -c "delete from \"Image\" where \"storeId\"='$LOJA' and status='PENDING'" >/dev/null
+out="$(upj "$jar" PRODUCT)"; [ "${out##*|}" = 201 ] && check ok "9i depois de consertar a permissão o upload volta a funcionar (201): sem estado preso" || check fail "9i recuperação: $out"
+RID="$(printf '%s' "${out%|*}" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)"; curl -s -b "$jar" -X POST -o /dev/null "http://127.0.0.1:$PORT/api/media/images/$RID/delete"
+rm -rf "$UPD" "$jar2"
 rm -f "$jar" "$body"
 
 echo "== 6f menor privilégio: o web NÃO recebe segredo nenhum além do necessário; a API recebe o PIX desligado; check-env.sh aprova o .env do smoke"
