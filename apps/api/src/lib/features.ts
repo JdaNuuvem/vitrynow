@@ -13,6 +13,7 @@ export const FEATURE_REGISTRY = {
   tab_service: { released: false, tier: "PRO" }, // comanda e pagamento dividido — API-42/43
   scheduled_orders: { released: false, tier: "PRO" }, // pedido agendado — API-40
   whatsapp_auto: { released: false, tier: "PRO" }, // WhatsApp automático — API-41
+  reels: { released: true, tier: "PRO" }, // Reels de até 30 s (ADR-0021); além do plano, a chave geral REELS_ENABLED (desligada por padrão)
   advanced_reports: { released: false, tier: "PRO" }, // relatórios avançados — API-45
 } as const satisfies Record<string, { released: boolean; tier: "BASICO" | "PRO" }>;
 

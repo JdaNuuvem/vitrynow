@@ -770,3 +770,41 @@ export const campaignContentSchema = z
 export type CampaignContent = z.infer<typeof campaignContentSchema>;
 export const campaignRevisionSchema = z.object({ revision: z.number().int().nonnegative() }).strict();
 export const campaignSaveSchema = z.object({ revision: z.number().int().nonnegative(), draft: campaignContentSchema }).strict();
+
+// ── Reels (ADR-0021, REEL-1): vídeo vertical de até 30 s por produto ──
+export const REEL_STATUSES = ["PROCESSING", "READY", "FAILED", "PUBLISHED"] as const;
+export const reelStatusSchema = z.enum(REEL_STATUSES);
+export type ReelStatus = z.infer<typeof reelStatusSchema>;
+/** Textos do catálogo de erros (spec RN-REEL §5): uma fonte só para a API e a tela. */
+export const REEL_ERRORS = {
+  VIDEO_TOO_LONG: { status: 400, message: "O vídeo passa de 30 segundos." },
+  VIDEO_TOO_LARGE: { status: 413, message: "O vídeo passa do tamanho máximo permitido." },
+  VIDEO_FORMAT_INVALID: { status: 400, message: "Use um vídeo MP4 ou MOV." },
+  VIDEO_LIMIT_REACHED: { status: 402, message: "Você chegou ao limite de vídeos do plano." },
+  VIDEO_PROCESSING_FAILED: { status: 500, message: "Não conseguimos preparar este vídeo. Envie outro." },
+  VIDEO_NOT_READY: { status: 409, message: "O vídeo ainda está sendo preparado." },
+  VIDEO_STORAGE_FULL: { status: 413, message: "O espaço de vídeos da sua loja acabou. Remova um vídeo." },
+} as const;
+export type ReelErrorCode = keyof typeof REEL_ERRORS;
+/** Entrada do envio (`POST /api/reels?productId=`); o arquivo vai no corpo multipart. */
+export const reelUploadSchema = z.object({ productId: z.string().trim().min(1).max(64) }).strict();
+export type ReelUploadInput = z.infer<typeof reelUploadSchema>;
+export const reelSchema = z
+  .object({
+    id: z.string(),
+    productId: z.string().nullable(),
+    status: reelStatusSchema,
+    durationMs: z.number().int().nonnegative().nullable(),
+    width: z.number().int().positive().nullable(),
+    height: z.number().int().positive().nullable(),
+    bytes: z.number().int().nonnegative(),
+    errorCode: z.string().nullable(),
+    errorMessage: z.string().nullable(),
+    videoUrl: z.string().nullable(), // só PRONTO ou PUBLICADO (o dono vê a prévia antes de publicar)
+    posterUrl: z.string().nullable(),
+    createdAt: z.string(),
+    publishedAt: z.string().nullable(),
+  })
+  .strict();
+export type ReelView = z.infer<typeof reelSchema>;
+export const reelUploadResultSchema = z.object({ reelId: z.string(), status: z.literal("PROCESSING") }).strict();

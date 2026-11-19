@@ -166,6 +166,7 @@ model Store {
   onboardingSteps OnboardingStep[]
   activationEvents ActivationEvent[]
   images       Image[]
+  reels        Reel[]
   printMode    PrintMode @default(LEGACY) // modo de impressão decidido pelo SERVIDOR por loja (ADR-0004 §8.12)
   manualDiscountStaffLimitPercent Int @default(10) // desconto manual do pedido lançado no painel: STAFF até este %, acima só o OWNER (RN-B2-06)
   cashStaffWithdrawalLimitCents Int @default(0) // limite de sangria do STAFF por lançamento (RN-CX-09); 0 = toda sangria exige o dono
@@ -1156,4 +1157,99 @@ model MenuCampaign {
   draft     Json?
   published Json?
   updatedAt DateTime @updatedAt
+}
+
+// ── Reels (ADR-0021, carimbo 830000): vídeo vertical de até 30 s por produto; convertido por worker ──
+enum ReelStatus {
+  PROCESSING // enviado, na fila ou convertendo
+  READY // convertido; só o dono vê até publicar
+  FAILED // reprovado ou erro; `errorCode` diz o motivo
+  PUBLISHED // aparece no cardápio
+}
+
+enum MediaJobStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+enum ReelReportReason {
+  PESSOA_IDENTIFICAVEL
+  MUSICA_DE_TERCEIROS
+  OUTRO
+}
+
+enum ReelReportStatus {
+  OPEN
+  KEPT // plataforma manteve o vídeo
+  REMOVED // plataforma removeu
+}
+
+model Reel {
+  id            String       @id @default(cuid())
+  storeId       String
+  store         Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  // Sem FK para Product de propósito: produto é apagado de verdade (catálogo) e o varredor `reels.convert` remove o vídeo em ≤ 24 h.
+  // A loja do produto é conferida no serviço (id + storeId) antes de criar.
+  productId     String?
+  status        ReelStatus   @default(PROCESSING)
+  keyBase       String // stores/<storeId>/reels/<uuid>; arquivos: <keyBase>.mp4 e <keyBase>-poster.webp
+  originalKey   String? // quarentena PRIVADA (quarantine/reels/<storeId>/<uuid>.upload); null depois de apagado
+  originalBytes Int
+  bytes         Int          @default(0) // MP4 + capa já prontos (conta na cota de espaço da loja)
+  durationMs    Int?
+  width         Int?
+  height        Int?
+  errorCode     String?
+  uploadedById  String?
+  publishedAt   DateTime?
+  takedownAt    DateTime? // despublicado por denúncia até a análise
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  jobs          MediaJob[]
+  reports       ReelReport[]
+
+  @@unique([id, storeId])
+  @@index([storeId, status])
+  @@index([productId])
+  @@index([status, createdAt])
+}
+
+// Fila em Postgres (SKIP LOCKED + lease), a mesma ideia das fundações do ADR-0019.
+model MediaJob {
+  id          String         @id @default(cuid())
+  kind        String // "REEL_CONVERT"
+  storeId     String
+  reelId      String
+  reel        Reel           @relation(fields: [reelId, storeId], references: [id, storeId], onDelete: Cascade)
+  status      MediaJobStatus @default(PENDING)
+  attempts    Int            @default(0)
+  availableAt DateTime       @default(now())
+  lockedUntil DateTime? // lease: job RUNNING com lease vencido volta à fila
+  lastError   String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([status, availableAt])
+  @@index([storeId, status])
+  @@index([reelId])
+}
+
+model ReelReport {
+  id           String           @id @default(cuid())
+  reelId       String
+  storeId      String
+  reel         Reel             @relation(fields: [reelId, storeId], references: [id, storeId], onDelete: Cascade)
+  reason       ReelReportReason
+  note         String? // texto curto sanitizado; sem dado pessoal do denunciante
+  reporterKey  String // HMAC(ip, dia): 1 denúncia por origem/reel/dia sem guardar o IP
+  status       ReelReportStatus @default(OPEN)
+  resolvedAt   DateTime?
+  resolvedById String?
+  createdAt    DateTime         @default(now())
+
+  @@unique([reelId, reporterKey])
+  @@index([status, createdAt])
+  @@index([storeId])
 }

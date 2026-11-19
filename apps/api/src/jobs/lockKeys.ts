@@ -12,7 +12,8 @@ export const JOB_LOCK_KEYS = {
   "message.outbox": 7008n,
   "tech.cleanup": 7009n,
   "print.queue_watch": 7010n,
-  "menu.revalidate": 7011n, // API-58 (lote 2): 7010 e do print.queue_watch (PC-24); o runner recusa lockKey repetido
+  "menu.revalidate": 7011n,
+  "reels.convert": 7013n, // ADR-0021: fila de mídia dos Reels (7012 fica reservada ao Atlas) // API-58 (lote 2): 7010 e do print.queue_watch (PC-24); o runner recusa lockKey repetido
 } as const;
 
 export type JobName = keyof typeof JOB_LOCK_KEYS;
