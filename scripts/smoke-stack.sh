@@ -282,15 +282,15 @@ N2="$("${DC[@]}" exec -T api sh -c 'find /uploads -type f | wc -l' | tr -d ' \r\
 out="$(upj "$jar" PRODUCT)"; [[ "${out##*|}" = 409 && "$out" == *IMAGE_QUOTA_EXCEEDED* ]] && check ok "9i loja no teto de $TETO imagens: 409 IMAGE_QUOTA_EXCEEDED" || check fail "9i cota: $out"
 [ "$("${DC[@]}" exec -T api sh -c 'find /uploads -type f | wc -l' | tr -d ' \r\n')" = "$N2" ] && check ok "9i a recusa por cota NÃO gravou arquivo no volume" || check fail "9i a recusa por cota deixou arquivo no volume"
 psqlq -c "delete from \"Image\" where \"storeId\"='$LOJA' and id like 'cota%'" >/dev/null
-# falha de gravação (permissão na pasta da loja): NÃO é disco cheio de verdade, mas exercita o mesmo caminho de erro de gravação
-"${DC[@]}" exec -T -u root api sh -c "mkdir -p /uploads/stores/$LOJA && chmod 555 /uploads/stores/$LOJA" >/dev/null 2>&1
+# falha de gravação (permissão na pasta da loja): NÃO é disco cheio de verdade, mas exercita o mesmo caminho de erro de gravação. O chmod é feito pelo DONO (node): o root do contêiner da API não consegue (cap_drop ALL)
+"${DC[@]}" exec -T api sh -c "mkdir -p /uploads/stores/$LOJA && chmod 555 /uploads/stores/$LOJA" >/dev/null 2>&1
 out="$(upj "$jar" PRODUCT)"; code="${out##*|}"
 { [ "$code" != 201 ] && [[ "$code" =~ ^[45] ]] && [[ "$out" != */uploads* && "$out" != *EACCES* && "$out" != *"node_modules"* ]]; } && check ok "9i falha de gravação: o upload NÃO é aceito ($code) e a resposta não vaza caminho nem erro interno" || check fail "9i falha de gravação: $out"
 rest="$("${DC[@]}" exec -T api sh -c "find /uploads -name '*.tmp*' -o -name '*.partial*' | wc -l; find /uploads -type f | wc -l" | tr -d '\r' | tr '\n' ' ')"
 [ "$rest" = "0 $N2 " ] && check ok "9i depois da falha: nenhum arquivo temporário e nenhum arquivo novo no volume" || check fail "9i sobrou arquivo depois da falha de gravação: '$rest' (esperado '0 $N2 ')"
 pend="$(psqlq -c "select count(*) from \"Image\" where \"storeId\"='$LOJA' and status='PENDING'")"
 echo "   (informativo: linhas PENDING deixadas pela falha = $pend; o job de limpeza as varre depois de QUARENTENA)"
-"${DC[@]}" exec -T -u root api sh -c "chmod 755 /uploads/stores/$LOJA" >/dev/null 2>&1
+"${DC[@]}" exec -T api sh -c "chmod 755 /uploads/stores/$LOJA" >/dev/null 2>&1
 psqlq -c "delete from \"Image\" where \"storeId\"='$LOJA' and status='PENDING'" >/dev/null
 out="$(upj "$jar" PRODUCT)"; [ "${out##*|}" = 201 ] && check ok "9i depois de consertar a permissão o upload volta a funcionar (201): sem estado preso" || check fail "9i recuperação: $out"
 RID="$(printf '%s' "${out%|*}" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)"; curl -s -b "$jar" -X POST -o /dev/null "http://127.0.0.1:$PORT/api/media/images/$RID/delete"
