@@ -3,6 +3,7 @@ import { Prisma, prisma } from "@meucardapio/db";
 import { closeCashSessionSchema, createCashMovementSchema, openCashSessionSchema, setCashStaffLimitSchema } from "@meucardapio/shared-types";
 import { toRow as auditRow, type AuditInput } from "../lib/audit";
 import { computeCashSummary } from "../lib/cashier";
+import { storeTimeZone } from "../lib/storeTz";
 import { CASH_TOLERANCE_CENTS, closePreview, evaluateClose, validateMovementReason } from "../lib/cashRules";
 import { findOwnedOrNotFound } from "../lib/tenant";
 import { publishToOwners } from "../realtime/hub";
@@ -36,7 +37,7 @@ async function summarizeSession(db: Db | typeof prisma, storeId: string, session
     where: { storeId, receivedAt: { gte: session.openedAt, ...(session.closedAt ? { lte: session.closedAt } : {}) } },
     select: { id: true, receivedAt: true, totalCents: true, serviceFeeCents: true, payments: { select: { method: true, amountCents: true, changeForCents: true } } },
   });
-  return computeCashSummary(session, orders, session.closedAt ?? new Date(), receipts);
+  return computeCashSummary(session, orders, session.closedAt ?? new Date(), receipts, await storeTimeZone(storeId, db));
 }
 
 // A API devolve a movimentação com TIPO, valor, motivo, PAPEL e HORA de quem lançou: nunca o id do usuário nem o e-mail (CA-CX-22).
