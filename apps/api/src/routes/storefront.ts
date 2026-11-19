@@ -129,6 +129,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
+    const productById = new Map(products.map((p) => [p.id, p]));
     // API-15 parte 2 (B8): produto com grupo de opções REAL (MANUAL) é precificado por `resolveLine` (o servidor é a única fonte do preço);
     // produto só com o espelho legado dos adicionais (LEGACY_ADDITIONALS) segue o caminho antigo, idêntico ao de antes (CA-B8-06).
     const groupsByProduct = await new PrismaOptionGroupsRepository(prisma).groupsForProducts(store.id, [...productById.keys()]);

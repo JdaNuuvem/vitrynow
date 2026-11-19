@@ -1,4 +1,3 @@
-import type { Category, Product, ProductAdditional, prisma as prismaClient } from "@meucardapio/db";
 import { orderOptionFields } from "../../lib/orderItems";
 import { PrismaOptionGroupsRepository } from "../optionGroups/optionGroups.repository";
 import type { Category, Product, ProductAdditional, Prisma, prisma as prismaClient } from "@meucardapio/db";
