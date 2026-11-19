@@ -9,6 +9,7 @@ const select = {
   timezone: true,
   acceptingOrders: true,
   schedule: true,
+  openingHours: true,
   pausedUntil: true,
   closedUntil: true,
   busyUntil: true,

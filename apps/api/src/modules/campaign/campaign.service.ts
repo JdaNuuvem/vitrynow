@@ -38,7 +38,7 @@ export async function validateCampaignImage(storeId: string, url: string): Promi
 /** Destino visível e DESTA loja: categoria da loja, ou produto ativo da loja. */
 export async function targetExists(storeId: string, target: { kind: "category" | "product"; id: string }): Promise<boolean> {
   if (target.kind === "category") return (await prisma.category.count({ where: { id: target.id, storeId } })) > 0;
-  return (await prisma.product.count({ where: { id: target.id, storeId, active: true } })) > 0;
+  return (await prisma.product.count({ where: { id: target.id, storeId, active: true, sellAlone: true } })) > 0;
 }
 
 const toState = (row: { revision: number; draft: Prisma.JsonValue | null; published: Prisma.JsonValue | null }): CampaignState => ({

@@ -72,12 +72,14 @@ export async function buildOrderLines(storeId: string, products: Array<Product &
     const onPromo = promoActive(priced, now);
     // Adicional que não vende sozinho (RN-PD-16): nunca entra como item do pedido (vitrine, mesa e balcão).
     if (!product.sellAlone) return fail(409, "Este item é um adicional e não é vendido sozinho.", "PRODUCT_ADDON_NOT_SOLD_ALONE");
+    // RN-PD-23b: produto por UNIDADE não aceita peso (nunca descartado em silêncio).
+    if (product.saleUnit === "UN" && item.weightGrams !== undefined) return fail(400, "Este produto não é vendido por peso.", "WEIGHT_NOT_ALLOWED");
     if (product.saleUnit !== "UN") {
       // Venda por peso (RN-PD-17..25): quantity = 1; weightGrams validado; unitário = valor da linha; sem opções nem adicionais no MVP.
       if (item.quantity !== 1) return fail(400, "Produto por peso é pedido em uma só pesagem.", "WEIGHT_QUANTITY_INVALID");
       if ((selected && selected.length > 0) || (item.additionalIds && item.additionalIds.length > 0)) return fail(400, "Produto vendido por peso não aceita opções.", "PRODUCT_WEIGHT_NO_OPTIONS");
       const grams = item.weightGrams;
-      if (grams === undefined) return fail(400, `Escolha entre ${product.minGrams} g e ${product.maxGrams} g.`, "WEIGHT_OUT_OF_RANGE");
+      if (grams === undefined) return fail(400, "Informe o peso.", "WEIGHT_REQUIRED");
       const weightIssue = checkWeight(product, grams);
       if (weightIssue) return fail(400, weightIssue.message, weightIssue.code);
       const lineCents = weightLineCents(effective, grams);

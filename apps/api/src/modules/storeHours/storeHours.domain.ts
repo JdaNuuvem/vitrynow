@@ -217,6 +217,40 @@ export function acceptingWindows(schedule: Schedule, timeZone: string, now: Date
     .filter((w) => w.end > w.start);
 }
 
+/** Aberto AGORA = há uma janela de ACEITAR pedido que contém `now` (o MESMO cálculo de `computeStoreStatus`; pausa e interruptor ficam fora daqui). */
+export function isOpenAt(schedule: Schedule, timeZone: string, now: Date): boolean {
+  return acceptingWindows(schedule, timeZone, now).some((w) => w.start <= now && now < w.end);
+}
+
+const DISPLAY_DAYS = [1, 2, 3, 4, 5, 6, 0]; // segunda a domingo (o índice 0 da grade é domingo)
+const DAY_TITLES = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+
+/**
+ * Texto de horário GERADO da grade (fonte única, SSOT D2): "Seg a sáb 09:00–17:00" ou "Seg a sex 09:00–17:00; Sáb 09:00–13:00". Dias com o mesmo horário e
+ * seguidos viram faixa ("Seg a qua"; 2 dias = "Seg e ter"). Sem nenhum dia aberto: "Fechado". Não usa exceções (feriado muda o dia, não a grade semanal).
+ */
+export function hoursText(schedule: Schedule): string {
+  const label = (intervals: Interval[]) => intervals.map((i) => `${i.start}–${i.end}`).join(", ");
+  const groups: Array<{ days: number[]; text: string }> = [];
+  for (const day of DISPLAY_DAYS) {
+    const intervals = [...(schedule.week[day] ?? [])].sort((a, b) => toMinutes(a.start) - toMinutes(b.start));
+    if (intervals.length === 0) continue;
+    const text = label(intervals);
+    const last = groups[groups.length - 1];
+    const previous = last ? DISPLAY_DAYS.indexOf(last.days[last.days.length - 1]) : -2;
+    if (last && last.text === text && previous === DISPLAY_DAYS.indexOf(day) - 1) last.days.push(day);
+    else groups.push({ days: [day], text });
+  }
+  if (groups.length === 0) return "Fechado";
+  const name = (d: number, first: boolean) => (first ? DAY_TITLES[d] : DAY_TITLES[d].toLowerCase());
+  return groups
+    .map(({ days, text }) => {
+      const range = days.length === 1 ? name(days[0], true) : days.length === 2 ? `${name(days[0], true)} e ${name(days[1], false)}` : `${name(days[0], true)} a ${name(days[days.length - 1], false)}`;
+      return `${range} ${text}`;
+    })
+    .join("; ");
+}
+
 /** Próxima abertura estritamente depois de `after`. */
 export function nextOpening(schedule: Schedule, timeZone: string, after: Date): Date | null {
   return acceptingWindows(schedule, timeZone, after).find((w) => w.start > after)?.start ?? null;
