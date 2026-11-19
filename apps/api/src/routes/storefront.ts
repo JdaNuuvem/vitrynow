@@ -19,7 +19,7 @@ import { CAPTCHA_HEADER, captchaVerifier } from "../lib/captcha";
 import { clientIpOf } from "../lib/clientIp";
 import { clientKey } from "../lib/clientKey";
 import { newOrderToken, orderTokenMatches, ORDER_TOKEN_HEADER } from "../lib/orderToken";
-import { assertOrderMoneyFits, buildOrderLines, optionCopiesCreate } from "../lib/orderItems";
+import { assertOrderMoneyFits, buildOrderLines, optionCopiesCreate, orderItemExtras } from "../lib/orderItems";
 
 const COUPON_EXHAUSTED_MESSAGE = "Esse cupom acabou.";
 class CouponExhaustedError extends Error {}
@@ -261,9 +261,8 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
               create: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })),
             },
             // Cópia da escolha no pedido (RN-B8-07): mudar o cardápio depois não altera pedido antigo. Na MESMA transação do pedido.
-            ...(item.optionCopies.length > 0
-              ? { options: { create: item.optionCopies.map((o) => ({ groupName: o.groupName, name: o.name, priceCents: o.priceCents, quantity: o.quantity, priceMode: o.priceMode })) } }
-              : {}),
+            ...optionCopiesCreate(item.optionCopies),
+            ...orderItemExtras(item),
           })),
         },
       },

@@ -14,6 +14,19 @@ export type ProductData = {
   description?: string;
   imageUrl?: string;
   priceCents?: number;
+  // Produto detalhado (PD): o serviço já converteu as datas do fuso da loja para instantes UTC
+  promoCents?: number | null;
+  promoStartsAt?: Date | null;
+  promoEndsAt?: Date | null;
+  kind?: "PRATO" | "ADICIONAL";
+  sellAlone?: boolean;
+  saleUnit?: "UN" | "KG" | "HG";
+  minGrams?: number;
+  stepGrams?: number;
+  maxGrams?: number;
+  isSingleDish?: boolean;
+  portionGrams?: number | null;
+  serves?: number | null;
   active?: boolean;
   featured?: boolean;
   position?: number;
@@ -54,6 +67,10 @@ export interface CatalogRepository {
   setProductOrder(storeId: string, categoryId: string, ids: string[]): Promise<void>;
   /** Pedidos ainda em aberto (não concluídos nem cancelados) que têm o produto. */
   countOpenOrdersWithProduct(productId: string): Promise<number>;
+  /** Fuso da loja (as datas da promoção são escolhidas nele). */
+  storeTimezone(storeId: string): Promise<string>;
+  /** Grupos de opções ligados ao produto: tem grupo BASE (preço vem da variação) e quantos grupos/adicionais legados existem. */
+  optionState(storeId: string, productId: string): Promise<{ hasBaseGroup: boolean; groups: number; legacyAdditionals: number }>;
 }
 
 export class PrismaCatalogRepository implements CatalogRepository {
@@ -196,6 +213,19 @@ export class PrismaCatalogRepository implements CatalogRepository {
     return this.db.order.count({
       where: { status: { notIn: ["CONCLUIDO", "CANCELADO"] }, items: { some: { productId } } },
     });
+  }
+
+  async storeTimezone(storeId: string) {
+    return (await this.db.store.findUniqueOrThrow({ where: { id: storeId }, select: { timezone: true } })).timezone;
+  }
+
+  async optionState(storeId: string, productId: string) {
+    const links = await this.db.productOptionGroup.findMany({ where: { storeId, productId }, select: { group: { select: { priceMode: true, source: true } } } });
+    return {
+      hasBaseGroup: links.some((l) => l.group.priceMode === "BASE"),
+      groups: links.filter((l) => l.group.source !== "LEGACY_ADDITIONALS").length,
+      legacyAdditionals: await this.db.productAdditional.count({ where: { productId } }),
+    };
   }
 }
 

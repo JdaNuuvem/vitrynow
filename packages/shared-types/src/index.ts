@@ -29,6 +29,8 @@ export const createOrderItemSchema = z.object({
   additionalIds: z.array(z.string().min(1)).max(50).optional(),
   optionSelections: z.array(z.object({ optionId: z.string().min(1).max(150), quantity: z.number().int().min(1).max(99) })).max(300).optional(),
   expectedUnitPriceCents: z.number().int().nonnegative().max(2_147_483_647).optional(),
+  // Produto detalhado (venda por peso): peso ESCOLHIDO em gramas inteiras; o servidor valida minimo/passo/maximo e calcula o valor da linha (quantity tem de ser 1).
+  weightGrams: z.number().int().positive().max(100_000).optional(),
   // API-15 parte 2 (B8): opções escolhidas por id, com quantidade (padrão 1). O servidor é a ÚNICA fonte do preço (RN-B8-03).
   options: z.array(z.object({ optionId: z.string().min(1), quantity: z.number().int().positive().max(20).optional() })).max(60).optional(),
 });
@@ -350,7 +352,20 @@ export const createProductSchema = z.object({
   name: textField({ max: 80, min: 1 }), // API-49: sanitiza e limita (o 150 era o limite antigo, anterior a API-49)
   description: textField({ max: 300, multiline: true }).optional(),
   imageUrl: mediaImageUrl.optional().or(z.literal("")),
-  priceCents: z.number().int().nonnegative().max(100_000_000),
+  priceCents: z.number().int().nonnegative().max(100_000_000), // preço NORMAL (real); em produto por peso é o preço do QUILO
+  // Produto detalhado (PD): promoção e vigência (datas no FUSO DA LOJA; o servidor converte para instantes UTC), tipo, unidade de venda, prato único. Todos opcionais.
+  promoCents: z.number().int().positive().max(100_000_000).nullable().optional(),
+  promoStartsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  promoEndsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  kind: z.enum(["PRATO", "ADICIONAL"]).optional(),
+  sellAlone: z.boolean().optional(),
+  saleUnit: z.enum(["UN", "KG", "HG"]).optional(),
+  minGrams: z.number().int().min(1).max(100_000).optional(),
+  stepGrams: z.number().int().min(1).max(100_000).optional(),
+  maxGrams: z.number().int().min(1).max(100_000).optional(),
+  isSingleDish: z.boolean().optional(),
+  portionGrams: z.number().int().min(1).max(5000).nullable().optional(),
+  serves: z.number().int().min(1).max(20).nullable().optional(),
   active: z.boolean().optional(),
   // Seleção editorial do cardápio público, editável no catálogo do CRM.
   featured: z.boolean().optional(),
