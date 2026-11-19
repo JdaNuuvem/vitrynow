@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { textField } from "./text";
 export * from "./text";
+export * from "./importProducts";
 
 // Telefone tolerante (BR ou genérico): dígitos, espaços, parênteses, hífen, "+", 8-20 chars.
 // Não valida DDD/formato exato — só rejeita lixo claramente não-telefone.

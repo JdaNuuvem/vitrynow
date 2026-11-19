@@ -123,7 +123,10 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/catalog/option-groups": "blocked", // API-15
   "POST /api/catalog/option-groups/:id": "blocked",
   "POST /api/catalog/option-groups/:id/delete": "blocked",
-  "POST /api/catalog/products/:id/option-groups": "blocked"
+  "POST /api/catalog/products/:id/option-groups": "blocked",
+  "POST /api/catalog/import/preview": "blocked", // IMP-1 (e2): cadastro; Consulta/Suspensão recusam (RN-IMP2-13)
+  "POST /api/catalog/import/:batchId/confirm": "blocked", // IMP-1 (e3)
+  "POST /api/catalog/import/:batchId/discard": "blocked"
 };
 
 /**
