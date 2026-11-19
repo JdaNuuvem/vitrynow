@@ -1,0 +1,97 @@
+{
+  "status": "proposal-not-implemented",
+  "version": "0.2.0",
+  "date": "2026-11-18",
+  "userConfirmedDirection": "Terracota e creme, com verde para estados positivos",
+  "referenceAuthority": {
+    "adminDesign": "CloudPOS / qXP8K5VUx9Ue95KQ7ySYjv / 19013:3328",
+    "publicDesign": "Ramenku / PCa69ifTSUxaqn64frvQZ0 / 16024:11488, 16262:16266, 16091:14080",
+    "inspectionStatus": "local-fig-structure-and-embedded-presentations-reviewed",
+    "valuesBelow": "sourceGeometry records the local design values. Product colors, touch, motion and responsive targets are VitryNow adaptations.",
+    "technicalSupport": "Dashboard - Front",
+    "nextStep": "Compare the pilots at source frame sizes and verify the responsive and brand adaptations"
+  },
+  "sourceGeometry": {
+    "admin": {
+      "frame": "19013:3328", "viewportPx": [1194, 834], "headerHeightPx": 92,
+      "columnsPx": [864, 282], "columnGapPx": 16, "kpiPx": [204, 128], "kpiRadiusPx": 12,
+      "orderListPx": [424, 472], "font": "Open Sans",
+      "surface": "#ffffff", "background": "#f8fafc", "heading": "#0f172a", "action": "#447dfc"
+    },
+    "menu": {
+      "frame": "16024:11488", "viewportPx": [390, 844], "coverPx": [390, 200],
+      "searchPx": [350, 46], "categoryStripPx": [350, 42], "featuredCardPx": [168, 248],
+      "featuredGapPx": 14, "listRowPx": [350, 108], "cartBarPx": [350, 58],
+      "detailPhoto": { "node": "16091:14091", "sizePx": [390, 390] }
+    },
+    "menuBanner": {
+      "node": "16262:17730", "sizePx": [350, 188], "paddingPx": 24, "background": "#7d1f22",
+      "cutoutPx": [227, 190], "textWidthPx": 182, "buttonPx": [96, 34],
+      "font": "Urbanist", "headingPx": 20, "descriptionPx": 14, "buttonTextPx": 14
+    }
+  },
+  "platform": {
+    "brand": { "primary": "#b7472a", "soft": "#fbebe4" },
+    "background": "#f6f5f1",
+    "surface": "#ffffff",
+    "ink": "#212920",
+    "muted": "#636b62",
+    "border": "#e3e6dd"
+  },
+  "store": {
+    "accentSource": "store.primaryColor",
+    "defaultAccent": "#1f7a54",
+    "contrastStrategy": "accentInk currently assumes white: keep its text on white; cream/other surfaces require a surface-aware calculation and tests; normal text >=4.5:1",
+    "preserveTenantBrand": true
+  },
+  "semantic": {
+    "success": "#1f7a54",
+    "warning": "#8b5a12",
+    "danger": "#b42332",
+    "info": "#315da4",
+    "rule": "Always pair status color with label/icon; verify against real background"
+  },
+  "chart": {
+    "series": ["#b7472a", "#1f7a54", "#315da4", "#8b5a12"],
+    "missing": "null-not-zero",
+    "future": "omit-or-mark-no-data",
+    "accessibleTable": true,
+    "axisMotion": "none",
+    "initialLibrary": "Existing MonthChart SVG; advanced library conditional on measured need"
+  },
+  "typography": {
+    "publicTitle": "Urbanist",
+    "publicFallback": "Existing local Plus Jakarta Sans",
+    "admin": "Open Sans",
+    "body": "Use the source face for each pilot and compare fallback metrics when needed",
+    "sizePx": { "caption": 12, "small": 14, "body": 16, "section": 20, "title": 28, "display": 36 },
+    "numberVariant": "tabular-nums"
+  },
+  "spacingPx": [4, 8, 12, 16, 24, 32, 48],
+  "radiusPx": { "control": 12, "card": 16, "banner": 24, "pill": 999 },
+  "touch": { "minimumPx": 44, "primaryActionHeightPx": 48 },
+  "layout": {
+    "publicReferenceMarginPx": 20,
+    "adminNavigationAtReferenceSize": "horizontal",
+    "adminMobileNavigation": "existing bottom navigation",
+    "targetViewports": ["360x800", "390x844", "768x1024", "1194x834", "1440x900"]
+  },
+  "icon": { "proposedFamily": "Lucide", "gridPx": 24, "sizesPx": [18, 20, 24], "strokeWidth": 1.75, "imports": "explicit-only" },
+  "motion": {
+    "durationMs": { "press": 80, "fast": 120, "normal": 200, "overlay": 240, "chartMobile": 320, "chartDesktop": 450 },
+    "easing": "cubic-bezier(0.2, 0.8, 0.2, 1)",
+    "properties": ["transform", "opacity"],
+    "reducedMotion": "System preference wins; no displacement; optional opacity <=150ms",
+    "replayOnRefresh": false,
+    "autoplayBanner": false,
+    "staticFinalDataFromStart": true
+  },
+  "performanceTargetsNotMeasured": {
+    "lcpMs": 2500,
+    "inpMs": 200,
+    "cls": 0.1,
+    "mobileBannerBudgetKB": 200,
+    "thumbnailPreferredBudgetKB": 60,
+    "chartLibraryOnPublicRoute": false
+  }
+}

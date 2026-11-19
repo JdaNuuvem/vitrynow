@@ -83,6 +83,8 @@ const ICON_PATHS = {
     </>
   ),
   check: <path d="m5 12 5 5 9-10" />,
+  info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5m0-8h.01" /></>,
+  alert: <><path d="M10.3 4.5a2 2 0 0 1 3.4 0l7.2 12.7A2 2 0 0 1 19.2 20H4.8a2 2 0 0 1-1.7-2.8l7.2-12.7Z" /><path d="M12 9v4m0 3h.01" /></>,
   eye: (
     <>
       <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
@@ -162,6 +164,8 @@ const ICON_PATHS = {
     </>
   ),
   arrowUp: <path d="M12 19V5M6 11l6-6 6 6" />,
+  sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5" /></>,
+  moon: <path d="M20.5 14a8.8 8.8 0 0 1-10.5-10.5A8.8 8.8 0 1 0 20.5 14Z" />,
   whatsapp: <path d="M4 20l1.3-4.2A8 8 0 1 1 8.4 18.8zM9 9c0 3 3 6 6 6l1-2-2-1-1 .8c-.8-.4-1.600-1.200-2-2l.8-1-1-2z" />,
 } satisfies Record<string, ReactNode>;
 

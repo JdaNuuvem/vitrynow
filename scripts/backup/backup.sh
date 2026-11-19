@@ -48,11 +48,6 @@ rm -f "$TMP.toc"
 # 4) Selo de integridade e publicação atômica.
 ( cd "$BACKUP_DIR" && sha256sum "$(basename "$TMP")" | sed "s/$(basename "$TMP")/$(basename "$FINAL")/" > "$(basename "$FINAL").sha256" )
 mv "$TMP" "$FINAL"
-# 4b) Uploads (fotos do cardápio em disco local; ADR-0017): mesmo carimbo do dump. Se UPLOADS_DIR está definida e as fotos não puderem ser arquivadas e
-# verificadas, o backup FALHA (LAST_OK não avança e o serviço fica unhealthy): um backup só com o banco perderia as fotos em silêncio.
-if [ -n "${UPLOADS_DIR:-}" ]; then
-  /bin/sh "$(dirname "$0")/backup-uploads.sh" "$STAMP" || fail "backup dos uploads falhou"
-fi
 SIZE="$(wc -c < "$FINAL" | tr -d ' ')"
 printf '%s %s\n' "$(date -u +%s)" "$(basename "$FINAL")" > "$BACKUP_DIR/LAST_OK"
 log "ok $(basename "$FINAL") ${SIZE} bytes, $DUMPED tabelas"

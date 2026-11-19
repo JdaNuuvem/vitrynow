@@ -53,6 +53,38 @@ async function placePixOrder(result: ReturnType<typeof setup>) {
   });
 }
 
+describe("useOrderFlow: total final do cupom", () => {
+  afterEach(() => sessionStorage.clear());
+  const couponForm = { ...form, couponCode: "CASA" };
+  const summary = { lines: ["1× Prato"], totalCents: 3000, paymentLabel: "PIX", deliveryLabel: "Retirada", address: null };
+
+  it("usa o total do servidor no PIX, no histórico e no comprovante", async () => {
+    const t = setup([], ok({
+      orderId: "o1", code: "0042", totalCents: 2400, discountCents: 600,
+      payment: { pixQrCode: "000201", pixQrCodeBase64: null },
+    }));
+    await act(async () => { await t.result.current.submit(couponForm, cart, 3000, summary); });
+    expect(t.onPlaced).toHaveBeenCalledWith(expect.objectContaining({ totalCents: 2400 }));
+    expect(t.result.current.placed?.summary).toMatchObject({ totalCents: 2400, discountCents: 600 });
+    expect(JSON.parse(sessionStorage.getItem(resumeKey("loja"))!)).toMatchObject({ totalCents: 2400 });
+  });
+
+  it("respeita desconto integral e a ausência de cobrança", async () => {
+    const t = setup([], ok({ orderId: "o1", code: "0042", totalCents: 0, discountCents: 3000 }));
+    await act(async () => { await t.result.current.submit(couponForm, cart, 3000, summary); });
+    expect(t.result.current.placed).toMatchObject({ totalCents: 0, pixData: null, summary: { paymentLabel: "Sem cobrança" } });
+    expect(t.onPlaced).toHaveBeenCalledWith(expect.objectContaining({ totalCents: 0 }));
+  });
+
+  it("omite o total desconhecido e preserva o QR de um servidor anterior", async () => {
+    const t = setup([], ok({ orderId: "o1", code: "0042", payment: { pixQrCode: "000201", pixQrCodeBase64: null } }));
+    await act(async () => { await t.result.current.submit(couponForm, cart, 3000, summary); });
+    expect(t.result.current.placed).toMatchObject({ totalCents: null, summary: { totalCents: null } });
+    expect(t.onPlaced).toHaveBeenCalledWith(expect.objectContaining({ totalCents: null }));
+    expect(JSON.parse(sessionStorage.getItem(resumeKey("loja"))!)).toMatchObject({ totalCents: null, pix: { pixQrCode: "000201" } });
+  });
+});
+
 async function tick(ms = PAYMENT_POLL_MS) {
   await act(async () => {
     await vi.advanceTimersByTimeAsync(ms);

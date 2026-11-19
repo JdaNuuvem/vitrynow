@@ -11,11 +11,13 @@ import { PixUnavailableError } from "../modules/storePayments/storePayments.serv
 import { orderService } from "../modules/orders/orders.module";
 import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { customerMessageFor, messageActorFor, moneyLineFor } from "../lib/cancelMessages";
-import { DomainError } from "../shared/errors";
+import { DomainError, useDomainErrors } from "../shared/errors";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
 import { buildMenuView } from "../lib/menuView";
 import { limited, tooMany } from "../lib/slidingLimit";
 import { newOrderToken, orderTokenMatches, ORDER_TOKEN_HEADER } from "../lib/orderToken";
+import { assertOrderMoneyFits, resolveOrderItems } from "../lib/orderItems";
+import { optionGroupsService } from "../modules/optionGroups/optionGroups.module";
 
 const COUPON_EXHAUSTED_MESSAGE = "Esse cupom acabou.";
 class CouponExhaustedError extends Error {}
@@ -27,6 +29,7 @@ export const MAX_PENDING_PER_PHONE = 3;
 const PENDING_WINDOW_MS = 30 * 60 * 1000;
 
 const storefrontRoutes: FastifyPluginAsync = async (app) => {
+  useDomainErrors(app);
   app.get("/stores/:slug/menu", async (request, reply) => {
     const { slug } = request.params as { slug: string };
     const store = await prisma.store.findUnique({ where: { slug } });
@@ -90,7 +93,6 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       where: { storeId: store.id, id: { in: input.items.map((i) => i.productId) } },
       include: { additionals: true },
     });
-    const productById = new Map(products.map((p) => [p.id, p]));
     if (products.length !== new Set(input.items.map((i) => i.productId)).size) {
       return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja" });
     }
@@ -107,32 +109,8 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    let itemsData;
-    try {
-      itemsData = input.items.map((item) => {
-        const product = productById.get(item.productId)!;
-        const additionalsByProduct = new Map(product.additionals.map((a) => [a.id, a]));
-        const chosenAdditionals = (item.additionalIds ?? []).map((id) => {
-          const additional = additionalsByProduct.get(id);
-          if (!additional) throw new Error(`adicional ${id} não pertence ao produto ${product.id}`);
-          return additional;
-        });
-        const additionalsCents = chosenAdditionals.reduce((sum, a) => sum + a.priceCents, 0);
-        return {
-          productId: item.productId,
-          productName: product.name,
-          quantity: item.quantity,
-          unitPriceCents: product.priceCents,
-          notes: item.notes,
-          lineTotalCents: (product.priceCents + additionalsCents) * item.quantity,
-          additionals: chosenAdditionals,
-        };
-      });
-    } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : "pedido inválido" });
-    }
-
-    const subtotalCents = itemsData.reduce((sum, item) => sum + item.lineTotalCents, 0);
+    const optionGroups = await optionGroupsService.groupsForProducts(store.id, products.map((product) => product.id), true);
+    const { items: itemsData, subtotalCents } = resolveOrderItems(input.items, products, optionGroups);
 
     if (store.minOrderCents !== null && subtotalCents < store.minOrderCents) {
       return reply.code(400).send({ error: `pedido mínimo é R$ ${(store.minOrderCents / 100).toFixed(2)}` });
@@ -191,6 +169,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     }
     const tipCents = input.tipCents ?? 0;
     const totalCents = subtotalCents - discountCents + deliveryFeeCents + tipCents;
+    assertOrderMoneyFits(totalCents);
     // RN-B9-03: a taxa mudou desde que o cliente viu (ou é outra): 409 com o novo valor; a tela pede confirmação.
     if (input.expectedDeliveryFeeCents !== undefined && input.expectedDeliveryFeeCents !== deliveryFeeCents) {
       return reply.code(409).send({ error: "A taxa de entrega mudou. Confira o novo total.", code: "DELIVERY_FEE_CHANGED", details: { deliveryFeeCents, totalCents } });
@@ -256,18 +235,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         // falar com o provedor — se algo cair no meio, a cobrança é encontrada (e a conciliação resolve), nunca órfã.
         ...(usePix ? { payment: { create: { amountCents: totalCents, idempotencyKey: randomUUID() } } } : {}),
         statusHistory: { create: { status: "PENDENTE" } },
-        items: {
-          create: itemsData.map((item) => ({
-            productId: item.productId,
-            productName: item.productName,
-            quantity: item.quantity,
-            unitPriceCents: item.unitPriceCents,
-            notes: item.notes,
-            additionals: {
-              create: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })),
-            },
-          })),
-        },
+        items: { create: itemsData },
       },
       });
       // Pedido que já entra no kanban (não aguarda PIX): o tíquete nasce NA MESMA transação — nunca pedido sem job.
@@ -282,7 +250,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     if (!usePix) {
       publishToStore(store.id, { type: "order.created", orderId: order.id });
       if (ticketQueued) publishToStore(store.id, { type: "print.available" });
-      return reply.code(201).send({ orderId: order.id, code: order.code, token: accessToken.token });
+      return reply.code(201).send({ orderId: order.id, code: order.code, token: accessToken.token, totalCents, discountCents });
     }
 
     const payment = await prisma.payment.findUniqueOrThrow({ where: { orderId: order.id } });
@@ -310,6 +278,8 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         orderId: order.id,
         code: order.code,
         token: accessToken.token,
+        totalCents,
+        discountCents,
         payment: { pixQrCode: pix.pixQrCode, pixQrCodeBase64: pix.pixQrCodeBase64, expiresAt: pix.expiresAt },
       });
     } catch (error) {

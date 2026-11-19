@@ -12,8 +12,30 @@ function setup() {
 }
 
 describe("HttpStorefrontGateway: token do pedido (NG-16)", () => {
+  it("consulta os bairros públicos e envia a taxa vista somente na entrega", async () => {
+    const { gateway, http } = setup();
+    const input = {
+      type: "DELIVERY" as const, customerName: "Teste", customerPhone: "21999999999", address: "Rua A",
+      paymentMethod: "DINHEIRO" as const, couponCode: "", cart: [], neighborhoodId: "centro", expectedDeliveryFeeCents: 0,
+    };
+    await gateway.getDeliveryZones("loja");
+    expect(http.get).toHaveBeenCalledWith("/stores/loja/delivery-zones");
+    await gateway.placeOrder("loja", input);
+    expect(http.post.mock.calls[0][1]).toMatchObject({ neighborhoodId: "centro", expectedDeliveryFeeCents: 0 });
+    await gateway.placeOrder("loja", { ...input, type: "BALCAO" });
+    expect(http.post.mock.calls[1][1]).not.toHaveProperty("expectedDeliveryFeeCents");
+    expect(http.post.mock.calls[1][1]).not.toHaveProperty("neighborhoodId");
+  });
   it("o cabeçalho é x-order-token", () => {
     expect(ORDER_TOKEN_HEADER).toBe("x-order-token");
+  });
+
+  it("consulta o rastreio da loja e do pedido com a credencial somente no cabeçalho", async () => {
+    const { http, gateway } = setup();
+    await gateway.getOrderTracking("minha loja", "pedido/123", "mco_segredo");
+    expect(http.get).toHaveBeenCalledWith("/stores/minha%20loja/orders/pedido%2F123/tracking", {
+      headers: { "x-order-token": "mco_segredo" },
+    });
   });
 
   it("payment-status manda o token no CABEÇALHO e nunca na URL", async () => {

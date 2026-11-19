@@ -209,7 +209,7 @@ export class OrderService {
   async detail(actor: PanelActor, orderId: string) {
     const order = await this.db.order.findFirst({
       where: { id: orderId, storeId: actor.storeId },
-      include: { items: true, deliverer: true, payment: true, statusHistory: { orderBy: { seq: "desc" }, take: 3 } },
+      include: { items: { include: { additionals: true, options: true } }, deliverer: true, payment: true, statusHistory: { orderBy: { seq: "desc" }, take: 3 } },
     });
     if (!order) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
     const { statusHistory, ...rest } = order;

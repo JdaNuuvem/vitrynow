@@ -22,3 +22,4 @@ apps/print-client/tools/roslyn/
 # chaves de assinatura de release NUNCA no repositorio
 *.updkey
 *.updkey.xml
+.qa-output/

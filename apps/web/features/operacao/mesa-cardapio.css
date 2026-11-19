@@ -1,0 +1,86 @@
+.mesa-cardapio { min-height: 100dvh; }
+.mesa-cardapio__main { padding-bottom: calc(5.5rem + env(safe-area-inset-bottom)); }
+.mesa-cardapio__content { scroll-margin-top: 16px; }
+.mesa-cardapio__label {
+  margin: 0 0 4px;
+  font-size: .75rem;
+  font-weight: 750;
+  color: var(--loja-accent-active-ink);
+}
+.mesa-cardapio__actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-block: 14px;
+}
+.mesa-cardapio__categories {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  margin-block: 14px 0;
+  padding: 3px 2px;
+}
+.mesa-cardapio__actions > button, .mesa-cardapio__categories > a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--loja-line);
+  border-radius: 9px;
+  background: var(--loja-surface);
+  color: var(--loja-ink);
+  font-size: .8125rem;
+  font-weight: 650;
+  text-align: center;
+}
+.mesa-cardapio__actions > button { padding-inline: 4px; }
+.mesa-cardapio__actions > button svg { flex: none; color: var(--loja-accent-active-ink); }
+.mesa-cardapio__actions > button:last-child { background: var(--loja-accent-soft); }
+.mesa-cardapio__categories > a { flex: none; padding-inline: 12px; background: var(--loja-surface-2); font-size: .875rem; }
+.mesa-cardapio__actions > button:hover:not(:disabled), .mesa-cardapio__categories > a:hover {
+  border-color: var(--loja-accent-active-ink);
+  color: var(--loja-accent-active-ink);
+}
+@media (max-width: 480px) {
+  .mesa-cardapio__actions > button { flex-direction: column; min-height: 60px; gap: 3px; line-height: 1.2; }
+}
+.mesa-cardapio__content .loja__section { scroll-margin-top: 16px; }
+.mesa-cardapio__main .loja__cart-bar { bottom: calc(14px + env(safe-area-inset-bottom)); }
+.mesa-cardapio__message { max-width: 36rem; margin: auto; padding: clamp(24px, 5vw, 56px) var(--loja-gutter); }
+.mesa-cardapio__message > h1 { margin: 0 0 12px; font-family: var(--loja-title); font-size: clamp(1.4rem, 4vw, 2.1rem); font-weight: 750; }
+.mesa-cardapio__message > p { margin-bottom: 12px; color: var(--loja-ink-3); }
+.mesa-cardapio__notice {
+  margin-block: 0 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--loja-ok-bg);
+  color: var(--loja-ok);
+}
+.mesa-cardapio__form { display: grid; gap: 12px; }
+.mesa-cardapio__review-table {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-height: 48px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--loja-accent-soft);
+  color: var(--loja-accent-active-ink);
+}
+.mesa-cardapio__form .loja__label { display: grid; gap: 6px; font-weight: 700; }
+.mesa-cardapio__form .loja__field {
+  border-radius: 9px;
+  background: var(--loja-glass-solid);
+  color: var(--loja-ink);
+}
+.mesa-cardapio__form > p { color: var(--loja-ink-3); font-size: .875rem; }
+.mesa-cardapio__form .loja__cta { width: 100%; }
+.mesa-cardapio__history { display: grid; gap: 10px; padding: 0 0 12px; list-style: none; }
+.mesa-cardapio__history > li { border: 1px solid var(--loja-line); border-radius: 12px; padding: 14px; background: var(--loja-glass-solid); }
+.mesa-cardapio__history header { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.mesa-cardapio__history header p, .mesa-cardapio__history small { color: var(--loja-ink-3); font-size: .875rem; }
+.mesa-cardapio__history small { display: block; }
+.mesa-cardapio__history ul { padding-inline-start: 18px; }

@@ -1,6 +1,7 @@
 "use client";
 
 import type { DeviceToken } from "@/core/domain/deviceTokens";
+import { Button } from "@/shared/design/components";
 
 export const tokenName = (token: DeviceToken) => token.label || "(sem nome)";
 
@@ -22,9 +23,9 @@ export function TokenRow({ token, onRevoke }: { token: DeviceToken; onRevoke: (t
         )}
       </div>
       {!token.revokedAt && (
-        <button type="button" className="impressoras-row__revoke" aria-label={`Revogar chave ${tokenName(token)}`} onClick={() => onRevoke(token)}>
-          revogar
-        </button>
+        <Button variant="quiet" className="impressoras-row__revoke" aria-label={`Revogar chave ${tokenName(token)}`} onClick={() => onRevoke(token)}>
+          Revogar
+        </Button>
       )}
     </div>
   );

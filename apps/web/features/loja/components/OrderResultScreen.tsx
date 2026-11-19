@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { PixPayment } from "@/core/domain/storefront";
+import type { ReadOrderTracking } from "@/core/gateways/StorefrontGateway";
+import { OrderTrackingPanel } from "./OrderTrackingPanel";
 import { useMediaQuery } from "@/lib/useMediaQuery";
 import { formatCents } from "@/shared/format/money";
+import { Icon } from "@/shared/icons/Icon";
 import type { OrderSummary } from "../checkoutForm";
 import { PIX_EXPIRED_MESSAGE, PIX_PAID_REASSURANCE, PIX_RESUMED_MESSAGE, TRACKING_UNAVAILABLE_MESSAGE } from "../hooks/useOrderFlow";
 import { Sheet } from "./Sheet";
+import { useBrokenImage } from "../hooks/useBrokenImage";
 
 // Conversa com a loja no WhatsApp, só com o código do pedido na mensagem (sem token nem dado do cliente). Sem número
 // cadastrado devolve null e a tela mostra só o texto.
@@ -14,6 +18,22 @@ export function storeChatLink(whatsapp: string | null | undefined, code: string)
 }
 
 const formatClock = (ms: number) => new Date(ms).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+
+function Receipt({ summary }: { summary: OrderSummary }) {
+  return (
+    <section className="loja__result-summary" aria-label="Resumo do pedido">
+      <h2 className="loja__summary-title">Resumo do pedido</h2>
+      <ul>{summary.lines.map((line, index) => <li key={index}>{line}</li>)}</ul>
+      {summary.discountCents != null && summary.discountCents > 0 && (
+        <p className="loja__receipt-discount">Desconto do cupom · −{formatCents(summary.discountCents)}</p>
+      )}
+      <p className="loja__receipt-total">
+        {summary.totalCents != null && <>Total {formatCents(summary.totalCents)} · </>}{summary.paymentLabel}
+      </p>
+      <p>{summary.deliveryLabel}{summary.address ? ` · ${summary.address}` : ""}</p>
+    </section>
+  );
+}
 
 // Telas pós-pedido (spec 09 §10.2): resumo do que foi pedido, "Voltar ao cardápio" como ação
 // principal e o cancelamento numa folha que escreve o efeito (nunca confirm() nativo).
@@ -29,9 +49,12 @@ export function OrderResultScreen({
   resume = "none",
   pixExpiresAt = null,
   storeName = null,
+  storeSlug,
+  storeCoverUrl,
   totalCents = null,
   summary = null,
   whatsapp = null,
+  readTracking,
   onCancel,
   onBack,
 }: {
@@ -48,9 +71,12 @@ export function OrderResultScreen({
   pixExpiresAt?: number | null;
   // Contexto de quem volta de outra aba (A4) e o valor a pagar (A2: total com taxa e gorjeta).
   storeName?: string | null;
+  storeSlug?: string;
+  storeCoverUrl?: string | null;
   totalCents?: number | null;
   summary?: OrderSummary | null;
   whatsapp?: string | null;
+  readTracking?: ReadOrderTracking;
   onCancel: () => void | Promise<void>;
   onBack: () => void;
 }) {
@@ -60,6 +86,9 @@ export function OrderResultScreen({
   const [copyNote, setCopyNote] = useState<string | null>(null);
   const pixCodeRef = useRef<HTMLTextAreaElement>(null);
   const chatLink = storeChatLink(whatsapp, code);
+  const ramenku = storeSlug === "ramenku";
+  const coverUrl = ramenku ? "/campanhas/ramenku-pedido-390.webp" : storeCoverUrl;
+  const cover = useBrokenImage(coverUrl);
   // A5: no celular não se escaneia a própria tela; o QR fica recolhido (para pagar com OUTRO aparelho). Sem matchMedia = amplo.
   const wide = useMediaQuery("(min-width: 800px)", true);
 
@@ -114,6 +143,7 @@ export function OrderResultScreen({
   if (cancelled) {
     return (
       <main className="loja__result">
+        <span className="loja__result-symbol"><Icon name="close" size={32} /></span>
         <h1 ref={headingRef} tabIndex={-1} className="loja__result-title">
           Pedido #{code} cancelado
         </h1>
@@ -127,6 +157,7 @@ export function OrderResultScreen({
   if (resume === "expired") {
     return (
       <main className="loja__result">
+        <span className="loja__result-symbol"><Icon name="orders" size={32} /></span>
         {storeName && <p className="loja__result-store">{storeName}</p>}
         <h1 ref={headingRef} tabIndex={-1} className="loja__result-title">
           {`Pedido #${code}`}
@@ -149,6 +180,7 @@ export function OrderResultScreen({
   if (pixData && paymentFailedMessage) {
     return (
       <main className="loja__result">
+        <span className="loja__result-symbol loja__result-symbol--error"><Icon name="close" size={32} /></span>
         <h1 ref={headingRef} tabIndex={-1} className="loja__result-title">
           Pedido #{code} não concluído
         </h1>
@@ -231,22 +263,8 @@ export function OrderResultScreen({
           </a>
         )}
 
-        {summary && (
-          <section className="loja__result-summary" aria-label="Resumo do pedido">
-            <ul>
-              {summary.lines.map((line, index) => (
-                <li key={index}>{line}</li>
-              ))}
-            </ul>
-            <p>
-              Total {formatCents(summary.totalCents)} · {summary.paymentLabel}
-            </p>
-            <p>
-              {summary.deliveryLabel}
-              {summary.address ? ` · ${summary.address}` : ""}
-            </p>
-          </section>
-        )}
+        {summary && <Receipt summary={summary} />}
+        {readTracking && !trackingUnavailable && <OrderTrackingPanel read={readTracking} />}
 
         {/* com PIX para pagar o primário é "Copiar código PIX"; voltar é secundário (contorno) */}
         <button type="button" onClick={onBack} className="loja__cta loja__cta--outline">
@@ -263,19 +281,28 @@ export function OrderResultScreen({
   }
 
   return (
-    <main className="loja__result">
-      <h1 ref={headingRef} tabIndex={-1} className="loja__result-title">
-        <span aria-hidden="true">✓ </span>
-        {title}
-      </h1>
-      <p className="loja__result-code">Pedido #{code}</p>
+    <main className="loja__result loja__result--receipt">
+      {coverUrl && !cover.failed ? (
+        <img
+          className="loja__receipt-hero" ref={cover.ref} onError={cover.onError}
+          alt="" src={coverUrl} width={390} height={390}
+          srcSet={ramenku ? "/campanhas/ramenku-pedido-390.webp 390w, /campanhas/ramenku-pedido-780.webp 780w" : undefined}
+          sizes={ramenku ? "(max-width: 520px) 100vw, 520px" : undefined}
+        />
+      ) : <span className={`loja__result-symbol${paymentConfirmed ? " loja__result-symbol--paid" : ""}`}>
+        <Icon name={paymentConfirmed ? "check" : "orders"} size={32} />
+      </span>}
+      <header className="loja__receipt-heading">
+        <h1 ref={headingRef} tabIndex={-1} className="loja__result-title">{title}</h1>
+        <p className="loja__result-code">Pedido #{code}</p>
+      </header>
 
       <div role="status">
         {paymentConfirmed ? (
-          <p className="loja__result-text loja__result-text--ok">Pagamento confirmado! Seu pedido já está sendo preparado.</p>
-        ) : (
+          <p className="loja__result-text loja__result-text--ok">O pagamento via PIX foi aprovado.</p>
+        ) : !readTracking ? (
           <p className="loja__result-text">A loja ainda precisa aceitar o pedido.</p>
-        )}
+        ) : null}
       </div>
 
       {trackingUnavailable && !paymentConfirmed && (
@@ -289,23 +316,9 @@ export function OrderResultScreen({
         </div>
       )}
 
-      {summary && (
-        <section className="loja__result-summary" aria-label="Resumo do pedido">
-          <ul>
-            {summary.lines.map((line, index) => (
-              <li key={index}>{line}</li>
-            ))}
-          </ul>
-          <p>
-            Total {formatCents(summary.totalCents)} · {summary.paymentLabel}
-          </p>
-          <p>
-            {summary.deliveryLabel}
-            {summary.address ? ` · ${summary.address}` : ""}
-          </p>
-        </section>
-      )}
+      {summary && <Receipt summary={summary} />}
 
+      {readTracking && !trackingUnavailable && <OrderTrackingPanel read={readTracking} chatLink={chatLink} />}
       <button type="button" onClick={onBack} className="loja__cta">
         Voltar ao cardápio
       </button>

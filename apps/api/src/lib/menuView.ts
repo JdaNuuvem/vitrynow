@@ -2,6 +2,8 @@ import type { Store } from "@meucardapio/db";
 import { prisma } from "@meucardapio/db";
 import { isSoldOutNow } from "./soldOut";
 import { publicCategory, publicStore } from "./publicDto";
+import { orderOptionFields } from "./orderItems";
+import { optionGroupsService } from "../modules/optionGroups/optionGroups.module";
 
 // Cardapio publico da loja (mesmo formato no link da loja e no QR da mesa). So produto ATIVO e DESTA loja (SEC-11).
 // Lote 2: junta API-22 (builder unico para o link e o QR), API-17 (`soldOut` EFETIVO agora; com "esconder esgotados" o produto
@@ -18,11 +20,16 @@ export async function buildMenuView(store: Store) {
       },
     },
   });
+  // Os adicionais existentes vêm de ProductAdditional. O espelho da migração não passa pelo checkout novo.
+  const groups = await optionGroupsService.groupsForProducts(store.id, categories.flatMap((category) => category.products.map((product) => product.id)), true);
   const now = new Date();
   const visibleCategories = categories.map(({ products, ...category }) => ({
     ...category,
     products: products
-      .map(({ soldOut, soldOutUntil, ...product }) => ({ ...product, soldOut: isSoldOutNow({ soldOut, soldOutUntil }, now) }))
+      .map(({ soldOut, soldOutUntil, ...product }) => {
+        const optionFields = orderOptionFields(groups.get(product.id) ?? []);
+        return { ...product, ...optionFields, soldOut: optionFields.unavailableByOptions || isSoldOutNow({ soldOut, soldOutUntil }, now) };
+      })
       .filter((product) => !(store.hideSoldOutProducts && product.soldOut)),
   }));
   return { store: publicStore(store), categories: visibleCategories.map(publicCategory) };

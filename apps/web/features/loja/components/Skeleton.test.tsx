@@ -13,7 +13,9 @@ describe("Skeleton", () => {
 
   it("o conjunto anuncia UMA vez que está carregando, em vez de um aviso por bloco", () => {
     const { container } = render(<MenuSkeleton products={3} />);
-    expect(screen.getByRole("status")).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("status")).not.toHaveAttribute("aria-busy");
+    expect(screen.getByRole("status").closest('[aria-busy="true"]')).toBeNull();
+    expect(container.querySelector(".loja__skeleton-menu")).toHaveAttribute("aria-busy", "true");
     expect(screen.getByText("Carregando o cardápio…")).toBeInTheDocument();
     // capa + nome + endereço + 3 produtos
     expect(container.querySelectorAll(".loja__skeleton")).toHaveLength(6);

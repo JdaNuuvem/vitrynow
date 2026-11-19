@@ -13,6 +13,10 @@ export class HttpCouponsGateway implements CouponsGateway {
     return this.http.post("/api/coupons", input);
   }
 
+  update(id: string, input: Partial<NewCouponInput>) {
+    return this.http.post(`/api/coupons/${encodeURIComponent(id)}`, input);
+  }
+
   setActive(id: string, active: boolean) {
     return this.http.post(`/api/coupons/${id}`, { active });
   }

@@ -23,7 +23,7 @@
   max-width: 100%;
   max-height: calc(100% - 32px);
   overflow: hidden;
-  background: #ffffff;
+  background: var(--surface);
   border-radius: 24px;
   box-shadow: 0 16px 32px rgba(0, 0, 0, 0.16);
   outline: none;
@@ -180,34 +180,39 @@
 .ui-switch {
   position: relative;
   flex-shrink: 0;
-  width: 36px;
-  height: 20px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   border: none;
-  border-radius: 20px;
-  background: #cfcfcf;
+  border-radius: var(--ds-radius-sm);
   cursor: pointer;
+}
+
+.ui-switch::before {
+  content: "";
+  position: absolute;
+  inset: 11px 2px;
+  border-radius: 20px;
+  background: var(--line-strong);
   transition: background-color var(--transition);
 }
 
-.ui-switch--on {
-  background: var(--ok);
-}
+.ui-switch--on::before { background: var(--ok); }
 
 .ui-switch__knob {
   position: absolute;
-  top: 2px;
-  left: 2px;
+  top: 14px;
+  left: 5px;
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #ffffff;
+  background: var(--surface);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
   transition: transform var(--transition);
 }
 
 .ui-switch--on .ui-switch__knob {
-  transform: translateX(16px);
+  transform: translateX(18px);
 }
 
 .ui-switch:focus-visible {
@@ -216,8 +221,8 @@
 }
 
 .ui-shine {
-  background: #f6f7f8;
-  background-image: linear-gradient(to right, #f6f7f8 0%, #dfdfdf 20%, #f6f7f8 40%, #f6f7f8 100%);
+  background: var(--surface-soft);
+  background-image: linear-gradient(to right, var(--surface-soft) 0%, var(--line) 20%, var(--surface-soft) 40%);
   background-repeat: no-repeat;
   background-size: 200% 100%;
   animation: ui-shine 1.5s linear infinite;
@@ -280,20 +285,20 @@
 
 .confirm-dialog__confirm--primary {
   background: var(--color-primary);
-  color: #ffffff;
+  color: var(--on-primary);
 }
 
 .confirm-dialog__confirm--danger {
   background: var(--danger);
-  color: #ffffff;
+  color: var(--on-danger);
 }
 
 /* Só contorno: a ação irreversível não pode ser tão chamativa quanto a segura. O seletor tem 2 classes porque
    `.confirm-dialog__actions button` (border: none) teria a mesma força que uma classe só. */
 .confirm-dialog__actions .confirm-dialog__confirm--danger-outline {
   border: 1px solid #fca5a5;
-  background: #ffffff;
-  color: #b91c1c;
+  background: var(--surface);
+  color: var(--danger);
 }
 
 .confirm-dialog__actions button {

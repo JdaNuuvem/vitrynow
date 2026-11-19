@@ -27,7 +27,10 @@ export const createOrderItemSchema = z.object({
   quantity: z.number().int().positive().max(100),
   notes: textField({ max: 150, multiline: true }).optional(), // RN-TXT-02: observação do item
   additionalIds: z.array(z.string().min(1)).max(50).optional(),
+  optionSelections: z.array(z.object({ optionId: z.string().min(1).max(150), quantity: z.number().int().min(1).max(99) })).max(300).optional(),
+  expectedUnitPriceCents: z.number().int().nonnegative().max(2_147_483_647).optional(),
 });
+export type CreateOrderItem = z.infer<typeof createOrderItemSchema>;
 
 // "CARTAO" é o valor legado do checkout antigo e vale como CREDITO.
 export const paymentMethodSchema = z.enum(["PIX", "DINHEIRO", "CARTAO", "CREDITO", "DEBITO", "VR", "VA"]);
@@ -333,14 +336,22 @@ export const httpsUrl = z
     { message: "use um endereço que comece com https://" },
   );
 
+const localMediaUrl = /^\/media\/stores\/[A-Za-z0-9_-]{1,64}\/[a-f0-9-]{36}-\d{2,5}\.webp$/;
+const mediaImageUrl = z.string().trim().max(500).refine((value) => {
+  if (httpsUrl.safeParse(value).success) return true;
+  const env = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env;
+  return env?.NODE_ENV === "development" && env.STORAGE_PUBLIC_BASE_URL === "/media" && localMediaUrl.test(value);
+}, "use um endereço que comece com https://");
+
 export const createProductSchema = z.object({
   categoryId: z.string().min(1), // obrigatório (RN-CT-07, API-56): produto sem categoria nunca aparece na vitrine
   name: textField({ max: 80, min: 1 }), // API-49: sanitiza e limita (o 150 era o limite antigo, anterior a API-49)
   description: textField({ max: 300, multiline: true }).optional(),
-  imageUrl: httpsUrl.optional().or(z.literal("")), // SEC-14: so https
+  imageUrl: mediaImageUrl.optional().or(z.literal("")),
   priceCents: z.number().int().nonnegative().max(100_000_000),
   active: z.boolean().optional(),
-  // `featured` não é aceito: a coluna existe, mas nenhuma tela a usa (RN-CT-14).
+  // Seleção editorial do cardápio público, editável no catálogo do CRM.
+  featured: z.boolean().optional(),
   position: z.number().int().optional(),
   additionals: z.array(productAdditionalInputSchema).max(50).optional(),
 });
@@ -412,6 +423,8 @@ export type OpenCashSessionInput = z.infer<typeof openCashSessionSchema>;
 // `reason`/`reasonText` são validados pelo servidor contra a lista fechada (CASH_REASON_REQUIRED / CASH_REASON_INVALID).
 export const closeCashSessionSchema = z.object({
   closingBalanceCents: z.number().int().nonnegative().max(100_000_000).nullable().optional(),
+  sessionId: z.string().min(1).max(128).optional(),
+  expectedBalanceCents: z.number().int().safe().optional(),
   notes: textField({ max: 300, multiline: true }).optional(),
   reason: z.string().max(40).nullable().optional(),
   reasonText: textField({ max: 400 }).nullable().optional(), // limpa aqui; o limite de 200 do motivo OUTRO é regra do servidor (CASH_REASON_INVALID, API-27)
@@ -461,8 +474,8 @@ export type UpdateCouponInput = z.infer<typeof updateCouponSchema>;
 
 export const updateStoreSettingsSchema = z.object({
   name: textField({ max: 150, min: 1 }).optional(),
-  logoUrl: httpsUrl.optional().or(z.literal("")),
-  coverImageUrl: httpsUrl.optional().or(z.literal("")),
+  logoUrl: mediaImageUrl.optional().or(z.literal("")),
+  coverImageUrl: mediaImageUrl.optional().or(z.literal("")),
   primaryColor: z
     .string()
     .regex(/^#[0-9a-fA-F]{6}$/, "use um hex de cor, ex. #16a34a")
@@ -696,6 +709,7 @@ export const platformMfaChallengeSchema = z.object({ purpose: z.enum(PLATFORM_MF
 
 export const platformStoreListQuerySchema = z.object({
   q: z.string().trim().max(100).optional(),
+  availability: z.enum(["available", "suspended"]).optional(),
   page: z.coerce.number().int().min(1).max(10_000).default(1),
   pageSize: z.coerce.number().int().min(1).max(50).default(20),
 });

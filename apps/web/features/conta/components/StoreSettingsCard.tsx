@@ -1,114 +1,113 @@
 "use client";
 
 import { useRef, useState } from "react";
-import type { StoreSettings } from "@/core/domain/store";
-import { validateImageUrl } from "@/shared/format/imageUrl";
+import type { StoreSettings, StoreSettingsInput } from "@/core/domain/store";
 import { MoneyInput } from "@/shared/ui/MoneyInput";
 import { Switch } from "@/shared/ui/Switch";
-import { toForm, type ContaForm } from "../contaForm";
+import { toForm, toPayload, type ContaForm } from "../contaForm";
 import type { SaveMessage } from "../hooks/useConta";
 import { Field } from "./Field";
 
 export function StoreSettingsCard({
   store,
   onSave,
+  canEditCatalogPolicy = false,
+  editable = true,
 }: {
   store: StoreSettings;
-  onSave: (form: ContaForm) => Promise<SaveMessage>;
+  onSave: (input: StoreSettingsInput) => Promise<SaveMessage>;
+  canEditCatalogPolicy?: boolean;
+  editable?: boolean;
 }) {
   const [form, setForm] = useState<ContaForm>(() => toForm(store));
   const [message, setMessage] = useState<SaveMessage | null>(null);
-  const [imageErrors, setImageErrors] = useState<{ logoUrl: string | null; coverImageUrl: string | null }>({ logoUrl: null, coverImageUrl: null });
-  const imageInputs = useRef<{ logoUrl: HTMLInputElement | null; coverImageUrl: HTMLInputElement | null }>({ logoUrl: null, coverImageUrl: null });
+  const [saving, setSaving] = useState(false);
+  const inFlight = useRef(false);
 
-  const bind = (key: Exclude<keyof ContaForm, "deliveryEnabled" | "pickupEnabled">) => ({
+  const bind = (key: Exclude<keyof ContaForm, "deliveryEnabled" | "pickupEnabled" | "hideSoldOutProducts">) => ({
     value: form[key],
     onChange: (value: string) => setForm((previous) => ({ ...previous, [key]: value })),
   });
 
   async function save() {
+    if (inFlight.current || !editable) return;
+    inFlight.current = true;
+    setSaving(true);
     setMessage(null);
-    // Logo e capa só em https (SEC-14/ST-17): avisa no campo, antes de gastar uma ida ao servidor.
-    const errors = { logoUrl: validateImageUrl(form.logoUrl), coverImageUrl: validateImageUrl(form.coverImageUrl) };
-    setImageErrors(errors);
-    const firstInvalid = errors.logoUrl ? "logoUrl" : errors.coverImageUrl ? "coverImageUrl" : null;
-    if (firstInvalid) return imageInputs.current[firstInvalid]?.focus();
-    setMessage(await onSave(form));
+    try {
+      const result = await onSave(toPayload(form));
+      if (result.kind === "ok" && result.settings) setForm(toForm(result.settings));
+      setMessage(result);
+    } finally {
+      inFlight.current = false;
+      setSaving(false);
+    }
   }
 
   return (
-    <div className="conta__card">
-      <p className="conta__meta">
-        Loja <span>{store.slug}</span> · código {store.code}
-      </p>
+      <form className="conta__card" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+        <h2>Dados da loja</h2>
+        <p className="conta__meta">
+          Loja <span>{store.slug}</span> · código {store.code}
+        </p>
+        {!editable && <p className="conta__meta">A edição dos dados da loja está disponível para o dono.</p>}
 
-      <Field label="Nome da loja" {...bind("name")} />
-      <Field
-        label="URL do logo (opcional)"
-        placeholder="https://..."
-        error={imageErrors.logoUrl}
-        inputRef={(element) => (imageInputs.current.logoUrl = element)}
-        {...bind("logoUrl")}
-      />
-      <Field
-        label="Cor principal (opcional)"
-        placeholder="#16a34a"
-        adornment={form.primaryColor && <span className="conta__swatch" style={{ backgroundColor: form.primaryColor }} />}
-        {...bind("primaryColor")}
-      />
-      <Field
-        label="URL da capa do cardápio (opcional)"
-        placeholder="https://..."
-        error={imageErrors.coverImageUrl}
-        inputRef={(element) => (imageInputs.current.coverImageUrl = element)}
-        {...bind("coverImageUrl")}
-      />
-      <Field label="Endereço (exibido no cardápio público)" placeholder="Rua Exemplo, 123, Centro, Cidade - UF" {...bind("address")} />
-      <Field label="WhatsApp (só números com DDI, ex. 5521999999999)" placeholder="5521999999999" {...bind("whatsapp")} />
-      <Field label="Horário de funcionamento (texto livre)" placeholder="Seg a sáb, 09:00 às 17:00" {...bind("openingHours")} />
+        <fieldset className="conta__fields" disabled={!editable || saving}>
+        <Field label="Nome da loja" {...bind("name")} />
+        <Field label="Endereço (exibido no cardápio público)" placeholder="Rua Exemplo, 123, Centro, Cidade - UF" {...bind("address")} />
+        <Field label="WhatsApp (só números com DDI, ex. 5521999999999)" placeholder="5521999999999" {...bind("whatsapp")} />
+        <Field label="Horário de funcionamento (texto livre)" placeholder="Seg a sáb, 09:00 às 17:00" {...bind("openingHours")} />
 
-      <div className="conta__field">
-        <label>Pedido mínimo em R$ (opcional)</label>
-        <MoneyInput
-          name="minOrder"
-          value={form.minOrder}
-          onChange={(value) => setForm((previous) => ({ ...previous, minOrder: value }))}
-        />
-      </div>
-
-      <div className="conta__field">
-        <label>Taxa de entrega em R$ (opcional, somada só nos pedidos de entrega)</label>
-        <MoneyInput
-          name="deliveryFee"
-          value={form.deliveryFee}
-          onChange={(value) => setForm((previous) => ({ ...previous, deliveryFee: value }))}
-        />
-      </div>
-
-      <div className="conta__switches">
-        <div className="conta__switch">
-          <Switch
-            label="Aceita entrega"
-            checked={form.deliveryEnabled}
-            onChange={(checked) => setForm((previous) => ({ ...previous, deliveryEnabled: checked }))}
+        <label className="conta__field conta__money">
+          Pedido mínimo em R$ (opcional)
+          <MoneyInput
+            name="minOrder"
+            value={form.minOrder}
+            onChange={(value) => setForm((previous) => ({ ...previous, minOrder: value }))}
           />
-          Aceita entrega
-        </div>
-        <div className="conta__switch">
-          <Switch
-            label="Aceita retirada"
-            checked={form.pickupEnabled}
-            onChange={(checked) => setForm((previous) => ({ ...previous, pickupEnabled: checked }))}
+        </label>
+
+        <label className="conta__field conta__money">
+          Taxa padrão de entrega em R$ (opcional)
+          <MoneyInput
+            name="deliveryFee"
+            value={form.deliveryFee}
+            onChange={(value) => setForm((previous) => ({ ...previous, deliveryFee: value }))}
           />
-          Aceita retirada
+        </label>
+
+        <div className="conta__switches">
+          {canEditCatalogPolicy && typeof form.hideSoldOutProducts === "boolean" && (
+            <div className="conta__switch">
+              <Switch label="Ocultar esgotados no cardápio" checked={form.hideSoldOutProducts}
+                onChange={(checked) => setForm((previous) => ({ ...previous, hideSoldOutProducts: checked }))} />
+              Ocultar esgotados no cardápio
+            </div>
+          )}
+          <div className="conta__switch">
+            <Switch
+              label="Aceita entrega"
+              checked={form.deliveryEnabled}
+              onChange={(checked) => setForm((previous) => ({ ...previous, deliveryEnabled: checked }))}
+            />
+            Aceita entrega
+          </div>
+          <div className="conta__switch">
+            <Switch
+              label="Aceita retirada"
+              checked={form.pickupEnabled}
+              onChange={(checked) => setForm((previous) => ({ ...previous, pickupEnabled: checked }))}
+            />
+            Aceita retirada
+          </div>
         </div>
-      </div>
+        </fieldset>
 
-      {message && <p className={message.kind === "ok" ? "conta__ok" : "conta__error"}>{message.text}</p>}
+        {message && <p role={message.kind === "ok" ? "status" : "alert"} className={message.kind === "ok" ? "conta__ok" : "conta__error"}>{message.text}</p>}
 
-      <button type="button" className="conta__primary" onClick={save}>
-        Salvar
-      </button>
-    </div>
+        {editable && <button type="submit" className="conta__primary" disabled={saving}>
+          {saving ? "Salvando…" : "Salvar"}
+        </button>}
+      </form>
   );
 }

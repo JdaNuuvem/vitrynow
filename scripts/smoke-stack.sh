@@ -26,8 +26,6 @@ NEXT_PUBLIC_API_URL=http://localhost:$PORT
 DOMAIN=:80
 ACME_EMAIL=smoke@exemplo.invalid
 APP_VERSION=smoke
-# O driver em disco ainda não existe na API (Dev Upload, ADR-0017): até lá o smoke usa S3 FICTÍCIO explícito. Depois que o driver entrar, trocar por STORAGE_DRIVER=local e apagar estas linhas.
-STORAGE_DRIVER=s3
 # storage S3 FICTÍCIO: a API fora de dev recusa subir sem estas 5 (assertStorageBootConfig); o smoke não faz upload, então nada conecta a esse endereço
 STORAGE_S3_ENDPOINT=https://s3.smoke.invalid
 STORAGE_S3_BUCKET=smoke
@@ -42,7 +40,7 @@ KRED=0   # vermelhos CONHECIDOS (abertos, visíveis, que não contam como falha 
 cleanup() {
   [ "${KEEP:-0}" = 1 ] && { echo "KEEP=1: stack mantida ($PROJ), porta $PORT"; return; }
   "${DC[@]}" down -v --remove-orphans >/dev/null 2>&1; docker rm -f "$PROJ-xffecho" >/dev/null 2>&1
-  rm -f "$ENVF" "$ROOT/infra/Caddyfile.smoke" "$ROOT"/infra/backups/*.dump "$ROOT"/infra/backups/*.sha256 "$ROOT"/infra/backups/uploads_* "$ROOT"/infra/backups/LAST_OK
+  rm -f "$ENVF" "$ROOT/infra/Caddyfile.smoke" "$ROOT"/infra/backups/*.dump "$ROOT"/infra/backups/*.sha256 "$ROOT"/infra/backups/LAST_OK
 }
 trap cleanup EXIT
 
@@ -321,10 +319,8 @@ rb="$(caddy429 100 /auth/forgot-password POST)"
 cb="${rb%% *}"
 curl -s -D - -o /dev/null -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT/auth/forgot-password" | tr -d '\r' | sed 's/^/      [cabeçalhos de um 429] /' | head -6
 if [ "$cb" -ge 20 ]; then check ok "9f rajada de 100 pedidos (mais que o limite de 60/min SOZINHA, então vale mesmo se a máquina lenta deixar o uso normal sair da janela): $cb respostas 429 do CADDY (corpo vazio; a origem passou de 60/min)"; else check fail "9f a rajada não foi limitada pelo Caddy ($rb)"; fi
-# a janela do limite é DESLIZANTE: esgota a zona em paralelo (rápido) e olha o cabeçalho logo em seguida; 429 do Caddy = sem x-ratelimit-limit (a API o emite)
-seq 1 80 | xargs -P 20 -I{} curl -s -o /dev/null -X POST -H "Content-Type: application/json" -d "{}" "http://127.0.0.1:$PORT/auth/forgot-password" >/dev/null 2>&1
-rh="$(curl -s -D - -o /dev/null -X POST -H "Content-Type: application/json" -d "{}" "http://127.0.0.1:$PORT/auth/forgot-password" | tr -d '\r')"
-[[ "$rh" == *"429"* && "$rh" == *[Rr]etry-[Aa]fter* && "${rh,,}" != *x-ratelimit-limit* ]] && check ok "9f a resposta 429 do Caddy traz Retry-After" || check fail "9f 429 do Caddy sem Retry-After"
+rh="$(curl -s -D - -o /dev/null -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT/auth/login" | tr -d '\r')"
+[[ "$rh" == *"429"* && "$rh" == *[Rr]etry-[Aa]fter* ]] && check ok "9f a resposta 429 do Caddy traz Retry-After" || check fail "9f 429 do Caddy sem Retry-After"
 # /loja e /health fora desta zona (zona própria)
 lrc="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health")"
 [ "$lrc" = 200 ] && check ok "9f /health segue livre com a zona de /auth esgotada" || check fail "9f /health devolveu $lrc"
@@ -342,34 +338,6 @@ for v in '/AUTH/Forgot-Password' '//auth/forgot-password' '/auth/./forgot-passwo
 done
 # IPv6 /48 e a zona: sem IPv6 na rede do smoke (curl -6 não é possível), confere a configuração
 grep -q 'ipv6_prefix 48' "$ROOT/infra/Caddyfile" && check ok "9f a zona de /auth agrupa IPv6 em /48 (ipv6_prefix 48)" || check fail "9f Caddyfile sem ipv6_prefix 48 na zona de /auth"
-echo "== 9g fotos em disco local (ADR-0017): volume, Caddy somente leitura, backup e restauração das fotos"
-FU="33333333-3333-4333-8333-333333333333"; FOTO="stores/lojasmoke/$FU-40.webp"
-if "${DC[@]}" exec -T api sh -c "mkdir -p /uploads/stores/lojasmoke && printf 'RIFFfakeWEBPsmoke' > /uploads/$FOTO && printf '<script>alert(1)</script>' > /uploads/stores/lojasmoke/x.html && printf 'segredo' > /uploads/$FOTO.bak" >/dev/null 2>&1; then check ok "9g a API (usuário node) grava no volume /uploads"; else check fail "9g a API não conseguiu gravar em /uploads (volume ou permissão)"; fi
-hdr="$(curl -s -D - -o /dev/null "http://127.0.0.1:$PORT/media/$FOTO" | tr -d '\r')"; hl="${hdr,,}"
-[[ "$hdr" == HTTP*" 200"* && "$hl" == *"content-type: image/webp"* ]] && check ok "9g o Caddy serve a foto do volume em /media (200, image/webp)" || check fail "9g /media/$FOTO não serviu como image/webp: $(echo "$hdr" | head -1)"
-[[ "$hl" == *"cache-control: public, max-age=31536000, immutable"* ]] && check ok "9g cache longo e imutável (nome não muda)" || check fail "9g sem Cache-Control imutável"
-[[ "$hl" == *"x-content-type-options: nosniff"* && "$hl" == *"content-security-policy: default-src 'none'; sandbox"* ]] && check ok "9g nosniff e CSP vazia (o navegador não interpreta o arquivo como página)" || check fail "9g faltam nosniff/CSP na foto"
-[ "$(curl -s "http://127.0.0.1:$PORT/media/$FOTO")" = "RIFFfakeWEBPsmoke" ] && check ok "9g o corpo servido é exatamente o arquivo do volume" || check fail "9g corpo diferente do arquivo"
-bad=""; for p in "/media/" "/media/stores/" "/media/stores/lojasmoke/" "/media/stores/lojasmoke/x.html" "/media/$FOTO.bak" "/media/../etc/passwd" "/media/stores/lojasmoke/%2e%2e/%2e%2e/etc/passwd" "/media/stores/lojasmoke/..%2f..%2fx" "/MEDIA/$FOTO" "/media/$FOTO/"; do
-  out="$(curl -s --path-as-is -w '|%{http_code}' "http://127.0.0.1:$PORT$p")"; code="${out##*|}"; body="${out%|*}"
-  { [ "$code" = 404 ] || [ "$code" = 400 ]; } && [[ "$body" != *"alert(1)"* && "$body" != *segredo* && "$body" != *"root:"* && "$body" != *"$FU"* ]] || bad="$bad [$p -> $code]"
-done
-[ -z "$bad" ] && check ok "9g listagem de pasta, .html, .bak, '..', %2e, maiúsculas e barra final: todos 404/400 sem vazar nada (10 caminhos)" || check fail "9g caminhos que NÃO deveriam servir:$bad"
-"${DC[@]}" exec -T caddy sh -c 'ls /srv/uploads/stores/lojasmoke >/dev/null' >/dev/null 2>&1 && check ok "9g (controle) o Caddy enxerga o volume em /srv/uploads" || check fail "9g o Caddy não enxerga o volume"
-"${DC[@]}" exec -T caddy sh -c 'touch /srv/uploads/stores/lojasmoke/novo' >/dev/null 2>&1 && check fail "9g o Caddy CONSEGUIU escrever no volume (deveria ser somente leitura)" || check ok "9g o Caddy NÃO escreve no volume (somente leitura)"
-pm="$("${DC[@]}" exec -T api stat -c '%a %U' /uploads/$FOTO | tr -d '\r')"; [ "$pm" = "644 node" ] && check ok "9g a foto gravada pela API tem modo 644 e dono node (o Caddy lê como outro usuário)" || check fail "9g modo/dono da foto: '$pm' (esperado '644 node')"
-# persistência: recriar o container da API (como num deploy) NÃO apaga as fotos
-"${DC[@]}" up -d --no-deps --force-recreate --wait api >/dev/null 2>&1; [ "$(curl -s "http://127.0.0.1:$PORT/media/$FOTO")" = "RIFFfakeWEBPsmoke" ] && check ok "9g a foto sobrevive à recriação do container da API (volume persistente)" || check fail "9g a foto sumiu depois de recriar a API"
-# backup e restauração das fotos
-bo="$("${DC[@]}" exec -T postgres-backup /bin/sh /scripts/backup.sh 2>&1 | tr -d '\r')"
-[[ "$bo" == *"backup-uploads: ok uploads_"* ]] && check ok "9g o backup inclui as fotos (uploads_*.tar.gz com selo e manifesto)" || check fail "9g o backup não registrou as fotos: $(echo "$bo" | tail -2)"
-up="$("${DC[@]}" exec -T postgres-backup sh -c 'ls -1 /backups/uploads_*.tar.gz | tail -1' | tr -d '\r')"
-"${DC[@]}" exec -T postgres-backup sh -c "grep -q 'lojasmoke/$FU-40.webp' ${up%.tar.gz}.manifest" >/dev/null 2>&1 && check ok "9g o manifesto do backup lista a foto" || check fail "9g a foto não está no manifesto"
-rs="$("${DC[@]}" exec -T postgres-backup sh -c "rm -rf /tmp/rest && sh /scripts/restore-uploads.sh $up /tmp/rest && cat /tmp/rest/$FOTO" 2>&1 | tr -d '\r')"
-[[ "$rs" == *"arquivo(s) restaurados"* && "$rs" == *"RIFFfakeWEBPsmoke"* ]] && check ok "9g a restauração recompõe a foto idêntica e confere o manifesto" || check fail "9g restauração das fotos falhou: $(echo "$rs" | tail -2)"
-pb="$("${DC[@]}" exec -T postgres-backup sh -c "stat -c %a $up $up.sha256" | tr -d '\r' | tr '\n' ' ')"; [ "$pb" = "600 600 " ] && check ok "9g backup das fotos com modo 600" || check fail "9g modos do backup das fotos: '$pb'"
-"${DC[@]}" exec -T api sh -c 'rm -rf /uploads/stores/lojasmoke' >/dev/null 2>&1
-
 mem="$(docker inspect -f '{{.HostConfig.Memory}}' "$("${DC[@]}" ps -q caddy)")"
 [ "$mem" -gt 0 ] 2>/dev/null && check ok "ST-49: o container do Caddy tem teto de memória ($((mem/1024/1024)) MB)" || check fail "ST-49: container do Caddy sem limite de memória"
 

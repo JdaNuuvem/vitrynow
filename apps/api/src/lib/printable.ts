@@ -59,7 +59,7 @@ export type PrintableOptions = {
 export async function buildPrintableOrder(orderId: string, options: PrintableOptions = {}): Promise<PrintableOrder | null> {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
-    include: { store: true, payment: true, coupon: true, table: { select: { label: true } }, items: { include: { additionals: true } } },
+    include: { store: true, payment: true, coupon: true, table: { select: { label: true } }, items: { include: { additionals: true, options: true } } },
   });
   if (!order) return null;
 
@@ -120,13 +120,23 @@ export async function buildPrintableOrder(orderId: string, options: PrintableOpt
     cancelNotice: options.cancelNotice ?? false,
     customerRemoved: order.anonymizedAt !== null,
     createdAt: order.createdAt.toISOString(),
-    items: order.items.map((item) => ({
-      productName: clean(item.productName) ?? "",
-      quantity: item.quantity,
-      unitPriceCents: item.unitPriceCents,
-      notes: clean(item.notes, true),
-      additionals: item.additionals.map((a) => ({ name: clean(a.name) ?? "", priceCents: a.priceCents })),
-    })),
+    items: order.items.map((item) => {
+      const variation = item.options.find((option) => option.priceMode === "BASE");
+      return {
+        productName: clean(variation ? `${item.productName} — ${variation.name}` : item.productName) ?? "",
+        quantity: item.quantity,
+        unitPriceCents: item.unitPriceCents,
+        notes: clean(item.notes, true),
+        // O cliente de impressão já soma adicionais por unidade. A variação BASE está no preço do item.
+        additionals: [
+          ...item.additionals.map((entry) => ({ name: clean(entry.name) ?? "", priceCents: entry.priceCents })),
+          ...item.options.filter((option) => option.priceMode === "SUM").map((option) => ({
+            name: clean(`${option.quantity > 1 ? `${option.quantity}× ` : ""}${option.name}`) ?? "",
+            priceCents: option.priceCents * option.quantity,
+          })),
+        ],
+      };
+    }),
   });
 }
 

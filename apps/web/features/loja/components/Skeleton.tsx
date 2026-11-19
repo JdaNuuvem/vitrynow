@@ -11,14 +11,16 @@ export function Skeleton({ width, height, radius }: { width?: string | number; h
 // com UM aviso para leitor de tela em vez de dezenas de blocos mudos.
 export function MenuSkeleton({ products = 4 }: { products?: number }) {
   return (
-    <div className="loja__skeleton-menu" role="status" aria-busy="true">
-      <span className="loja__visually-hidden">Carregando o cardápio…</span>
-      <Skeleton height={160} radius={0} />
-      <Skeleton width="60%" height={24} />
-      <Skeleton width="85%" height={16} />
-      {Array.from({ length: products }, (_, index) => (
-        <Skeleton key={index} height={96} radius={12} />
-      ))}
-    </div>
+    <>
+      <span className="loja__visually-hidden" role="status">Carregando o cardápio…</span>
+      <div className="loja__skeleton-menu" aria-busy="true" aria-hidden="true">
+        <Skeleton height={160} radius={0} />
+        <Skeleton width="60%" height={24} />
+        <Skeleton width="85%" height={16} />
+        {Array.from({ length: products }, (_, index) => (
+          <Skeleton key={index} height={96} radius={12} />
+        ))}
+      </div>
+    </>
   );
 }

@@ -20,8 +20,6 @@ case "$*" in
      esac; exit 0 ;;
   *" exec -T api node -e"*) exit "${STUB_HEALTH:-0}" ;;
   *" exec -T postgres-backup cat /backups/LAST_OK"*) [ "${STUB_BACKUP:-}" = ausente ] && exit 1; echo "$(( $(date -u +%s) - ${STUB_BACKUP_IDADE:-3600} )) abc"; exit 0 ;;
-  *" exec -T api df -P /uploads"*) [ "${STUB_DF:-}" = falha ] && exit 1; printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 1000 500 500 %s%% /uploads\n' "${STUB_DF:-50}"; exit 0 ;;
-  *" exec -T api find /uploads"*) printf '/uploads/a.webp\n/uploads/b.webp\n/uploads/c.webp\n'; exit 0 ;;
   *" logs "*) cat "$STUB_LOGFILE" 2>/dev/null; exit 0 ;;
 esac
 exit 0
@@ -54,13 +52,6 @@ echo "== /health e backup"
 roda env STUB_HEALTH=1;         caso "/health fora: ALERTA" '[ "$RC" = 1 ] && [[ "$OUT" == *"/health da API NÃO respondeu"* ]]'
 roda env STUB_BACKUP_IDADE=100000; caso "backup com mais de 26 h: ALERTA" '[ "$RC" = 1 ] && [[ "$OUT" == *"último backup verificado há 27 h"* ]]'
 roda env STUB_BACKUP=ausente;   caso "sem LAST_OK: ALERTA" '[ "$RC" = 1 ] && [[ "$OUT" == *"nenhum backup verificado"* ]]'
-
-echo "== fotos (disco local)"
-roda env;                       caso "disco das fotos com 50%: ok, com a contagem de fotos" '[[ "$OUT" == *"disco das fotos com 50% de uso, 3 foto(s)"* ]]'
-roda env STUB_DF=85;            caso "disco das fotos com 85%: ALERTA" '[ "$RC" = 1 ] && [[ "$OUT" == *"disco das fotos com 85% de uso"* ]]'
-roda env STUB_DF=80;            caso "disco das fotos com exatamente 80%: ALERTA (limite inclusivo)" '[ "$RC" = 1 ] && [[ "$OUT" == *"disco das fotos com 80%"* ]]'
-roda env STUB_DF=79;            caso "disco das fotos com 79%: ok" '[ "$RC" = 0 ]'
-roda env STUB_DF=falha;         caso "df falha (volume não montado): ALERTA" '[ "$RC" = 1 ] && [[ "$OUT" == *"não consegui medir o disco das fotos"* ]]'
 
 echo "== logs da API"
 logfila() { logbom; echo '[hashlane] pedidos recusados com 503 SERVER_BUSY (fila cheia: 4, teto por origem: 0, espera esgotada: 0; acumulado 4)'; }

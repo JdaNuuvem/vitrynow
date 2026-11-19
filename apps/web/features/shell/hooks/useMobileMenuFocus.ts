@@ -2,11 +2,8 @@
 
 import { useEffect, useRef, type RefObject } from "react";
 
-// Foco do menu lateral no celular (UX-17). O menu é um painel que cobre a tela, não um diálogo:
-//  - ao abrir, o foco entra nele (o leitor de tela anuncia o menu e o Tab começa pelos itens);
-//  - ao fechar, o foco volta ao botão que abriu ("Mais"), em vez de se perder no topo da página;
-//  - Esc fecha.
-export function useMobileMenuFocus(open: boolean, containerRef: RefObject<HTMLElement>, onClose: () => void) {
+// O gatilho pode estar no cabeçalho ou na navegação inferior.
+export function useMobileMenuFocus(open: boolean, containerRef: RefObject<HTMLElement>, onClose: () => void, opener?: RefObject<HTMLElement>) {
   const triggerRef = useRef<HTMLElement | null>(null);
   const wasOpen = useRef(false);
   const onCloseRef = useRef(onClose);
@@ -14,7 +11,7 @@ export function useMobileMenuFocus(open: boolean, containerRef: RefObject<HTMLEl
 
   useEffect(() => {
     if (open) {
-      triggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      triggerRef.current = opener?.current ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
       wasOpen.current = true;
       containerRef.current?.focus();
     } else if (wasOpen.current) {
@@ -22,14 +19,29 @@ export function useMobileMenuFocus(open: boolean, containerRef: RefObject<HTMLEl
       const trigger = triggerRef.current;
       if (trigger && document.contains(trigger)) trigger.focus();
     }
-  }, [open, containerRef]);
+  }, [open, containerRef, opener]);
 
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onCloseRef.current();
+      const panel = containerRef.current;
+      if (!panel || (event.target instanceof Element && event.target.closest('[role="dialog"]'))) return;
+      if (event.key === "Escape") {
+        onCloseRef.current();
+      } else if (event.key === "Tab") {
+        const items = panel.querySelectorAll<HTMLElement>('a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]');
+        const first = items[0];
+        const last = items[items.length - 1];
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === panel)) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open]);
+  }, [open, containerRef]);
 }

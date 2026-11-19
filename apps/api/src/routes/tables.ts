@@ -11,10 +11,13 @@ import { newOrderToken } from "../lib/orderToken";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
 import { SALE_STATUSES } from "../lib/saleLines";
 import { limited, tooMany } from "../lib/slidingLimit";
+import { isSoldOutNow } from "../lib/soldOut";
 import { hashToken } from "../lib/tokenHash";
 import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { publishToStore } from "../realtime/hub";
 import { CodedError, useDomainErrors } from "../shared/errors";
+import { resolveOrderItems } from "../lib/orderItems";
+import { optionGroupsService } from "../modules/optionGroups/optionGroups.module";
 
 // API-22 — mesa e QR (ADR-0002 nível 1; spec do Leonardo B, RN-MB-01..13).
 // Segurança (ADR-0002 §7): o QR é estático e NÃO abre a conta da mesa. O primeiro pedido emite um token anônimo do APARELHO (256 bits; só o hash vai ao banco)
@@ -281,7 +284,8 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (products.length !== new Set(input.items.map((i) => i.productId)).size) {
       return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja", code: "PRODUCT_NOT_FOUND" });
     }
-    const unavailable = products.filter((p) => !p.active);
+    const now = new Date();
+    const unavailable = products.filter((p) => !p.active || isSoldOutNow(p, now));
     if (unavailable.length > 0) {
       return reply.code(400).send({
         error: `Item indisponível no momento: ${unavailable.map((p) => p.name).join(", ")}.`,
@@ -289,24 +293,8 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         details: { items: unavailable.map((p) => ({ id: p.id, name: p.name })) },
       });
     }
-    const productById = new Map(products.map((p) => [p.id, p]));
-    let itemsData;
-    try {
-      itemsData = input.items.map((item) => {
-        const product = productById.get(item.productId)!;
-        const byId = new Map(product.additionals.map((a) => [a.id, a]));
-        const chosen = (item.additionalIds ?? []).map((id) => {
-          const additional = byId.get(id);
-          if (!additional) throw new Error(`adicional ${id} não pertence ao produto ${product.id}`);
-          return additional;
-        });
-        const extra = chosen.reduce((sum, a) => sum + a.priceCents, 0);
-        return { productId: product.id, productName: product.name, quantity: item.quantity, unitPriceCents: product.priceCents, notes: item.notes, lineTotalCents: (product.priceCents + extra) * item.quantity, additionals: chosen };
-      });
-    } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : "pedido inválido", code: "ADDITIONAL_NOT_FOUND" });
-    }
-    const subtotalCents = itemsData.reduce((sum, i) => sum + i.lineTotalCents, 0);
+    const optionGroups = await optionGroupsService.groupsForProducts(store.id, products.map((product) => product.id), true);
+    const { items: itemsData, subtotalCents } = resolveOrderItems(input.items, products, optionGroups);
     if (store.minOrderCents !== null && subtotalCents < store.minOrderCents) {
       return reply.code(400).send({ error: `pedido mínimo é R$ ${(store.minOrderCents / 100).toFixed(2)}`, code: "MIN_ORDER" });
     }
@@ -341,16 +329,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           awaitingPayment: false,
           publicTokenHash: orderToken.hash,
           statusHistory: { create: { status: direct ? "CONFIRMADO" : "PENDENTE" } },
-          items: {
-            create: itemsData.map((item) => ({
-              productId: item.productId,
-              productName: item.productName,
-              quantity: item.quantity,
-              unitPriceCents: item.unitPriceCents,
-              notes: item.notes,
-              additionals: { create: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })) },
-            })),
-          },
+          items: { create: itemsData },
         },
       });
       // Decisão do Claudio (18/11): imprime AO CHEGAR, com ou sem aceite; o aceite só muda o estado. O tíquete nasce na MESMA transação (nunca pedido sem job).
@@ -381,7 +360,21 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           where: { storeId: found.store.id, tableId: found.table.id, deviceTokenHash: hash },
           orderBy: { createdAt: "asc" },
           take: 100,
-          select: { id: true, code: true, status: true, totalCents: true, createdAt: true, items: { select: { productName: true, quantity: true, unitPriceCents: true, notes: true, additionals: { select: { name: true, priceCents: true } } } } },
+          select: {
+            id: true,
+            code: true,
+            status: true,
+            totalCents: true,
+            createdAt: true,
+            items: { select: {
+              productName: true,
+              quantity: true,
+              unitPriceCents: true,
+              notes: true,
+              additionals: { select: { name: true, priceCents: true } },
+              options: { select: { groupName: true, name: true, priceCents: true, quantity: true, priceMode: true } },
+            } },
+          },
         })
       : [];
     return { table: { label: found.table.label }, orders };

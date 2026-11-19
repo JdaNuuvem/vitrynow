@@ -109,8 +109,9 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(cors, {
     origin: allowedOrigin(),
     credentials: true,
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
     // Lista explícita (NG-16): só estes cabeçalhos de requisição passam no preflight do navegador.
-    allowedHeaders: ["content-type", ORDER_TOKEN_HEADER, "x-mfa-challenge"],
+    allowedHeaders: ["content-type", ORDER_TOKEN_HEADER, "x-mfa-challenge", "x-device-token", "idempotency-key"],
   });
   // API JSON pura — CSP não se aplica a respostas que o browser nunca renderiza como HTML.
   app.register(helmet, { contentSecurityPolicy: false });

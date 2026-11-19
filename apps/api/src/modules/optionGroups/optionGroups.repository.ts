@@ -27,7 +27,7 @@ export interface OptionGroupsRepository {
   productsWithAnotherBase(storeId: string, groupId: string): Promise<string[]>;
   findProduct(storeId: string, productId: string): Promise<{ id: string; name: string; priceCents: number } | null>;
   listProductGroups(storeId: string, productId: string): Promise<GroupRow[]>;
-  groupsForProducts(storeId: string, productIds: string[]): Promise<Map<string, GroupRow[]>>;
+  groupsForProducts(storeId: string, productIds: string[], nativeOnly?: boolean): Promise<Map<string, GroupRow[]>>;
   setProductGroups(storeId: string, productId: string, groupIds: string[]): Promise<void>;
 }
 
@@ -121,18 +121,18 @@ export class PrismaOptionGroupsRepository implements OptionGroupsRepository {
 
   async listProductGroups(storeId: string, productId: string) {
     const links = await this.db.productOptionGroup.findMany({
-      where: { storeId, productId },
+      where: { storeId, productId, group: { source: "MANUAL" } },
       orderBy: { position: "asc" },
       include: { group: { include: { options: { orderBy: { position: "asc" } } } } },
     });
     return links.map((link) => toRow(link.group, link.position));
   }
 
-  async groupsForProducts(storeId: string, productIds: string[]) {
+  async groupsForProducts(storeId: string, productIds: string[], nativeOnly = false) {
     const map = new Map<string, GroupRow[]>(productIds.map((id) => [id, []]));
     if (productIds.length === 0) return map;
     const links = await this.db.productOptionGroup.findMany({
-      where: { storeId, productId: { in: productIds } },
+      where: { storeId, productId: { in: productIds }, ...(nativeOnly ? { group: { source: "MANUAL" } } : {}) },
       orderBy: { position: "asc" },
       include: { group: { include: { options: { orderBy: { position: "asc" } } } } },
     });
@@ -142,7 +142,7 @@ export class PrismaOptionGroupsRepository implements OptionGroupsRepository {
 
   async setProductGroups(storeId: string, productId: string, groupIds: string[]) {
     await this.db.$transaction([
-      this.db.productOptionGroup.deleteMany({ where: { storeId, productId } }),
+      this.db.productOptionGroup.deleteMany({ where: { storeId, productId, group: { source: "MANUAL" } } }),
       this.db.productOptionGroup.createMany({ data: groupIds.map((groupId, position) => ({ storeId, productId, groupId, position })) }),
     ]);
   }

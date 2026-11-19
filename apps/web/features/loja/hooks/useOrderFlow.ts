@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { CartLine, PixPayment } from "@/core/domain/storefront";
+import type { PixPayment, PlaceOrderInput } from "@/core/domain/storefront";
+import type { ReadOrderTracking } from "@/core/gateways/StorefrontGateway";
 import { useStorefrontServices } from "@/core/services/StorefrontServices";
 import { STORE_CLOSED_MESSAGE, toPlaceOrderInput, type CheckoutForm, type OrderSummary } from "../checkoutForm";
 import { interpretPaymentStatus } from "../paymentStatus";
@@ -45,10 +46,21 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [errorDetails, setErrorDetails] = useState<unknown>(null);
   const [placed, setPlaced] = useState<PlacedOrderState | null>(null);
+  const sending = useRef(false);
   // NG-16: o token fica SÓ em memória, num ref: não entra no estado que a tela recebe, não vai à URL, ao localStorage
   // (o histórico guarda só código e total) nem a log. Some ao recarregar a página.
   const tokenRef = useRef<string | null>(null);
+  const trackingReaders = useRef(new Map<string, ReadOrderTracking>());
+
+  function receiptKey(order: PlacedOrder) {
+    return JSON.stringify([slug, order.code, order.placedAt]);
+  }
+
+  function trackingFor(order: PlacedOrder) {
+    return trackingReaders.current.get(receiptKey(order));
+  }
   // PIX deste pedido ainda guardado para retomada (código e prazo): a aba "Meus pedidos" só diz "a loja recebe o pedido"
   // enquanto houver um payload válido (em dúvida, omite).
   const [pendingPix, setPendingPix] = useState<{ code: string; expiresAt: number } | null>(null);
@@ -170,26 +182,47 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
   }, [pixOnScreen]);
 
   // Devolve true se o pedido foi criado (quem chamou limpa o carrinho e fecha o checkout).
-  async function submit(form: CheckoutForm, cart: CartLine[], totalCents: number, summary: OrderSummary | null = null): Promise<boolean> {
-    if (submitting) return false;
+  async function submit(form: CheckoutForm, cart: PlaceOrderInput["cart"], estimatedTotalCents: number, summary: OrderSummary | null = null): Promise<boolean> {
+    if (sending.current) return false;
     if (form.deliveryType === "DELIVERY" && !form.address.trim()) {
       setError("informe o endereço de entrega");
       setErrorCode(null);
       return false;
     }
+    sending.current = true;
     setSubmitting(true);
     setError(null);
     setErrorCode(null);
-    const result = await storefront.placeOrder(slug, toPlaceOrderInput(form, cart));
-    setSubmitting(false);
+    setErrorDetails(null);
+    let result;
+    try {
+      result = await storefront.placeOrder(slug, toPlaceOrderInput(form, cart));
+    } catch {
+      setError("Não foi possível confirmar o envio do pedido. Confira com a loja antes de tentar novamente.");
+      return false;
+    } finally {
+      sending.current = false;
+      setSubmitting(false);
+    }
     if (!result.ok) {
       setError(result.code === "STORE_CLOSED" ? `${STORE_CLOSED_MESSAGE}.` : result.error);
       setErrorCode(result.code ?? null);
+      setErrorDetails(result.details);
       return false;
     }
 
-    onPlaced({ code: result.data.code, totalCents, placedAt: new Date().toISOString() });
-    tokenRef.current = result.data.token ?? null;
+    // Um servidor anterior pode omitir o total. Com cupom, só ele conhece o valor com desconto.
+    const totalCents = result.data.totalCents ?? (form.couponCode.trim() ? null : estimatedTotalCents);
+    const receipt = { code: result.data.code, totalCents, placedAt: new Date().toISOString() };
+    const { token, orderId } = result.data;
+    if (token && storefront.getOrderTracking) {
+      const readers = trackingReaders.current;
+      readers.set(receiptKey(receipt), storefront.getOrderTracking.bind(storefront, slug, orderId, token));
+      const oldest = readers.keys().next().value;
+      if (readers.size > 20 && oldest !== undefined) readers.delete(oldest);
+    }
+    onPlaced(receipt);
+    tokenRef.current = token ?? null;
     // WEB-33b: guarda o que permite VOLTAR ao QR depois de recarregar (nunca token nem orderId).
     const parsedExpiry = result.data.payment?.expiresAt ? Date.parse(result.data.payment.expiresAt) : NaN;
     const placedAt = Date.now();
@@ -209,7 +242,12 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
       paymentFailedMessage: null,
       cancelled: false,
       cancelError: null,
-      summary,
+      summary: summary && {
+        ...summary,
+        totalCents,
+        ...(result.data.discountCents ? { discountCents: result.data.discountCents } : {}),
+        paymentLabel: totalCents === 0 ? "Sem cobrança" : summary.paymentLabel,
+      },
       trackingUnavailable: !result.data.token,
       resume: "none",
       pixExpiresAt: null,
@@ -239,5 +277,5 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
     setPlaced(null);
   }
 
-  return { placed, submitting, error, errorCode, submit, cancel, back, pendingPix };
+  return { placed, submitting, error, errorCode, errorDetails, submit, cancel, back, pendingPix, trackingFor };
 }

@@ -1,129 +1,117 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
+import { ThemeControls } from "@/shared/design/ThemeControls";
 import { useBrokenImage } from "../hooks/useBrokenImage";
 import type { StoreInfo } from "@/core/domain/storefront";
 import { storeInitials } from "@/lib/storeInitials";
 import { STORE_CLOSED_MESSAGE } from "../checkoutForm";
-import { ChatIcon, ChevronIcon, CoinIcon, PinIcon, SearchIcon } from "../icons";
-import { conditionsLine } from "../storeInfo";
+import { ChatIcon, ClockIcon, CoinIcon, FiltersIcon, InfoIcon, PinIcon, SearchIcon } from "../icons";
+import { conditionsLine, isStoreAcceptingOrders, prepTimesLine } from "../storeInfo";
 
-// Cabeçalho do cardápio v2 (spec 12 §2): capa em largura total, folha branca que sobe sobre ela, logo redonda pela
-// metade sobre a capa, identidade, caixa de status e busca. Só mostra "quem é a loja" e dá entrada à busca e às
+// Cabeçalho do cardápio: fotografia da loja, superfície branca e identidade legível. Só mostra "quem é a loja" e dá entrada à busca e às
 // categorias; os chips e o carrinho moram fora (a barra de categorias fica fixa e precisa ser filha da página inteira).
 export function StoreHeader({
   store,
   onOpenSearch,
   onViewAllCategories,
   showCategoriesHead,
+  searchField,
+  tableLabel,
+  qrDisabled = false,
+  preview = false,
 }: {
   store: StoreInfo;
   onOpenSearch: () => void;
   onViewAllCategories: () => void;
   // Só há o que escolher com 2 categorias ou mais (mesma regra dos chips).
   showCategoriesHead: boolean;
+  searchField?: ReactNode;
+  tableLabel?: string;
+  qrDisabled?: boolean;
+  preview?: boolean;
 }) {
-  const [showHours, setShowHours] = useState(false);
-  // URL de capa/logo pode estar quebrada (loja digitou errado, arquivo saiu do ar): cai no degradê / monograma, nunca
-  // em ícone de imagem quebrada. Inclui a que falhou antes da hidratação (SSR).
+  const [showInfo, setShowInfo] = useState(false);
+  // O bloco de cor e o monograma mantêm a identidade quando uma imagem falha, inclusive antes da hidratação.
   const cover = useBrokenImage(store.coverImageUrl);
   const logo = useBrokenImage(store.logoUrl);
   const hasCover = Boolean(store.coverImageUrl) && !cover.failed;
   const hasLogo = Boolean(store.logoUrl) && !logo.failed;
   const whatsappLink = store.whatsapp ? `https://wa.me/${store.whatsapp}` : null;
-  const conditions = conditionsLine(store);
-  const open = store.acceptingOrders;
+  const conditions = tableLabel
+    ? conditionsLine({ ...store, deliveryEnabled: false, pickupEnabled: false })
+    : conditionsLine(store);
+  const open = !qrDisabled && isStoreAcceptingOrders(store);
+  const hours = store.acceptingOrders ? store.hours : null;
+  const openStatus = hours?.status === "ABERTO" && hours.closesAt ? hours.message : "Recebendo pedidos";
+  const closedStatus = qrDisabled ? "Pedidos com o atendente" : hours?.status === "PAUSADO" ? "Pedidos pausados" : "Fechado agora";
+  const closedMessage = qrDisabled ? "Para fazer seu pedido, chame o atendente." : hours && hours.status !== "ABERTO" ? hours.message : `${STORE_CLOSED_MESSAGE}.`;
+  const prepTimes = open && !tableLabel ? prepTimesLine(store) : "";
+  const Title = preview ? "strong" : "h1";
 
   return (
-    <>
-      {/* Sem capa (ou capa quebrada): degradê da cor da loja, nunca faixa cinza (spec 12 §2.1). */}
-      <div className={`loja__cover${hasCover ? "" : " loja__cover--empty"}`}>
-        {hasCover && <img ref={cover.ref} src={store.coverImageUrl as string} alt="" onError={cover.onError} />}
-      </div>
-
-      <section className="loja__card" aria-label="Sobre a loja">
-        {hasLogo ? (
-          <div className="loja__logo">
-            {/* alt vazio: o nome da loja já está no título ao lado (revisão da Da Vinci, N1) */}
-            <img ref={logo.ref} src={store.logoUrl as string} alt="" onError={logo.onError} />
-          </div>
-        ) : (
-          // Monograma (spec 12 §2.3): decorativo, o nome da loja vem logo abaixo.
-          <div className="loja__logo loja__logo--initials" aria-hidden="true">
-            {storeInitials(store.name)}
-          </div>
-        )}
-
-        <div className="loja__ident">
-          <div className="loja__ident-main">
-            <div className="loja__name-row">
-              <h1 className="loja__name">{store.name}</h1>
-              {whatsappLink && (
-                <a href={whatsappLink} target="_blank" rel="noreferrer" className="loja__whatsapp" title="Falar no WhatsApp" aria-label="Falar com a loja no WhatsApp (abre em outra aba)">
-                  <ChatIcon />
-                </a>
-              )}
+    <header className="loja__store-header">
+      <section className="loja__store-summary" aria-label="Sobre a loja">
+        <div className="loja__store-summary-row">
+          {hasLogo ? (
+            <div className="loja__logo">
+              <img ref={logo.ref} src={store.logoUrl as string} alt="" width={40} height={40} decoding="async" onError={logo.onError} />
             </div>
-            <div className="loja__info">
-              {store.address && (
-                <p className="loja__line loja__line--top">
-                  <PinIcon />
-                  <span>{store.address}</span>
-                </p>
-              )}
-              {conditions && (
-                <p className="loja__line">
-                  <CoinIcon />
-                  <span>{conditions}</span>
-                </p>
-              )}
-            </div>
+          ) : (
+            <span className="loja__logo loja__logo--initials" aria-hidden="true">{storeInitials(store.name)}</span>
+          )}
+          <div className="loja__summary-title">
+            {tableLabel && <p className="mesa-cardapio__label">{tableLabel}</p>}
+            <Title className="loja__name">{store.name}</Title>
+            <span className={`loja__summary-state${open ? "" : " loja__summary-state--closed"}`}>
+              <span className={`loja__dot${open ? "" : " loja__dot--closed"}`} aria-hidden="true" />
+              {open ? openStatus : closedStatus}
+            </span>
           </div>
-
-          {/* Caixa de status. Sem o B5 (horário estruturado) o servidor não sabe a hora de fechar: só afirma o que sabe,
-              se a loja está recebendo pedidos, e mostra o texto de horário que a loja cadastrou. */}
-          <div className={`loja__status${open ? "" : " loja__status--closed"}`}>
-            <div className="loja__status-head">
-              <span className="loja__status-state">
-                <span className={`loja__dot${open ? "" : " loja__dot--closed"}`} aria-hidden="true" />
-                {open ? "Recebendo pedidos" : "Fechado agora"}
-              </span>
-              {store.openingHours && (
-                <button type="button" className="loja__hours-button" aria-expanded={showHours} aria-controls="loja-horarios" onClick={() => setShowHours((value) => !value)}>
-                  Ver horários
-                  <span className={`loja__hours-chevron${showHours ? " loja__hours-chevron--open" : ""}`}>
-                    <ChevronIcon />
-                  </span>
-                </button>
-              )}
-            </div>
-            {!open && (
-              <p className="loja__status-text" role="status">
-                {STORE_CLOSED_MESSAGE}.
-              </p>
-            )}
-            {store.openingHours && (
-              <p id="loja-horarios" className="loja__hours" hidden={!showHours}>
-                {store.openingHours}
-              </p>
-            )}
-          </div>
-        </div>
-
-        <button type="button" onClick={onOpenSearch} className="loja__search">
-          <span className="loja__search-icon">
-            <SearchIcon size="md" />
-          </span>
-          Pesquisar...
-        </button>
-
-        {showCategoriesHead && (
-          <div className="loja__categories-head">
-            <h2 className="loja__categories-title">Categorias</h2>
-            <button type="button" onClick={onViewAllCategories} className="loja__categories-all">
-              Ver todas ›
+          {!preview && (store.address || store.openingHours || conditions) && (
+            <button
+              className="loja__summary-action"
+              type="button"
+              aria-label={store.openingHours ? "Ver horários e informações da loja" : "Informações da loja"}
+              aria-expanded={showInfo}
+              aria-controls="loja-horarios"
+              onClick={() => setShowInfo((expanded) => !expanded)}
+            >
+              <InfoIcon />
             </button>
-          </div>
-        )}
+          )}
+          {!preview && <ThemeControls compact />}
+          {!preview && whatsappLink && (
+            <a href={whatsappLink} target="_blank" rel="noreferrer" className="loja__summary-action" aria-label="Falar com a loja no WhatsApp (abre em outra aba)">
+              <ChatIcon />
+            </a>
+          )}
+        </div>
+        {!open && <p className="loja__closed-notice" role="status">{closedMessage}</p>}
+        {prepTimes && <p className="loja__prep-times"><ClockIcon /><span>{prepTimes}</span></p>}
+        {!preview && <div className="loja__store-details" id="loja-horarios" hidden={!showInfo}>
+          {store.address && <p><PinIcon /><span>{store.address}</span></p>}
+          {conditions && <p><CoinIcon /><span>{conditions}</span></p>}
+          {store.openingHours && <p><ClockIcon /><span>{store.openingHours}</span></p>}
+        </div>}
       </section>
-    </>
+      <div className={`loja__menu-hero${hasCover ? " loja__menu-hero--with-cover" : ""}`}>
+        <div className={`loja__cover${hasCover ? "" : " loja__cover--empty"}${store.coverImageUrl ? "" : " loja__cover--compact"}`}>
+          {hasCover && <img ref={cover.ref} src={store.coverImageUrl as string} alt="" width={1408} height={768} loading="eager" onError={cover.onError} />}
+        </div>
+        <div className="loja__hero-actions">
+          {searchField ?? (preview ? <p className="loja__search">Pesquisar no cardápio</p> : <button type="button" onClick={onOpenSearch} className="loja__search">
+            <span className="loja__search-icon" aria-hidden="true"><SearchIcon size="md" /></span>
+            Pesquisar no cardápio
+          </button>)}
+          {!preview && showCategoriesHead && (
+            <div className="loja__category-picker">
+              <h2 className="sr-only">Categorias</h2>
+              <button type="button" onClick={onViewAllCategories} aria-label="Ver todas as categorias" title="Ver todas as categorias">
+                <FiltersIcon />
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </header>
   );
 }

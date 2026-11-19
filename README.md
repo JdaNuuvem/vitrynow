@@ -2,7 +2,7 @@
 
 Plataforma de pedidos para restaurantes e lojas: cardápio online para o cliente, painel de gestão (pedidos, catálogo, caixa, cupons, equipe), impressão de tíquetes no balcão e pagamento por PIX.
 
-> **Estado em 18/11/2026: só ambiente de DEV.** Nada em produção. Nome, domínio, marca e parecer jurídico ainda indefinidos. PIX e e-mail rodam só em modo de teste (mock). Parte do código desta `main` entrou **sem revisão de qualidade e segurança** (ver "Dívida de revisão").
+**Entrega de desenvolvimento de 18/11/2026.** Para iniciar pelo Windows, extraia o pacote inteiro e execute `Abrir-VitryNow.cmd`. Veja as rotas atuais, o design system, a integração pendente da campanha e as evidências em [Entrega para o dev](ENTREGA-PARA-O-DEV.md). Pix e e-mail usam provedores de teste na instalação local.
 
 ## Stack
 
@@ -10,13 +10,15 @@ Plataforma de pedidos para restaurantes e lojas: cardápio online para o cliente
 |---|---|
 | Monorepo | pnpm 12 (`apps/*`, `packages/*`, `infra`), TypeScript 5.6, **Node 24** |
 | API | Fastify 4 (cookie, cors, helmet, jwt, rate-limit, websocket), Zod, jobs no processo |
-| Banco | PostgreSQL 16, Prisma 5.22 (37 migrações em `packages/db/prisma/migrations`) |
+| Banco | PostgreSQL 16, Prisma 5.22 (54 migrações em `packages/db/prisma/migrations`) |
 | Painel e cardápio | Next.js 14.2, React 18, Tailwind 3 (SSR/ISR no cardápio público) |
 | Impressão | C# / .NET Framework 4.7.2 (WinForms), `apps/print-client` |
 | Testes | Vitest 2 (API e web), Testing Library (web), selftest próprio no print-client |
 | Infra | Docker Compose, Caddy (HTTPS e limite de requisições), backup do Postgres, CI no GitHub Actions |
 
-## O que já existe na `main` (verificado no código em 18/11)
+## Inventário histórico da integração anterior
+
+O inventário de rotas e telas desta seção registrava a `main` antes da entrega. Consulte o guia acima e o código em `apps/web/app` e `apps/api/src/routes` para o estado atual.
 
 **Pedidos e pagamento:** cardápio público e criação de pedido (`/stores/:slug/orders`); máquina de estados do pedido com cancelar/recusar com motivo, desfazer, estorno de PIX (idempotente), retentar e abandonar estorno preso; **pedido manual** do painel (`POST /api/orders`); histórico e kanban com busca; **acompanhamento público** por token (`/stores/:slug/orders/:id/tracking`); webhook do Mercado Pago idempotente (mock/sandbox); **PIX por loja** com provedor de teste (`/api/store/payments*`).
 **Caixa:** abrir, movimentos, fechar (fechamento duplo resolvido), resumo; vendas contadas por **dinheiro recebido** (`paidAt`, `SaleLine`); limite de sangria do funcionário.

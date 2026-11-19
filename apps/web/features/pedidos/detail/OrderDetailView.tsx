@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { statusLabel, TYPE_LABELS } from "@/core/domain/orderLabels";
-import type { OrderDetail } from "@/core/domain/orderDetail";
+import { detailItemTotal, type OrderDetail } from "@/core/domain/orderDetail";
 import type { Deliverer, Order } from "@/core/domain/orders";
 import { formatCents } from "@/shared/format/money";
 import { CANCEL_REASONS } from "../cancelReasons";
@@ -180,7 +180,15 @@ export function OrderDetailView({ order, deliverers, nowMs, busy, canRetryRefund
               <span>
                 {item.quantity}× {item.productName}
               </span>
-              <span>{formatCents(item.unitPriceCents * item.quantity)}</span>
+              <span>{formatCents(detailItemTotal(item))}</span>
+              {Boolean(item.options?.length || item.additionals?.length) && (
+                <span className="pedido-detalhe__item-note">
+                  {[
+                    ...(item.options ?? []).map((option) => `${option.groupName}: ${option.quantity > 1 ? `${option.quantity}× ` : ""}${option.name}`),
+                    ...(item.additionals ?? []).map((entry) => entry.name),
+                  ].join(" · ")}
+                </span>
+              )}
               {item.notes && <span className="pedido-detalhe__item-note">Obs.: {item.notes}</span>}
             </li>
           ))}

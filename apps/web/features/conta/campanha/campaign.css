@@ -1,0 +1,30 @@
+.campaign-page {
+  max-width: 1440px;
+  margin-inline: auto;
+  padding: clamp(20px, 3vw, 42px) clamp(16px, 3vw, 44px) 90px;
+  color: var(--ink);
+}
+
+.campaign-page > .ds-state { margin-block-end: 20px; }
+.campaign-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); align-items: start; gap: 20px; }
+.campaign-layout > * { min-width: 0; }
+.campaign-form fieldset { display: grid; gap: 14px; min-width: 0; border: 0; margin: 0; padding: 0; }
+.campaign-form label { display: grid; gap: 5px; min-width: 0; color: var(--ink); font-size: .875rem; font-weight: 650; }
+.campaign-form label span { color: var(--ink-soft); font-size: .8125rem; font-weight: 450; }
+.campaign-form :is(input:not([type="checkbox"]), select, textarea) { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-weight: 450; }
+.campaign-form input[type="file"]::file-selector-button { color: var(--ink); background: var(--surface-soft); border: 1px solid var(--line); border-radius: 5px; margin-inline-end: 8px; cursor: pointer; }
+.campaign-form .campaign-check { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.campaign-form input[type="checkbox"] { height: 18px; width: 18px; accent-color: var(--color-primary); }
+.campaign-form fieldset > .ds-button { justify-self: start; }
+.campaign-fields-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.campaign-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-block-start: 20px; }
+.campaign-preview__controls, .campaign-preview__controls > div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
+.campaign-preview__controls button[aria-pressed="true"] { background: var(--color-primary); border-color: var(--color-primary); color: var(--on-primary); }
+.campaign-preview__frame.loja { container-type: inline-size; width: 100%; min-height: min(270px, 55vw); padding: 10px; margin: 14px auto 0; border: 1px solid var(--line); border-radius: 14px; }
+.campaign-preview__frame--mobile.loja { max-width: 390px; }
+.campaign-preview__frame .loja__banner { width: 100%; max-width: none; margin: 0; }
+.campaign-preview__frame--mobile .loja__banner-title { font-size: clamp(1rem, 4cqi, 1.375rem); }
+.campaign-preview__target { color: var(--ink-soft); font-size: .875rem; margin-block-start: 10px; }
+
+@media (max-width: 920px) { .campaign-layout { grid-template-columns: 1fr; } }
+@media (max-width: 480px) { .campaign-fields-row { grid-template-columns: 1fr; } }

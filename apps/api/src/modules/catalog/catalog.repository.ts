@@ -1,4 +1,6 @@
 import type { Category, Product, ProductAdditional, prisma as prismaClient } from "@meucardapio/db";
+import { orderOptionFields } from "../../lib/orderItems";
+import { PrismaOptionGroupsRepository } from "../optionGroups/optionGroups.repository";
 
 type Db = typeof prismaClient;
 
@@ -57,12 +59,21 @@ export interface CatalogRepository {
 export class PrismaCatalogRepository implements CatalogRepository {
   constructor(private readonly db: Db) {}
 
-  listCategories(storeId: string) {
-    return this.db.category.findMany({
+  async listCategories(storeId: string) {
+    const categories = await this.db.category.findMany({
       where: { storeId },
       orderBy: { position: "asc" },
-      include: { products: { orderBy: { position: "asc" }, include: { additionals: true } } },
+      include: { products: { where: { storeId }, orderBy: { position: "asc" }, include: { additionals: true } } },
     });
+    const groups = await new PrismaOptionGroupsRepository(this.db).groupsForProducts(
+      storeId,
+      categories.flatMap((category) => category.products.map((product) => product.id)),
+      true,
+    );
+    return categories.map((category) => ({
+      ...category,
+      products: category.products.map((product) => ({ ...product, ...orderOptionFields(groups.get(product.id) ?? []) })),
+    }));
   }
 
   findCategory(storeId: string, id: string) {

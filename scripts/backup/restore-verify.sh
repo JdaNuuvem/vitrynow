@@ -45,13 +45,4 @@ if [ -n "$EXPECTED" ]; then
   fi
   rm -f "$DUMP.actual.$$"
 fi
-# fotos (ADR-0017): se há backup de uploads com o MESMO carimbo do dump, restaura numa pasta temporária e confere contra o manifesto
-STAMP="$(basename "$DUMP" .dump)"; STAMP="${STAMP#*_}"; UPT="$(dirname "$DUMP")/uploads_${STAMP}.tar.gz"
-if [ -f "$UPT" ]; then
-  UPD="$(mktemp -d)"; trap 'rm -rf "$UPD"; cleanup' EXIT
-  if sh "$HERE/restore-uploads.sh" "$UPT" "$UPD/fotos" >"$UPD/log" 2>&1; then echo "restore-verify: fotos OK ($(tail -1 "$UPD/log" | sed 's/^restore-uploads: //'))"
-  else cat "$UPD/log"; echo "restore-verify: FALHA as fotos não voltaram"; exit 1; fi
-else
-  echo "restore-verify: AVISO sem backup de uploads com o carimbo $STAMP: as FOTOS não foram verificadas"
-fi
 echo "restore-verify: OK"

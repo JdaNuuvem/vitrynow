@@ -335,7 +335,7 @@ describe("PedidosPage: faixa dos abertos escondidos pelo teto (API-70, WEB-37)",
     render(<PedidosPage />);
     const link = screen.getByRole("link", { name: "Histórico" });
     expect(link).toHaveAttribute("href", "/dashboard/pedidos/historico");
-    expect(link).toHaveClass("pedidos__history-link");
+    expect(link).toHaveClass("ds-button", "ds-button--secondary");
   });
 
   it("sem nenhum escondido, nada de faixa", () => {

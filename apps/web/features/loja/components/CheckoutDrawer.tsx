@@ -1,6 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PaymentMethod, StoreInfo } from "@/core/domain/storefront";
 import { formatCents, maskMoneyInput } from "@/shared/format/money";
+import { Icon } from "@/shared/icons/Icon";
+import type { StorefrontGateway } from "@/core/gateways/StorefrontGateway";
+import { useDeliveryZones } from "../hooks/useDeliveryZones";
 import {
   PAYMENT_GROUPS,
   STORE_CLOSED_MESSAGE,
@@ -31,6 +34,9 @@ export function CheckoutDrawer({
   closed,
   submitting,
   error,
+  errorCode,
+  errorDetails,
+  gateway,
   pixAvailable = true,
   onClose,
   onSubmit,
@@ -40,6 +46,9 @@ export function CheckoutDrawer({
   closed: boolean;
   submitting: boolean;
   error: string | null;
+  errorCode?: string | null;
+  errorDetails?: unknown;
+  gateway?: StorefrontGateway;
   // PIX só deve aparecer com o Mercado Pago da loja conectado (B1/API-07). Até o backend
   // informar isso, a página mantém true (comportamento de hoje).
   pixAvailable?: boolean;
@@ -57,19 +66,63 @@ export function CheckoutDrawer({
     tipCents: 0,
   });
   const [attempted, setAttempted] = useState(false);
+  const [neighborhood, setNeighborhood] = useState("");
+  const [requiresNeighborhood, setRequiresNeighborhood] = useState(false);
+  const [rejectedPix, setRejectedPix] = useState(false);
+  const [quote, setQuote] = useState<{ key: string; fee: number; total: number } | null>(null);
+  const submittedKey = useRef("");
+  const submittedCoupon = useRef("");
+  const coupon = form.couponCode.trim();
+  const delivery = form.deliveryType === "DELIVERY";
+  const { config, loading: zonesLoading, failed: zonesFailed, retry: reloadZones } = useDeliveryZones(gateway, store.slug, store.deliveryEnabled);
+  const zone = config?.zones.find((option) => option.id === neighborhood);
+  const hasZoneChoice = Boolean(config?.zones.length || requiresNeighborhood);
+  const outside = Boolean(config?.outsideMode === "DEFAULT_FEE" && neighborhood === "outside");
+  const missingZone = delivery && hasZoneChoice && !zone && !outside;
+  const pendingZone = delivery && (zonesLoading || zonesFailed || missingZone);
+  const pixEnabled = pixAvailable && !rejectedPix;
+  const missingPayment = form.paymentMethod === "PIX" && !pixEnabled;
+  const pricingKey = JSON.stringify([form.deliveryType, neighborhood, subtotalCents, form.tipCents, coupon]);
+  const activeQuote = quote?.key === pricingKey ? quote : null;
+  const threshold = zone?.freeFromCents ?? config?.freeShippingFromCents;
+  const baseFee = zone?.feeCents ?? config?.defaultFeeCents ?? store.deliveryFeeCents;
+  const estimatedFee = threshold != null && subtotalCents >= threshold ? 0 : baseFee;
+  useEffect(() => {
+    if (errorCode === "PIX_UNAVAILABLE") setRejectedPix(true);
+    if (errorCode === "NEIGHBORHOOD_REQUIRED" || errorCode === "NEIGHBORHOOD_UNAVAILABLE" || errorCode === "NEIGHBORHOOD_NOT_FOUND") {
+      setNeighborhood("");
+      setRequiresNeighborhood(true);
+      setQuote(null);
+      reloadZones();
+    }
+    if (errorCode === "DELIVERY_FEE_CHANGED") {
+      const data = errorDetails as { deliveryFeeCents?: number; totalCents?: number } | null;
+      if (typeof data?.deliveryFeeCents === "number" && Number.isSafeInteger(data.deliveryFeeCents) && data.deliveryFeeCents >= 0 &&
+          typeof data.totalCents === "number" && Number.isSafeInteger(data.totalCents) && data.totalCents >= 0) {
+        setQuote({ key: submittedKey.current, fee: data.deliveryFeeCents, total: data.totalCents });
+      } else {
+        reloadZones();
+      }
+    }
+  }, [errorCode, errorDetails, reloadZones]);
+  const couponRejected = Boolean(error && /cupom/i.test(error) && submittedCoupon.current);
+  const couponError = couponRejected && coupon === submittedCoupon.current && !closed ? error : null;
   const update = <K extends keyof CheckoutForm>(key: K, value: CheckoutForm[K]) => setForm((prev) => ({ ...prev, [key]: value }));
 
-  const totals = checkoutTotals({
+  const estimatedTotals = checkoutTotals({
     subtotalCents,
     deliveryType: form.deliveryType,
-    deliveryFeeCents: store.deliveryFeeCents,
+    deliveryFeeCents: activeQuote?.fee ?? estimatedFee,
     tipCents: form.tipCents,
   });
+  const totals = activeQuote ? { ...estimatedTotals, totalCents: activeQuote.total } : estimatedTotals;
+  const quotedDiscount = activeQuote ? estimatedTotals.totalCents - activeQuote.total : 0;
   // Só mostra os erros depois da primeira tentativa de enviar (não grita com quem ainda digita).
   const errors: CheckoutErrors = attempted ? validateCheckout(form, totals.totalCents) : {};
   const errorCount = Object.keys(errors).length;
 
   function submit() {
+    if (submitting || closed || pendingZone || missingPayment || (!store.pickupEnabled && !store.deliveryEnabled)) return;
     const found = validateCheckout(form, totals.totalCents);
     const first = firstInvalidField(found);
     if (first) {
@@ -77,7 +130,12 @@ export function CheckoutDrawer({
       document.getElementById(FIELD_ID[first])?.focus();
       return;
     }
-    onSubmit(form, totals);
+    submittedCoupon.current = coupon;
+    submittedKey.current = pricingKey;
+    onSubmit({
+      ...form,
+      ...(delivery ? { neighborhoodId: zone?.id, expectedDeliveryFeeCents: totals.deliveryFeeCents } : {}),
+    }, totals);
   }
 
   const fieldProps = (field: CheckoutField) => ({
@@ -100,7 +158,7 @@ export function CheckoutDrawer({
   ];
 
   return (
-    <Sheet title="Finalizar pedido" onClose={onClose} tall>
+    <Sheet title="Finalizar pedido" onClose={onClose} tall purchase>
       <form
         className="loja__form"
         noValidate
@@ -119,12 +177,12 @@ export function CheckoutDrawer({
             {STORE_CLOSED_MESSAGE}.
           </div>
         )}
-        {error && !closed && (
+        {error && !closed && !couponRejected && (
           <div role="alert" className="loja__error-summary">
             <p>{error}</p>
-            <button type="button" className="loja__empty-menu-link" onClick={submit} disabled={submitting}>
+            {!errorCode && <button type="button" className="loja__empty-menu-link" onClick={submit} disabled={submitting}>
               Tentar de novo
-            </button>
+            </button>}
           </div>
         )}
 
@@ -149,6 +207,29 @@ export function CheckoutDrawer({
               ))}
             </div>
           </fieldset>
+        )}
+
+        {delivery && (hasZoneChoice || zonesFailed || zonesLoading) && (
+          <div className="loja__zone">
+            <label className="loja__label" htmlFor="loja-bairro">Bairro da entrega</label>
+            {zonesLoading ? <p role="status">Consultando bairros…</p> : zonesFailed ? (
+              <div role="alert">
+                <p>Não foi possível consultar a taxa de entrega.</p>
+                <button type="button" className="loja__empty-menu-link" onClick={reloadZones}>Consultar novamente</button>
+              </div>
+            ) : (
+              <>
+                <select id="loja-bairro" className="loja__field" value={neighborhood} onChange={(event) => setNeighborhood(event.target.value)}>
+                  <option value="">Selecione o bairro</option>
+                  {config?.zones.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
+                  {config?.outsideMode === "DEFAULT_FEE" && <option value="outside">Outro bairro</option>}
+                </select>
+                {requiresNeighborhood && !config?.zones.length && config?.outsideMode !== "DEFAULT_FEE" && (
+                  <p className="loja__hint">Nenhum bairro está disponível para entrega no momento.</p>
+                )}
+              </>
+            )}
+          </div>
         )}
 
         <div>
@@ -197,20 +278,24 @@ export function CheckoutDrawer({
           </div>
         )}
 
-        <div>
+        <div className="loja__coupon" data-invalid={couponError ? "true" : undefined}>
           <label className="loja__label" htmlFor="loja-cupom">
+            <Icon name="coupons" size={19} />
             Cupom de desconto (opcional)
           </label>
           <input
             id="loja-cupom"
             className="loja__field loja__field--upper"
             autoComplete="off"
+            aria-invalid={couponError ? true : undefined}
+            aria-describedby={couponError ? "loja-cupom-erro" : undefined}
             value={form.couponCode}
             onChange={(e) => update("couponCode", e.target.value)}
           />
+          {couponError && <p id="loja-cupom-erro" className="loja__error-text" role="alert">{couponError}</p>}
         </div>
 
-        {PAYMENT_GROUPS.filter((group) => !group.online || pixAvailable).map((group) => (
+        {PAYMENT_GROUPS.filter((group) => !group.online || pixEnabled).map((group) => (
           <fieldset key={group.legend} className="loja__fieldset">
             <legend className="loja__legend">{group.legend}</legend>
             {group.options.map((option) => (
@@ -274,15 +359,16 @@ export function CheckoutDrawer({
           </div>
         </fieldset>
 
-        <div className="loja__summary">
+        <section className="loja__summary" aria-label="Resumo do pedido">
+          <h3 className="loja__summary-title">Resumo do pedido</h3>
           <div className="loja__summary-row">
             <span>Subtotal</span>
             <span>{formatCents(totals.subtotalCents)}</span>
           </div>
-          {totals.deliveryFeeCents > 0 && (
+          {delivery && (pendingZone || config || totals.deliveryFeeCents > 0) && (
             <div className="loja__summary-row">
               <span>Taxa de entrega</span>
-              <span>{formatCents(totals.deliveryFeeCents)}</span>
+              <span>{pendingZone ? "A confirmar" : formatCents(totals.deliveryFeeCents)}</span>
             </div>
           )}
           {totals.tipCents > 0 && (
@@ -291,15 +377,19 @@ export function CheckoutDrawer({
               <span>{formatCents(totals.tipCents)}</span>
             </div>
           )}
+          {quotedDiscount > 0 && (
+            <div className="loja__summary-row"><span>Desconto do cupom</span><span>−{formatCents(quotedDiscount)}</span></div>
+          )}
           <div className="loja__summary-row loja__summary-row--total">
-            <span>Total</span>
-            <span>{formatCents(totals.totalCents)}</span>
+            <span>{coupon && !activeQuote ? "Total antes do desconto" : "Total"}</span>
+            <span>{pendingZone ? "A confirmar" : formatCents(totals.totalCents)}</span>
           </div>
-          {form.couponCode.trim() && <p className="loja__hint">O desconto do cupom é aplicado ao enviar o pedido.</p>}
-        </div>
+          {coupon && !activeQuote && <p className="loja__hint">A loja verifica o cupom ao receber o pedido.</p>}
+        </section>
 
-        <button type="submit" disabled={submitting || closed} className="loja__cta">
-          {submitting ? "Enviando…" : `Finalizar pedido · ${formatCents(totals.totalCents)}`}
+        <button type="submit" disabled={submitting || closed || pendingZone || missingPayment || (!store.pickupEnabled && !store.deliveryEnabled)} className="loja__cta">
+          {submitting ? "Enviando…" : (activeQuote || errorCode === "ITEM_PRICE_CHANGED") ? (coupon && !activeQuote ? "Confirmar novo valor" : `Confirmar novo total · ${formatCents(totals.totalCents)}`) :
+            coupon || pendingZone ? "Finalizar pedido" : `Finalizar pedido · ${formatCents(totals.totalCents)}`}
         </button>
       </form>
     </Sheet>

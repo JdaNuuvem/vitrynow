@@ -46,4 +46,19 @@ describe("ProductForm: foto só em https (WEB-22, SEC-14/ST-17)", () => {
     await fill("");
     expect(onSave).toHaveBeenCalledTimes(1);
   });
+
+  it("altera o preço preservando a foto local cadastrada", async () => {
+    const onSave = vi.fn().mockResolvedValue(null);
+    const product = { id: "p", name: "Miso ramen", active: true, featured: false, description: null,
+      imageUrl: "/local-ramenku/miso.webp", priceCents: 3890, additionals: [] };
+    render(<ProductForm categoryId="c" initial={product} onSave={onSave} onClose={vi.fn()} />);
+    const price = screen.getByPlaceholderText("00,00");
+    await userEvent.clear(price);
+    await userEvent.type(price, "4200");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar" }));
+    const [input, id] = onSave.mock.calls[0];
+    expect(id).toBe("p");
+    expect(input.priceCents).toBe(4200);
+    expect(input).not.toHaveProperty("imageUrl");
+  });
 });

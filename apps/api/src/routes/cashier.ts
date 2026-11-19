@@ -125,7 +125,7 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
     const session = await prisma.cashSession.findFirst({ where: { storeId, closedAt: null }, include: { movements: true } });
     if (!session) return reply.code(404).send({ error: "não há caixa aberto", code: "CASH_REQUIRED" });
     const summary = await summarizeSession(prisma, storeId, session);
-    return closePreview(summary.expectedCents, counted);
+    return { ...closePreview(summary.expectedCents, counted), sessionId: session.id };
   });
 
   app.get("/api/cashier/sessions/:id/summary", { preHandler: app.requirePanelAuth }, async (request, reply) => {
@@ -194,10 +194,16 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
       async (tx) => {
         const rows = await tx.$queryRaw<{ id: string; closedAt: Date | null }[]>`SELECT "id", "closedAt" FROM "CashSession" WHERE "storeId" = ${storeId} ORDER BY "openedAt" DESC, "id" DESC LIMIT 1 FOR UPDATE`;
         if (!rows[0]) throw new CodedError(404, "CASH_REQUIRED", "não há caixa aberto");
+        if (parsed.data.sessionId !== undefined && rows[0].id !== parsed.data.sessionId) {
+          throw new CodedError(409, "CASH_SESSION_CHANGED", "O caixa em atividade mudou. Confira o novo caixa antes de fechar.");
+        }
         if (rows[0].closedAt) throw new CodedError(409, "CASH_ALREADY_CLOSED", "Este caixa já foi fechado.");
         const session = await tx.cashSession.findUniqueOrThrow({ where: { id: rows[0].id }, include: { movements: true } });
         const closedAt = new Date();
         const summary = await summarizeSession(tx, storeId, { ...session, closedAt });
+        if (parsed.data.expectedBalanceCents !== undefined && summary.expectedCents !== parsed.data.expectedBalanceCents) {
+          throw new CodedError(409, "CASH_PREVIEW_CHANGED", "O saldo mudou. Confira os valores novamente antes de fechar.");
+        }
         const differenceCents = counted - summary.expectedCents;
         const verdict = evaluateClose(differenceCents, parsed.data.reason, parsed.data.reasonText);
         const updated = await tx.cashSession.update({

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Order } from "@/core/domain/orders";
 import { applySaleDefinition, awaitingInRange, isAwaitingAccept } from "./salesDefinition";
-import { buildInicioMetrics } from "./inicioMetrics";
+import { buildInicioMetrics, monthRange, weekRange } from "./inicioMetrics";
 import type { ReportSummary } from "@/core/domain/reports";
 
 const order = (over: Partial<Order>): Order =>
@@ -106,6 +106,26 @@ describe("buildInicioMetrics com a definição única", () => {
   const summary = (over: Partial<ReportSummary>): ReportSummary =>
     ({ from: "", to: "", orderCount: 2, revenueCents: 6300, tipCents: 200, discountCents: 400, averageTicketCents: 3150, customerCount: 2, byDay: [], byType: { BALCAO: { count: 2, revenueCents: 6300 } }, topProducts: [], byDeliverer: [], cashSummary: { sessionCount: 0, suprimentosCents: 0, sangriasCents: 0 }, ...over }) as ReportSummary;
   const now = new Date("2026-11-16T15:00:00.000Z");
+
+  it("preserva os totais da API atual, sem subtrair pendentes e gorjeta duas vezes", () => {
+    const api = summary({ ruleChangedAt: "2026-11-18T00:00:00Z", openCount: 1, openCents: 3000, revenueCents: 6100, averageTicketCents: 3050 });
+    const metrics = buildInicioMetrics(api, api, now, [order({ totalCents: 3000 })]);
+    expect(metrics).toMatchObject({ revenueCents: 6100, orderCount: 2, tipCents: 200, chartExact: true, awaiting: { count: 1, cents: 3000 } });
+  });
+
+  it("preserva uma resposta STAFF sem inferir valores financeiros", () => {
+    const staff = summary({ openCount: 2, revenueCents: undefined, tipCents: undefined, averageTicketCents: undefined });
+    const metrics = buildInicioMetrics(staff, staff, now, [order({ totalCents: 3000 })]);
+    expect(metrics.revenueCents).toBeUndefined();
+    expect(metrics.averageTicketCents).toBeUndefined();
+    expect(metrics.awaiting).toEqual({ count: 2, cents: undefined });
+  });
+
+  it("calcula o período no dia civil da loja e evita incluir horas do dia seguinte", () => {
+    const late = new Date("2026-12-01T01:00:00Z");
+    expect(monthRange(late)).toEqual({ from: new Date("2026-11-01T03:00:00Z"), to: new Date("2026-11-30T03:00:00Z") });
+    expect(weekRange(late).from).toEqual(new Date("2026-11-24T03:00:00Z"));
+  });
 
   it("o Início mostra faturamento R$ 61,00, ticket R$ 30,50 e 2 vendas no exemplo fechado", () => {
     const metrics = buildInicioMetrics(summary({}), summary({}), now, []);

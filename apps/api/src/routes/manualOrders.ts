@@ -11,6 +11,8 @@ import { getJwtSecret } from "../lib/securityConfig";
 import { logAudit } from "../lib/audit";
 import { limited, tooMany } from "../lib/slidingLimit";
 import { CodedError, useDomainErrors } from "../shared/errors";
+import { assertOrderMoneyFits, resolveOrderItems } from "../lib/orderItems";
+import { optionGroupsService } from "../modules/optionGroups/optionGroups.module";
 
 // API-13 — pedido lançado no PAINEL (B2). O servidor decide TODO preço (RN-B2-01); o pedido nasce CONFIRMADO (o atendente já o aceitou), com tíquete na MESMA
 // transação (nunca pedido sem job) e `source = PAINEL`. Ignora "loja fechada", horário, pedido mínimo e modalidade desligada: a loja decide (RN-B2-04).
@@ -85,24 +87,8 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
         details: { items: unavailable.map((p) => ({ id: p.id, name: p.name })) },
       });
     }
-    const productById = new Map(products.map((p) => [p.id, p]));
-    let itemsData;
-    try {
-      itemsData = input.items.map((item) => {
-        const product = productById.get(item.productId)!;
-        const byId = new Map(product.additionals.map((a) => [a.id, a]));
-        const chosen = (item.additionalIds ?? []).map((id) => {
-          const additional = byId.get(id);
-          if (!additional) throw new Error(`adicional ${id} não pertence ao produto ${product.id}`);
-          return additional;
-        });
-        const extra = chosen.reduce((sum, a) => sum + a.priceCents, 0);
-        return { productId: product.id, productName: product.name, quantity: item.quantity, unitPriceCents: product.priceCents, notes: item.notes, lineTotalCents: (product.priceCents + extra) * item.quantity, additionals: chosen };
-      });
-    } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : "pedido inválido", code: "ADDITIONAL_NOT_FOUND" });
-    }
-    const subtotalCents = itemsData.reduce((sum, i) => sum + i.lineTotalCents, 0);
+    const optionGroups = await optionGroupsService.groupsForProducts(storeId, products.map((product) => product.id), true);
+    const { items: itemsData, subtotalCents } = resolveOrderItems(input.items, products, optionGroups);
 
     // Cupom: mesma validação do cardápio (validade, limite, mínimo); o OWNER pode forçar um cupom ESGOTADO (RN-B2-05), nunca um inativo ou vencido.
     let coupon = null;
@@ -125,6 +111,7 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
     const deliveryFeeCents = input.type === "DELIVERY" ? store.deliveryFeeCents : 0;
     const tipCents = input.tipCents ?? 0;
     const totalCents = subtotalCents - discountCents + deliveryFeeCents + tipCents;
+    assertOrderMoneyFits(totalCents);
     const zeroTotal = totalCents === 0;
     const paymentMethod = zeroTotal ? null : toOrderPaymentMethod(input.paymentMethod);
     if (!zeroTotal && input.changeForCents !== undefined) {
@@ -180,16 +167,7 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
             paidAt: receivedNow ? new Date() : null, // RN-CX-02(a): "já pago" = recebido agora
             publicTokenHash: accessToken.hash,
             statusHistory: { create: { status: "CONFIRMADO", userId, source: "PANEL", kind: "ADVANCE" } },
-            items: {
-              create: itemsData.map((item) => ({
-                productId: item.productId,
-                productName: item.productName,
-                quantity: item.quantity,
-                unitPriceCents: item.unitPriceCents,
-                notes: item.notes,
-                additionals: { create: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })) },
-              })),
-            },
+            items: { create: itemsData },
           },
         });
         ticketQueued = await enqueueOrderTicket(tx, { id: created.id, storeId });
