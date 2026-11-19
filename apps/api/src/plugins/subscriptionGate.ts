@@ -96,7 +96,9 @@ const publicOrderGate = async (request: FastifyRequest, reply: FastifyReply) => 
   const hours = await storeHoursService.publicStatus(slug);
   if (hours && hours.status.status !== "ABERTO") {
     const { reason, nextOpenAt, message } = hours.status;
-    return reply.code(409).send({ error: message, code: "STORE_CLOSED", details: { reason, nextOpenAt } });
+    // g1: modo ocupado tem código próprio (RN-OCU-03): não se confunde com loja fechada.
+    const code = reason === "BUSY" ? "STORE_BUSY" : "STORE_CLOSED";
+    return reply.code(409).send({ error: message, code, details: { reason, nextOpenAt } });
   }
   return undefined;
 };
@@ -128,7 +130,7 @@ const publicMenuSerializer = async (request: FastifyRequest, _reply: FastifyRepl
       const accepting = switchedOn && (hours ? hours.status === "ABERTO" : true);
       // `prepMinutes` só existe quando a loja configurou (API-57): nunca um prazo inventado.
       const prepMinutes = state.hours?.prepMinutes;
-      return { ...body, store: { ...body.store, acceptingOrders: switchedOn, accepting, hours: hours ?? null, ...(prepMinutes ? { prepMinutes } : {}) } };
+      return { ...body, store: { ...body.store, acceptingOrders: switchedOn, accepting, acceptingNow: accepting, busyUntil: state.hours?.busyUntil ?? null, reason: hours?.reason ?? null, hours: hours ?? null, ...(prepMinutes ? { prepMinutes } : {}) } };
     }
   }
   return payload;

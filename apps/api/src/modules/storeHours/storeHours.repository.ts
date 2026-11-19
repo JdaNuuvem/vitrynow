@@ -11,6 +11,8 @@ const select = {
   schedule: true,
   pausedUntil: true,
   closedUntil: true,
+  busyUntil: true,
+  busyExtraMinutes: true,
   prepMinutesDelivery: true,
   prepMinutesPickup: true,
 } as const;
@@ -34,6 +36,10 @@ export class PrismaStoreHoursRepository implements StoreHoursRepository {
   }
 
   async saveOverrides(storeId: string, data: { pausedUntil: Date | null; closedUntil: Date | null }) {
+    await this.db.store.update({ where: { id: storeId }, data });
+  }
+
+  async saveBusy(storeId: string, data: { busyUntil: Date | null; busyExtraMinutes: number | null }) {
     await this.db.store.update({ where: { id: storeId }, data });
   }
 

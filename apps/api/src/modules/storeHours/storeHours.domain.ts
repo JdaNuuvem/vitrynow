@@ -12,7 +12,7 @@ export type Schedule = {
 };
 
 export type StoreState = "ABERTO" | "FECHADO" | "PAUSADO";
-export type ClosedReason = "SWITCHED_OFF" | "PAUSED" | "CLOSED_TODAY" | "OUTSIDE_HOURS";
+export type ClosedReason = "SWITCHED_OFF" | "PAUSED" | "CLOSED_TODAY" | "OUTSIDE_HOURS" | "BUSY";
 
 export type StoreStatus = {
   status: StoreState;
@@ -32,6 +32,8 @@ export type StatusInput = {
   acceptingOrders: boolean;
   pausedUntil: Date | null;
   closedUntil: Date | null;
+  /** Modo ocupado (g1): comparado com `now`; vencido = ignorado (sem job). */
+  busyUntil?: Date | null;
 };
 
 const MIN_MS = 60_000;
@@ -239,6 +241,22 @@ function opensMessage(next: Date, now: Date, timeZone: string): string {
 
 /** Estado da loja agora (RN-B5-01: a assinatura é decidida ANTES, pelo portão da assinatura). */
 export function computeStoreStatus(input: StatusInput): StoreStatus {
+  const base = computeBaseStatus(input);
+  // g1: o modo ocupado só pesa quando a loja estaria ABERTA (fechada/pausada/desligada vence: mensagem mais clara, sem confundir).
+  const { busyUntil, now, timezone } = input;
+  if (base.status === "ABERTO" && busyUntil && busyUntil > now) {
+    return {
+      status: "PAUSADO",
+      reason: "BUSY",
+      nextOpenAt: busyUntil.toISOString(),
+      closesAt: null,
+      message: `Estamos com muitos pedidos agora. Voltamos a receber às ${timeLabel(busyUntil, timezone)}.`,
+    };
+  }
+  return base;
+}
+
+function computeBaseStatus(input: StatusInput): StoreStatus {
   const { schedule, timezone, now, acceptingOrders, pausedUntil, closedUntil } = input;
 
   if (!acceptingOrders) {
