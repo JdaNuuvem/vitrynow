@@ -1,0 +1,66 @@
+.daily-chart {
+  --chart-accent: var(--color-primary, #b7472a);
+  --chart-baseline: color-mix(in srgb, var(--ink) 16%, var(--surface));
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.daily-chart__tools, .daily-chart__readout, .daily-chart__empty, .daily-chart__data { grid-column: 1 / -1; }
+.daily-chart__tools { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
+.daily-chart__month, .daily-chart__tools select { font-size: .875rem; font-weight: 600; }
+.daily-chart__month::first-letter { text-transform: uppercase; }
+.daily-chart__tools select, .daily-chart__units button {
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 8px; padding: 6px 10px; min-height: 36px;
+}
+.daily-chart__units { display: flex; align-items: center; gap: 4px; }
+.daily-chart__units button { font-size: .8125rem; font-weight: 600; }
+.daily-chart__units button[aria-pressed="true"] {
+  background: var(--surface-soft); border-color: var(--chart-accent); box-shadow: inset 0 -2px var(--chart-accent);
+}
+.daily-chart__tools :is(button, select):focus-visible, .daily-chart__data summary:focus-visible {
+  outline: 2px solid var(--chart-accent); outline-offset: 2px;
+}
+.daily-chart__readout { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-block: 6px; }
+.daily-chart__readout span, .daily-chart__axis, .daily-chart__dates { color: var(--ink-soft); font-size: .75rem; }
+.daily-chart__readout strong { font-size: .9375rem; }
+.daily-chart__axis { display: flex; flex-direction: column; align-items: end; justify-content: space-between; max-width: 12ch; overflow-wrap: anywhere; }
+.daily-chart__plot {
+  display: flex; align-items: stretch; min-inline-size: 0; height: clamp(126px, 17vw, 184px);
+  border: 0; border-bottom: 1px solid var(--chart-baseline); padding: 0; margin: 0;
+  background: repeating-linear-gradient(to top, transparent 0, transparent calc(50% - 1px), var(--line) 50%);
+}
+.daily-chart__plot legend {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%);
+}
+.daily-chart__column {
+  position: relative; display: flex; justify-content: center; align-items: end; min-width: 0; flex: 1; cursor: pointer;
+}
+.daily-chart__column input {
+  position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer;
+}
+.daily-chart__column:focus-within { outline: 2px solid var(--chart-accent); outline-offset: -1px; z-index: 1; }
+.daily-chart__bar {
+  pointer-events: none; width: 68%; max-width: 50px; min-height: 2px; background: var(--chart-accent); border-radius: 3px 3px 0 0;
+  transform-origin: bottom;
+}
+.daily-chart__bar[data-missing="true"] { background: transparent; min-height: 0; }
+.daily-chart__column input:checked + .daily-chart__bar { box-shadow: 0 -2px 0 var(--ink); }
+.daily-chart__dates { grid-column: 2; display: flex; justify-content: space-between; }
+.daily-chart__empty { color: var(--ink-soft); padding: 24px 0; }
+.daily-chart__data { margin-top: 8px; }
+.daily-chart__data summary { width: fit-content; cursor: pointer; font-size: .875rem; font-weight: 600; padding-block: 6px; }
+.daily-chart__data table { width: 100%; table-layout: fixed; border-collapse: collapse; margin-top: 6px; font-size: .8125rem; }
+.daily-chart__data caption { text-align: left; padding-block: 6px; }
+.daily-chart__data :is(th, td) { border-bottom: 1px solid var(--line); text-align: end; padding: 7px 2px; overflow-wrap: anywhere; }
+.daily-chart__data th:first-child { text-align: start; }
+@media (prefers-reduced-motion: no-preference) {
+  .daily-chart__bar { animation: daily-chart-enter .28s ease-out both; }
+  @keyframes daily-chart-enter { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+}
+@media (pointer: coarse) {
+  .daily-chart__units button, .daily-chart__tools select { min-height: 44px; }
+  .daily-chart__data summary { padding-block: 12px; }
+}

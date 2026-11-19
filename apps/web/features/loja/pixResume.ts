@@ -12,7 +12,7 @@ export type ResumePaymentMethod = "PIX" | "OUTRO";
 export type ResumeRecord = {
   code: string;
   placedAt: number; // ms desde 1970
-  totalCents: number;
+  totalCents: number | null;
   paymentMethod: ResumePaymentMethod;
   pix: { pixQrCode: string; pixQrCodeBase64: string | null } | null; // só com PIX
   pixExpiresAt: number | null; // ms desde 1970; só com PIX
@@ -57,7 +57,7 @@ export function parseResume(raw: unknown): ResumeRecord | null {
   const { code, placedAt, totalCents, paymentMethod, pix, pixExpiresAt, pixExpiryKnown } = raw;
   if (typeof code !== "string" || !CODE_PATTERN.test(code)) return null;
   if (!isTimestamp(placedAt)) return null;
-  if (typeof totalCents !== "number" || !Number.isInteger(totalCents) || totalCents < 0 || totalCents > MAX_REASONABLE_CENTS) return null;
+  if (totalCents !== null && (typeof totalCents !== "number" || !Number.isInteger(totalCents) || totalCents < 0 || totalCents > MAX_REASONABLE_CENTS)) return null;
   if (paymentMethod !== "PIX" && paymentMethod !== "OUTRO") return null;
 
   if (paymentMethod === "OUTRO") {
@@ -91,7 +91,7 @@ export function clearResume(slug: string, storage: Storage | null = sessionStore
 /** Guarda a retomada de um pedido PIX recém-criado. Devolve false se não gravou (sem payload, sem storage ou cheio). */
 export function saveResume(
   slug: string,
-  order: { code: string; totalCents: number; placedAt: number; pix: PixPayment | null | undefined; pixExpiresAt?: number | null },
+  order: { code: string; totalCents: number | null; placedAt: number; pix: PixPayment | null | undefined; pixExpiresAt?: number | null },
   storage: Storage | null = sessionStore(),
 ): boolean {
   if (!storage || !order.pix?.pixQrCode) return false;

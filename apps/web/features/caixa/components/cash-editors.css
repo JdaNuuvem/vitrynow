@@ -1,0 +1,8 @@
+.cash-edit, .cash-edit__fields { display: grid; gap: var(--ds-space-3); }
+.cash-edit__fields { border: 0; padding: 0; min-width: 0; }
+.cash-edit__money { display: grid; gap: 5px; justify-items: start; }
+.cash-edit__money label { font-weight: 700; font-size: var(--ds-text-sm); }
+.cash-edit > .ds-button { justify-self: start; }
+.cash-edit__preview { display: grid; gap: 7px; padding: 12px; background: var(--surface-soft); border-radius: var(--ds-radius-sm); }
+.cash-edit__preview div { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.cash-edit__preview dd { font-weight: 700; }

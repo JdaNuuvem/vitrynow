@@ -18,16 +18,23 @@ export function LoginPage() {
   return (
     <AuthCard title="Entrar no painel">
       <form onSubmit={handleSubmit} className="auth__form">
-        <input className="auth__input" type="email" required placeholder="E-mail" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <input
-          className="auth__input"
-          type="password"
-          required
-          placeholder="Senha"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
-        {error && <p className="auth__error">{error}</p>}
+        <label className="auth__field">
+          E-mail
+          <input className="auth__input" type="email" autoComplete="username" required placeholder="E-mail" value={email} onChange={(e) => setEmail(e.target.value)} />
+        </label>
+        <label className="auth__field">
+          Senha
+          <input
+            className="auth__input"
+            type="password"
+            autoComplete="current-password"
+            required
+            placeholder="Senha"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </label>
+        {error && <p className="auth__error" role="alert">{error}</p>}
         <button className="auth__button" type="submit" disabled={loading}>
           {loading ? "Entrando..." : "Entrar"}
         </button>
@@ -35,6 +42,7 @@ export function LoginPage() {
       <Link href="/esqueci-senha" className="auth__link">
         Esqueci minha senha
       </Link>
+      <Link href="/cadastro" className="auth__link">Criar minha loja</Link>
     </AuthCard>
   );
 }

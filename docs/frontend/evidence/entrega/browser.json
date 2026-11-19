@@ -1,0 +1,352 @@
+{
+  "scenarios": {
+    "registration": true,
+    "storefront": {
+      "pickup": "0001",
+      "table": "0002",
+      "totalCents": 7600
+    },
+    "appearance": true,
+    "cashier": true,
+    "designAndCampaign": true
+  },
+  "dashboard": [
+    {
+      "path": "/dashboard",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/primeiros-passos",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/pedidos",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/pedidos/novo",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/pedidos/historico",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/pedidos/pix",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/mesas",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/caixa",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/catalogo",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/catalogo/opcoes",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/conta",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/conta/aparencia",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/conta/horarios",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/conta/entrega",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/cupons",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/equipe",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/entregadores",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/auditoria",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/relatorios",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/planos",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/pagamentos",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/impressoras",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/impressoras/fila",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    },
+    {
+      "path": "/dashboard/privacidade",
+      "widths": [
+        360,
+        390,
+        768,
+        1194,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ]
+    }
+  ],
+  "failures": []
+}

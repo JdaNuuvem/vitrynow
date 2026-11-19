@@ -1,6 +1,19 @@
 import type { Category, Product, StoreInfo } from "@/core/domain/storefront";
 import { formatCents } from "@/shared/format/money";
 
+export function isStoreAcceptingOrders(store: Pick<StoreInfo, "acceptingOrders" | "accepting">): boolean {
+  return store.acceptingOrders && store.accepting !== false;
+}
+
+export function prepTimesLine(store: Pick<StoreInfo, "prepMinutes" | "deliveryEnabled" | "pickupEnabled">): string {
+  const parts: string[] = [];
+  const delivery = store.prepMinutes?.delivery;
+  const pickup = store.prepMinutes?.pickup;
+  if (store.deliveryEnabled && delivery != null) parts.push(`Entrega: ${delivery} min de preparo`);
+  if (store.pickupEnabled && pickup != null) parts.push(`Retirada: ${pickup} min de preparo`);
+  return parts.join(" · ");
+}
+
 // Regras de apresentação do cardápio v2 (spec 12). Funções puras: a tela só desenha o que sai daqui.
 
 // "Mínimo R$ 20,00 · Entrega R$ 6,00 · Retirada": cada trecho só aparece se existir (spec 12 §2.4).
@@ -26,13 +39,12 @@ export function isCompactCategory(category: Pick<Category, "products">): boolean
 //  - "simple": sem adicionais → adiciona 1 e o "+" vira stepper (− n +);
 //  - "options": só adicionais opcionais → adiciona 1 unidade SIMPLES (sem opções); o cartão mostra "Tem opções" e o
 //    total do produto no selo, sem "−" (editar fica no carrinho);
-//  - "detail": tem grupo obrigatório → o "+" abre o detalhe. Ainda não existe grupo obrigatório no modelo (API-15);
-//    quando o contrato trouxer `requiredGroups`, este é o ponto de ligação.
+//  - "detail": tem grupo obrigatório → o "+" abre o detalhe.
 export type QuickAddMode = "simple" | "options" | "detail";
 
-export function quickAddMode(product: Pick<Product, "additionals"> & { requiredGroups?: unknown[] }): QuickAddMode {
-  if (product.requiredGroups && product.requiredGroups.length > 0) return "detail";
-  return product.additionals.length > 0 ? "options" : "simple";
+export function quickAddMode(product: Pick<Product, "additionals" | "optionGroups"> & { requiredGroups?: unknown[] }): QuickAddMode {
+  if (product.requiredGroups?.length || product.optionGroups?.some((group) => group.minSelect > 0 || group.priceMode === "BASE")) return "detail";
+  return product.additionals.length > 0 || product.optionGroups?.length ? "options" : "simple";
 }
 
 // Chip destacado na barra de categorias (spec 12 §2.1). Entradas: `spy` = categoria sob a linha de leitura (null se a

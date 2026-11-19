@@ -52,7 +52,7 @@
 
 .security-confirm__primary {
   background: var(--color-primary);
-  color: #ffffff;
+  color: var(--on-primary);
 }
 
 .security-confirm__primary[disabled] {

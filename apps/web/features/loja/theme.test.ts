@@ -22,6 +22,14 @@ describe("cor da loja no cardápio (spec 12 §6, D-01)", () => {
     expect(accentOn("#ffd54a")).toBe("#111111"); // amarelo claro: branco não passaria
   });
 
+  it("usa preto quando nem branco nem #111111 atingem 4,5:1", () => {
+    const accent = "#0077dd";
+    expect(contrastRatio(accent, "#ffffff")).toBeLessThan(4.5);
+    expect(contrastRatio(accent, "#111111")).toBeLessThan(4.5);
+    expect(accentOn(accent)).toBe("#000000");
+    expect(contrastRatio(accent, accentOn(accent))).toBeGreaterThanOrEqual(4.5);
+  });
+
   it.each(["#1f7a54", "#b5472a", "#3f4fc4", "#8a2d6b", "#ffd54a", "#7dd3fc", "#f97316", "#ffffff", "#e5e5e5"])(
     "para %s: o 'accent-ink' (preço, links) sempre tem 4,5:1 sobre branco",
     (accent) => {

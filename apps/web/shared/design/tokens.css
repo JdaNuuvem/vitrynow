@@ -1,0 +1,83 @@
+:root {
+  color-scheme: light;
+  --panel-canvas: #f5f3ed;
+  --surface: #fff;
+  --surface-soft: #efefe8;
+  --line: #dedfd5;
+  --line-strong: #858d80;
+  --ink: #222b24;
+  --ink-soft: #596359;
+  --color-primary: #a13d27;
+  --on-primary: #fff;
+  --color-primary-ten: #faeee7;
+  --color-primary-twenty-five: #ebc9bb;
+  --color-primary-fifty: #d3917b;
+  --ok: #1f704e;
+  --ok-bg: #e5f3e9;
+  --warn: #864607;
+  --warn-bg: #fff0dd;
+  --danger: #ac2336;
+  --danger-bg: #fff0f1;
+  --on-danger: #fff;
+  --info-ink: #28558f;
+  --info-bg: #ebf3ff;
+  --on-info: #fff;
+  --ds-font-body: "Open Sans", "Segoe UI", system-ui, sans-serif;
+  --ds-font-display: "Urbanist", "Open Sans", system-ui, sans-serif;
+  --ds-text-xs: .75rem;
+  --ds-text-sm: .875rem;
+  --ds-text-base: 1rem;
+  --ds-text-md: 1.125rem;
+  --ds-text-lg: 1.375rem;
+  --ds-text-title: clamp(1.85rem, 1.5rem + 1.4vw, 2.65rem);
+  --ds-space-1: 4px;
+  --ds-space-2: 8px;
+  --ds-space-3: 12px;
+  --ds-space-4: 16px;
+  --ds-space-5: 20px;
+  --ds-space-6: 24px;
+  --ds-space-8: 32px;
+  --ds-space-10: 40px;
+  --ds-radius-sm: 6px;
+  --ds-radius-md: 10px;
+  --ds-radius-lg: 14px;
+  --ds-control: 44px;
+  --ds-page-width: 1536px;
+  --ds-page-gutter: clamp(16px, 2.2vw, 32px);
+  --ds-scrim: rgb(23 29 23 / 48%);
+  --shadow-float: 0 12px 34px rgb(29 37 29 / 14%);
+  --transition: 160ms;
+  --ease-smooth-out: cubic-bezier(.22, 1, .36, 1);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --panel-canvas: #171c18;
+  --surface: #222922;
+  --surface-soft: #2a332b;
+  --line: #3c483d;
+  --line-strong: #788978;
+  --ink: #f3f5ee;
+  --ink-soft: #bdc9bd;
+  --color-primary: #faa68d;
+  --on-primary: #281a15;
+  --color-primary-ten: #3c2b24;
+  --color-primary-twenty-five: #624032;
+  --color-primary-fifty: #a86b58;
+  --ok: #8ed8ab;
+  --ok-bg: #243d30;
+  --warn: #ffca86;
+  --warn-bg: #423423;
+  --danger: #ffa4b0;
+  --danger-bg: #482d35;
+  --on-danger: #301d22;
+  --info-ink: #a7c9fb;
+  --info-bg: #25384d;
+  --on-info: #182839;
+  --ds-scrim: rgb(0 0 0 / 62%);
+  --shadow-float: 0 12px 34px rgb(0 0 0 / 30%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --transition: 0ms; }
+}

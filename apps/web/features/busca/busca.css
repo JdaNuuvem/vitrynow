@@ -1,27 +1,7 @@
-.search-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 100000000;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 12vh 16px 16px;
-}
-
-.search-modal__scrim {
-  position: absolute;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-}
-
 .search-modal__panel {
-  position: relative;
-  width: 560px;
-  max-width: 100%;
   overflow: hidden;
-  border-radius: 16px;
-  background: #ffffff;
-  box-shadow: var(--shadow-float);
+  border-radius: var(--ds-radius-lg);
+  background: var(--surface);
 }
 
 .search-modal__field {
@@ -44,7 +24,7 @@
   background: transparent;
 }
 
-.search-modal kbd {
+.search-modal__panel kbd {
   padding: 2px 6px;
   border: 1px solid var(--line);
   border-radius: 4px;

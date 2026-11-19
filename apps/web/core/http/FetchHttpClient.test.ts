@@ -81,4 +81,17 @@ describe("FetchHttpClient: cabeçalhos extras", () => {
     expect(init.body).toBeUndefined();
     expect(init.headers["x-order-token"]).toBe("mco_abc");
   });
+
+  it("POST com arquivo deixa o navegador gerar o Content-Type multipart", async () => {
+    const fetchMock = stub();
+    const file = new File(["conteúdo"], "banner.webp", { type: "image/webp" });
+    const form = new FormData();
+    form.append("file", file);
+
+    await new FetchHttpClient().post("/api/media/images?kind=COVER", form);
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.body).toBe(form);
+    expect(new Headers(init.headers).has("content-type")).toBe(false);
+    expect(init.credentials).toBe("include");
+  });
 });

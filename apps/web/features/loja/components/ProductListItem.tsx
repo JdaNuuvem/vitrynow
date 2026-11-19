@@ -1,5 +1,5 @@
 import type { Product } from "@/core/domain/storefront";
-import { formatCents } from "@/shared/format/money";
+import { startingPrice } from "../productOptions";
 import { useBrokenImage } from "../hooks/useBrokenImage";
 import { MinusIcon, PlusIcon } from "../icons";
 import { quickAddMode } from "../storeInfo";
@@ -12,6 +12,8 @@ type Props = {
   closed?: boolean;
   // Linha compacta (DV-V2-01): categoria com poucas fotos usa linha sem bloco de foto, "+" na direita.
   compact?: boolean;
+  // Produto selecionado pela loja para a grade de destaques.
+  photoCard?: boolean;
   // Emoji da categoria: vira o desenho do bloco quando o produto não tem foto.
   categoryIcon?: string | null;
   onOpen: (product: Product) => void;
@@ -23,26 +25,32 @@ type Props = {
 // Único lugar que sabe desenhar um produto na lista (cardápio por categoria e busca): os dois ficam idênticos.
 // Estrutura (spec 12 §3): o NOME é o botão principal e sua área de toque cobre o cartão inteiro (::after); o "+" é
 // outro botão, por cima. Nunca um controle dentro de outro controle.
-export function ProductListItem({ product, quantityInCart, closed = false, compact = false, categoryIcon = null, onOpen, onQuickAdd, onRemoveOne }: Props) {
+export function ProductListItem({ product, quantityInCart, closed = false, compact = false, photoCard = false, categoryIcon = null, onOpen, onQuickAdd, onRemoveOne }: Props) {
   const mode = quickAddMode(product);
-  const showAdd = !closed;
+  const unavailable = product.soldOut || product.unavailableByOptions;
+  const showAdd = !closed && !unavailable;
   const asStepper = showAdd && mode === "simple" && quantityInCart > 0;
-  const hasOptions = mode === "options";
+  const hasOptions = mode !== "simple";
 
   return (
-    <article className={`loja__item${compact ? " loja__item--compact" : ""}`}>
+    <article className={`loja__item${compact ? " loja__item--compact" : ""}${photoCard ? " loja__item--photo-card" : ""}${product.soldOut ? " loja__item--sold-out" : ""}`}>
+      {!compact && <ProductMedia product={product} categoryIcon={categoryIcon} />}
       <div className="loja__item-main">
         {/* data-product-id: é o que recebe o foco quando o detalhe fecha (WEB-22, F2) */}
-        <button type="button" className="loja__item-name" data-product-id={product.id} onClick={() => onOpen(product)}>
+        <button
+          type="button"
+          className="loja__item-name"
+          data-product-id={photoCard ? undefined : product.id}
+          data-featured-product-id={photoCard ? product.id : undefined}
+          onClick={() => onOpen(product)}
+        >
           {product.name}
         </button>
         {product.description && <p className="loja__item-desc">{product.description}</p>}
-        <p className="loja__item-price">{formatCents(product.priceCents)}</p>
-        {hasOptions && <p className="loja__item-options">Tem opções</p>}
+        {hasOptions && !unavailable && (!photoCard || !product.description) && <p className="loja__item-options">Tem opções</p>}
       </div>
-
-      {!compact && <ProductMedia product={product} categoryIcon={categoryIcon} />}
-
+      <p className="loja__item-price">{startingPrice(product)}</p>
+      {unavailable && <span className="loja__sold-out-label">{product.unavailableByOptions ? "Indisponível" : "Esgotado"}</span>}
       {showAdd && (
         <div className="loja__item-add">
           {asStepper ? (
@@ -78,8 +86,7 @@ export function ProductListItem({ product, quantityInCart, closed = false, compa
   );
 }
 
-// Bloco da foto 112×112: com espaço reservado (zero salto de layout). Sem foto, ou com foto quebrada, vira "tinta" da
-// cor da loja com o emoji da categoria; nunca ícone de imagem quebrada.
+// A mídia mantém a proporção quando a foto falta. O ícone da categoria aparece sobre a cor da loja.
 function ProductMedia({ product, categoryIcon }: { product: Product; categoryIcon: string | null }) {
   const image = useBrokenImage(product.imageUrl);
   const hasImage = Boolean(product.imageUrl) && !image.failed;

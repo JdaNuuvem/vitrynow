@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { CartLine } from "@/core/domain/storefront";
+import type { CartLine, OptionSelection } from "@/core/domain/storefront";
 import {
   addLine,
   cartItemCount,
@@ -16,8 +16,10 @@ export function useCart(productsById: ProductsById) {
 
   return {
     cart,
-    add: (productId: string, quantity: number, additionalIds: string[], notes: string) =>
-      setCart((prev) => addLine(prev, { productId, quantity, additionalIds, notes })),
+    add: (productId: string, quantity: number, additionalIds: string[], notes: string, optionSelections?: OptionSelection[]) =>
+      setCart((prev) => addLine(prev, { productId, quantity, additionalIds, notes, ...(optionSelections?.length ? { optionSelections } : {}) })),
+    edit: (index: number, choice: Pick<CartLine, "quantity" | "additionalIds" | "optionSelections" | "notes">) =>
+      setCart((prev) => prev.map((line, current) => current === index ? { ...line, ...choice, optionSelections: choice.optionSelections } : line)),
     changeQuantity: (index: number, delta: number) => setCart((prev) => changeLineQuantity(prev, index, delta)),
     // "−" do cartão do produto: tira uma unidade da ÚLTIMA linha deste produto (a mais recente).
     removeOne: (productId: string) =>

@@ -105,12 +105,12 @@
 .caixa-widget__open,
 .caixa-widget__row .is-entry {
   background: var(--ok);
-  color: #ffffff;
+  color: var(--on-primary);
 }
 
 .caixa-widget__row .is-exit {
-  background: #b2002b;
-  color: #ffffff;
+  background: var(--danger);
+  color: var(--on-danger);
 }
 
 .caixa-widget__content .caixa-widget__neutral {
@@ -277,7 +277,7 @@
 }
 
 .cash-modal__muted {
-  color: #888888;
+  color: var(--ink-soft);
   font-size: 14px;
 }
 
@@ -303,7 +303,7 @@
 
 .cash-modal__primary {
   background: var(--color-primary);
-  color: #ffffff;
+  color: var(--on-primary);
 }
 
 .cash-modal__primary[disabled] {
@@ -312,7 +312,7 @@
 }
 
 .cash-modal__cancel {
-  background: #ffffff;
+  background: var(--surface);
   color: var(--color-primary);
 }
 
@@ -397,7 +397,7 @@
   margin: 8px 16px 0;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: #ffffff;
+  background: var(--surface);
   flex-shrink: 0;
 }
 
@@ -440,7 +440,7 @@
 }
 
 .cash-history__item span.is-exit {
-  color: #b2002b;
+  color: var(--danger);
 }
 
 .cash-config-subheader {

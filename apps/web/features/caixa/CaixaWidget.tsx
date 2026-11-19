@@ -5,6 +5,7 @@ import { useState } from "react";
 import type { CashMovementType } from "@/core/domain/cashier";
 import { formatCents } from "@/shared/format/money";
 import { Icon } from "@/shared/icons/Icon";
+import { StateMessage } from "@/shared/design/components";
 import { CashConfigModal } from "./components/CashConfigModal";
 import { CashSummaryModal, type SummaryTab } from "./components/CashSummaryModal";
 import { CloseCashModal } from "./components/CloseCashModal";
@@ -20,7 +21,7 @@ function openedAtLabel(iso: string): string {
 }
 
 export function CaixaWidget({ reportsHref }: { reportsHref: string }) {
-  const { state, open, close, addMovement } = useCashier();
+  const { state, open, close, addMovement, previewClose, lastClosing } = useCashier();
   const [modal, setModal] = useState<ActiveModal>(null);
   const [movementType, setMovementType] = useState<CashMovementType | null>(null);
   const [summaryTab, setSummaryTab] = useState<SummaryTab>("resumo");
@@ -79,8 +80,9 @@ export function CaixaWidget({ reportsHref }: { reportsHref: string }) {
             </Link>
             <button type="button" className="caixa-widget__config" onClick={() => setModal("config")}>
               <Icon name="settings" size={16} />
-              <span>Configurações</span>
+              <span>Ajuda com o caixa</span>
             </button>
+            {lastClosing && <StateMessage tone="success" title="Caixa fechado." />}
           </div>
         )}
       </section>
@@ -89,9 +91,8 @@ export function CaixaWidget({ reportsHref }: { reportsHref: string }) {
       <MovementModal type={movementType} onClose={() => setMovementType(null)} onConfirm={addMovement} />
       <CloseCashModal
         open={modal === "close"}
-        summary={summary}
         onClose={closeModal}
-        onShowHistory={() => showSummary("historico")}
+        onPreview={previewClose}
         onConfirm={close}
       />
       <CashSummaryModal open={modal === "summary"} session={session} summary={summary} tab={summaryTab} onTabChange={setSummaryTab} onClose={closeModal} />

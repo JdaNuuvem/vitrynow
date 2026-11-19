@@ -5,6 +5,9 @@ export type CashMovement = {
   type: CashMovementType;
   amountCents: number;
   notes: string | null;
+  reason?: string | null;
+  reasonText?: string | null;
+  createdByRole?: "OWNER" | "STAFF" | null;
   createdAt: string;
 };
 
@@ -43,4 +46,49 @@ export type CashierState = {
   summary?: CashSummary;
   expectedBalanceCents: number;
   stale: boolean;
+  staffWithdrawalLimitCents?: number;
+  ruleChangeNotice?: { id: string; text: string } | null;
 };
+
+export type CashClosingPreview = {
+  sessionId: string;
+  expectedCents: number;
+  countedCents: number;
+  differenceCents: number;
+  toleranceCents: number;
+  reasonRequired: boolean;
+};
+
+export type CashCloseInput = {
+  closingBalanceCents: number;
+  sessionId?: string;
+  expectedBalanceCents?: number;
+  reason?: string;
+  reasonText?: string;
+  notes?: string;
+};
+
+export type CashMovementInput = {
+  type: CashMovementType;
+  amountCents: number;
+  reason: string;
+  reasonText?: string;
+  notes?: string;
+};
+
+export type CashClosedSession = {
+  id: string;
+  openingBalanceCents: number;
+  openedAt: string;
+  closedAt: string;
+  closedByRole: "OWNER" | "STAFF" | null;
+  closingBalanceCents?: number | null;
+  expectedClosingCents?: number | string | null;
+  differenceCents?: number | string | null;
+  closeReason?: string | null;
+  closeReasonText?: string | null;
+  movements?: CashMovement[];
+};
+
+export type CashSessionDetail = { session: CashClosedSession; summary: CashSummary | null };
+export type CashClosingResult = CashSessionDetail & { differenceCents: number; toleranceCents: number };

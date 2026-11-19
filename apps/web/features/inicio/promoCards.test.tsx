@@ -7,13 +7,18 @@ import { PROMO_CARDS, PROMO_GATES, visiblePromoCards, type PromoGates } from "./
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/features/planos/FeatureUpgradeContext", () => ({ useFeatureUpgrade: () => ({ openUpgrade: vi.fn() }) }));
 vi.mock("@/features/planos/PlanStatusBanner", () => ({ PlanStatusBanner: () => null }));
-vi.mock("./components/MobileHome", () => ({ MobileHome: () => null }));
+vi.mock("./components/StoreOperations", () => ({ StoreOperations: () => null }));
 vi.mock("./components/RevenueCard", () => ({ RevenueCard: () => null }));
 vi.mock("./components/TopProductsCard", () => ({ TopProductsCard: () => null }));
 vi.mock("./components/OrderTypesCard", () => ({ OrderTypesCard: () => null }));
 vi.mock("./components/CurrentOrdersCard", () => ({ CurrentOrdersCard: () => null }));
 vi.mock("./hooks/useHiddenValues", () => ({ useHiddenValues: () => ({ hidden: false, toggle: vi.fn() }) }));
-vi.mock("./hooks/useInicioData", () => ({ useInicioData: () => ({ metrics: null, currentOrders: [] }) }));
+vi.mock("./hooks/useInicioData", () => ({
+  useInicioData: () => {
+    const loading = { data: null, error: null, updatedAt: null, retry: vi.fn() };
+    return { month: loading, week: loading, open: loading, waiting: loading, legacyOrders: loading };
+  },
+}));
 
 const closed: PromoGates = { B1: false, NFC_E: false };
 

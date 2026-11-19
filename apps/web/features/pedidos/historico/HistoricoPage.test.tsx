@@ -108,17 +108,19 @@ beforeEach(() => {
 
 describe("HistoricoPage: consulta e cabeçalho", () => {
   it("consulta a situação ABERTO SEM período: nada de period, from ou to (API-72)", () => {
+    query = "status=ABERTO&period=7d&from=2026-11-01&to=2026-11-18";
     render(<HistoricoPage />);
-    expect(lastQuery).toEqual({ status: "ABERTO" });
+    expect(lastQuery).toMatchObject({ status: "ABERTO" });
+    for (const key of ["period", "from", "to"]) expect(lastQuery).not.toHaveProperty(key);
   });
 
-  it("tem título, link de volta para Pedidos e o filtro 'Em aberto' como informação (não como botão)", () => {
+  it("tem título, link de volta para Pedidos e permite filtrar situação e período", () => {
     render(<HistoricoPage />);
     expect(screen.getByRole("heading", { name: "Histórico" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Pedidos/ })).toHaveAttribute("href", "/dashboard/pedidos");
-    expect(screen.getByText("Em aberto")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Em aberto" })).not.toBeInTheDocument();
-    expect(document.body.textContent).not.toMatch(/90 dias/); // sem janela de data: o filtro mostra todo pedido aberto
+    expect(screen.getByRole("link", { name: "Voltar aos pedidos" })).toHaveAttribute("href", "/dashboard/pedidos");
+    expect(within(screen.getByRole("combobox", { name: "Situação" })).getByRole("option", { name: "Em aberto" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Período" })).toHaveValue("7d");
+    expect(lastQuery).toMatchObject({ status: "ALL", period: "7d" });
   });
 });
 
@@ -158,12 +160,12 @@ describe("HistoricoPage: a lista", () => {
     list.rows = [row("1")];
     list.total = 1;
     const { unmount } = render(<HistoricoPage />);
-    expect(screen.getByText("1 pedido em aberto")).toHaveAttribute("aria-live", "polite");
+    expect(screen.getByText("1 pedido", { exact: true })).toHaveAttribute("aria-live", "polite");
     unmount();
     list.rows = [row("1"), row("2")];
     list.total = 1234;
     render(<HistoricoPage />);
-    expect(screen.getByText("1.234 pedidos em aberto")).toBeInTheDocument();
+    expect(screen.getByText("1.234 pedidos", { exact: true })).toBeInTheDocument();
   });
 
   it("vazio: mensagem própria e nenhuma lista", () => {
@@ -248,7 +250,7 @@ describe("HistoricoPage: abrir o detalhe (o mesmo da WEB-26)", () => {
   it("tocar na linha abre o detalhe pela URL, sem mudar o pedido", async () => {
     render(<HistoricoPage />);
     await userEvent.click(screen.getByRole("button", { name: "Abrir pedido 0042" }));
-    expect(push).toHaveBeenCalledWith("/dashboard/pedidos/historico?pedido=42");
+    expect(push).toHaveBeenCalledWith("/dashboard/pedidos/historico?pedido=42", { scroll: false });
     expect(boardFns.transition).not.toHaveBeenCalled();
     expect(boardFns.cancel).not.toHaveBeenCalled();
   });
@@ -266,7 +268,7 @@ describe("HistoricoPage: abrir o detalhe (o mesmo da WEB-26)", () => {
     query = "pedido=42";
     render(<HistoricoPage />);
     await userEvent.click(screen.getByRole("button", { name: "fechar detalhe" }));
-    expect(replace).toHaveBeenCalledWith("/dashboard/pedidos/historico");
+    expect(replace).toHaveBeenCalledWith("/dashboard/pedidos/historico", { scroll: false });
     expect(back).not.toHaveBeenCalled();
   });
 
