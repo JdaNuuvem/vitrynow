@@ -109,6 +109,26 @@ describe("modo ocupado (g1)", () => {
     expect(json(await publicOrder()).error).toContain(tokyo);
   });
 
+  it("Deming P2: religar não passa de 4 h contínuas (clampa; no teto, 409 BUSY_LIMIT_REACHED); vencido, recomeça", async () => {
+    const t0 = Date.now();
+    await busy({ minutes: 120 });
+    // simula 2 h 30 min de ocupado contínuo: início há 150 min, ainda ativo por mais 30 (teto em 90 min)
+    await prisma.store.update({ where: { id: storeId }, data: { busyStartedAt: new Date(t0 - 150 * 60_000), busyUntil: new Date(t0 + 30 * 60_000) } });
+    const res = await busy({ minutes: 120 });
+    expect(res.statusCode).toBe(200);
+    const row = await prisma.store.findUniqueOrThrow({ where: { id: storeId } });
+    expect(row.busyUntil!.getTime()).toBeLessThanOrEqual(row.busyStartedAt!.getTime() + 240 * 60_000);
+    const again = await busy({ minutes: 15 });
+    expect(again.statusCode).toBe(409);
+    expect(json(again).code).toBe("BUSY_LIMIT_REACHED");
+    await rewind(1); // venceu: um novo ocupado recomeça o início
+    expect((await busy({ minutes: 30 })).statusCode).toBe(200);
+    const fresh = await prisma.store.findUniqueOrThrow({ where: { id: storeId } });
+    expect(Date.now() - fresh.busyStartedAt!.getTime()).toBeLessThan(60_000);
+    await unbusy();
+    expect((await prisma.store.findUniqueOrThrow({ where: { id: storeId } })).busyStartedAt).toBeNull();
+  });
+
   it("RN-OCU-05: o prazo extra soma ao prazo mostrado só enquanto dura o modo", async () => {
     await app.inject({ method: "POST", url: "/api/store/prep-times", headers: { cookie: owner }, payload: { deliveryMinutes: 40, pickupMinutes: null } });
     await busy({ minutes: 30, extraMinutes: 20 });

@@ -1,4 +1,4 @@
-import type { BusyRequest, StoreStatusAction } from "@meucardapio/shared-types";
+import { BUSY_MAX_MINUTES, type BusyRequest, type StoreStatusAction } from "@meucardapio/shared-types";
 import type { Actor, AuditLogger } from "../../shared/audit";
 import { DomainError } from "../../shared/errors";
 import {
@@ -24,6 +24,7 @@ export type StoreHoursRow = {
   closedUntil: Date | null;
   busyUntil: Date | null;
   busyExtraMinutes: number | null;
+  busyStartedAt: Date | null;
   prepMinutesDelivery: number | null;
   prepMinutesPickup: number | null;
 };
@@ -35,7 +36,7 @@ export interface StoreHoursRepository {
   findBySlug(slug: string): Promise<StoreHoursRow | null>;
   saveSchedule(storeId: string, schedule: Schedule | null): Promise<void>;
   saveOverrides(storeId: string, data: { pausedUntil: Date | null; closedUntil: Date | null }): Promise<void>;
-  saveBusy(storeId: string, data: { busyUntil: Date | null; busyExtraMinutes: number | null }): Promise<void>;
+  saveBusy(storeId: string, data: { busyUntil: Date | null; busyExtraMinutes: number | null; busyStartedAt: Date | null }): Promise<void>;
   savePrepTimes(storeId: string, data: { prepMinutesDelivery: number | null; prepMinutesPickup: number | null }): Promise<void>;
 }
 
@@ -164,15 +165,24 @@ export class StoreHoursService {
   // "Estou lotado" (g1): OWNER e STAFF ligam e desligam. O fim é só `busyUntil` vs relógio do servidor (RN-OCU-02).
   async startBusy(actor: Actor, input: BusyRequest): Promise<StoreHoursView> {
     const row = await this.load(actor.storeId);
-    const busyUntil = new Date(this.clock.now().getTime() + input.minutes * 60_000);
-    const next = { busyUntil, busyExtraMinutes: input.extraMinutes ?? null };
+    const now = this.clock.now();
+    const active = this.busyActive(row);
+    // Teto de 4 h CONTÍNUAS (RN-OCU-01): religar não zera; vencido o ocupado, o início recomeça.
+    const startedAt = active ? (row.busyStartedAt ?? now) : now;
+    const cap = new Date(startedAt.getTime() + BUSY_MAX_MINUTES * 60_000);
+    let busyUntil = new Date(now.getTime() + input.minutes * 60_000);
+    if (busyUntil > cap) {
+      if (active && row.busyUntil! >= cap) throw new DomainError(409, "Limite de 4 horas seguidas atingido. Desligue o modo ocupado ou o recebimento de pedidos.", "BUSY_LIMIT_REACHED");
+      busyUntil = cap;
+    }
+    const next = { busyUntil, busyExtraMinutes: input.extraMinutes ?? null, busyStartedAt: startedAt };
     await this.repo.saveBusy(actor.storeId, next);
     this.audit.log({
       ...actor,
       action: "store.busy_start",
       targetType: "Store",
       targetId: actor.storeId,
-      metadata: { minutes: input.minutes, extraMinutes: input.extraMinutes ?? null, busyUntil: busyUntil.toISOString() },
+      metadata: { minutes: input.minutes, extraMinutes: input.extraMinutes ?? null, busyUntil: busyUntil.toISOString(), startedAt: startedAt.toISOString() },
     });
     return this.view({ ...row, ...next });
   }
@@ -180,7 +190,7 @@ export class StoreHoursService {
   async endBusy(actor: Actor): Promise<StoreHoursView> {
     const row = await this.load(actor.storeId);
     const wasActive = this.busyActive(row);
-    const next = { busyUntil: null, busyExtraMinutes: null };
+    const next = { busyUntil: null, busyExtraMinutes: null, busyStartedAt: null };
     await this.repo.saveBusy(actor.storeId, next);
     if (wasActive) {
       this.audit.log({ ...actor, action: "store.busy_end", targetType: "Store", targetId: actor.storeId, metadata: { early: true } });

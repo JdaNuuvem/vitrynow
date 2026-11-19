@@ -132,6 +132,7 @@ model Store {
   pausedUntil   DateTime? // "Pausar 15/30/60 min": recusa pedido até este instante
   closedUntil   DateTime? // "Fechar por hoje": recusa pedido até a próxima abertura da grade
   busyUntil     DateTime? // g1 "Estou lotado": recusa pedido novo até este instante (relógio do servidor; sem job)
+  busyStartedAt DateTime? // g1 (Deming P2): início do ocupado CONTÍNUO; teto de 240 min conta daqui, religar não zera
   busyExtraMinutes Int? // g1 (RN-OCU-05): minutos somados ao prazo mostrado enquanto durar o modo ocupado (10, 20 ou 30)
   prepMinutesDelivery Int? // tempo médio de preparo (5..240) para a previsão ao cliente; null = sem previsão (API-57)
   prepMinutesPickup   Int?
