@@ -3,6 +3,7 @@ import { prisma } from "@meucardapio/db";
 import { isSoldOutNow } from "./soldOut";
 import { fromPriceCents, unavailableGroups, type GroupRow } from "../modules/optionGroups/optionGroups.domain";
 import { PrismaOptionGroupsRepository } from "../modules/optionGroups/optionGroups.repository";
+import { publicCampaign } from "../modules/campaign/campaign.service";
 import { publicCategory, publicStore } from "./publicDto";
 
 // Cardapio publico da loja (mesmo formato no link da loja e no QR da mesa). So produto ATIVO e DESTA loja (SEC-11).
@@ -32,5 +33,5 @@ export async function buildMenuView(store: Store) {
       })
       .filter((product) => !(store.hideSoldOutProducts && product.soldOut)),
   }));
-  return { store: publicStore(store), categories: visibleCategories.map(publicCategory) };
+  return { store: { ...publicStore(store), campaign: await publicCampaign(store.id) }, categories: visibleCategories.map(publicCategory) };
 }

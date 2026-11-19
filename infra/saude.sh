@@ -11,6 +11,9 @@
 #   3. último backup verificado (LAST_OK) com menos de 26 h
 #   4. logs da API na janela: [hashlane] SERVER_BUSY (fila de hash cheia), [*_floor_exceeded] por TAXA (> 1% dos pedidos da rota, mínimo 3 casos; Sun Tzu),
 #      [estorno] (erro de estorno), [audit] falha (auditoria que não gravou), respostas 5xx por taxa (> 1% das respostas, mínimo 5)
+#   5. ALERTAS DE SEGURANÇA (NG-12b): cada linha "security_alert" que a própria API emite (as regras e limiares ficam em ALERT_RULES, apps/api/src/lib/securityEvents.ts:
+#      login falho por IP/conta, origem trocada, chave de impressora recusada, sessão recusada em massa, reset em excesso, back-office) = ALERTA, com o nome da regra e
+#      quantas vezes; e um resumo informativo dos "security_event" por tipo (não alerta)
 # NÃO cobre: disco/memória do servidor (use o monitoramento do provedor), certificado TLS, nem a fila de impressão (alerta central do PC-24 é outro canal).
 set -uo pipefail
 export MSYS_NO_PATHCONV=1   # Git Bash no Windows reescreve /backups/LAST_OK como caminho do Windows; no Linux não faz nada
@@ -60,6 +63,13 @@ if [ -z "$LOG" ]; then alerta "a API não gerou NENHUMA linha de log em $MIN min
     else ok "piso de tempo de $caminho: $casos estouro(s) em $total pedido(s)"; fi
   done
   est="$(conta "$LOG" '\[estorno\]')"; [ "$est" = 0 ] && ok "estorno: nenhuma linha de erro" || alerta "estorno: $est linha(s) de erro (provedor recusou ou conclusão falhou); confira os pedidos CANCELADO sem devolução"
+  alertas_seg="$(printf '%s\n' "$LOG" | grep '"msg":"security_alert"' || true)"
+  if [ -n "$alertas_seg" ]; then
+    resumo="$(printf '%s\n' "$alertas_seg" | grep -o '"securityAlert":"[A-Z_]*"' | cut -d'"' -f4 | sort | uniq -c | awk '{printf "%s×%s ", $2, $1}')"
+    alerta "alerta(s) de SEGURANÇA emitidos pela API: $resumo(veja docs/RUNBOOK-infra.md §16: o que fazer por regra; nunca há IP cru nem e-mail no log)"
+  else ok "segurança: nenhum security_alert na janela"; fi
+  eventos_seg="$(printf '%s\n' "$LOG" | grep '"msg":"security_event"' | grep -o '"securityEvent":"[a-z_]*"' | cut -d'"' -f4 | sort | uniq -c | awk '{printf "%s=%s ", $2, $1}')"
+  [ -z "$eventos_seg" ] && ok "segurança: nenhum security_event na janela" || ok "segurança: eventos na janela (informativo): $eventos_seg"
   aud="$(conta "$LOG" '\[audit\] falha')"; [ "$aud" = 0 ] && ok "auditoria: nenhuma falha ao gravar" || alerta "auditoria: $aud falha(s) ao gravar (ação sensível sem rastro)"
   concl="$(conta "$LOG" '"msg":"request completed"')"; c5="$(printf '%s\n' "$LOG" | grep '"msg":"request completed"' | grep -c '"statusCode":5' || true)"
   if [ "${c5:-0}" -ge 5 ] && [ $(( c5 * 100 )) -gt "$concl" ]; then alerta "respostas 5xx: $c5 de $concl (> 1%)"; else ok "respostas 5xx: ${c5:-0} de $concl"; fi

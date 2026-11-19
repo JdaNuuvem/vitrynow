@@ -77,12 +77,31 @@ case "$(uname -s 2>/dev/null)" in
      if [ -n "$modo" ] && [[ ! "$modo" =~ ^[0-7]?[0-7]00$ ]]; then warn "$ENVF com modo $modo: outros usuários do servidor conseguem ler os segredos (chmod 600 $ENVF)"; fi ;;
 esac
 
-# --- storage S3 das imagens (API-18): em produção a API recusa subir sem estas 5 (assertStorageBootConfig); a URL pública precisa ser https
-falt=""; for n in STORAGE_S3_ENDPOINT STORAGE_S3_BUCKET STORAGE_S3_ACCESS_KEY_ID STORAGE_S3_SECRET_ACCESS_KEY STORAGE_PUBLIC_BASE_URL; do [ -n "$(get $n)" ] || falt="$falt $n"; done
-if [ -n "$falt" ]; then risco "storage S3 das imagens incompleto: faltam$falt (a API NÃO sobe em produção sem elas)"; else
-  ok "storage S3 das imagens configurado (5 variáveis)"
-  [[ "$(get STORAGE_PUBLIC_BASE_URL)" =~ ^https:// ]] || bad "STORAGE_PUBLIC_BASE_URL deve começar com https:// (a API recusa subir com outro valor)"
-fi
+# Revalidação do cardápio (API-58): opcional; preenchida precisa ser forte (a rota do web só abre com ela). Vazia = só o ISR de 30 s (aviso, não erro).
+RV="$(get REVALIDATE_SECRET)"
+if [ -z "$RV" ]; then warn "REVALIDATE_SECRET vazio: o cardápio só atualiza pelo ISR (até 30 s) depois que o dono muda algo"
+elif [ "${#RV}" -lt 32 ]; then bad "REVALIDATE_SECRET curto (${#RV} caracteres; mínimo 32 quando preenchido)"
+else ok "REVALIDATE_SECRET com ${#RV} caracteres"; fi
+
+# --- storage das imagens (API-18, ADR-0017): padrão do compose = disco local. Com local NÃO exige S3; com s3 exige as 5 variáveis (a API recusa subir sem elas)
+drv="$(get STORAGE_DRIVER)"; drv="${drv:-local}"
+case "$drv" in
+  local) ok "STORAGE_DRIVER=local: fotos em disco (volume uploads_data); nenhuma variável de S3 é exigida"
+         ld="$(get STORAGE_LOCAL_DIR)"
+         if [ -n "$ld" ]; then
+           [[ "$ld" == /* ]] || bad "STORAGE_LOCAL_DIR deve ser um caminho ABSOLUTO (tem ${#ld} caracteres)"
+           [ "$ld" = /uploads ] || warn "STORAGE_LOCAL_DIR difere de /uploads: o compose FIXA /uploads (é onde o volume está montado); o valor do .env é ignorado"
+         fi
+         pb="$(get STORAGE_PUBLIC_BASE_URL)"
+         [ -z "$pb" ] || [[ "$pb" =~ ^https:// ]] || bad "STORAGE_PUBLIC_BASE_URL deve começar com https:// (a API recusa subir com outro valor); vazia = WEB_ORIGIN/media"
+         for n in STORAGE_S3_ENDPOINT STORAGE_S3_BUCKET STORAGE_S3_ACCESS_KEY_ID STORAGE_S3_SECRET_ACCESS_KEY; do [ -n "$(get $n)" ] && warn "$n está preenchida mas STORAGE_DRIVER=local a ignora"; done ;;
+  s3)    falt=""; for n in STORAGE_S3_ENDPOINT STORAGE_S3_BUCKET STORAGE_S3_ACCESS_KEY_ID STORAGE_S3_SECRET_ACCESS_KEY STORAGE_PUBLIC_BASE_URL; do [ -n "$(get $n)" ] || falt="$falt $n"; done
+         if [ -n "$falt" ]; then risco "STORAGE_DRIVER=s3 incompleto: faltam$falt (a API NÃO sobe em produção sem elas)"; else
+           ok "storage S3 das imagens configurado (5 variáveis)"
+           [[ "$(get STORAGE_PUBLIC_BASE_URL)" =~ ^https:// ]] || bad "STORAGE_PUBLIC_BASE_URL deve começar com https:// (a API recusa subir com outro valor)"
+         fi ;;
+  *)     bad "STORAGE_DRIVER='$drv' inválido (use local ou s3)" ;;
+esac
 
 # --- PIX por loja (API-07)
 mode="$(get MP_OAUTH_MODE)"; mode="${mode:-off}"
@@ -112,6 +131,7 @@ esac
 
 # --- nenhum segredo repetido entre si (compara valores, imprime só nomes)
 names=(POSTGRES_PASSWORD JWT_SECRET MFA_HMAC_KEY API_INTERNAL_SECRET)
+[ -n "$(get REVALIDATE_SECRET)" ] && names+=(REVALIDATE_SECRET)
 [ "$mode" = real ] && names+=(PAYMENT_ENC_KEY)
 dup=0
 for ((i=0; i<${#names[@]}; i++)); do for ((j=i+1; j<${#names[@]}; j++)); do

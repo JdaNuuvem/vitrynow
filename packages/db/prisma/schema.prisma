@@ -158,6 +158,7 @@ model Store {
   feedbacks    Feedback[]
   doNotContact DoNotContact[]
   subscription Subscription?
+  menuCampaign MenuCampaign?
   paymentAccounts PaymentAccount[]
   optionGroups OptionGroup[]
   counter      StoreCounter?
@@ -1110,4 +1111,17 @@ model SubscriptionNotice {
 
   @@unique([subscriptionId, kind, dueAt])
   @@index([sentAt])
+}
+
+// Campanha principal do cardápio (CONTRATO-CAMPANHA). Uma linha por loja. `revision` é a revisão OTIMISTA: toda escrita só vale se a revisão enviada
+// for a atual (UPDATE ... WHERE revision = esperada) e incrementa na mesma instrução. `publicId` é o ID estável da campanha no cardápio (não é o id da loja).
+// `draft` e `published` guardam o conteúdo validado (JSON); a cópia publicada nunca muda por salvar rascunho.
+model MenuCampaign {
+  storeId   String   @id
+  store     Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  publicId  String   @default(cuid())
+  revision  Int      @default(0)
+  draft     Json?
+  published Json?
+  updatedAt DateTime @updatedAt
 }

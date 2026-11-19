@@ -13,8 +13,10 @@ RUN node -e "const v=require('./package.json').packageManager.split('@')[1].spli
 RUN pnpm install --frozen-lockfile --filter "@meucardapio/web..."
 COPY packages/shared-types packages/shared-types
 COPY apps/web apps/web
+# @meucardapio/shared-types resolve pra src/index.ts em dev (via tsx); o build do Next (sem tsx) precisa do dist/ compilado.
 RUN pnpm --filter @meucardapio/shared-types build
 
+# Estágio "development" (stack local do sócio: `next dev` com todas as dependências). Produção usa o estágio "build" abaixo e a imagem FINAL (a última FROM).
 FROM development AS build
 ARG NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
