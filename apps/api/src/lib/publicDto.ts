@@ -10,7 +10,7 @@ export const PUBLIC_CAMPAIGN_KEYS = ["id", "title", "description", "imageUrl", "
 // Horário DERIVADO da grade (PR-01, SSOT D2): acrescentados pelo portão público do cardápio (subscriptionGate), não pelo `publicStore`.
 export const PUBLIC_STORE_HOURS_KEYS = ["openNow", "nextOpensAt", "hoursText"] as const;
 export const PUBLIC_CATEGORY_KEYS = ["id", "name", "icon", "products"] as const;
-export const PUBLIC_PRODUCT_KEYS = ["id", "name", "description", "imageUrl", "priceCents", "featured", "soldOut", "additionals", "optionGroups", "unavailable", "unavailableByOptions", "fromPriceCents"] as const;
+export const PUBLIC_PRODUCT_KEYS = ["id", "name", "description", "imageUrl", "priceCents", "featured", "soldOut", "additionals", "optionGroups", "unavailable", "unavailableByOptions", "fromPriceCents", "promoCents", "promoEndsAt", "saleUnit", "minGrams", "stepGrams", "maxGrams", "portionGrams", "serves", "isSingleDish", "sellAlone"] as const;
 export const PUBLIC_ADDITIONAL_KEYS = ["id", "name", "priceCents"] as const;
 // API-15 parte 3 (B8): grupos de opcoes REAIS (MANUAL) do produto. Sem `source`, `active`, `position` nem ids de loja. So opcoes ATIVAS.
 export const PUBLIC_OPTION_GROUP_KEYS = ["id", "name", "helpText", "minSelect", "maxSelect", "maxPerOption", "priceMode", "options"] as const;
@@ -47,7 +47,7 @@ export const publicOptionGroup = (g: GroupRow) => ({
 });
 
 // `soldOutUntil` NAO entra no tipo: a rota ja o consumiu ao calcular o `soldOut` efetivo (API-17) e ele nao e publico.
-type PublicProductInput = Omit<Product, "soldOutUntil"> & { additionals: ProductAdditional[]; optionGroups: GroupRow[]; unavailable: boolean; fromPriceCents: number | null };
+type PublicProductInput = Omit<Product, "soldOutUntil"> & { additionals: ProductAdditional[]; optionGroups: GroupRow[]; unavailable: boolean; fromPriceCents: number | null; promoActiveNow: boolean };
 
 export const publicProduct = (p: PublicProductInput) => ({
   id: p.id,
@@ -61,6 +61,17 @@ export const publicProduct = (p: PublicProductInput) => ({
   optionGroups: p.optionGroups.map(publicOptionGroup),
   unavailableByOptions: p.unavailable, // nome que o front le (mesmo valor de `unavailable`)
   fromPriceCents: p.fromPriceCents, // "a partir de R$ X" (RN-B8-04): menor opcao ativa do grupo BASE; null sem variacao
+  // Produto detalhado (PD, §7 da spec): a promoção SÓ aparece enquanto ativa AGORA (futura/vencida nunca; `promoStartsAt` nunca é público); sem `sku`, `listPriceCents`, `storeId`.
+  promoCents: p.promoActiveNow ? p.promoCents : null,
+  promoEndsAt: p.promoActiveNow ? p.promoEndsAt : null,
+  saleUnit: p.saleUnit,
+  minGrams: p.saleUnit === "UN" ? null : p.minGrams,
+  stepGrams: p.saleUnit === "UN" ? null : p.stepGrams,
+  maxGrams: p.saleUnit === "UN" ? null : p.maxGrams,
+  portionGrams: p.saleUnit === "UN" ? p.portionGrams : null, // por peso não mostra gramatura (RN-PD-27)
+  serves: p.saleUnit === "UN" ? p.serves : null,
+  isSingleDish: p.isSingleDish,
+  sellAlone: p.sellAlone,
   unavailable: p.unavailable, // RN-B8-05: grupo obrigatorio sem opcao ativa => nao da para pedir (calculado pela rota)
 });
 

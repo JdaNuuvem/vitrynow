@@ -107,6 +107,10 @@ export function toPanelOrder(
       unitPriceCents: item.unitPriceCents,
       notes: item.notes,
       ...(opts.detail ? {
+        // Produto detalhado: o painel mostra "400 g × R$ 49,90/kg" e o preço normal quando houve promoção (cópias do momento do pedido)
+        weightGrams: item.weightGrams,
+        pricePerKgCents: item.pricePerKgCents,
+        listPriceCents: item.listPriceCents,
         additionals: (item.additionals ?? []).map(({ name, priceCents }) => ({ name, priceCents })),
         options: (item.options ?? []).map(({ groupName, name, priceCents, quantity, priceMode }) => ({ groupName, name, priceCents, quantity, priceMode })),
       } : {}),
