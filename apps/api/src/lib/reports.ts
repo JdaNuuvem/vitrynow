@@ -1,7 +1,6 @@
 import { Prisma, prisma } from "@meucardapio/db";
 import { SALE_STATUSES } from "./saleLines";
-import { STORE_TIMEZONE } from "./storeDay";
-import { localMidnightUtc, parseLocalDate } from "./storeTime";
+import { DEFAULT_STORE_TIMEZONE, localMidnightUtc, parseLocalDate } from "./storeTime";
 import { utc } from "./sqlTime";
 
 // API-20 (B14): relatórios agregados NO BANCO, no fuso da loja, com a definição única de venda (API-21, lib/saleLines):
@@ -11,17 +10,17 @@ import { utc } from "./sqlTime";
 export const MAX_REPORT_DAYS = 366;
 export const DEFAULT_REPORT_DAYS = 30;
 
-export type ReportRange = { fromDate: string; toDate: string; fromUtc: Date; toExclusiveUtc: Date };
+export type ReportRange = { fromDate: string; toDate: string; fromUtc: Date; toExclusiveUtc: Date; timeZone: string };
 export type RangeError = "INVALID_DATE" | "FROM_AFTER_TO" | "PERIOD_TOO_LONG";
 
 const DAY = 24 * 60 * 60 * 1000;
-const dateOf = (instant: Date) => instant.toLocaleDateString("en-CA", { timeZone: STORE_TIMEZONE });
+const dateOf = (instant: Date, timeZone: string) => instant.toLocaleDateString("en-CA", { timeZone });
 
 // "AAAA-MM-DD" vale como está (dia da LOJA, inclusivo). Um instante ISO (formato antigo do painel) vira o dia da loja desse instante.
-function toLocalDate(value: string): string | null {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return parseLocalDate(value, STORE_TIMEZONE) ? value : null;
+function toLocalDate(value: string, timeZone: string): string | null {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return parseLocalDate(value, timeZone) ? value : null;
   const instant = new Date(value);
-  return Number.isNaN(instant.getTime()) ? null : dateOf(instant);
+  return Number.isNaN(instant.getTime()) ? null : dateOf(instant, timeZone);
 }
 
 // Período padrão: os últimos 30 dias, de hoje para trás (datas inclusivas no fuso da loja).
@@ -31,16 +30,16 @@ const utcDay = (date: string) => {
 };
 const shiftDate = (date: string, days: number) => new Date(utcDay(date) + days * DAY).toISOString().slice(0, 10);
 
-export function resolveRange(query: { from?: string; to?: string }, now: Date = new Date()): ReportRange | { error: RangeError } {
-  const toDate = query.to ? toLocalDate(query.to) : dateOf(now);
+export function resolveRange(query: { from?: string; to?: string }, now: Date = new Date(), timeZone: string = DEFAULT_STORE_TIMEZONE): ReportRange | { error: RangeError } {
+  const toDate = query.to ? toLocalDate(query.to, timeZone) : dateOf(now, timeZone);
   if (!toDate) return { error: "INVALID_DATE" };
-  const fromDate = query.from ? toLocalDate(query.from) : shiftDate(toDate, -(DEFAULT_REPORT_DAYS - 1));
+  const fromDate = query.from ? toLocalDate(query.from, timeZone) : shiftDate(toDate, -(DEFAULT_REPORT_DAYS - 1));
   if (!fromDate) return { error: "INVALID_DATE" };
   if (fromDate > toDate) return { error: "FROM_AFTER_TO" };
   if ((utcDay(toDate) - utcDay(fromDate)) / DAY + 1 > MAX_REPORT_DAYS) return { error: "PERIOD_TOO_LONG" };
-  const fromUtc = parseLocalDate(fromDate, STORE_TIMEZONE)!;
+  const fromUtc = parseLocalDate(fromDate, timeZone)!;
   const [y, m, d] = shiftDate(toDate, 1).split("-").map(Number);
-  return { fromDate, toDate, fromUtc, toExclusiveUtc: localMidnightUtc(y, m, d, STORE_TIMEZONE) };
+  return { fromDate, toDate, fromUtc, toExclusiveUtc: localMidnightUtc(y, m, d, timeZone), timeZone };
 }
 
 export type Bucket = { count: number; revenueCents: number };
@@ -75,10 +74,10 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
   const sale = Prisma.sql`o."status"::text = ANY(${[...SALE_STATUSES]}) AND o."type"::text <> 'MESA'`; // API-24: a venda da mesa é o RECEBIMENTO, não o pedido
   // Janela por instante (UTC) das 00:00 locais; o agrupamento por dia converte para o fuso da loja DENTRO do banco.
   const window = Prisma.sql`o."storeId" = ${storeId} AND o."awaitingPayment" = false AND o."createdAt" >= ${utc(range.fromUtc)} AND o."createdAt" < ${utc(range.toExclusiveUtc)}`;
-  const localDay = Prisma.sql`to_char((o."createdAt" AT TIME ZONE 'UTC') AT TIME ZONE ${STORE_TIMEZONE}, 'YYYY-MM-DD')`;
+  const localDay = Prisma.sql`to_char((o."createdAt" AT TIME ZONE 'UTC') AT TIME ZONE ${range.timeZone}, 'YYYY-MM-DD')`;
 
   const rWindow = Prisma.sql`r."storeId" = ${storeId} AND r."receivedAt" >= ${utc(range.fromUtc)} AND r."receivedAt" < ${utc(range.toExclusiveUtc)}`;
-  const rDay = Prisma.sql`to_char((r."receivedAt" AT TIME ZONE 'UTC') AT TIME ZONE ${STORE_TIMEZONE}, 'YYYY-MM-DD')`;
+  const rDay = Prisma.sql`to_char((r."receivedAt" AT TIME ZONE 'UTC') AT TIME ZONE ${range.timeZone}, 'YYYY-MM-DD')`;
 
   const [totals, days, payments, types, products, deliverers, cash, rTotal, rDays, rPayments, rProducts] = await Promise.all([
     prisma.$queryRaw<
@@ -175,7 +174,7 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
     to: range.toExclusiveUtc.toISOString(),
     fromDate: range.fromDate,
     toDate: range.toDate,
-    timeZone: STORE_TIMEZONE,
+    timeZone: range.timeZone,
     orderCount,
     revenueCents,
     discountCents: n(t.discount),
