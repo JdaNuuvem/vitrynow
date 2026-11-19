@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { IMPORT_COLUMNS, IMPORT_MAX_BYTES, IMPORT_MAX_PER_HOUR, importGuideText, IMPORT_GUIDE_VERSION, type ImportConfirmInput, type ImportDraftRow, type ImportPreview } from "@meucardapio/shared-types";
+import { IMPORT_COLUMNS, IMPORT_MAX_BYTES, IMPORT_MAX_PER_HOUR, importGuideText, importGuideNotice, IMPORT_GUIDE_VERSION, type ImportConfirmInput, type ImportDraftRow, type ImportPreview } from "@meucardapio/shared-types";
 import type { AuditLogger } from "../../shared/audit";
 import { CodedError, NotFoundError } from "../../shared/errors";
 import { MAX_CATEGORIES_PER_STORE, MAX_PRODUCTS_PER_STORE, normalizeName, type CatalogService, type ProductActor } from "../catalog/catalog.service";
@@ -43,7 +43,7 @@ export class CatalogImportService {
   }
 
   guide() {
-    return { version: IMPORT_GUIDE_VERSION, text: importGuideText() };
+    return { version: IMPORT_GUIDE_VERSION, text: importGuideText(), notice: importGuideNotice };
   }
 
   // e2: valida e mostra; NÃO grava produto nem categoria. Só o lote (rascunho) é guardado.

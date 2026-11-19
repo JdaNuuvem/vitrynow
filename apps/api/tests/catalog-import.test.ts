@@ -100,6 +100,9 @@ describe("importação — rotas (e1..e3)", () => {
     const guide = json(await call("GET", "/api/catalog/import/guide"));
     expect(guide.version).toBe(1);
     expect(guide.text).toContain("preco");
+    // texto FIXO validado pela Ogilvy: qualquer mudança exige nova validação (e nova versão do guia)
+    expect(guide.text).toContain("Regras: um item do cardápio por linha; não invente itens, preços, descrições nem alérgenos; se um item tiver mais de um preço (ex.: P e G), crie uma linha para cada tamanho com o tamanho no nome; se não conseguir ler um preço ou um campo, deixe-o vazio em vez de adivinhar; escreva o preço em reais com ponto decimal e sem R$ nem separador de milhar (ex.: 12.50); não inclua nada além do JSON.");
+    expect(guide.notice).toBe("A IA pode errar preços e descrições. Você confere tudo na prévia antes de publicar.");
   });
 
   it("CA-IMP2-01/13: o preview não grava produto nem categoria; só o lote", async () => {

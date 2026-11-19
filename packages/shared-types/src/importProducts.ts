@@ -6,7 +6,7 @@ export const IMPORT_COLUMNS = [
   { key: "categoria", required: true, example: "Pizzas", help: "Nome da categoria. Se já existir (sem diferenciar acento ou maiúscula), é reaproveitada." },
   { key: "nome", required: true, example: "Pizza Margherita", help: "Até 80 caracteres." },
   { key: "descricao", required: false, example: "Molho, muçarela e manjericão", help: "Opcional. Até 300 caracteres." },
-  { key: "preco", required: true, example: "42,50", help: "Em reais. Aceita 12,50, 12.50 ou R$ 12,50. Maior que zero." },
+  { key: "preco", required: true, example: "42.50", help: "Em reais, com ponto decimal e sem R$ nem separador de milhar (ex.: 12.50). Se não souber, deixe vazio." },
 ] as const;
 export type ImportColumnKey = (typeof IMPORT_COLUMNS)[number]["key"];
 export const IMPORT_COLUMN_KEYS: readonly string[] = IMPORT_COLUMNS.map((c) => c.key);
@@ -16,6 +16,8 @@ export const IMPORT_MAX_BYTES = 2 * 1024 * 1024; // RN-IMP2-02 (2 MB)
 export const IMPORT_MAX_PER_HOUR = 3; // RN-IMP2-20 (por loja)
 export const IMPORT_FORMATS = ["csv", "json"] as const; // xlsx fica para depois (sem dependência nova nesta fase)
 export const IMPORT_GUIDE_VERSION = 1;
+// Aviso exibido pela tela junto do guia (fora do prompt). Texto validado pela Ogilvy; a tela é proposta ao sócio.
+export const importGuideNotice = "A IA pode errar preços e descrições. Você confere tudo na prévia antes de publicar.";
 
 export const importTemplateQuerySchema = z.object({ format: z.enum(IMPORT_FORMATS).default("csv") });
 export const importPreviewInputSchema = z.object({ format: z.enum(IMPORT_FORMATS), content: z.string().min(1) }).strict();
