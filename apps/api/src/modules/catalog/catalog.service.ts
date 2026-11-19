@@ -1,5 +1,6 @@
 import type { CreateCategoryInput, CreateProductInput, SetSoldOutInput, UpdateProductInput } from "@meucardapio/shared-types";
 import { nextSoldOutReset } from "../../lib/soldOut";
+import { storeTimeZone } from "../../lib/storeTz";
 import type { Actor, AuditLogger } from "../../shared/audit";
 import { CodedError, NotFoundError } from "../../shared/errors";
 import { AdditionalNotInProductError, type CatalogRepository } from "./catalog.repository";
@@ -128,7 +129,7 @@ export class CatalogService {
   async setSoldOut(actor: Actor, id: string, input: SetSoldOutInput) {
     const product = await this.requireProduct(actor.storeId, id);
     const duration = input.duration ?? "TODAY";
-    const soldOutUntil = input.soldOut && duration === "TODAY" ? nextSoldOutReset() : null;
+    const soldOutUntil = input.soldOut && duration === "TODAY" ? nextSoldOutReset(new Date(), await storeTimeZone(actor.storeId)) : null;
     const updated = await this.repo.updateProduct(id, { soldOut: input.soldOut, soldOutUntil });
     this.audit.log({
       ...actor,
