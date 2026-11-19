@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { InMemoryObjectStorage, setObjectStorage } from "../src/lib/objectStorage";
@@ -218,10 +219,11 @@ describe("Reels: envio, fila e conversão", () => {
 
     it("permissão: STAFF do PRO envia e lista (OWNER também)", async () => {
       const a = await ctx();
-      const email = "func@teste.com";
-      await app.inject({ method: "POST", url: "/api/users", headers: { cookie: a.cookie }, payload: { email, password: "provisoria-12" } });
+      const email = `func-${randomUUID().slice(0, 8)}@teste.com`;
+      const staffPassword = `Sx-${randomUUID()}`; // gerada em runtime: nada de senha literal no repositório
+      await app.inject({ method: "POST", url: "/api/users", headers: { cookie: a.cookie }, payload: { email, password: staffPassword } });
       await prisma.user.updateMany({ where: { email }, data: { emailVerifiedAt: new Date() } });
-      const staff = (await login(app, email, "provisoria-12")).cookie;
+      const staff = (await login(app, email, staffPassword)).cookie;
       if (!staff) return; // primeiro acesso exige troca de senha em alguns fluxos
       const productId = await mkProduct(a.storeId);
       expect((await upload(staff, productId, video())).statusCode).toBe(202);
