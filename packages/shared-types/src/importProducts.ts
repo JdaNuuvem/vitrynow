@@ -84,6 +84,6 @@ export function importGuideText(): string {
     example,
     "Colunas:",
     cols,
-    "Regras: um item do cardápio por linha; não invente itens nem preços; se um item tiver mais de um preço (ex.: P e G), crie uma linha para cada tamanho com o tamanho no nome; não inclua nada além do JSON.",
+    "Regras: um item do cardápio por linha; não invente itens, preços, descrições nem alérgenos; se um item tiver mais de um preço (ex.: P e G), crie uma linha para cada tamanho com o tamanho no nome; se não conseguir ler um preço ou um campo, deixe-o vazio em vez de adivinhar; escreva o preço em reais com ponto decimal e sem R$ nem separador de milhar (ex.: 12.50); não inclua nada além do JSON.",
   ].join("\n\n");
 }
