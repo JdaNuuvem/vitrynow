@@ -26,14 +26,10 @@ NEXT_PUBLIC_API_URL=http://localhost:$PORT
 DOMAIN=:80
 ACME_EMAIL=smoke@exemplo.invalid
 APP_VERSION=smoke
-# O driver em disco ainda não existe na API (Dev Upload, ADR-0017): até lá o smoke usa S3 FICTÍCIO explícito. Depois que o driver entrar, trocar por STORAGE_DRIVER=local e apagar estas linhas.
-STORAGE_DRIVER=s3
-# storage S3 FICTÍCIO: a API fora de dev recusa subir sem estas 5 (assertStorageBootConfig); o smoke não faz upload, então nada conecta a esse endereço
-STORAGE_S3_ENDPOINT=https://s3.smoke.invalid
-STORAGE_S3_BUCKET=smoke
-STORAGE_S3_ACCESS_KEY_ID=smoke
-STORAGE_S3_SECRET_ACCESS_KEY=smoke-nao-e-segredo
-STORAGE_PUBLIC_BASE_URL=https://cdn.smoke.invalid/smoke
+# fotos em DISCO LOCAL (ADR-0017): o volume uploads_data; a URL pública vira WEB_ORIGIN/media (padrão do compose)
+STORAGE_DRIVER=local
+# a guarda de boot exige https na URL pública; o smoke é http, então ela é declarada aqui (os testes só usam o CAMINHO /media/...)
+STORAGE_PUBLIC_BASE_URL=https://localhost:$PORT/media
 EOF
 ROOTW="$(cygpath -m "$ROOT")"   # docker.exe (Windows) precisa de C:/...
 DC=(docker compose -p "$PROJ" -f "$ROOTW/infra/docker-compose.yml" -f "$ROOTW/infra/docker-compose.smoke.yml" --env-file "$ROOTW/infra/.smoke.env")
@@ -208,6 +204,60 @@ for p in /auth/me /api/orders /api/catalog/categories /api/store/settings /api/s
   prc="$(curl -s -o "$body" -w '%{http_code}' -b "$jar" "http://127.0.0.1:$PORT$p")"
   if [ "$prc" = 200 ]; then check ok "rota do painel com sessão: GET $p = 200 ($(wc -c < "$body" | tr -d ' ') bytes; leitura via Prisma)"; else check fail "GET $p com sessão devolveu $prc: $(head -c 150 "$body")"; fi
 done
+echo "== 9h upload REAL de foto pela API, leitura pelo Caddy (/media), recusas, persistência, backup e restauração (INF-30, ADR-0017)"
+UPD="$ROOTW/infra/.smoke-upload"; rm -rf "$UPD"; mkdir -p "$UPD"
+node "$ROOTW/scripts/smoke-fixtures/gera-png.mjs" "$UPD/foto.png" 96 96
+printf 'isto nao e imagem' > "$UPD/texto.png"
+printf '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(1)</script></svg>' > "$UPD/xss.svg"
+{ printf '\211PNG\r\n\032\n'; head -c 4000 /dev/urandom; } > "$UPD/corrompido.png"
+{ cat "$UPD/foto.png"; head -c 9500000 /dev/zero; } > "$UPD/grande.png"
+up() { curl -s -b "$jar" -w '|%{http_code}' -F "file=@$UPD/$1;type=${3:-image/png};filename=${4:-$1}" "http://127.0.0.1:$PORT/api/media/images?kind=${2:-PRODUCT}"; }
+nfotos() { "${DC[@]}" exec -T api sh -c 'find /uploads -type f | wc -l' | tr -d ' \r\n'; }
+N0="$(nfotos)"
+out="$(curl -s -w '|%{http_code}' -F "file=@$UPD/foto.png;type=image/png" "http://127.0.0.1:$PORT/api/media/images?kind=PRODUCT")"; [ "${out##*|}" = 401 ] && check ok "9h sem sessão: 401" || check fail "9h upload sem sessão devolveu ${out##*|}"
+out="$(up foto.png EVIL)"; [[ "${out##*|}" = 400 && "$out" == *INVALID_KIND* ]] && check ok "9h kind inválido: 400 INVALID_KIND" || check fail "9h kind inválido: $out"
+for caso in "texto.png|image/png|.png que é TEXTO" "xss.svg|image/svg+xml|SVG com script" "texto.png|image/jpeg|texto com Content-Type mentido (image/jpeg)"; do
+  IFS='|' read -r arq tipo desc <<< "$caso"; out="$(up "$arq" PRODUCT "$tipo")"; code="${out##*|}"
+  { [ "$code" = 400 ] || [ "$code" = 415 ] || [ "$code" = 422 ]; } && [[ "$out" == *UNSUPPORTED_TYPE* ]] && check ok "9h $desc: recusado ($code UNSUPPORTED_TYPE)" || check fail "9h $desc NÃO foi recusado como esperado: $out"
+done
+out="$(up corrompido.png)"; code="${out##*|}"; { [ "$code" = 400 ] || [ "$code" = 415 ] || [ "$code" = 422 ]; } && [[ "$out" == *CORRUPT_IMAGE* || "$out" == *UNSUPPORTED_TYPE* ]] && check ok "9h PNG com magic bytes mas corrompido: recusado ($code)" || check fail "9h PNG corrompido: $out"
+out="$(up grande.png)"; [ "${out##*|}" = 413 ] && check ok "9h arquivo de ~9,5 MB (limite 8 MB): 413" || check fail "9h arquivo grande devolveu ${out##*|}"
+[ "$(nfotos)" = "$N0" ] && check ok "9h as 6 recusas NÃO deixaram nenhum arquivo no volume" || check fail "9h as recusas deixaram arquivos no volume ($N0 -> $(nfotos))"
+out="$(up foto.png PRODUCT image/png '../../../etc/evil.png')"; code="${out##*|}"; resp="${out%|*}"
+if [ "$code" = 201 ]; then
+  IMGID="$(printf '%s' "$resp" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)"
+  mapfile -t VURLS < <(printf '%s' "$resp" | grep -o 'http[^"]*\.webp' | sort -u)   # o campo `url` repete a maior variante: dedup
+  check ok "9h upload válido (nome do arquivo com ../../ é ignorado): 201, ${#VURLS[@]} variante(s)"
+  [[ "${VURLS[0]}" =~ /media/stores/[A-Za-z0-9_-]+/[a-f0-9-]{36}-[0-9]+\.webp$ ]] && [[ "${VURLS[0]}" != *evil* && "${VURLS[0]}" != *..* ]] && check ok "9h a URL pública é /media/stores/<loja>/<uuid>-<largura>.webp (nada do nome enviado)" || check fail "9h URL inesperada: ${VURLS[0]}"
+else IMGID=""; VURLS=(); check fail "9h upload válido falhou: $out"; fi
+vok=0; for u in "${VURLS[@]}"; do
+  p="/${u#*://*/}"; hdr="$(curl -s -D - -o "$UPD/baixada.webp" "http://127.0.0.1:$PORT$p" | tr -d '\r')"; hl="${hdr,,}"; magic="$(head -c 12 "$UPD/baixada.webp" | od -An -c | tr -d ' \n')"
+  [[ "$hdr" == HTTP*" 200"* && "$hl" == *"content-type: image/webp"* && "$hl" == *"immutable"* && "$hl" == *"nosniff"* && "$magic" == RIFF*WEBP ]] && vok=$((vok+1)) || echo "   variante $p: $(echo "$hdr" | head -1) magic=$magic"
+done
+[ "$vok" -ge 1 ] && [ "$vok" = "${#VURLS[@]}" ] && check ok "9h TODAS as variantes (${#VURLS[@]}) lidas pelo Caddy: 200, image/webp, bytes RIFF/WEBP reais, cache imutável, nosniff" || check fail "9h variantes lidas ok: $vok de ${#VURLS[@]}"
+if [ "${#VURLS[@]}" -ge 1 ]; then
+  p0="/${VURLS[0]#*://*/}"; SHA_SERV="$(curl -s "http://127.0.0.1:$PORT$p0" | sha256sum | cut -d' ' -f1)"
+  perm="$("${DC[@]}" exec -T api sh -c "stat -c '%a %U' /uploads${p0#/media}" | tr -d '\r')"; [ "$perm" = "644 node" ] && check ok "9h arquivo no volume com modo 644, dono node" || check fail "9h arquivo no volume: '$perm'"
+  [ "$(nfotos)" = "$((N0 + ${#VURLS[@]}))" ] && check ok "9h o volume ganhou exatamente ${#VURLS[@]} arquivo(s) (um por variante)" || check fail "9h arquivos no volume: $(nfotos) (esperado $((N0 + ${#VURLS[@]})))"
+  # '..' que ESCAPA da raiz, partindo de um caminho real (um '..' que volta ao próprio arquivo legítimo é servido, como a URL normal: não é fuga)
+  badt=""; for tp in "/media/stores/x/../../../../etc/passwd" "${p0}/../../../../../etc/passwd" "/media/stores/x/..%2f..%2f..%2f..%2fetc/passwd"; do
+    to="$(curl -s --path-as-is -w '|%{http_code}' "http://127.0.0.1:$PORT$tp")"; { [ "${to##*|}" = 404 ] || [ "${to##*|}" = 400 ]; } && [[ "$to" != *"root:"* ]] || badt="$badt [$tp -> ${to##*|}]"
+  done
+  [ -z "$badt" ] && check ok "9h traversal que escapa da raiz, a partir de caminho real: negado (404/400), sem vazar /etc/passwd" || check fail "9h traversal na leitura:$badt"
+  # persistência: reiniciar a API e o Caddy não apaga a foto
+  "${DC[@]}" restart api caddy >/dev/null 2>&1; for t in $(seq 1 40); do [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health")" = 200 ] && break; sleep 3; done
+  [ "$(curl -s "http://127.0.0.1:$PORT$p0" | sha256sum | cut -d' ' -f1)" = "$SHA_SERV" ] && check ok "9h a foto continua igual (mesmo sha256) depois de reiniciar API e Caddy" || check fail "9h a foto mudou ou sumiu depois do restart"
+  # backup + restauração das fotos
+  bo="$("${DC[@]}" exec -T postgres-backup /bin/sh /scripts/backup.sh 2>&1 | tr -d '\r')"; [[ "$bo" == *"backup-uploads: ok uploads_"* ]] && check ok "9h backup inclui as fotos reais" || check fail "9h backup sem fotos: $(echo "$bo" | tail -1)"
+  tarf="$("${DC[@]}" exec -T postgres-backup sh -c 'ls -1 /backups/uploads_*.tar.gz | tail -1' | tr -d '\r')"
+  SHA_REST="$("${DC[@]}" exec -T postgres-backup sh -c "rm -rf /tmp/rest9h && sh /scripts/restore-uploads.sh $tarf /tmp/rest9h >/dev/null && sha256sum /tmp/rest9h${p0#/media} | cut -d' ' -f1" | tr -d '\r\n')"
+  [ -n "$SHA_REST" ] && [ "$SHA_REST" = "$SHA_SERV" ] && check ok "9h a foto restaurada do backup é BYTE A BYTE a que o Caddy serve (sha256 igual)" || check fail "9h foto restaurada diferente: servida=$SHA_SERV restaurada=$SHA_REST"
+fi
+if [ -n "$IMGID" ]; then
+  out="$(curl -s -b "$jar" -X POST -w '|%{http_code}' "http://127.0.0.1:$PORT/api/media/images/$IMGID/delete")"; [ "${out##*|}" = 200 ] && check ok "9h o dono apaga a imagem: 200" || check fail "9h apagar imagem: $out"
+  [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT$p0")" = 404 ] && [ "$(nfotos)" = "$N0" ] && check ok "9h depois de apagar: 404 no /media e o volume volta a $N0 arquivo(s)" || check fail "9h imagem apagada ainda servida ou arquivos restantes ($(nfotos))"
+fi
+rm -rf "$UPD"
 rm -f "$jar" "$body"
 
 echo "== 6f menor privilégio: o web NÃO recebe segredo nenhum além do necessário; a API recebe o PIX desligado; check-env.sh aprova o .env do smoke"
