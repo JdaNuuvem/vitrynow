@@ -201,7 +201,7 @@ describe("produto detalhado: API", { timeout: 120_000 }, () => {
     const faixa = await pedido([{ productId: p.id, quantity: 1, weightGrams: 50 }]);
     expect([faixa.statusCode, json(faixa).code]).toEqual([400, "WEIGHT_OUT_OF_RANGE"]);
     const sem = await pedido([{ productId: p.id, quantity: 1 }]);
-    expect([sem.statusCode, json(sem).code]).toEqual([400, "WEIGHT_OUT_OF_RANGE"]);
+    expect([sem.statusCode, json(sem).code]).toEqual([400, "WEIGHT_REQUIRED"]);
     const passo = await pedido([{ productId: p.id, quantity: 1, weightGrams: 130 }]);
     expect([passo.statusCode, json(passo).code]).toEqual([400, "WEIGHT_STEP_INVALID"]);
     const comOpcao = await pedido([{ productId: p.id, quantity: 1, weightGrams: 400, options: [{ optionId: "x" }] }]);
@@ -280,6 +280,40 @@ describe("produto detalhado: API", { timeout: 120_000 }, () => {
     expect(dtoKg).toMatchObject({ saleUnit: "KG", minGrams: 200, stepGrams: 100, maxGrams: 2000, portionGrams: null, serves: null });
     const texto = JSON.stringify(produtos);
     for (const proibido of ["sku", "promoStartsAt", "listPriceCents", "storeId", "pricePerKgCents", "createdAt"]) expect(texto).not.toContain(`"${proibido}"`);
+  });
+
+  it("produto por UNIDADE com weightGrams = 400 WEIGHT_NOT_ALLOWED (nunca descartado em silêncio) e nada gravado", async () => {
+    const p = await produto();
+    const res = await pedido([{ productId: p.id, quantity: 1, weightGrams: 400 }]);
+    expect([res.statusCode, json(res).code]).toEqual([400, "WEIGHT_NOT_ALLOWED"]);
+    expect(await prisma.order.count({ where: { storeId } })).toBe(0);
+  });
+
+  it("STAFF edita nome de produto cuja promoção do dono é > 50%, mas NÃO muda preço/promoção para acima de 50%", async () => {
+    const p = await produto({ promoCents: 1000 }); // dono: 66% de desconto
+    const bcrypt = await import("bcryptjs");
+    await prisma.user.create({ data: { storeId, email: "staff-pd2@teste.com", passwordHash: await bcrypt.hash(credentials.password, 10), role: "STAFF" } });
+    const staff = (await login(app, "staff-pd2@teste.com", credentials.password)).cookie!;
+    const nome = await post(`/api/catalog/products/${p.id}`, { name: "Prato novo" }, staff);
+    expect(nome.statusCode, nome.body).toBe(200);
+    const preco = await post(`/api/catalog/products/${p.id}`, { priceCents: 3100 }, staff); // continua > 50%
+    expect([preco.statusCode, json(preco).code]).toEqual([403, "FORBIDDEN_ROLE"]);
+    const promo = await post(`/api/catalog/products/${p.id}`, { promoCents: 900 }, staff);
+    expect([promo.statusCode, json(promo).code]).toEqual([403, "FORBIDDEN_ROLE"]);
+  });
+
+  it("campanha não aponta para adicional que não vende sozinho; o banco recusa promoção >= preço e faixa de peso invertida (CHECKs 801000)", async () => {
+    const ad = await produto({ kind: "ADICIONAL", name: "Ovo", priceCents: 300 });
+    const prato = await produto({ name: "Prato X" });
+    const draft = (id: string) => ({ title: "Camp", description: "", imageUrl: "", imageLayout: "photo", imagePosition: "center", action: { label: "Ver", target: { kind: "product", id } } });
+    expect((await app.inject({ method: "PUT", url: "/api/store/menu-campaign", headers: { cookie }, payload: { revision: 0, draft: draft(ad.id) } })).statusCode).toBe(200);
+    const publicarAd = await post("/api/store/menu-campaign/publish", { revision: 1 });
+    expect(publicarAd.statusCode).toBe(400);
+    expect((await app.inject({ method: "PUT", url: "/api/store/menu-campaign", headers: { cookie }, payload: { revision: 1, draft: draft(prato.id) } })).statusCode).toBe(200);
+    expect((await post("/api/store/menu-campaign/publish", { revision: 2 })).statusCode).toBe(200);
+    await expect(prisma.product.update({ where: { id: prato.id }, data: { promoCents: 5000 } })).rejects.toThrow();
+    await expect(prisma.product.update({ where: { id: prato.id }, data: { minGrams: 900, maxGrams: 100 } })).rejects.toThrow();
+    expect((await prisma.product.findUniqueOrThrow({ where: { id: prato.id } })).promoCents).toBeNull();
   });
 
   it("produto antigo (sem nenhum campo novo) continua idêntico: unitário = preço, sem cópias; e a loja B nunca altera produto da A (404)", async () => {
