@@ -5,6 +5,7 @@
 #
 # Gera uploads_<CARIMBO>.tar.gz + .tar.gz.sha256 + uploads_<CARIMBO>.manifest (sha256 de CADA arquivo, lido do que está DENTRO do tar, não da pasta viva:
 # um arquivo gravado durante o backup não gera falso erro). Um backup só "existe" se o tar foi relido e o manifesto fechou; senão exit 1 e nada fica.
+# A pasta quarantine/ (originais de vídeo em conversão) é EXCLUÍDA do backup.
 # Pasta de uploads ausente = ERRO (volume não montado: o backup passaria "ok" sem foto nenhuma). Pasta vazia é válida (loja sem fotos ainda).
 set -eu
 umask 077
@@ -20,7 +21,9 @@ trap 'rm -rf "$CHK"' EXIT
 [ -d "$UPLOADS_DIR" ] || fail "pasta de uploads $UPLOADS_DIR não existe (volume não montado?)"
 mkdir -p "$BACKUP_DIR"
 
-tar -czf "$TMP" -C "$UPLOADS_DIR" . 2>/dev/null || fail "tar falhou"
+# quarantine/ (ADR-0021, Reels) guarda o ORIGINAL CRU enviado pelo cliente por minutos, até a conversão: nunca vai para o backup (seria reter por 14 dias o que a decisão manda apagar
+# ao fim do job, e é dado pessoal sem validação). O que fica é o MP4 final e a capa, sob stores/<loja>/reels/.
+tar -czf "$TMP" -C "$UPLOADS_DIR" --exclude=./quarantine . 2>/dev/null || fail "tar falhou"
 [ -s "$TMP" ] || fail "arquivo vazio"
 # verificação: relê o tar numa pasta temporária e gera o manifesto do que REALMENTE foi arquivado
 mkdir -p "$CHK"
