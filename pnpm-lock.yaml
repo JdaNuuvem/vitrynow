@@ -201,9 +201,6 @@ importers:
       bcrypt:
         specifier: 6.0.0
         version: 6.0.0
-      bcryptjs:
-        specifier: ^2.4.3
-        version: 2.4.3
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1
@@ -238,6 +235,9 @@ importers:
       '@types/ws':
         specifier: ^8.5.12
         version: 8.18.2
+      bcryptjs:
+        specifier: ^2.4.3
+        version: 2.4.3
       tsx:
         specifier: ^4.19.1
         version: 4.23.15
@@ -314,13 +314,13 @@ importers:
       '@prisma/client':
         specifier: ^5.19.1
         version: 5.22.0(prisma@5.22.0)
-      bcryptjs:
-        specifier: ^2.4.3
-        version: 2.4.3
     devDependencies:
       '@types/node':
         specifier: ^20.19.43
         version: 20.19.43
+      bcryptjs:
+        specifier: ^2.4.3
+        version: 2.4.3
       prisma:
         specifier: ^5.19.1
         version: 5.22.0
