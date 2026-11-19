@@ -1,7 +1,7 @@
 // PR-06 (b1): a COTAÇÃO (`POST /stores/:slug/quote`) e a CRIAÇÃO do pedido usam a mesma conta (`lib/orderQuote.ts`). Este teste prova a PARIDADE: para cada caso, o total, o subtotal,
 // o desconto e a taxa da cotação são EXATAMENTE os do pedido criado; e quando a criação recusa por regra de pedido (mínimo, cupom, bairro), a cotação recusa com o mesmo status e corpo.
 // Item que não pode ser pedido (esgotado, pausado, adicional, peso fora da faixa) vem marcado na cotação (`available:false`) e a criação o recusa.
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
@@ -84,6 +84,12 @@ describe("PR-06: cotação × criação do pedido (paridade)", { timeout: 300_00
     await prisma.store.updateMany({ where: { slug: slug2 }, data: { freeShippingFromCents: 4000 } });
     await post("/api/coupons", { code: "PCT10", discountType: "PERCENT", discountValue: 10 }, cookie2);
   }, 300_000);
+  // Os tetos de requisição do servidor são por INSTÂNCIA e por minuto, e cada caso cria pedidos reais: uma instância nova por caso (os dados do beforeAll ficam no banco).
+  beforeEach(async () => {
+    await app.close();
+    app = makeApp();
+    await app.ready();
+  });
   afterAll(async () => {
     await app.close();
     await resetDb();
@@ -93,29 +99,30 @@ describe("PR-06: cotação × criação do pedido (paridade)", { timeout: 300_00
   const item = (key: string, over: Record<string, unknown> = {}) => ({ productId: id[key], quantity: 1, ...over });
 
   // Caso feliz: cotação e pedido criado têm os MESMOS números (subtotal, desconto, taxa, total).
-  const paridade: Array<[string, string, Record<string, unknown>, number]> = [
-    ["1 unidade simples x2", slug, { type: "BALCAO", items: [item("UN", { quantity: 2 })] }, 6000],
-    ["2 promoção por unidade x3", slug, { type: "BALCAO", items: [item("PROMO", { quantity: 3 })] }, 7200],
-    ["3 promoção por quilo 350 g", slug, { type: "BALCAO", items: [item("KGPROMO", { weightGrams: 350 })] }, 1747],
-    ["4 peso 400 g", slug, { type: "BALCAO", items: [item("KG", { weightGrams: 400 })] }, 1996],
-    ["5 variação BASE + opção SOMA x3", slug, { type: "BALCAO", items: [item("OPCOES", { quantity: 3, options: [{ optionId: id.G }, { optionId: id.catupiry }] })] }, 20400],
-    ["6 adicional legado", slug, { type: "BALCAO", items: [item("LEGADO", { additionalIds: [id.gelo] })] }, 1200],
-    ["7 opção + adicional legado no mesmo item", slug, { type: "BALCAO", items: [item("MISTO", { quantity: 2, additionalIds: [id.ovo], options: [{ optionId: id.alho }] })] }, 2 * (2000 + 300 + 150)],
-    ["8 cupom percentual", slug, { type: "BALCAO", items: [item("UN")], couponCode: "pct10" }, 2700],
-    ["9 cupom fixo", slug, { type: "BALCAO", items: [item("UN")], couponCode: "FIX500" }, 2500],
-    ["10 cupom fixo maior que o subtotal (limitado ao subtotal)", slug, { type: "BALCAO", items: [item("UN")], couponCode: "FIXGRANDE" }, 0],
-    ["11 cupom sobre o preço PROMOCIONAL", slug, { type: "BALCAO", items: [item("PROMO")], couponCode: "PCT10" }, 2160],
-    ["12 cupom com mínimo atendido", slug, { type: "BALCAO", items: [item("UN", { quantity: 2 })], couponCode: "MIN5000" }, 5400],
-    ["13 entrega no bairro (taxa do bairro)", slug, { type: "DELIVERY", neighborhoodId: id.centro, items: [item("UN")] }, 3700],
-    ["14 bairro com frete grátis acima do mínimo do bairro", slug, { type: "DELIVERY", neighborhoodId: id.rico, items: [item("UN", { quantity: 2 })] }, 6000],
-    ["15 bairro abaixo do mínimo grátis paga a taxa", slug, { type: "DELIVERY", neighborhoodId: id.rico, items: [item("UN")] }, 3900],
-    ["16 gorjeta", slug, { type: "BALCAO", items: [item("UN")], tipCents: 250 }, 3250],
-    ["17 loja com taxa única e frete grátis geral acima do limite", slug2, { type: "DELIVERY", items: [item("UN2", { quantity: 2 })] }, 4000],
-    ["18 taxa única abaixo do limite grátis", slug2, { type: "DELIVERY", items: [item("UN2")] }, 2600],
-    ["19 frete grátis conta o subtotal LÍQUIDO (o cupom derruba abaixo do limite: cobra a taxa)", slug2, { type: "DELIVERY", items: [item("UN2", { quantity: 2 })], couponCode: "PCT10" }, 3600 + 600],
+  const paridade: Array<[string, string, () => Record<string, unknown>, number]> = [
+    ["1 unidade simples x2", slug, () => ({ type: "BALCAO", items: [item("UN", { quantity: 2 })] }), 6000],
+    ["2 promoção por unidade x3", slug, () => ({ type: "BALCAO", items: [item("PROMO", { quantity: 3 })] }), 7200],
+    ["3 promoção por quilo 350 g", slug, () => ({ type: "BALCAO", items: [item("KGPROMO", { weightGrams: 350 })] }), 1747],
+    ["4 peso 400 g", slug, () => ({ type: "BALCAO", items: [item("KG", { weightGrams: 400 })] }), 1996],
+    ["5 variação BASE + opção SOMA x3", slug, () => ({ type: "BALCAO", items: [item("OPCOES", { quantity: 3, options: [{ optionId: id.G }, { optionId: id.catupiry }] })] }), 20400],
+    ["6 adicional legado", slug, () => ({ type: "BALCAO", items: [item("LEGADO", { additionalIds: [id.gelo] })] }), 1200],
+    ["7 opção + adicional legado no mesmo item", slug, () => ({ type: "BALCAO", items: [item("MISTO", { quantity: 2, additionalIds: [id.ovo], options: [{ optionId: id.alho }] })] }), 2 * (2000 + 300 + 150)],
+    ["8 cupom percentual", slug, () => ({ type: "BALCAO", items: [item("UN")], couponCode: "pct10" }), 2700],
+    ["9 cupom fixo", slug, () => ({ type: "BALCAO", items: [item("UN")], couponCode: "FIX500" }), 2500],
+    ["10 cupom fixo maior que o subtotal (limitado ao subtotal)", slug, () => ({ type: "BALCAO", items: [item("UN")], couponCode: "FIXGRANDE" }), 0],
+    ["11 cupom sobre o preço PROMOCIONAL", slug, () => ({ type: "BALCAO", items: [item("PROMO")], couponCode: "PCT10" }), 2160],
+    ["12 cupom com mínimo atendido", slug, () => ({ type: "BALCAO", items: [item("UN", { quantity: 2 })], couponCode: "MIN5000" }), 5400],
+    ["13 entrega no bairro (taxa do bairro)", slug, () => ({ type: "DELIVERY", neighborhoodId: id.centro, items: [item("UN")] }), 3700],
+    ["14 bairro com frete grátis acima do mínimo do bairro", slug, () => ({ type: "DELIVERY", neighborhoodId: id.rico, items: [item("UN", { quantity: 2 })] }), 6000],
+    ["15 bairro abaixo do mínimo grátis paga a taxa", slug, () => ({ type: "DELIVERY", neighborhoodId: id.rico, items: [item("UN")] }), 3900],
+    ["16 gorjeta", slug, () => ({ type: "BALCAO", items: [item("UN")], tipCents: 250 }), 3250],
+    ["17 loja com taxa única e frete grátis geral acima do limite", slug2, () => ({ type: "DELIVERY", items: [item("UN2", { quantity: 2 })] }), 4000],
+    ["18 taxa única abaixo do limite grátis", slug2, () => ({ type: "DELIVERY", items: [item("UN2")] }), 2600],
+    ["19 frete grátis conta o subtotal LÍQUIDO (o cupom derruba abaixo do limite: cobra a taxa)", slug2, () => ({ type: "DELIVERY", items: [item("UN2", { quantity: 2 })], couponCode: "PCT10" }), 3600 + 600],
   ];
-  for (const [nome, s, payload, esperado] of paridade) {
+  for (const [nome, s, fazer, esperado] of paridade) {
     it(`paridade — ${nome}`, async () => {
+      const payload = fazer();
       const q = await quote(s, payload);
       expect(q.statusCode, q.body).toBe(200);
       const quoted = json(q).quote;
@@ -129,16 +136,17 @@ describe("PR-06: cotação × criação do pedido (paridade)", { timeout: 300_00
   }
 
   // Recusas de PEDIDO (mínimo, cupom, bairro): a cotação recusa com o MESMO status e corpo da criação.
-  const recusas: Array<[string, string, Record<string, unknown>]> = [
-    ["20 pedido mínimo da loja", slug2, { type: "BALCAO", items: [{ productId: id.UN2, quantity: 1 }] }],
-    ["21 cupom inexistente", slug, { type: "BALCAO", items: [item("UN")], couponCode: "NAOEXISTE" }],
-    ["22 cupom com mínimo não atingido", slug, { type: "BALCAO", items: [item("UN")], couponCode: "MIN5000" }],
-    ["23 entrega sem escolher o bairro (loja com bairros)", slug, { type: "DELIVERY", items: [item("UN")] }],
-    ["24 bairro de outra loja", slug, { type: "DELIVERY", neighborhoodId: "bairro-que-nao-existe", items: [item("UN")] }],
+  const recusas: Array<[string, string, () => Record<string, unknown>]> = [
+    ["20 pedido mínimo da loja", slug2, () => ({ type: "BALCAO", items: [{ productId: id.UN2, quantity: 1 }] })],
+    ["21 cupom inexistente", slug, () => ({ type: "BALCAO", items: [item("UN")], couponCode: "NAOEXISTE" })],
+    ["22 cupom com mínimo não atingido", slug, () => ({ type: "BALCAO", items: [item("UN")], couponCode: "MIN5000" })],
+    ["23 entrega sem escolher o bairro (loja com bairros)", slug, () => ({ type: "DELIVERY", items: [item("UN")] })],
+    ["24 bairro de outra loja", slug, () => ({ type: "DELIVERY", neighborhoodId: "bairro-que-nao-existe", items: [item("UN")] })],
   ];
   // o mínimo da loja 2 é 1500 e o prato custa 2000: para recusar de verdade, sobe o mínimo antes do caso
-  for (const [nome, s, payload] of recusas) {
+  for (const [nome, s, fazer] of recusas) {
     it(`paridade de recusa — ${nome}`, async () => {
+      const payload = fazer();
       if (nome.startsWith("20")) await prisma.store.updateMany({ where: { slug: slug2 }, data: { minOrderCents: 5000 } });
       const q = await quote(s, payload);
       const c = await create(s, payload);
@@ -149,17 +157,17 @@ describe("PR-06: cotação × criação do pedido (paridade)", { timeout: 300_00
   }
 
   // Itens que NÃO podem ser pedidos: a cotação marca e segue; a criação recusa.
-  const indisponiveis: Array<[string, Record<string, unknown>, string]> = [
-    ["25 produto esgotado", item("ESGOTADO"), "ITEM_UNAVAILABLE"],
-    ["26 produto pausado", item("PAUSADO"), "ITEM_UNAVAILABLE"],
-    ["27 adicional que não vende sozinho", item("ADICIONAL"), "PRODUCT_ADDON_NOT_SOLD_ALONE"],
-    ["28 peso fora da faixa", item("KG", { weightGrams: 50 }), "WEIGHT_OUT_OF_RANGE"],
-    ["29 produto por peso sem peso", item("KG"), "WEIGHT_REQUIRED"],
-    ["30 opção obrigatória faltando", item("OPCOES"), "OPTION_INVALID"],
+  const indisponiveis: Array<[string, () => Record<string, unknown>, string]> = [
+    ["25 produto esgotado", () => item("ESGOTADO"), "ITEM_UNAVAILABLE"],
+    ["26 produto pausado", () => item("PAUSADO"), "ITEM_UNAVAILABLE"],
+    ["27 adicional que não vende sozinho", () => item("ADICIONAL"), "PRODUCT_ADDON_NOT_SOLD_ALONE"],
+    ["28 peso fora da faixa", () => item("KG", { weightGrams: 50 }), "WEIGHT_OUT_OF_RANGE"],
+    ["29 produto por peso sem peso", () => item("KG"), "WEIGHT_REQUIRED"],
+    ["30 opção obrigatória faltando", () => item("OPCOES"), "OPTION_INVALID"],
   ];
-  for (const [nome, ruim, codigo] of indisponiveis) {
+  for (const [nome, fazer, codigo] of indisponiveis) {
     it(`item indisponível — ${nome}: cotação marca available:false e o resto entra no total; a criação recusa`, async () => {
-      const payload = { type: "BALCAO", items: [item("UN"), ruim] };
+      const payload = { type: "BALCAO", items: [item("UN"), fazer()] };
       const q = await quote(slug, payload);
       expect(q.statusCode, q.body).toBe(200);
       const body = json(q).quote;
