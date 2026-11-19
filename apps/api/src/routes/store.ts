@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
-import { storeAvailabilitySchema, updateStoreSettingsSchema } from "@meucardapio/shared-types";
+import { isStoreTimezone, storeAvailabilitySchema, updateStoreSettingsSchema } from "@meucardapio/shared-types";
 import { logAudit } from "../lib/audit";
 import { bannerStateOf, getSubscriptionView } from "../lib/subscription";
 
@@ -28,6 +28,7 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
         acceptingOrders: true,
         hideSoldOutProducts: true,
         deliveryFeeCents: true,
+        timezone: true,
       },
     });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });
@@ -58,8 +59,12 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/api/store/settings", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request, reply) => {
     const { storeId } = request.user;
+    const asked = (request.body as { timezone?: unknown } | null)?.timezone;
+    if (asked !== undefined && !isStoreTimezone(asked)) return reply.code(400).send({ error: "Fuso horário inválido. Escolha um da lista.", code: "TIMEZONE_INVALID" });
     const parsed = updateStoreSettingsSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    // PR-04b: o fuso muda só o "dia" daqui para a frente (relatório, hoje, cupom, esgotado); pedidos já gravados ficam em UTC, intactos. Auditoria guarda valor anterior e novo.
+    const before = parsed.data.timezone ? (await prisma.store.findUnique({ where: { id: storeId }, select: { timezone: true } }))?.timezone : undefined;
 
     const { logoUrl, coverImageUrl, primaryColor, customDomain, address, whatsapp, openingHours, ...rest } = parsed.data;
     // SEC-14 (ST-18): o domínio é ÚNICO no banco; quem decide é o índice (sem "consultar e depois gravar"), então duas lojas simultâneas não passam as duas.
@@ -93,6 +98,7 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
         acceptingOrders: true,
         hideSoldOutProducts: true,
         deliveryFeeCents: true,
+        timezone: true,
       },
     }).catch((error: unknown) => {
       const known = error as { code?: string; meta?: { target?: string[] | string } };
@@ -101,7 +107,7 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
       throw error;
     });
     if (!store) return reply.code(409).send({ error: "este domínio já está em uso por outra loja", code: "CUSTOM_DOMAIN_TAKEN" });
-    logAudit({ storeId, userId: request.user.userId, action: "store.settings_update", targetType: "Store", targetId: storeId, metadata: { fields: Object.keys(parsed.data) } }); // só QUAIS campos mudaram, nunca os valores (endereço, telefone, textos; ADR-0014 §3.4)
+    logAudit({ storeId, userId: request.user.userId, action: "store.settings_update", targetType: "Store", targetId: storeId, metadata: { fields: Object.keys(parsed.data), ...(parsed.data.timezone && before !== parsed.data.timezone ? { timezone: { from: before, to: parsed.data.timezone } } : {}) } }); // só QUAIS campos mudaram, nunca os valores (endereço, telefone, textos; ADR-0014 §3.4)
     return { store };
   });
 };
