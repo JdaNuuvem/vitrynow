@@ -2,7 +2,7 @@
 // um campo novo no banco (ou um `include` cru) que apareca na resposta quebra aqui, em vez de vazar em producao.
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { PUBLIC_ADDITIONAL_KEYS, PUBLIC_CATEGORY_KEYS, PUBLIC_OPTION_GROUP_KEYS, PUBLIC_OPTION_KEYS, PUBLIC_PRODUCT_KEYS, PUBLIC_STORE_KEYS } from "../src/lib/publicDto";
+import { PUBLIC_ADDITIONAL_KEYS, PUBLIC_CATEGORY_KEYS, PUBLIC_OPTION_GROUP_KEYS, PUBLIC_STORE_HOURS_KEYS, PUBLIC_OPTION_KEYS, PUBLIC_PRODUCT_KEYS, PUBLIC_STORE_KEYS } from "../src/lib/publicDto";
 import { makeApp, orderTokenHeader, registerStore, resetDb } from "./helpers";
 
 describe("SEC-18 - respostas das rotas publicas so com campos permitidos", { timeout: 60_000 }, () => {
@@ -38,7 +38,7 @@ describe("SEC-18 - respostas das rotas publicas so com campos permitidos", { tim
     expect(res.statusCode).toBe(200);
     const body = json(res);
     expect(keys(body)).toEqual(["categories", "store"]);
-    expect(keys(body.store)).toEqual(sorted([...PUBLIC_STORE_KEYS, "payment", "accepting", "hours", "campaign"])); // `payment.pixAvailable` vem do plugin do PIX; `accepting` (loja recebe pedido AGORA) vem do portao de assinatura (API-09)
+    expect(keys(body.store)).toEqual(sorted([...PUBLIC_STORE_KEYS, "payment", "accepting", "hours", "campaign", ...PUBLIC_STORE_HOURS_KEYS])); // `payment.pixAvailable` vem do plugin do PIX; `accepting` (loja recebe pedido AGORA) vem do portao de assinatura (API-09)
     expect(keys(body.categories[0])).toEqual(sorted(PUBLIC_CATEGORY_KEYS));
     expect(keys(body.categories[0].products[0])).toEqual(sorted(PUBLIC_PRODUCT_KEYS));
     expect(keys(body.categories[0].products[0].additionals[0])).toEqual(sorted(PUBLIC_ADDITIONAL_KEYS));
