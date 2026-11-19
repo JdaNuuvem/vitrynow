@@ -1,5 +1,6 @@
 import type { OrderPaymentMethod, OrderType } from "@meucardapio/db";
 import { summarizeFinancials } from "./saleLines";
+import { DEFAULT_STORE_TIMEZONE } from "./storeTime";
 
 export type CashSessionInput = {
   openedAt: Date;
@@ -49,14 +50,14 @@ const emptyBucket = () => ({ count: 0, revenueCents: 0 });
 
 // Saldo esperado = abertura + dinheiro RECEBIDO na sessão + suprimentos - sangrias - devoluções (RN-CX-01..06; a conta do dinheiro vem de
 // `saleLines.summarizeFinancials`, a mesma definição que o relatório usa). Vendas canceladas não entram em nenhum total (só contadas à parte).
-export function computeCashSummary(session: CashSessionInput, orders: CashOrderInput[], now: Date = new Date(), receipts: CashReceiptInput[] = []): CashSummary {
+export function computeCashSummary(session: CashSessionInput, orders: CashOrderInput[], now: Date = new Date(), receipts: CashReceiptInput[] = [], timeZone: string = DEFAULT_STORE_TIMEZONE): CashSummary {
   const financials = summarizeFinancials({
     orders: orders.map((o) => ({ id: "", type: o.type, status: o.status, awaitingPayment: o.awaitingPayment, subtotalCents: o.totalCents, discountCents: 0, deliveryFeeCents: o.deliveryFeeCents, tipCents: o.tipCents, totalCents: o.totalCents, paymentMethod: o.paymentMethod, createdAt: o.createdAt, paidAt: o.paidAt, receiptId: null })),
     receipts: receipts.map((r) => ({ id: r.id, receivedAt: r.receivedAt, totalCents: r.totalCents, serviceFeeCents: r.serviceFeeCents, orderIds: [], payments: r.payments.map((p) => ({ id: "", method: p.method, amountCents: p.amountCents, changeForCents: p.changeForCents ?? undefined })) })),
     movements: session.movements.map((m) => ({ ...m, createdAt: m.createdAt ?? session.openedAt })),
     cashSession: { openedAt: session.openedAt, closedAt: session.closedAt, openingBalanceCents: session.openingBalanceCents },
     range: { from: session.openedAt, to: session.closedAt ?? now },
-    timeZone: "America/Sao_Paulo",
+    timeZone,
     now,
   }).cash;
   const windowEnd = (session.closedAt ?? now).getTime();
