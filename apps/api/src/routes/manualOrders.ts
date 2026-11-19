@@ -12,6 +12,7 @@ import { getJwtSecret } from "../lib/securityConfig";
 import { logAudit } from "../lib/audit";
 import { limited, tooMany } from "../lib/slidingLimit";
 import { CodedError, useDomainErrors } from "../shared/errors";
+import { assertOrderMoneyFits } from "../lib/orderItems";
 
 // API-13 — pedido lançado no PAINEL (B2). O servidor decide TODO preço (RN-B2-01); o pedido nasce CONFIRMADO (o atendente já o aceitou), com tíquete na MESMA
 // transação (nunca pedido sem job) e `source = PAINEL`. Ignora "loja fechada", horário, pedido mínimo e modalidade desligada: a loja decide (RN-B2-04).
@@ -87,7 +88,7 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
       });
     }
     const built = await buildOrderLines(storeId, products, input.items);
-    if (!built.ok) return reply.code(400).send(built.body);
+    if (!built.ok) return reply.code(built.status).send(built.body);
     const itemsData = built.lines;
     const subtotalCents = itemsData.reduce((sum, i) => sum + i.lineTotalCents, 0);
 
@@ -112,6 +113,7 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
     const deliveryFeeCents = input.type === "DELIVERY" ? store.deliveryFeeCents : 0;
     const tipCents = input.tipCents ?? 0;
     const totalCents = subtotalCents - discountCents + deliveryFeeCents + tipCents;
+    assertOrderMoneyFits(totalCents);
     const zeroTotal = totalCents === 0;
     const paymentMethod = zeroTotal ? null : toOrderPaymentMethod(input.paymentMethod);
     if (!zeroTotal && input.changeForCents !== undefined) {

@@ -1,23 +1,20 @@
 .conta {
   box-sizing: border-box;
   min-height: 100vh;
-  padding: 40px 24px;
+  max-width: 1300px;
+  margin-inline: auto;
+  padding: clamp(22px, 3vw, 44px) clamp(16px, 3vw, 40px) 90px;
   color: var(--ink);
 }
 
-.conta h1 {
-  margin-bottom: 24px;
-  font-size: 24px;
-  font-weight: 600;
-  line-height: 32px;
-}
+.conta h1:not(.ds-heading h1) { margin-bottom: 24px; font-size: 26px; font-weight: 700; }
 
 .conta__card {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-width: 448px;
-  padding: 16px;
+  min-width: 0;
+  padding: clamp(16px, 2vw, 24px);
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
@@ -26,6 +23,23 @@
 .conta__card--spaced {
   margin-top: 24px;
 }
+
+.conta__links {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+  gap: 12px;
+  margin-block: 10px 24px;
+}
+
+.conta__shortcut { display: flex; align-items: center; gap: 12px; min-height: 74px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); text-decoration: none; }
+.conta__shortcut:hover { border-color: var(--color-primary); }
+.conta__shortcut > svg { flex: none; color: var(--color-primary); }
+.conta__shortcut > span { flex: 1; display: grid; gap: 3px; }
+.conta__shortcut small { color: var(--ink-soft); font-size: .8125rem; }
+.conta__grid { display: grid; align-items: start; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; }
+.conta__grid > .conta__card { margin: 0; }
+.conta__fields { display: grid; gap: 13px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.conta__money { display: grid; gap: 5px; font-size: .8125rem; color: var(--ink-soft); }
 
 .conta__card h2 {
   font-size: 16px;
@@ -57,6 +71,7 @@
 .conta__field input {
   box-sizing: border-box;
   width: 100%;
+  min-height: 44px;
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -67,14 +82,6 @@
 .conta__field input:focus {
   outline: 2px solid var(--color-primary);
   outline-offset: 1px;
-}
-
-.conta__swatch {
-  flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
 }
 
 .conta .money-input {
@@ -104,6 +111,7 @@
 
 .conta__switches {
   display: flex;
+  flex-wrap: wrap;
   gap: 24px;
 }
 
@@ -127,17 +135,18 @@
 /* Erro de um campo, logo abaixo dele (rótulo do alerta ligado por aria-describedby). */
 .conta__field .conta__field-error {
   margin-top: 4px;
-  color: #b91c1c;
+  color: var(--danger);
   font-size: 13px;
 }
 
 .conta__primary {
   align-self: flex-start;
+  min-height: 44px;
   padding: 10px 16px;
   border: none;
   border-radius: 8px;
   background: var(--color-primary);
-  color: #ffffff;
+  color: var(--on-primary, white);
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -147,4 +156,11 @@
   .conta {
     padding: 24px 16px 120px;
   }
+  .conta__grid { grid-template-columns: 1fr; }
 }
+.conta-payments { margin-top: 16px; }
+.conta-payments__summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 165px), 1fr)); gap: 12px; margin: 12px 0 20px; }
+.conta-payments__summary > div { display: grid; gap: 4px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+.conta-payments__summary dt { font-size: 13px; color: var(--ink-soft); }
+.conta-payments__summary dd { margin: 0; color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.conta-payments__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }

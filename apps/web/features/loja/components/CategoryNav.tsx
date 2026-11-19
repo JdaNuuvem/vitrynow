@@ -1,6 +1,9 @@
 import { useEffect, useRef } from "react";
 import type { Category } from "@/core/domain/storefront";
+import { scrollBehavior } from "@/lib/motion";
 import { SearchIcon } from "../icons";
+import { useBrokenImage } from "../hooks/useBrokenImage";
+import { Icon } from "@/shared/icons/Icon";
 
 export function CategorySectionHeading({ category }: { category: { name: string; icon: string | null } }) {
   return (
@@ -13,6 +16,15 @@ export function CategorySectionHeading({ category }: { category: { name: string;
 
 type StickyIdentity = { name: string; logoUrl: string | null; initials: string };
 
+function CategoryThumbnail({ category }: { category: Category }) {
+  const src = category.products.find((product) => product.imageUrl)?.imageUrl;
+  const image = useBrokenImage(src ?? null);
+  if (src && !image.failed) {
+    return <img ref={image.ref} src={src} className="loja__chip-photo" loading="lazy" width={24} height={24} alt="" onError={image.onError} />;
+  }
+  return category.icon ? <span className="loja__chip-icon" aria-hidden="true">{category.icon}</span> : null;
+}
+
 // Barra de categorias (spec 12 §2.1). Fica fixa no topo ao rolar; o chip da categoria que está na tela fica
 // destacado (scrollspy) e é trazido para dentro da linha. Em telas largas (≥ 800 px), quando a identidade sai de vista,
 // o próprio sticky vira UMA linha: logo + nome + chips + buscar. O scrollspy nunca move o foco.
@@ -22,6 +34,7 @@ export function CategoryChips({
   stuck,
   identity,
   onSelect,
+  onSelectAll,
   onOpenSearch,
 }: {
   categories: Category[];
@@ -30,18 +43,21 @@ export function CategoryChips({
   stuck: boolean;
   identity: StickyIdentity;
   onSelect: (id: string) => void;
+  onSelectAll?: () => void;
   onOpenSearch: () => void;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
 
-  // Traz o chip ativo para dentro da linha rolável (instantâneo: o movimento suave é da fatia 2). Só mexe na rolagem
+  // Traz o chip ativo para dentro da linha rolável. Só mexe na rolagem
   // horizontal da própria linha: nunca na da página, e nunca no foco.
   useEffect(() => {
     const row = rowRef.current;
     const chip = row?.querySelector<HTMLElement>('[aria-current="true"]');
     if (!row || !chip) return;
-    const target = chip.offsetLeft - (row.clientWidth - chip.offsetWidth) / 2;
-    row.scrollLeft = Math.max(0, target);
+    const target = Math.max(0, chip.offsetLeft - (row.clientWidth - chip.offsetWidth) / 2);
+    // Suave (M-03), exceto para quem pediu menos movimento (scrollBehavior devolve "auto").
+    if (typeof row.scrollTo === "function") row.scrollTo({ left: target, behavior: scrollBehavior() });
+    else row.scrollLeft = target;
   }, [activeCategoryId]);
 
   if (categories.length <= 1) return null;
@@ -52,6 +68,12 @@ export function CategoryChips({
         <span className="loja__stick-name">{identity.name}</span>
       </div>
       <div className="loja__chips" ref={rowRef}>
+        {onSelectAll && (
+          <button type="button" onClick={onSelectAll} aria-current={activeCategoryId === null ? "true" : undefined}
+            className={`loja__chip${activeCategoryId === null ? " loja__chip--active" : ""}`}>
+            <span className="loja__chip-body"><Icon name="products" size={22} />Tudo</span>
+          </button>
+        )}
         {categories.map((category) => (
           <button
             key={category.id}
@@ -61,11 +83,7 @@ export function CategoryChips({
             className={`loja__chip${activeCategoryId === category.id ? " loja__chip--active" : ""}`}
           >
             <span className="loja__chip-body">
-              {category.icon && (
-                <span className="loja__chip-icon" aria-hidden="true">
-                  {category.icon}
-                </span>
-              )}
+              <CategoryThumbnail category={category} />
               {category.name}
             </span>
           </button>

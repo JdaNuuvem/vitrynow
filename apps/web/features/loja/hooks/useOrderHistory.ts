@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-export type PlacedOrder = { code: string; totalCents: number; placedAt: string };
+export type PlacedOrder = { code: string; totalCents: number | null; placedAt: string };
 
 // Histórico dos pedidos feitos neste navegador (o cliente não tem login). Só localStorage:
 // pode vir vazio/bloqueado, então toda leitura/escrita é protegida.

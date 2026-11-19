@@ -61,6 +61,15 @@ export function ListIcon() {
   );
 }
 
+export function FiltersIcon() {
+  return (
+    <Svg size="md" strokeWidth={1.8}>
+      <path d="M3 7h9m4 0h5M3 17h4m4 0h10" strokeLinecap="round" />
+      <circle cx="14" cy="7" r="2" /><circle cx="9" cy="17" r="2" />
+    </Svg>
+  );
+}
+
 export function OrdersIcon() {
   return (
     <Svg size="lg" strokeWidth={1.8}>

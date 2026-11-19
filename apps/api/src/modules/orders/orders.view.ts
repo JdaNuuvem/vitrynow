@@ -1,4 +1,4 @@
-import type { Order, OrderItem, Payment, Deliverer } from "@meucardapio/db";
+import type { Order, OrderItem, OrderItemAdditional, OrderItemOption, Payment, Deliverer } from "@meucardapio/db";
 import { MAX_REFUND_AUTO_ATTEMPTS } from "../../lib/refundPolicy";
 
 // Visão do pedido para o PAINEL (PRD-15, Nightingale API-54a). Regra geral: resposta de pedido SEMPRE por allowlist —
@@ -39,7 +39,7 @@ export function contactAccessFor(role: "OWNER" | "STAFF", order: { status: strin
 
 // A fonte é a linha completa; o que SAI é decidido campo a campo em toPanelOrder (a allowlist é a barreira).
 export type PanelOrderSource = Order & {
-  items: OrderItem[];
+  items: (OrderItem & { additionals?: OrderItemAdditional[]; options?: OrderItemOption[] })[];
   deliverer: Deliverer | null;
   payment: Payment | null;
 };
@@ -106,6 +106,10 @@ export function toPanelOrder(
       quantity: item.quantity,
       unitPriceCents: item.unitPriceCents,
       notes: item.notes,
+      ...(opts.detail ? {
+        additionals: (item.additionals ?? []).map(({ name, priceCents }) => ({ name, priceCents })),
+        options: (item.options ?? []).map(({ groupName, name, priceCents, quantity, priceMode }) => ({ groupName, name, priceCents, quantity, priceMode })),
+      } : {}),
     })),
     // Pagamento: só o que a tela precisa. Nada de id do provedor, QR, chave de idempotência nem contexto de estorno.
     payment: order.payment && {

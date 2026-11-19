@@ -1,0 +1,11 @@
+.vitry-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--ink);
+  font: 750 22px/1 "Open Sans", "Segoe UI", sans-serif;
+  letter-spacing: -1.25px;
+  white-space: nowrap;
+}
+.vitry-brand img { display: block; width: 36px; height: 36px; flex: none; }
+.vitry-brand__suffix { color: var(--color-primary); }

@@ -5,9 +5,8 @@ import type { ReportDay, ReportSummary } from "@/core/domain/reports";
 // PENDENTE é "Aguardando aceite" e fica à parte; cancelado fica fora; gorjeta NÃO é receita da loja.
 // Faturamento = total do pedido − gorjeta. Ticket médio = faturamento ÷ vendas.
 //
-// Interino (Atlas, UX-23): o resumo da API ainda conta PENDENTE como venda e soma a gorjeta no total. Enquanto a API-20
-// não troca a fonte, o Início corrige no cliente: tira a gorjeta (a API manda `tipCents`) e separa os PENDENTES usando
-// a lista de pedidos que a tela já carrega. A API-20 depois entrega os números prontos; esta função some.
+// Compatibilidade com respostas anteriores à API-21, que incluíam gorjeta e PENDENTE no total.
+// O adaptador de período usa diretamente os totais já calculados pelo servidor nas versões recentes.
 
 export const STORE_TIMEZONE = "America/Sao_Paulo";
 
@@ -24,7 +23,7 @@ export type SalesFigures = {
   awaitingKnown: boolean;
 };
 
-type SummaryTotals = Pick<ReportSummary, "orderCount" | "revenueCents" | "byDay"> & { tipCents?: number };
+type SummaryTotals = Pick<ReportSummary, "orderCount" | "byDay"> & { revenueCents: number; tipCents?: number };
 
 const tipOf = (order: Order) => order.tipCents ?? 0;
 const dayOf = (createdAt: string) => new Date(createdAt).toLocaleDateString("en-CA", { timeZone: STORE_TIMEZONE });
@@ -58,7 +57,7 @@ export function applySaleDefinition(summary: SummaryTotals, awaiting: Order[] | 
     return {
       ...entry,
       orderCount: Math.max(0, entry.orderCount - ofDay.length),
-      revenueCents: Math.max(0, entry.revenueCents - ofDay.reduce((sum, order) => sum + order.totalCents, 0)),
+      revenueCents: entry.revenueCents === undefined ? undefined : Math.max(0, entry.revenueCents - ofDay.reduce((sum, order) => sum + order.totalCents, 0)),
     };
   });
 

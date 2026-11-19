@@ -11,7 +11,7 @@ export function LojaRoot({ slug, initialMenu }: { slug: string; initialMenu?: Me
   const [services] = useState(() => createHttpStorefrontServices());
   return (
     <StorefrontServicesProvider services={services}>
-      <LojaPage slug={slug} initialMenu={initialMenu} />
+      <LojaPage key={slug} slug={slug} initialMenu={initialMenu} />
     </StorefrontServicesProvider>
   );
 }

@@ -30,16 +30,20 @@ export function SingleFieldForm({
   };
   return (
     <form onSubmit={handle} className="auth__form">
-      <input
-        className="auth__input"
-        type={type}
-        required
-        minLength={minLength}
-        placeholder={placeholder}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      />
-      {error && <p className="auth__error">{error}</p>}
+      <label className="auth__field">
+        {type === "email" ? "E-mail" : "Nova senha"}
+        <input
+          className="auth__input"
+          type={type}
+          autoComplete={type === "email" ? "username" : "new-password"}
+          required
+          minLength={minLength}
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      </label>
+      {error && <p className="auth__error" role="alert">{error}</p>}
       <button className="auth__button" type="submit" disabled={loading}>
         {loading ? loadingLabel : submitLabel}
       </button>

@@ -126,6 +126,11 @@ describe("avisos da plataforma", () => {
     const noticeId = JSON.parse(created.body).notice.id;
 
     const { cookie } = await registerStore(app);
+    const opsList = await app.inject({ method: "GET", url: "/api/platform/notices?pageSize=1", headers: { cookie: platformCookie } });
+    expect(opsList.statusCode).toBe(200);
+    expect(opsList.headers["cache-control"]).toBe("no-store");
+    expect(opsList.json()).toMatchObject({ total: 1, page: 1, pageSize: 1, notices: [{ id: noticeId, title: "Novidade" }] });
+    expect((await app.inject({ method: "GET", url: "/api/platform/notices", headers: { cookie: cookie! } })).statusCode).toBe(401);
     const list = JSON.parse((await app.inject({ method: "GET", url: "/api/notices", headers: { cookie: cookie! } })).body);
     expect(list.unreadCount).toBe(1);
     expect(list.notices[0].title).toBe("Novidade");

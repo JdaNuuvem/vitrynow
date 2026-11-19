@@ -1,0 +1,10 @@
+# Sobreposição para o Compose local descartável vitry-handoff-qa, com portas 3400/3401.
+services:
+  api:
+    environment:
+      VITRY_PLATFORM_QA_STACK: vitry-handoff-qa
+      MFA_ENFORCED: "true"
+      PRIVACY_ACTIONS_ENABLED: "true"
+      PRIVACY_HASH_SALT: ${VITRY_QA_PRIVACY_HASH_SALT:?gere um sal aleatório próprio para a QA}
+      RESEND_API_KEY: ""
+      PLATFORM_ALERT_EMAIL: ""

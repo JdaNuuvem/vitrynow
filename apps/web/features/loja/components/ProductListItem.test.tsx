@@ -37,6 +37,13 @@ function setup(over: Over = {}) {
 }
 
 describe("ProductListItem: estrutura do cartão v2 (spec 12 §3)", () => {
+  it("um produto esgotado ainda abre o detalhe e oculta a ação de compra", async () => {
+    const { onOpen } = setup({ product: { ...base, soldOut: true }, quantityInCart: 1 });
+    expect(screen.getByText("Esgotado")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Adicionar|Mais um/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: base.name }));
+    expect(onOpen).toHaveBeenCalledOnce();
+  });
   it("mostra nome, descrição e preço", () => {
     setup();
     expect(screen.getByRole("button", { name: "Cheeseburguer" })).toBeInTheDocument();

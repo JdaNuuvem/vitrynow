@@ -6,6 +6,7 @@ import { statusLabel } from "@/core/domain/orderLabels";
 import type { Order } from "@/core/domain/orders";
 import { useCurrentRole } from "@/core/session/useCurrentRole";
 import { useMediaQuery } from "@/lib/useMediaQuery";
+import { Button, PageHeading, StateMessage } from "@/shared/design/components";
 import type { CardAction } from "./orderActions";
 import { CancelOrderDialog } from "./components/CancelOrderDialog";
 import { OrderCard } from "./components/OrderCard";
@@ -93,12 +94,11 @@ export function PedidosPage() {
   return (
     <main className={`pedidos${selectedId && desktop ? " pedidos--with-detail" : ""}`}>
       <div className="pedidos__content">
-      <div className="pedidos__titlebar">
-        <h1>Pedidos</h1>
-        <Link href={HISTORY_HREF} className="pedidos__history-link">
-          Histórico
-        </Link>
-      </div>
+      <PageHeading title="Pedidos" actions={<>
+        <Link href={HISTORY_HREF} className="ds-button ds-button--secondary">Histórico</Link>
+        <Link href="/dashboard/pedidos/pix" className="ds-button ds-button--secondary">Pix pendentes</Link>
+        <Link href="/dashboard/pedidos/novo" className="ds-button ds-button--primary">Novo pedido</Link>
+      </>} />
 
       {p.notice && (
         <div role="alert" className="pedidos__notice">
@@ -117,12 +117,8 @@ export function PedidosPage() {
         </div>
       )}
       {p.loadState === "error" && (
-        <div role="alert" className="pedidos__notice">
-          <span>Não foi possível carregar os pedidos. Verifique sua internet.</span>
-          <button type="button" className="pedidos__retry" onClick={p.retryLoad}>
-            Tentar de novo
-          </button>
-        </div>
+        <StateMessage tone="danger" title="Não foi possível carregar os pedidos. Verifique sua internet."
+          action={<Button onClick={p.retryLoad}>Tentar de novo</Button>} />
       )}
 
       {/* API-70: o teto de abertos deixou pedidos ANTIGOS de fora do quadro (os mais novos sempre aparecem). A faixa diz quantos. */}

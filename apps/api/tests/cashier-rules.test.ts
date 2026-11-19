@@ -117,7 +117,7 @@ describe("API-27 — caixa: regras do servidor", () => {
 
   it("CA-CX-19: a PRÉVIA do fechamento devolve esperado, diferença, toleranceCents e reasonRequired (false para 0 e até 5,00; true acima); sem valor ⇒ 400", async () => {
     const ctx = await setup(10000);
-    expect(json(await preview(ctx.owner, "10000"))).toEqual({ expectedCents: 10000, countedCents: 10000, differenceCents: 0, toleranceCents: 500, reasonRequired: false });
+    expect(json(await preview(ctx.owner, "10000"))).toEqual({ sessionId: (await current(ctx.owner)).session.id, expectedCents: 10000, countedCents: 10000, differenceCents: 0, toleranceCents: 500, reasonRequired: false });
     expect(json(await preview(ctx.owner, "9700")).reasonRequired).toBe(false);
     expect(json(await preview(ctx.owner, "9500")).reasonRequired).toBe(false);
     expect(json(await preview(ctx.owner, "9499"))).toMatchObject({ differenceCents: -501, reasonRequired: true });
@@ -128,6 +128,22 @@ describe("API-27 — caixa: regras do servidor", () => {
     }
     expect((await app.inject({ method: "GET", url: "/api/cashier/close-preview", headers: { cookie: ctx.owner } })).statusCode).toBe(400);
     expect((await current(ctx.owner)).toleranceCents).toBe(500); // a tela recebe a tolerância do servidor
+  });
+
+  it("recusa a confirmação quando a sessão ou o saldo mudou após a conferência", async () => {
+    const ctx = await setup(10000);
+    const checked = json(await preview(ctx.owner, "10000"));
+    const confirmation = { sessionId: checked.sessionId, expectedBalanceCents: checked.expectedCents, closingBalanceCents: 10000 };
+    await move(ctx.owner, { type: "SUPRIMENTO", amountCents: 100, reason: "TROCO" });
+    const changedBalance = await close(ctx.owner, confirmation);
+    expect(changedBalance.statusCode, changedBalance.body).toBe(409);
+    expect((await current(ctx.owner)).expectedBalanceCents).toBe(10100);
+
+    expect((await close(ctx.owner, { closingBalanceCents: 10100 })).statusCode).toBe(200);
+    await app.inject({ method: "POST", url: "/api/cashier/open", headers: { cookie: ctx.owner }, payload: { openingBalanceCents: 10000 } });
+    const changedSession = await close(ctx.owner, confirmation);
+    expect(changedSession.statusCode, changedSession.body).toBe(409);
+    expect((await current(ctx.owner)).session.id).not.toBe(checked.sessionId);
   });
 
   it("CA-CX-20: sangria/suprimento SEM motivo ⇒ 400 CASH_REASON_REQUIRED e NADA é criado; motivo de outro tipo ⇒ CASH_REASON_INVALID; DEVOLUCAO só o sistema cria", async () => {

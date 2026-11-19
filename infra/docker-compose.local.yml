@@ -1,0 +1,100 @@
+name: vitry-local
+
+x-api: &api-image
+  image: ${VITRY_LOCAL_PROJECT:-vitry-local}-api
+  build:
+    context: ..
+    dockerfile: apps/api/Dockerfile
+
+x-db-url: &db-url "postgresql://vitry:${VITRY_LOCAL_DB_PASSWORD:?use Abrir-VitryNow.cmd}@postgres:5432/vitry_local?schema=public"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: vitry_local
+      POSTGRES_USER: vitry
+      POSTGRES_PASSWORD: ${VITRY_LOCAL_DB_PASSWORD:?use Abrir-VitryNow.cmd}
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "vitry", "-d", "vitry_local"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  s3mock:
+    image: adobe/s3mock:5.2.3
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: cardapio-media
+      COM_ADOBE_TESTING_S3MOCK_STORE_ROOT: /s3mockroot
+      COM_ADOBE_TESTING_S3MOCK_STORE_RETAIN_FILES_ON_EXIT: "true"
+    volumes:
+      - media:/s3mockroot
+
+  init:
+    <<: *api-image
+    working_dir: /repo/packages/db
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: *db-url
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["sh", "-ec", "./node_modules/.bin/prisma migrate deploy && ./node_modules/.bin/tsx prisma/seed-local.ts"]
+
+  api:
+    <<: *api-image
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: *db-url
+      WEB_ORIGIN: http://127.0.0.1:${VITRY_LOCAL_WEB_PORT:-3000}
+      PUBLIC_API_URL: http://127.0.0.1:${VITRY_LOCAL_API_PORT:-3001}
+      COOKIE_SECURE: "false"
+      JWT_SECRET: ${VITRY_LOCAL_JWT:?use Abrir-VitryNow.cmd}
+      MFA_HMAC_KEY: ${VITRY_LOCAL_MFA:?use Abrir-VitryNow.cmd}
+      PAYMENT_ENC_KEY: ${VITRY_LOCAL_ENCRYPTION:?use Abrir-VitryNow.cmd}
+      MP_OAUTH_MODE: fake
+      WEB_INTERNAL_URL: http://web:3000
+      REVALIDATE_SECRET: ${VITRY_LOCAL_REVALIDATE:-}
+      STORAGE_S3_ENDPOINT: http://s3mock:9090
+      STORAGE_S3_BUCKET: cardapio-media
+      STORAGE_S3_ACCESS_KEY_ID: local-media
+      STORAGE_S3_SECRET_ACCESS_KEY: local-media
+      STORAGE_PUBLIC_BASE_URL: /media
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      s3mock:
+        condition: service_started
+    ports:
+      - "127.0.0.1:${VITRY_LOCAL_API_PORT:-3001}:3001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "Promise.all(['http://127.0.0.1:3001/health','http://s3mock:9090/favicon.ico'].map(url=>fetch(url))).then(results=>process.exit(results.every(r=>r.ok)?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 4s
+      retries: 24
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+      target: development
+    working_dir: /repo/apps/web
+    environment:
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_LOCAL_RAMENKU: "1"
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:${VITRY_LOCAL_API_PORT:-3001}
+      API_INTERNAL_URL: http://api:3001
+      REVALIDATE_SECRET: ${VITRY_LOCAL_REVALIDATE:-}
+      MEDIA_INTERNAL_URL: http://s3mock:9090/cardapio-media
+    command: ["./node_modules/.bin/next", "dev", "--hostname", "0.0.0.0", "--port", "3000"]
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${VITRY_LOCAL_WEB_PORT:-3000}:3000"
+
+volumes:
+  db:
+  media:

@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { usePanelServices } from "@/core/services/PanelServices";
 import { useHelp } from "@/features/ajuda/HelpWidget";
 
-export function SidebarFooter() {
+export function SidebarFooter({ onNavigate }: { onNavigate: () => void }) {
   const router = useRouter();
   const { auth } = usePanelServices();
   const { openHelp } = useHelp();
@@ -16,10 +16,10 @@ export function SidebarFooter() {
 
   return (
     <nav className="shell-footer">
-      <button type="button" onClick={() => openHelp("feedback")}>
+      <button type="button" onClick={() => { onNavigate(); openHelp("feedback"); }}>
         Enviar sugestões
       </button>
-      <button type="button" onClick={() => openHelp("suporte")}>
+      <button type="button" onClick={() => { onNavigate(); openHelp("suporte"); }}>
         Suporte
       </button>
       <button type="button" onClick={logout}>
