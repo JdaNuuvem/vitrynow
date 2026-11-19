@@ -280,7 +280,9 @@ export class CatalogService {
       if (promo < 1 || promo >= price) throw invalid("PROMO_INVALID", "O preço promocional precisa ser menor que o preço normal.");
       if (startsAt && endsAt && endsAt.getTime() <= startsAt.getTime()) throw invalid("PROMO_INVALID", "A promoção termina antes de começar.");
       // RN-PD-10: acima de 50% só o dono (inteiros: promo × 2 < normal; 50% exato passa).
-      if (actor.role !== "OWNER" && promoAboveHalf(price, promo)) throw invalid("FORBIDDEN_ROLE", "Acima do seu limite. Peça ao dono.", 403);
+      // Só quando preço ou promoção vieram no corpo: o STAFF segue podendo editar nome, foto etc. de produto com promoção do dono acima de 50%.
+      const touchedPrice = input.priceCents !== undefined || input.promoCents !== undefined;
+      if (touchedPrice && actor.role !== "OWNER" && promoAboveHalf(price, promo)) throw invalid("FORBIDDEN_ROLE", "Acima do seu limite. Peça ao dono.", 403);
     }
 
     // Tipo: ADICIONAL nasce sem vender sozinho (RN-PD-11); o dono pode marcar "Também vender sozinho".
