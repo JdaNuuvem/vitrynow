@@ -12,7 +12,7 @@ export const PUBLIC_STORE_HOURS_KEYS = ["openNow", "nextOpensAt", "hoursText"] a
 // Modo ocupado (g1): `busyUntil` (ISO|null) e `reason` (motivo fechado de `hours.reason`; null quando aberta). `accepting` já existe: NÃO há `acceptingNow`. `busyStartedAt`/`busyExtraMinutes` não vazam.
 export const PUBLIC_STORE_BUSY_KEYS = ["busyUntil", "reason"] as const;
 export const PUBLIC_CATEGORY_KEYS = ["id", "name", "icon", "products"] as const;
-export const PUBLIC_PRODUCT_KEYS = ["id", "name", "description", "imageUrl", "priceCents", "featured", "soldOut", "additionals", "optionGroups", "unavailable", "unavailableByOptions", "fromPriceCents", "promoCents", "promoEndsAt", "saleUnit", "minGrams", "stepGrams", "maxGrams", "portionGrams", "serves", "isSingleDish", "sellAlone"] as const;
+export const PUBLIC_PRODUCT_KEYS = ["id", "name", "description", "imageUrl", "priceCents", "featured", "soldOut", "additionals", "optionGroups", "unavailable", "unavailableByOptions", "fromPriceCents", "tags", "promoCents", "promoEndsAt", "saleUnit", "minGrams", "stepGrams", "maxGrams", "portionGrams", "serves", "isSingleDish", "sellAlone"] as const;
 export const PUBLIC_ADDITIONAL_KEYS = ["id", "name", "priceCents"] as const;
 // API-15 parte 3 (B8): grupos de opcoes REAIS (MANUAL) do produto. Sem `source`, `active`, `position` nem ids de loja. So opcoes ATIVAS.
 export const PUBLIC_OPTION_GROUP_KEYS = ["id", "name", "helpText", "minSelect", "maxSelect", "maxPerOption", "priceMode", "options"] as const;
@@ -66,6 +66,7 @@ export const publicProduct = (p: PublicProductInput) => ({
   // Produto detalhado (PD, §7 da spec): a promoção SÓ aparece enquanto ativa AGORA (futura/vencida nunca; `promoStartsAt` nunca é público); sem `sku`, `listPriceCents`, `storeId`.
   promoCents: p.promoActiveNow ? p.promoCents : null,
   promoEndsAt: p.promoActiveNow ? p.promoEndsAt : null,
+  tags: p.tags, // selos (lista fechada); `sku` nunca é público
   saleUnit: p.saleUnit,
   minGrams: p.saleUnit === "UN" ? null : p.minGrams,
   stepGrams: p.saleUnit === "UN" ? null : p.stepGrams,
