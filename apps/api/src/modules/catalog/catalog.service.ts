@@ -193,7 +193,13 @@ export class CatalogService {
         hint: "HIDE_INSTEAD",
       });
     }
-    await this.repo.deleteProduct(id);
+    try {
+      await this.repo.deleteProduct(id);
+    } catch (error) {
+      // Corrida: alguém ligou o adicional a um grupo entre a conferência e a exclusão; a FK recusa (P2003).
+      if ((error as { code?: string }).code === "P2003") throw new CodedError(409, "ADDON_IN_USE", "Este adicional está em uso. Remova-o dos grupos primeiro.", { hint: "REMOVE_FROM_GROUPS" });
+      throw error;
+    }
     this.audit.log({
       ...actor,
       action: "product.delete",

@@ -1,5 +1,6 @@
 // c4 do produto detalhado (carimbo 803000, RN-PD-12/13/15): adicional ligado a grupo de opções, ADDON_IN_USE, isolamento entre lojas.
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PrismaCatalogRepository } from "../src/modules/catalog/catalog.repository";
 import { prisma } from "@meucardapio/db";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
@@ -114,5 +115,17 @@ describe("adicional como opção de grupo (c4)", { timeout: 120_000 }, () => {
     const ovo = await produto({ kind: "ADICIONAL", name: "Ovo" });
     const r = await grupo([{ name: "x", priceCents: 0, productId: ovo }], { priceMode: "BASE", minSelect: 1, maxSelect: 1 });
     expect([r.statusCode, json(r).code]).toEqual([400, "OPTION_ADDON_IN_BASE_GROUP"]);
+  });
+
+  it("corrida: se a conferência não viu o uso, a FK recusa e a rota responde 409 ADDON_IN_USE (nunca 500)", async () => {
+    const { ovo } = await montar();
+    const spy = vi.spyOn(PrismaCatalogRepository.prototype, "addonUsage").mockResolvedValue({ groups: [], products: 0 });
+    try {
+      const del = await post(`/api/catalog/products/${ovo}/delete`);
+      expect([del.statusCode, json(del).code]).toEqual([409, "ADDON_IN_USE"]);
+      expect(await prisma.product.count({ where: { id: ovo } })).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
