@@ -85,8 +85,6 @@ services:
       # API_INTERNAL_SECRET_PREVIOUS (a API aceita os dois), suba api e web, e depois esvazie o PREVIOUS.
       API_INTERNAL_SECRET: ${API_INTERNAL_SECRET:?defina API_INTERNAL_SECRET no .env (32+ caracteres; openssl rand -hex 32)}
       API_INTERNAL_SECRET_PREVIOUS: ${API_INTERNAL_SECRET_PREVIOUS:-}
-      WEB_INTERNAL_URL: http://web:3000
-      REVALIDATE_SECRET: ${REVALIDATE_SECRET:-}
       JOBS_ENABLED: ${JOBS_ENABLED:-true}   # jobs no processo da API (ADR-0011); false só para depurar
       # PIX por loja (API-07, ADR-0001): desligado por padrão. As regras CONDICIONAIS (com MP_OAUTH_MODE=real exige chave de cifra
       # própria, MP_CLIENT_ID/SECRET e PUBLIC_API_URL https) o compose não expressa: ficam em infra/check-env.sh (rode antes de subir) e
@@ -110,14 +108,19 @@ services:
       TRIAL_DAYS: ${TRIAL_DAYS:-7}
       # SEC-13: em produção a API NÃO sobe com MFA_ENFORCED diferente de "true" (guarda de partida em lib/mfaBoot.ts). Padrão SEGURO: true.
       MFA_ENFORCED: ${MFA_ENFORCED:-true}
-      # API-18/INF-10: storage S3 das imagens. Em produção a API NÃO sobe sem estas 5 (assertStorageBootConfig: nada de Fake em memória silencioso) e a
-      # URL pública tem de ser https. Vazias aqui de propósito: quem valida é o check-env.sh --prod (o deploy.sh o usa), com mensagem clara.
+      # Fotos do cardápio (API-18, ADR-0017, decisão do Claudio 18/11): em DISCO LOCAL do servidor (volume uploads_data), sem S3/R2. A pasta é FIXA em /uploads
+      # (é onde o volume está montado); o Caddy serve esse volume somente leitura em /media. Com STORAGE_DRIVER=s3 valem as variáveis STORAGE_S3_* abaixo
+      # (vazias de propósito: quem valida é o check-env.sh --prod, que o deploy.sh usa).
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      STORAGE_LOCAL_DIR: /uploads
       STORAGE_S3_ENDPOINT: ${STORAGE_S3_ENDPOINT:-}
       STORAGE_S3_BUCKET: ${STORAGE_S3_BUCKET:-}
       STORAGE_S3_ACCESS_KEY_ID: ${STORAGE_S3_ACCESS_KEY_ID:-}
       STORAGE_S3_SECRET_ACCESS_KEY: ${STORAGE_S3_SECRET_ACCESS_KEY:-}
       STORAGE_S3_REGION: ${STORAGE_S3_REGION:-us-east-1}
-      STORAGE_PUBLIC_BASE_URL: ${STORAGE_PUBLIC_BASE_URL:-}
+      STORAGE_PUBLIC_BASE_URL: ${STORAGE_PUBLIC_BASE_URL:-${WEB_ORIGIN}/media}
+    volumes:
+      - uploads_data:/uploads   # fotos (leitura e escrita só aqui)
     expose:
       - "3001"
     cap_drop: [ALL]
@@ -150,7 +153,6 @@ services:
       # Segredo de serviço (SEC-24): só em tempo de EXECUÇÃO e só no servidor. Nunca NEXT_PUBLIC_*, nunca ARG de build,
       # nunca no código. A API só confia no IP repassado pelo web quando este segredo confere.
       API_INTERNAL_SECRET: ${API_INTERNAL_SECRET:?defina API_INTERNAL_SECRET no .env (32+ caracteres; openssl rand -hex 32)}
-      REVALIDATE_SECRET: ${REVALIDATE_SECRET:-}
     expose:
       - "3000"
     cap_drop: [ALL]
@@ -196,6 +198,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+      - uploads_data:/srv/uploads:ro   # fotos servidas em /media, SOMENTE LEITURA (o proxy não escreve nem executa nada)
     # Teto de memória (ST-49/ST-50). Medido: 6 a 7 KB por IP distinto na janela. Decisão do Atlas (17/11): 768 MB, porque com 512 MB
     # o Caddy chegou a ~450 MB sob rotatividade alta de IPs (o cenário do ataque) e a folga era pequena. É um TETO (custo só de RAM
     # se for usado). O smoke exige que o teto sustente >= 60 mil IPs a 80%. Acima disso (ataque distribuído) o Caddy é morto e volta
@@ -227,10 +230,12 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
       PGDATABASE: meucardapio
       BACKUP_DIR: /backups
+      UPLOADS_DIR: /uploads
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
       KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
     volumes:
       - ./backups:/backups
+      - uploads_data:/uploads:ro   # fotos entram no backup (backup-uploads.sh), leitura apenas
       - ../scripts/backup:/scripts:ro
     entrypoint: ["/bin/sh", "/scripts/backup-loop.sh"]
     healthcheck:
@@ -259,3 +264,4 @@ volumes:
   postgres_data:
   caddy_data:
   caddy_config:
+  uploads_data:   # fotos do cardápio (ADR-0017): persistente; entra no backup; NUNCA use `down -v` em produção

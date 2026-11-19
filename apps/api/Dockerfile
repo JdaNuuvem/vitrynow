@@ -46,6 +46,8 @@ WORKDIR /repo/apps/api
 # Não roda como root: o código fica de root (somente leitura para o app). Única exceção: a pasta de
 # engines do Prisma, onde o `prisma migrate deploy` (serviço "migrate") verifica/grava o engine.
 RUN chown -R node:node /repo/node_modules/.pnpm/@prisma+engines*/node_modules/@prisma/engines
+# fotos em disco local (ADR-0017): o volume nomeado uploads_data herda este dono na 1ª criação; arquivos novos saem com modo 644 (o Caddy, outro usuário, só lê)
+RUN mkdir -p /uploads && chown node:node /uploads
 USER node
 EXPOSE 3001
 CMD ["node", "dist/server.js"]
