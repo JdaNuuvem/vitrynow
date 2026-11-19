@@ -25,6 +25,8 @@ export type ProductData = {
   stepGrams?: number;
   maxGrams?: number;
   isSingleDish?: boolean;
+  sku?: string | null;
+  tags?: Array<"VEGANO" | "VEGETARIANO" | "SEM_GLUTEN" | "SEM_LACTOSE" | "PICANTE" | "FIT">;
   portionGrams?: number | null;
   serves?: number | null;
   active?: boolean;
