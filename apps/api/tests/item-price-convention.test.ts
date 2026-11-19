@@ -1,6 +1,7 @@
 // C1 / CA-B8-CRUZ (Nightingale, Leonardo, Atlas) — UMA convenção de preço do item, provada de ponta a ponta com o que a main FAZ:
-//  (a) item com OPÇÕES: `unitPriceCents` = BASE + opções SOMA × quantidade da opção; sem adicional legado (a main recusa os dois juntos: OPTIONS_AMBIGUOUS);
+//  (a) item com OPÇÕES: `unitPriceCents` = BASE + opções SOMA × quantidade da opção;
 //  (b) item com ADICIONAL LEGADO: `unitPriceCents` = SÓ a base e o adicional soma POR CIMA: linha = (unitário + adicionais) × quantidade.
+//  (e) DECISÃO do Atlas (#135): opções e adicional legado PODEM coexistir no mesmo item; unitário = base + opções; o adicional soma por cima (exemplo ORIGINAL do Leonardo: 7.900).
 // O mesmo pedido tem de dar o MESMO dinheiro no total do pedido, no tíquete (conta do print-client), no relatório e no caixa.
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
@@ -39,6 +40,19 @@ describe("C1 — convenção do preço do item: total, tíquete, relatório e ca
     },
     // BASE R$ 30,00 + adicional legado R$ 3,00, 2 unidades ⇒ unitário R$ 30,00; linha R$ 66,00
     { nome: "(b) adicional legado", unitario: 3000, qtd: 2, linha: 6600, adicional: { name: "Queijo extra", priceCents: 300 } },
+    // (e) BASE 30,00 + opções 4,00 e 2,50 + adicional legado 3,00, 2 unidades ⇒ unitário 36,50; linha (36,50 + 3,00) × 2 = 79,00
+    {
+      nome: "(e) opções + adicional legado no MESMO item",
+      unitario: 3650,
+      qtd: 2,
+      linha: 7900,
+      opcoes: [
+        { groupName: "Tamanho", name: "Média", priceCents: 3000, quantity: 1, priceMode: "BASE" },
+        { groupName: "Borda", name: "Catupiry", priceCents: 400, quantity: 1, priceMode: "SUM" },
+        { groupName: "Extra", name: "Bacon", priceCents: 250, quantity: 1, priceMode: "SUM" },
+      ],
+      adicional: { name: "Queijo extra", priceCents: 300 },
+    },
     // com quantidade na opção: BASE 30,00 + opção 2,00 × 3 = unitário 36,00; 1 unidade
     {
       nome: "(c) opção com quantidade 3",
