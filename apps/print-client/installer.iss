@@ -3,7 +3,7 @@
 ; Gera bin\Installer\MeuCardapio-PrintClient-Setup.exe
 ;
 ; Nome/marca final: decisao do Claudio (CL-05). Troque AppName/AppPublisher/icone so quando ela sair.
-; Nada aqui vem do cardapio.ai: tools\scan-identity.ps1 confere isso no EXE, no instalador e no codigo.
+; Nada aqui vem de um servico de terceiro: tools\scan-identity.ps1 confere isso no EXE, no instalador e no codigo.
 ; Assinatura de codigo (Authenticode) so com build final e aval do Claudio (gasto): PC-13.
 
 #define AppVersion "1.0.0"
