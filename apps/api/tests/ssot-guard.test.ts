@@ -35,11 +35,8 @@ function catraca(nome: string, re: RegExp, teto: Record<string, number>) {
 }
 
 describe("catraca de fonte única (nenhuma cópia nova)", () => {
-  // HORÁRIO/FUSO: a fonte da API é lib/storeDay.ts (STORE_TIMEZONE); a do front é features/inicio/services/salesDefinition.ts. Ver D-02.
+  // HORÁRIO/FUSO: na API só `DEFAULT_STORE_TIMEZONE` (lib/storeTime.ts) e `Store.timezone`; a do front é features/inicio/services/salesDefinition.ts. Ver D-02.
   catraca("fuso 'America/Sao_Paulo' escrito à mão", /["'`]America\/Sao_Paulo["'`]/g, {
-    "apps/api/src/lib/cashier.ts": 1,
-    "apps/api/src/lib/storeDay.ts": 1,
-    "apps/api/src/modules/orders/orders.service.ts": 1,
     "apps/web/features/auditoria/AuditoriaPage.tsx": 1,
     "apps/web/features/auditoria/components/LogRow.tsx": 1,
     "apps/web/features/cupons/components/CouponRow.tsx": 1,
@@ -50,7 +47,7 @@ describe("catraca de fonte única (nenhuma cópia nova)", () => {
     "apps/web/features/plataforma/PlatformUi.tsx": 1,
     "apps/web/features/privacidade/PrivacyPage.tsx": 1,
     "apps/web/features/relatorios/dateRange.ts": 1,
-    "apps/api/src/lib/storeTime.ts": 2
+    "apps/api/src/lib/storeTime.ts": 1 // DEFAULT_STORE_TIMEZONE: a ÚNICA na API (PR-04)
   });
   // DINHEIRO: formatador de moeda definido à mão
   catraca("formatador de moeda reinventado (Intl currency BRL / function formatBRL)", /style:\s*["']currency["']|function\s+(formatBRL|formatMoney|formatPrice)\b/g, {
