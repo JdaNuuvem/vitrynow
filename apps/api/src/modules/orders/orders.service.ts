@@ -178,7 +178,7 @@ export class OrderService {
         }
       }
     }
-    return searchOrderHistory(this.db, actor.storeId, store?.timezone ?? "America/Sao_Paulo", this.now(), query, actor.role, { skipPhone });
+    return searchOrderHistory(this.db, actor.storeId, safeTimeZone(store?.timezone), this.now(), query, actor.role, { skipPhone });
   }
 
   // Observação interna do pedido (API-54): texto livre da equipe, nunca ao cliente nem ao tíquete. A auditoria registra
