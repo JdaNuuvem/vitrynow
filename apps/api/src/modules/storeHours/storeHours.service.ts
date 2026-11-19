@@ -13,6 +13,7 @@ import {
   type Schedule,
   type StoreStatus,
 } from "./storeHours.domain";
+import { suggestSchedule, type HoursSuggestion } from "./storeHours.suggest";
 
 export type StoreHoursRow = {
   id: string;
@@ -103,6 +104,14 @@ export class StoreHoursService {
     const now = this.clock.now();
     const open = isOpenAt(schedule, row.timezone, now);
     return { openNow: open, nextOpensAt: open ? null : (nextOpening(schedule, row.timezone, now)?.toISOString() ?? null), hoursText: hoursText(schedule) };
+  }
+
+  /** a2: sugere uma grade a partir do texto enviado ou, sem texto, do texto LEGADO da loja. NÃO grava: o dono confere e salva pelo `POST /api/store/hours`. */
+  async suggest(storeId: string, text?: string): Promise<HoursSuggestion & { source: "REQUEST" | "LEGACY"; summary: string | null }> {
+    const row = await this.load(storeId);
+    const source = text !== undefined && text.trim() !== "" ? "REQUEST" : "LEGACY";
+    const result = suggestSchedule(source === "REQUEST" ? (text as string) : (row.openingHours ?? ""));
+    return { ...result, source, summary: result.schedule ? hoursText(result.schedule) : null };
   }
 
   /** Para as telas de configuração da loja (painel). */

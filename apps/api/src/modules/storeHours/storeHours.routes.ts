@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { busyRequestSchema, storeStatusActionSchema, updatePrepTimesSchema, updateStoreHoursSchema } from "@meucardapio/shared-types";
+import { busyRequestSchema, storeStatusActionSchema, suggestHoursSchema, updatePrepTimesSchema, updateStoreHoursSchema } from "@meucardapio/shared-types";
 import { useDomainErrors } from "../../shared/errors";
 import type { StoreHoursService } from "./storeHours.service";
 
@@ -17,6 +17,13 @@ export function buildStoreHoursRoutes(service: StoreHoursService): FastifyPlugin
       const parsed = updateStoreHoursSchema.safeParse(request.body);
       if (!parsed.success) return reply.code(400).send({ error: "Horário inválido.", code: "VALIDATION_ERROR", details: parsed.error.flatten() });
       return { hours: await service.saveSchedule(request.user, parsed.data.schedule) };
+    });
+
+    // a2: sugestão de grade a partir do texto (legado ou enviado). NÃO grava nada; por isso vale também na Consulta (classe `allowed`).
+    app.post("/api/store/hours/suggest", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request, reply) => {
+      const parsed = suggestHoursSchema.safeParse(request.body ?? {});
+      if (!parsed.success) return reply.code(400).send({ error: "Texto inválido.", code: "VALIDATION_ERROR", details: parsed.error.flatten() });
+      return { suggestion: await service.suggest(request.user.storeId, parsed.data.text) };
     });
 
     // "Minha loja → Atendimento": tempo médio de preparo por modalidade (5 a 240 min; null = sem previsão).
