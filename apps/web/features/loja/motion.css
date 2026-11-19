@@ -1,8 +1,8 @@
-/* Peças de movimento da loja pública que as telas ligam sob demanda (WEB-28, spec 12 §8). SÓ infraestrutura:
-   nenhuma regra aqui atinge um elemento que já existe, então a aparência de hoje não muda. Os tokens
-   (`--loja-dur-*`, `--loja-ease-*`) ficam em loja.css.
+/* Movimento da loja pública (spec 12 §8): base da WEB-28 e Fatia 2 (UX-26b). Os tokens (`--loja-dur-*`, `--loja-ease-*`)
+   ficam em loja.css e viram ~0 em `prefers-reduced-motion`, então tudo aqui já respeita a preferência.
 
-   Orçamento que o `motion.test.ts` impõe: os @keyframes só animam `transform` e `opacity` (compositor, sem reflow). */
+   Orçamento que o `motion.test.ts` impõe: @keyframes só com `transform`/`opacity`; transitions só de `transform`, `opacity`
+   e cor (nada de width, height, top, left, sombra ou filtro). `will-change` só durante a animação (nenhum fixo). */
 
 /* ---------- M-01: entrada de item (opt-in: a tela põe `loja-reveal` e `--loja-index`) ---------- */
 .loja .loja-reveal {
@@ -67,4 +67,178 @@
   clip: rect(0 0 0 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* ================= Fatia 2 (UX-26b) ================= */
+
+/* M-01: cartão sobe 10 px e aparece na 1ª vez que entra na tela. O JS (useRevealOnEnter) marca data-reveal só nos
+   cartões abaixo da dobra e o atraso da cascata (--reveal-i, no máximo 8); o HTML do servidor nunca nasce escondido. */
+.loja .loja__item[data-reveal] {
+  transition:
+    opacity var(--loja-dur-3) var(--loja-ease-out) calc(var(--reveal-i, 0) * var(--loja-stagger)),
+    transform var(--loja-dur-3) var(--loja-ease-out) calc(var(--reveal-i, 0) * var(--loja-stagger));
+}
+
+.loja .loja__item[data-reveal="pre"] {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+/* Rede de segurança: cartão que já estava na tela e continuava escondido aparece NA HORA, sem animação (conteúdo
+   invisível é pior do que animação perdida; o observador pode demorar em aba de fundo ou aparelho lento). */
+.loja .loja__item[data-reveal="shown"] {
+  transition: none;
+}
+
+/* M-05: "+" vira stepper e o selo da quantidade aparece: cresce de 0,8 a 1 com leve overshoot (200 ms, mola) */
+.loja .loja__stepper-card,
+.loja .loja__add-count {
+  animation: loja-pop var(--loja-dur-2) var(--loja-ease-spring) both;
+}
+
+.loja .loja__stepper-card {
+  transform-origin: right center;
+}
+
+@keyframes loja-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+}
+
+/* M-05/M-13: o toque afunda (escala 0,92 no "+", 0,98 nos demais) em 120 ms; nada espera a animação acabar */
+.loja .loja__add-dot,
+.loja .loja__nav-tab,
+.loja .loja__search,
+.loja .loja__categories-all,
+.loja .loja__hours-button,
+.loja .loja__stepper-card button {
+  transition: transform var(--loja-dur-1) var(--loja-ease-out);
+}
+
+/* chip: afunda (M-13, 120 ms) E troca de cor (M-03, 200 ms). Uma regra só: duas regras `transition` com a mesma
+   especificidade se sobrescrevem, e a segunda apagaria a troca de cor. */
+.loja .loja__chip-body {
+  transition:
+    transform var(--loja-dur-1) var(--loja-ease-out),
+    background-color var(--loja-dur-2),
+    color var(--loja-dur-2);
+}
+
+.loja .loja__add-button:active .loja__add-dot,
+.loja .loja__stepper-card button:active {
+  transform: scale(0.92);
+}
+
+.loja .loja__chip:active .loja__chip-body,
+.loja .loja__nav-tab:active,
+.loja .loja__search:active,
+.loja .loja__categories-all:active,
+.loja .loja__hours-button:active {
+  transform: scale(0.98);
+}
+
+/* M-07: a pílula do carrinho sobe e aparece; o pulso (WAAPI) e o total que "rola" vêm do React */
+.loja .loja__cart-bar {
+  animation: loja-pill-in var(--loja-dur-3) var(--loja-ease-out) both;
+  transition: transform var(--loja-dur-1) var(--loja-ease-out);
+}
+
+.loja .loja__cart-bar:active {
+  transform: translateX(-50%) scale(0.98);
+}
+
+@keyframes loja-pill-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(24px);
+  }
+}
+
+.loja .loja__roll {
+  display: inline-block;
+  animation: loja-roll var(--loja-dur-2) var(--loja-ease-out) both;
+}
+
+@keyframes loja-roll {
+  from {
+    opacity: 0;
+    transform: translateY(60%);
+  }
+}
+
+/* M-08: a folha (carrinho, checkout) sobe de baixo em 280 ms (ease-out), o fundo escurece; ao fechar desce MAIS RÁPIDO,
+   200 ms (ease-in). Em ≥ 801 px o modal sobe 24 px e aparece. A saída é a classe --closing que o Sheet põe e espera. */
+.loja .loja__sheet::before {
+  animation: loja-scrim-in var(--loja-dur-3) var(--loja-ease-out) both;
+}
+
+.loja .loja__sheet-panel {
+  animation: loja-sheet-in var(--loja-dur-3) var(--loja-ease-out) both;
+}
+
+.loja .loja__sheet--closing::before {
+  animation: loja-scrim-out var(--loja-dur-2) var(--loja-ease-in) both;
+}
+
+.loja .loja__sheet--closing .loja__sheet-panel {
+  animation: loja-sheet-out var(--loja-dur-2) var(--loja-ease-in) both;
+}
+
+@keyframes loja-scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes loja-scrim-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes loja-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@keyframes loja-sheet-out {
+  to {
+    transform: translateY(100%);
+  }
+}
+
+@media (min-width: 801px) {
+  .loja .loja__sheet-panel {
+    animation-name: loja-modal-in;
+  }
+
+  .loja .loja__sheet--closing .loja__sheet-panel {
+    animation-name: loja-modal-out;
+  }
+}
+
+@keyframes loja-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+}
+
+@keyframes loja-modal-out {
+  to {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+}
+
+/* M-11: foto que ainda carrega ao hidratar fica transparente (useBrokenImage marca data-loading) e aparece com fade */
+.loja img {
+  transition: opacity var(--loja-dur-2) var(--loja-ease-out);
+}
+
+.loja img[data-loading] {
+  opacity: 0;
 }

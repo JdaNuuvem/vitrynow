@@ -14,6 +14,18 @@ export function useBrokenImage(src: string | null | undefined) {
   useEffect(() => {
     const img = ref.current;
     if (src && img && img.complete && img.naturalWidth === 0) setFailedSrc(src);
+    // M-11 (fade da foto): só uma imagem que AINDA carrega ao hidratar fica transparente até o `load`. A que já veio
+    // pronta do servidor (SSR) nunca é escondida, para não piscar nem atrasar o LCP; sem JS também aparece.
+    if (!src || !img || img.complete) return;
+    img.setAttribute("data-loading", "");
+    const done = () => img.removeAttribute("data-loading");
+    img.addEventListener("load", done, { once: true });
+    img.addEventListener("error", done, { once: true });
+    return () => {
+      img.removeEventListener("load", done);
+      img.removeEventListener("error", done);
+      img.removeAttribute("data-loading");
+    };
   }, [src]);
 
   const onError = useCallback(() => setFailedSrc(src ?? null), [src]);
