@@ -43,7 +43,8 @@ describe("SEC-18 - respostas das rotas publicas so com campos permitidos", { tim
     expect(keys(body.categories[0].products[0])).toEqual(sorted(PUBLIC_PRODUCT_KEYS));
     expect(keys(body.categories[0].products[0].additionals[0])).toEqual(sorted(PUBLIC_ADDITIONAL_KEYS));
     const text = res.body;
-    for (const forbidden of ['"storeId"', '"createdAt"', '"updatedAt"', '"active"', '"position"', '"categoryId"', '"productId"', '"timezone"', '"customDomain"', '"printMode"', '"cashStaffWithdrawalLimitCents"']) {
+    // PR-04b: `timezone` DEIXOU de ser proibido (contrato aprovado: a loja pública mostra horários no fuso da loja; está na allowlist PUBLIC_STORE_KEYS).
+    for (const forbidden of ['"storeId"', '"createdAt"', '"updatedAt"', '"active"', '"position"', '"categoryId"', '"productId"', '"customDomain"', '"printMode"', '"cashStaffWithdrawalLimitCents"']) {
       expect(text, forbidden).not.toContain(forbidden);
     }
     expect(text).not.toContain(l.store.id); // o id interno da loja nunca aparece
