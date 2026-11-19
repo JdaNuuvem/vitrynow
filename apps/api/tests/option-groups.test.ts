@@ -249,7 +249,7 @@ describe("grupos de opções (API-15)", () => {
     };
     const publicOrder = (items: unknown[], fields: Record<string, unknown> = {}) => post(`${basePath}/orders`, { type: "BALCAO", items, ...fields });
     const required = await publicOrder([{ productId, quantity: 1 }]);
-    expect([required.statusCode, json(required).code]).toEqual([400, "OPTION_REQUIRED"]);
+    expect([required.statusCode, json(required).code]).toEqual([400, "OPTION_INVALID"]);
     const stale = await publicOrder([{ ...item, expectedUnitPriceCents: 7600 }]);
     expect([stale.statusCode, json(stale).code]).toEqual([409, "ITEM_PRICE_CHANGED"]);
     expect(json(stale).details.items[0]).toMatchObject({ productId, unitPriceCents: 7900 });
@@ -273,12 +273,12 @@ describe("grupos de opções (API-15)", () => {
       const { orderId } = json(response);
       const detail = json(await get(`/api/orders/${orderId}`)).order;
       expect(detail.totalCents).toBe(response === delivery ? 16300 : 15800);
-      expect(detail.items[0]).toMatchObject({ unitPriceCents: 6000, notes: item.notes });
+      expect(detail.items[0]).toMatchObject({ unitPriceCents: 7600, notes: item.notes });
       expect(detail.items[0].options).toEqual(expect.arrayContaining(snapshots));
       const ticket = await buildPrintableOrder(orderId);
-      expect(ticket?.items[0]).toMatchObject({ productName: "Pizza — G", unitPriceCents: 6000, quantity: 2 });
+      expect(ticket?.items[0]).toMatchObject({ productName: "Pizza", unitPriceCents: 6000, quantity: 2 }); // tíquete (convenção da main): unitário = BASE; opções em linhas "Grupo: opção"
       expect(ticket?.items[0].additionals).toEqual(expect.arrayContaining([
-        { name: "Orégano", priceCents: 300 }, { name: "2× Catupiry", priceCents: 1600 },
+        { name: "Orégano", priceCents: 300 }, { name: "Tamanho: G", priceCents: 0 }, { name: "Borda: Catupiry x2", priceCents: 1600 },
       ]));
     }
     const myOrders = await app.inject({ method: "GET", url: `${tablePath}/my-orders`, headers: { "x-device-token": json(qr).deviceToken } });

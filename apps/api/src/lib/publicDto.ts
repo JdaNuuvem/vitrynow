@@ -3,11 +3,10 @@
 // Adicionar um campo publico = editar esta lista de proposito (e o teste `public-dto.test.ts`, que trava o conjunto exato de chaves).
 import type { GroupRow } from "../modules/optionGroups/optionGroups.domain";
 import type { Category, Product, ProductAdditional, Store } from "@meucardapio/db";
-import type { orderOptionFields } from "./orderItems";
 
 export const PUBLIC_STORE_KEYS = ["name", "slug", "logoUrl", "coverImageUrl", "primaryColor", "address", "whatsapp", "openingHours", "minOrderCents", "deliveryEnabled", "pickupEnabled", "acceptingOrders", "deliveryFeeCents", "hideSoldOutProducts"] as const;
 export const PUBLIC_CATEGORY_KEYS = ["id", "name", "icon", "products"] as const;
-export const PUBLIC_PRODUCT_KEYS = ["id", "name", "description", "imageUrl", "priceCents", "featured", "soldOut", "additionals", "optionGroups", "unavailable"] as const;
+export const PUBLIC_PRODUCT_KEYS = ["id", "name", "description", "imageUrl", "priceCents", "featured", "soldOut", "additionals", "optionGroups", "unavailable", "unavailableByOptions", "fromPriceCents"] as const;
 export const PUBLIC_ADDITIONAL_KEYS = ["id", "name", "priceCents"] as const;
 // API-15 parte 3 (B8): grupos de opcoes REAIS (MANUAL) do produto. Sem `source`, `active`, `position` nem ids de loja. So opcoes ATIVAS.
 export const PUBLIC_OPTION_GROUP_KEYS = ["id", "name", "helpText", "minSelect", "maxSelect", "maxPerOption", "priceMode", "options"] as const;
@@ -44,7 +43,7 @@ export const publicOptionGroup = (g: GroupRow) => ({
 });
 
 // `soldOutUntil` NAO entra no tipo: a rota ja o consumiu ao calcular o `soldOut` efetivo (API-17) e ele nao e publico.
-type PublicProductInput = Omit<Product, "soldOutUntil"> & { additionals: ProductAdditional[]; optionGroups: GroupRow[]; unavailable: boolean };
+type PublicProductInput = Omit<Product, "soldOutUntil"> & { additionals: ProductAdditional[]; optionGroups: GroupRow[]; unavailable: boolean; fromPriceCents: number | null };
 
 export const publicProduct = (p: PublicProductInput) => ({
   id: p.id,
@@ -56,6 +55,8 @@ export const publicProduct = (p: PublicProductInput) => ({
   soldOut: p.soldOut, // API-17: valor EFETIVO agora (a rota o calcula com isSoldOutNow antes do DTO); `soldOutUntil` NAO e publico
   additionals: p.additionals.map(publicAdditional),
   optionGroups: p.optionGroups.map(publicOptionGroup),
+  unavailableByOptions: p.unavailable, // nome que o front le (mesmo valor de `unavailable`)
+  fromPriceCents: p.fromPriceCents, // "a partir de R$ X" (RN-B8-04): menor opcao ativa do grupo BASE; null sem variacao
   unavailable: p.unavailable, // RN-B8-05: grupo obrigatorio sem opcao ativa => nao da para pedir (calculado pela rota)
 });
 
