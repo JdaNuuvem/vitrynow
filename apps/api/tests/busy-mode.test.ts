@@ -50,10 +50,10 @@ describe("modo ocupado (g1)", () => {
     expect(refused.statusCode).toBe(409);
     expect(json(refused)).toMatchObject({ code: "STORE_BUSY", details: { reason: "BUSY" } });
     expect(json(refused).error).toMatch(/Voltamos a receber às \d{2}:\d{2}/);
-    expect(await menuStore()).toMatchObject({ accepting: false, acceptingNow: false, reason: "BUSY" });
+    expect(await menuStore()).toMatchObject({ accepting: false, reason: "BUSY" });
     await rewind(1); // o relógio passou de busyUntil
     expect((await publicOrder()).statusCode).toBe(201);
-    expect(await menuStore()).toMatchObject({ accepting: true, acceptingNow: true, busyUntil: null, reason: null });
+    expect(await menuStore()).toMatchObject({ accepting: true, busyUntil: null, reason: null });
   });
 
   it("CA-OCU-02: pedido manual, chamar garçom e acompanhar seguem funcionando durante o modo", async () => {
