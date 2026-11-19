@@ -99,6 +99,11 @@ caso "--prod: driver s3 com URL pública http reprova" 1 "STORAGE_PUBLIC_BASE_UR
 ARGS=
 caso "sem --prod: driver s3 incompleto é só aviso" 0 "STORAGE_DRIVER=s3 incompleto" "$(base; echo STORAGE_DRIVER=s3)"
 caso "local com chave de S3 preenchida: aviso de que é ignorada" 0 "STORAGE_DRIVER=local a ignora" "$(base; echo STORAGE_S3_BUCKET=x)"
+# --- API-58: REVALIDATE_SECRET (opcional; forte quando preenchido; distinto dos outros)
+caso "REVALIDATE_SECRET vazio: só aviso (o ISR de 30 s atualiza o cardápio)" 0 "REVALIDATE_SECRET vazio" "$(base)"
+caso "REVALIDATE_SECRET forte passa" 0 "REVALIDATE_SECRET com 41 caracteres" "$(base; echo REVALIDATE_SECRET=$S5)"
+caso "REVALIDATE_SECRET curto reprova mesmo sem --prod" 1 "REVALIDATE_SECRET curto" "$(base; echo REVALIDATE_SECRET=curto123)"
+caso "REVALIDATE_SECRET igual a outro segredo reprova" 1 "REVALIDATE_SECRET têm o MESMO valor" "$(base; echo REVALIDATE_SECRET=$S1)"
 # --- INF-19/C4: ADMIN_TOKEN fraco reprova sempre; vazio é permitido
 caso "ADMIN_TOKEN curto reprova mesmo sem --prod" 1 "ADMIN_TOKEN curto" "$(base; echo ADMIN_TOKEN=curto123)"
 caso "ADMIN_TOKEN forte passa" 0 "" "$(base; echo ADMIN_TOKEN=$S5)"

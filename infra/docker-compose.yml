@@ -97,6 +97,10 @@ services:
       MP_CLIENT_ID: ${MP_CLIENT_ID:-}
       MP_CLIENT_SECRET: ${MP_CLIENT_SECRET:-}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-}
+      # Revalidação do cardápio sob demanda (API-58): a API chama o web PELA REDE INTERNA (nunca pelo Caddy) com este segredo. Sem as DUAS variáveis a API não
+      # revalida e o cardápio só atualiza pelo ISR (até 30 s). O mesmo segredo vale no web (abaixo); vazio = desligado.
+      WEB_INTERNAL_URL: http://web:3000
+      REVALIDATE_SECRET: ${REVALIDATE_SECRET:-}
       MP_ACCESS_TOKEN: ${MP_ACCESS_TOKEN:-}
       MP_WEBHOOK_SECRET: ${MP_WEBHOOK_SECRET:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
@@ -145,6 +149,7 @@ services:
       # Chamadas servidor-a-servidor do cardápio (SSR/ISR) vão direto à API pela rede interna: sem isto o padrão do código é
       # http://localhost:3001, que dentro deste container NÃO é a API (o cardápio cairia no plano B do navegador sem avisar).
       API_INTERNAL_URL: http://api:3001
+      REVALIDATE_SECRET: ${REVALIDATE_SECRET:-}   # a rota /api/revalidate do web só abre com o MESMO segredo da API; vazio = fechada
       # Segredo de serviço (SEC-24): só em tempo de EXECUÇÃO e só no servidor. Nunca NEXT_PUBLIC_*, nunca ARG de build,
       # nunca no código. A API só confia no IP repassado pelo web quando este segredo confere.
       API_INTERNAL_SECRET: ${API_INTERNAL_SECRET:?defina API_INTERNAL_SECRET no .env (32+ caracteres; openssl rand -hex 32)}
