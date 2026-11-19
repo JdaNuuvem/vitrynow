@@ -166,7 +166,7 @@ export type GroupInput = {
   maxSelect: number | null;
   maxPerOption: number;
   priceMode: PriceMode;
-  options: Array<{ id?: string; name: string; priceCents: number; active?: boolean }>;
+  options: Array<{ id?: string; name: string; priceCents: number; active?: boolean; productId?: string | null; priceSource?: "OWN" | "INHERIT" }>;
 };
 
 export type ConfigProblem = { code: string; message: string };

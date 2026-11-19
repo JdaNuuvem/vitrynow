@@ -19,6 +19,7 @@ function setup(opts: { categories?: Category[]; products?: Product[]; productsIn
     nextCategoryPosition: async () => 0,
     deleteCategory: async (id: string) => void calls.push(`deleteCategory:${id}`),
     deleteProduct: async (id: string) => void calls.push(`deleteProduct:${id}`),
+    addonUsage: async () => ({ groups: [], products: 0 }), // RN-PD-15: sem uso como adicional = pode excluir
     createCategory: async (_s: string, data: unknown) => (updates.push(data), rec<Category>({})),
     updateCategory: async (_id: string, data: unknown) => (updates.push(data), rec<Category>({})),
   } as unknown as CatalogRepository;

@@ -59,6 +59,7 @@ export async function resetDb() {
     prisma.cashMovement.deleteMany(),
     prisma.cashSession.deleteMany(),
     prisma.productAdditional.deleteMany(),
+    prisma.option.deleteMany(),
     prisma.product.deleteMany(),
     prisma.category.deleteMany(),
     prisma.coupon.deleteMany(),
