@@ -30,6 +30,14 @@ type DetailInput = {
 };
 const invalid = (code: string, message: string, status = 400) => new CodedError(status, code, message);
 
+// SKU repetido na loja: a chave única (storeId, sku) do banco decide; duas gravações simultâneas nunca passam as duas.
+const isSkuTaken = (error: unknown) => {
+  const known = error as { code?: string; meta?: { target?: string[] | string } };
+  const target = Array.isArray(known.meta?.target) ? known.meta.target.join(",") : String(known.meta?.target ?? "");
+  return known.code === "P2002" && target.includes("sku");
+};
+const skuTaken = () => new CodedError(409, "SKU_TAKEN", "Este código já está em uso.");
+
 // Nome de categoria único na loja, sem diferenciar maiúsculas nem acentos (RN-CT-01, CA-CT-02).
 export function normalizeName(name: string): string {
   return name
@@ -120,7 +128,12 @@ export class CatalogService {
     }
     // Produto novo entra no FIM da categoria (RN-CT-02).
     const position = data.position ?? (await this.repo.nextProductPosition(data.categoryId));
-    return this.repo.createProduct(storeId, { ...data, position }, additionals);
+    try {
+      return await this.repo.createProduct(storeId, { ...data, position }, additionals);
+    } catch (error) {
+      if (isSkuTaken(error)) throw skuTaken();
+      throw error;
+    }
   }
 
   async updateProduct(actor: ProductActor, id: string, input: UpdateProductInput) {
@@ -134,6 +147,7 @@ export class CatalogService {
     } catch (error) {
       // SEC-10: adicional que não é deste produto (inclusive de outra loja) => 404, nada alterado.
       if (error instanceof AdditionalNotInProductError) throw new NotFoundError("adicional não encontrado neste produto");
+      if (isSkuTaken(error)) throw skuTaken();
       throw error;
     }
     // RN-PD-09: toda mudança de promoção (valor, início ou fim) também grava auditoria (só números e instantes, sem texto livre).
@@ -266,7 +280,9 @@ export class CatalogService {
       if (promo < 1 || promo >= price) throw invalid("PROMO_INVALID", "O preço promocional precisa ser menor que o preço normal.");
       if (startsAt && endsAt && endsAt.getTime() <= startsAt.getTime()) throw invalid("PROMO_INVALID", "A promoção termina antes de começar.");
       // RN-PD-10: acima de 50% só o dono (inteiros: promo × 2 < normal; 50% exato passa).
-      if (actor.role !== "OWNER" && promoAboveHalf(price, promo)) throw invalid("FORBIDDEN_ROLE", "Acima do seu limite. Peça ao dono.", 403);
+      // Só quando preço ou promoção vieram no corpo: o STAFF segue podendo editar nome, foto etc. de produto com promoção do dono acima de 50%.
+      const touchedPrice = input.priceCents !== undefined || input.promoCents !== undefined;
+      if (touchedPrice && actor.role !== "OWNER" && promoAboveHalf(price, promo)) throw invalid("FORBIDDEN_ROLE", "Acima do seu limite. Peça ao dono.", 403);
     }
 
     // Tipo: ADICIONAL nasce sem vender sozinho (RN-PD-11); o dono pode marcar "Também vender sozinho".
