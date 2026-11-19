@@ -25,7 +25,7 @@ export interface OptionGroupsRepository {
   countProductsUsing(groupId: string): Promise<number>;
   /** Produtos que ficariam com mais de um grupo BASE se `groupId` virasse BASE (nomes). */
   productsWithAnotherBase(storeId: string, groupId: string): Promise<string[]>;
-  findProduct(storeId: string, productId: string): Promise<{ id: string; name: string; priceCents: number } | null>;
+  findProduct(storeId: string, productId: string): Promise<{ id: string; name: string; priceCents: number; kind: string; saleUnit: string; promoCents: number | null } | null>;
   listProductGroups(storeId: string, productId: string): Promise<GroupRow[]>;
   groupsForProducts(storeId: string, productIds: string[], nativeOnly?: boolean): Promise<Map<string, GroupRow[]>>;
   setProductGroups(storeId: string, productId: string, groupIds: string[]): Promise<void>;
@@ -117,7 +117,7 @@ export class PrismaOptionGroupsRepository implements OptionGroupsRepository {
   }
 
   findProduct(storeId: string, productId: string) {
-    return this.db.product.findFirst({ where: { id: productId, storeId }, select: { id: true, name: true, priceCents: true } });
+    return this.db.product.findFirst({ where: { id: productId, storeId }, select: { id: true, name: true, priceCents: true, kind: true, saleUnit: true, promoCents: true } });
   }
 
   async listProductGroups(storeId: string, productId: string) {

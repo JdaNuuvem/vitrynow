@@ -1,6 +1,7 @@
 import type { Store } from "@meucardapio/db";
 import { prisma } from "@meucardapio/db";
 import { isSoldOutNow } from "./soldOut";
+import { promoActive } from "./productPrice";
 import { fromPriceCents, unavailableGroups, type GroupRow } from "../modules/optionGroups/optionGroups.domain";
 import { PrismaOptionGroupsRepository } from "../modules/optionGroups/optionGroups.repository";
 import { publicCampaign } from "../modules/campaign/campaign.service";
@@ -29,8 +30,9 @@ export async function buildMenuView(store: Store) {
       .map(({ soldOut, soldOutUntil, ...product }) => {
         // O espelho LEGACY_ADDITIONALS ja sai em `additionals`; aqui so os grupos reais (sem duplicar a escolha).
         const real: GroupRow[] = (groupsByProduct.get(product.id) ?? []).filter((g) => g.source !== "LEGACY_ADDITIONALS");
-        return { ...product, soldOut: isSoldOutNow({ soldOut, soldOutUntil }, now), optionGroups: real, unavailable: unavailableGroups(real).length > 0, fromPriceCents: fromPriceCents(real) };
+        return { ...product, soldOut: isSoldOutNow({ soldOut, soldOutUntil }, now), optionGroups: real, unavailable: unavailableGroups(real).length > 0, fromPriceCents: fromPriceCents(real), promoActiveNow: promoActive(product, now) };
       })
+      .filter((product) => product.sellAlone) // adicional que não vende sozinho nunca aparece na vitrine (RN-PD-11/16)
       .filter((product) => !(store.hideSoldOutProducts && product.soldOut)),
   }));
   return { store: { ...publicStore(store), campaign: await publicCampaign(store.id) }, categories: visibleCategories.map(publicCategory) };

@@ -297,6 +297,19 @@ model Product {
   position    Int          @default(0)
   soldOut      Boolean     @default(false) // API-17 (B11): esgotado; vale até soldOutUntil (null = até reativar)
   soldOutUntil DateTime?
+  // Produto detalhado (PD, carimbo 790000): tudo opcional/com padrao neutro; produto antigo segue identico. Dinheiro em centavos, peso em gramas inteiras.
+  promoCents   Int?      // preco promocional (< priceCents); vale entre promoStartsAt e promoEndsAt pelo relogio do SERVIDOR
+  promoStartsAt DateTime? // instante UTC (00:00 do dia escolhido no fuso da loja)
+  promoEndsAt   DateTime? // instante UTC EXCLUSIVO (00:00 do dia seguinte ao dia final escolhido)
+  kind         ProductKind @default(PRATO)
+  sellAlone    Boolean   @default(true) // false = adicional que nao vende sozinho
+  saleUnit     SaleUnit  @default(UN)   // KG/HG: priceCents e o preco do QUILO (HG so muda como a tela digita e mostra)
+  minGrams     Int       @default(100)
+  stepGrams    Int       @default(50)
+  maxGrams     Int       @default(5000)
+  isSingleDish Boolean   @default(false)
+  portionGrams Int?
+  serves       Int?
   additionals ProductAdditional[]
   optionGroups ProductOptionGroup[]
   orderItems  OrderItem[]
@@ -390,6 +403,17 @@ model Order {
   @@index([delivererId])
 }
 
+enum ProductKind {
+  PRATO
+  ADICIONAL
+}
+
+enum SaleUnit {
+  UN
+  KG
+  HG
+}
+
 model OrderItem {
   id           String   @id @default(cuid())
   orderId      String
@@ -400,6 +424,10 @@ model OrderItem {
   quantity     Int
   unitPriceCents Int
   notes        String?
+  // Produto detalhado: copias do momento do pedido. `listPriceCents` = preco normal da unidade (so quando havia promocao); venda por peso: quantity=1, `unitPriceCents` = valor da linha.
+  listPriceCents Int?
+  weightGrams    Int?
+  pricePerKgCents Int?
 
   additionals  OrderItemAdditional[]
   options      OrderItemOption[]
