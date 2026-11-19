@@ -29,6 +29,8 @@ export const createOrderItemSchema = z.object({
   additionalIds: z.array(z.string().min(1)).max(50).optional(),
   optionSelections: z.array(z.object({ optionId: z.string().min(1).max(150), quantity: z.number().int().min(1).max(99) })).max(300).optional(),
   expectedUnitPriceCents: z.number().int().nonnegative().max(2_147_483_647).optional(),
+  // API-15 parte 2 (B8): opções escolhidas por id, com quantidade (padrão 1). O servidor é a ÚNICA fonte do preço (RN-B8-03).
+  options: z.array(z.object({ optionId: z.string().min(1), quantity: z.number().int().positive().max(20).optional() })).max(60).optional(),
 });
 export type CreateOrderItem = z.infer<typeof createOrderItemSchema>;
 

@@ -14,18 +14,30 @@ import { customerMessageFor, messageActorFor, moneyLineFor } from "../lib/cancel
 import { DomainError, useDomainErrors } from "../shared/errors";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
 import { buildMenuView } from "../lib/menuView";
+import { resolveLine, type GroupRow } from "../modules/optionGroups/optionGroups.domain";
+import { PrismaOptionGroupsRepository } from "../modules/optionGroups/optionGroups.repository";
 import { limited, tooMany } from "../lib/slidingLimit";
+import { CAPTCHA_HEADER, captchaVerifier } from "../lib/captcha";
+import { clientIpOf } from "../lib/clientIp";
+import { clientKey } from "../lib/clientKey";
 import { newOrderToken, orderTokenMatches, ORDER_TOKEN_HEADER } from "../lib/orderToken";
 import { assertOrderMoneyFits, resolveOrderItems } from "../lib/orderItems";
 import { optionGroupsService } from "../modules/optionGroups/optionGroups.module";
 
 const COUPON_EXHAUSTED_MESSAGE = "Esse cupom acabou.";
 class CouponExhaustedError extends Error {}
+// API-15: erro de escolha de opções do item (vira 400 com `code`, sem dizer se a opção existe em outra loja/produto).
+class OptionRequestError extends Error {
+  constructor(message: string, readonly code: string) {
+    super(message);
+  }
+}
 
 // Rotas públicas do cardápio (sem autenticação) — equivalente ao /online/{slug} do original.
 // NG-08: tetos do pedido público (por loja e por telefone); ver o comentário no uso.
 export const PUBLIC_ORDERS_PER_STORE_PER_MINUTE = 60;
 export const MAX_PENDING_PER_PHONE = 3;
+export const CAPTCHA_AT_PENDING = 2; // com captcha ligado, a partir do 2º pedido pendente do telefone
 const PENDING_WINDOW_MS = 30 * 60 * 1000;
 
 const storefrontRoutes: FastifyPluginAsync = async (app) => {
@@ -65,6 +77,14 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         where: { storeId: store.id, customerPhone: input.customerPhone, status: "PENDENTE", source: "CLIENTE", createdAt: { gte: new Date(Date.now() - PENDING_WINDOW_MS) } },
       });
       if (pendingOfPhone >= MAX_PENDING_PER_PHONE) return tooMany(reply);
+      // Captcha SÓ com risco (NG-08): o 2º pedido pendente do mesmo telefone já pede a prova; cliente normal nunca vê. Provedor desligado (`off`) = nada muda.
+      const captcha = captchaVerifier();
+      if (captcha.mode !== "off" && pendingOfPhone >= CAPTCHA_AT_PENDING) {
+        const header = request.headers[CAPTCHA_HEADER];
+        const token = typeof header === "string" && header.length <= 2000 ? header : undefined;
+        const ok = await captcha.verify(token, clientKey(clientIpOf(request))).catch(() => false); // erro do provedor = recusa (fail-closed)
+        if (!ok) return reply.code(403).send({ error: "Confirme que você não é um robô para continuar.", code: "CAPTCHA_REQUIRED" });
+      }
     }
 
     // Mesa só entra por QR/comanda (API-22). Esta rota genérica não tem mesa: recusa até lá (API-60).
@@ -109,8 +129,62 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    const optionGroups = await optionGroupsService.groupsForProducts(store.id, products.map((product) => product.id), true);
-    const { items: itemsData, subtotalCents } = resolveOrderItems(input.items, products, optionGroups);
+    // API-15 parte 2 (B8): produto com grupo de opções REAL (MANUAL) é precificado por `resolveLine` (o servidor é a única fonte do preço);
+    // produto só com o espelho legado dos adicionais (LEGACY_ADDITIONALS) segue o caminho antigo, idêntico ao de antes (CA-B8-06).
+    const groupsByProduct = await new PrismaOptionGroupsRepository(prisma).groupsForProducts(store.id, [...productById.keys()]);
+    const optionIssues: Array<{ productId: string; code: string; message: string; groupId?: string }> = [];
+    let itemsData;
+    try {
+      itemsData = input.items.map((item) => {
+        const product = productById.get(item.productId)!;
+        const groups: GroupRow[] = groupsByProduct.get(product.id) ?? [];
+        const realGroups = groups.filter((g) => g.source !== "LEGACY_ADDITIONALS");
+        if (item.options && item.additionalIds?.length) throw new OptionRequestError("Envie `options` OU `additionalIds` no mesmo item, não os dois.", "OPTIONS_AMBIGUOUS");
+        if (realGroups.length > 0 || item.options) {
+          // grupo legado entra no cálculo só como lista de opções válidas (ids iguais aos dos adicionais): produto sem grupo real aceita `options` também
+          const resolved = resolveLine({ name: product.name, priceCents: product.priceCents }, groups, item.options ?? []);
+          if (!resolved.ok) {
+            for (const issue of resolved.issues) optionIssues.push({ productId: product.id, code: issue.code, message: issue.message, groupId: issue.groupId });
+            throw new OptionRequestError("As opções escolhidas não são válidas.", "OPTION_INVALID");
+          }
+          return {
+            productId: item.productId,
+            productName: product.name,
+            quantity: item.quantity,
+            unitPriceCents: resolved.unitPriceCents, // preço UNITÁRIO já com a variação e as opções (RN-B8-03)
+            notes: item.notes,
+            lineTotalCents: resolved.unitPriceCents * item.quantity,
+            additionals: [] as Array<{ name: string; priceCents: number }>,
+            optionCopies: resolved.copies,
+          };
+        }
+        const additionalsByProduct = new Map(product.additionals.map((a) => [a.id, a]));
+        const chosenAdditionals = (item.additionalIds ?? []).map((id) => {
+          const additional = additionalsByProduct.get(id);
+          if (!additional) throw new Error(`adicional ${id} não pertence ao produto ${product.id}`);
+          return additional;
+        });
+        const additionalsCents = chosenAdditionals.reduce((sum, a) => sum + a.priceCents, 0);
+        return {
+          productId: item.productId,
+          productName: product.name,
+          quantity: item.quantity,
+          unitPriceCents: product.priceCents,
+          notes: item.notes,
+          lineTotalCents: (product.priceCents + additionalsCents) * item.quantity,
+          additionals: chosenAdditionals,
+          optionCopies: [] as Array<{ groupName: string; name: string; priceCents: number; quantity: number; priceMode: "SUM" | "BASE" }>,
+        };
+      });
+    } catch (error) {
+      if (error instanceof OptionRequestError) {
+        // Uma resposta SÓ para opção inexistente, inativa, de outro produto ou de outra loja: nenhuma pista (RN-B8-02).
+        return reply.code(400).send({ error: error.message, code: error.code, ...(optionIssues.length ? { issues: optionIssues } : {}) });
+      }
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "pedido inválido" });
+    }
+
+    const subtotalCents = itemsData.reduce((sum, item) => sum + item.lineTotalCents, 0);
 
     if (store.minOrderCents !== null && subtotalCents < store.minOrderCents) {
       return reply.code(400).send({ error: `pedido mínimo é R$ ${(store.minOrderCents / 100).toFixed(2)}` });
@@ -235,7 +309,22 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         // falar com o provedor — se algo cair no meio, a cobrança é encontrada (e a conciliação resolve), nunca órfã.
         ...(usePix ? { payment: { create: { amountCents: totalCents, idempotencyKey: randomUUID() } } } : {}),
         statusHistory: { create: { status: "PENDENTE" } },
-        items: { create: itemsData },
+        items: {
+          create: itemsData.map((item) => ({
+            productId: item.productId,
+            productName: item.productName,
+            quantity: item.quantity,
+            unitPriceCents: item.unitPriceCents,
+            notes: item.notes,
+            additionals: {
+              create: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })),
+            },
+            // Cópia da escolha no pedido (RN-B8-07): mudar o cardápio depois não altera pedido antigo. Na MESMA transação do pedido.
+            ...(item.optionCopies.length > 0
+              ? { options: { create: item.optionCopies.map((o) => ({ groupName: o.groupName, name: o.name, priceCents: o.priceCents, quantity: o.quantity, priceMode: o.priceMode })) } }
+              : {}),
+          })),
+        },
       },
       });
       // Pedido que já entra no kanban (não aguarda PIX): o tíquete nasce NA MESMA transação — nunca pedido sem job.

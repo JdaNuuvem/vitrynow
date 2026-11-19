@@ -179,6 +179,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       const startedAt = performance.now();
       const parsed = forgotPasswordSchema.safeParse(request.body);
       if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+      securityEvent(request, "password_reset_requested", { email: parsed.data.email }); // NG-12: igual para conta existente, inexistente e limitada (sem oráculo)
 
       // SEC-28: a emissão do token (por conta: 3/hora, 60 s entre pedidos, um só token ativo) fica em `issueResetToken`; o envio NÃO é
       // esperado (ST-57: esperar o provedor de e-mail revelaria por tempo se a conta existe) e o piso de duração iguala os três caminhos
@@ -233,6 +234,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         // com o erro de validação, que não depende do token e por isso não é oráculo.
         const onlyEmail = parsed.error.issues.length > 0 && parsed.error.issues.every((issue) => issue.path[0] === "email");
         if (onlyEmail) {
+          securityEvent(request, "password_reset_refused", { reason: "EMAIL_MISSING" });
           await padToMinimum(startedAt, RESET_FAIL_MIN_DURATION_MS, "reset");
           return reply.code(400).send({ error: "token inválido ou expirado" });
         }
@@ -296,11 +298,13 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         throw error;
       });
       if (!outcome || !resetToken) {
+        securityEvent(request, "password_reset_refused", { email: parsed.data.email, reason: "TOKEN_REFUSED" }); // o mesmo evento para token morto, e-mail errado ou inexistente
         await padToMinimum(startedAt, RESET_FAIL_MIN_DURATION_MS, "reset");
         return reply.code(400).send({ error: "token inválido ou expirado" });
       }
 
       disconnectUser(outcome);
+      securityEvent(request, "password_reset_done", { userId: outcome });
       return { ok: true };
     },
   );

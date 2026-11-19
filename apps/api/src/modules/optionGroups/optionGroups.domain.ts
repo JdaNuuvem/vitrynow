@@ -13,6 +13,8 @@ export type GroupRow = {
   maxSelect: number | null;
   maxPerOption: number;
   priceMode: PriceMode;
+  /** "LEGACY_ADDITIONALS" = espelho dos adicionais antigos (mesmos ids); "MANUAL" = grupo criado no painel. */
+  source?: string;
   /** Ordem do grupo dentro do produto. */
   position?: number;
   options: OptionRow[];

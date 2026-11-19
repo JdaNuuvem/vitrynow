@@ -1,3 +1,6 @@
+import { randomBytes } from "node:crypto";
+import { mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 // API-18 / ADR-0010: interface de armazenamento de objetos. O domínio só conhece isto; o provedor
@@ -46,6 +49,69 @@ export class InMemoryObjectStorage implements ObjectStorage {
 
   publicUrl(key: string): string {
     return `${this.baseUrl}/${key}`;
+  }
+}
+
+/**
+ * Disco local do servidor (ADR-0017, decisão do Claudio 18/11: produção sem S3/R2). Os arquivos ficam em `rootDir/<chave>`; quem
+ * serve ao público é o proxy (Caddy), numa rota só de leitura e sem listar diretório; a API NÃO serve arquivos.
+ * Defesas: a chave passa por `assertSafeKey` (stores/<loja>/<uuid>-<largura>.webp: sem `..`, sem barra extra, sem nome do cliente);
+ * o caminho final é conferido contra a raiz e, depois do mkdir, o `realpath` da pasta também (um symlink plantado em
+ * stores/<loja> não leva a gravação para fora). Escrita atômica (temporário + rename): o proxy nunca serve arquivo pela metade.
+ */
+export class LocalDiskStorage implements ObjectStorage {
+  private readonly root: string;
+
+  constructor(
+    rootDir: string,
+    private readonly publicBaseUrl: string,
+  ) {
+    if (!path.isAbsolute(rootDir)) throw new Error("STORAGE_LOCAL_DIR deve ser um caminho absoluto");
+    this.root = path.resolve(rootDir);
+  }
+
+  private fileOf(key: string): string {
+    assertSafeKey(key);
+    const file = path.resolve(this.root, key);
+    if (!file.startsWith(this.root + path.sep)) throw new Error("chave de objeto fora da pasta de uploads");
+    return file;
+  }
+
+  /** A pasta REAL (depois de seguir symlinks) tem de continuar dentro da raiz REAL. */
+  private async assertInsideRoot(dir: string): Promise<void> {
+    const [realDir, realRoot] = await Promise.all([realpath(dir), realpath(this.root)]);
+    if (realDir !== realRoot && !realDir.startsWith(realRoot + path.sep)) throw new Error("pasta de uploads aponta para fora da raiz");
+  }
+
+  async put(key: string, body: Buffer, _options: PutOptions): Promise<void> {
+    const file = this.fileOf(key);
+    const dir = path.dirname(file);
+    await mkdir(dir, { recursive: true, mode: 0o755 });
+    await this.assertInsideRoot(dir);
+    const tmp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
+    try {
+      await writeFile(tmp, body, { flag: "wx", mode: 0o644 });
+      await rename(tmp, file);
+    } catch (error) {
+      await rm(tmp, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  async delete(key: string): Promise<void> {
+    const file = this.fileOf(key);
+    try {
+      await this.assertInsideRoot(path.dirname(file));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return; // pasta inexistente: nada a apagar (idempotente)
+      throw error;
+    }
+    await rm(file, { force: true }); // já não existir não é erro
+  }
+
+  publicUrl(key: string): string {
+    assertSafeKey(key);
+    return `${this.publicBaseUrl.replace(/\/+$/, "")}/${key}`;
   }
 }
 
@@ -98,6 +164,16 @@ const isDevLikeEnv = (env: NodeJS.ProcessEnv) => env.NODE_ENV === "development" 
  */
 export function assertStorageBootConfig(env: NodeJS.ProcessEnv = process.env): void {
   if (isDevLikeEnv(env)) return;
+  // ADR-0017: uploads em disco local do servidor; sem S3. O driver em disco é entregue à parte (API-18c).
+  const driver = env.STORAGE_DRIVER || "s3";
+  if (driver !== "s3" && driver !== "local") throw new Error(`STORAGE_DRIVER inválido: "${driver}" (use "local" ou "s3").`);
+  if (driver === "local") {
+    const missingLocal = ["STORAGE_LOCAL_DIR", "STORAGE_PUBLIC_BASE_URL"].filter((name) => !env[name]);
+    if (missingLocal.length > 0) throw new Error(`Storage em disco não configurado: faltam ${missingLocal.join(", ")}.`);
+    if (!/^(\/|[A-Za-z]:[\\/])/.test(env.STORAGE_LOCAL_DIR ?? "")) throw new Error("STORAGE_LOCAL_DIR deve ser um caminho absoluto.");
+    if (!/^https:\/\//.test(env.STORAGE_PUBLIC_BASE_URL ?? "")) throw new Error("STORAGE_PUBLIC_BASE_URL deve ser https:// fora de dev/teste (URL pública das imagens).");
+    return;
+  }
   const missing = ["STORAGE_S3_ENDPOINT", "STORAGE_S3_BUCKET", "STORAGE_S3_ACCESS_KEY_ID", "STORAGE_S3_SECRET_ACCESS_KEY", "STORAGE_PUBLIC_BASE_URL"].filter((name) => !env[name]);
   if (missing.length > 0) throw new Error(`Storage de imagens não configurado fora de dev/teste: faltam ${missing.join(", ")}. O Fake em memória só roda em dev/teste.`);
   if (!/^https:\/\//.test(env.STORAGE_PUBLIC_BASE_URL ?? "")) throw new Error("STORAGE_PUBLIC_BASE_URL deve ser https:// fora de dev/teste (URL pública das imagens).");
@@ -105,6 +181,12 @@ export function assertStorageBootConfig(env: NodeJS.ProcessEnv = process.env): v
 
 export function createObjectStorageFromEnv(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
   assertStorageBootConfig(env);
+  if (env.STORAGE_DRIVER === "local") {
+    // Em dev/teste a guarda do boot não exige nada; aqui o driver exige o mínimo para funcionar (pasta absoluta e URL pública).
+    if (!env.STORAGE_LOCAL_DIR || !path.isAbsolute(env.STORAGE_LOCAL_DIR)) throw new Error("STORAGE_DRIVER=local exige STORAGE_LOCAL_DIR (caminho absoluto).");
+    if (!env.STORAGE_PUBLIC_BASE_URL) throw new Error("STORAGE_DRIVER=local exige STORAGE_PUBLIC_BASE_URL (URL pública da rota de mídia no proxy).");
+    return new LocalDiskStorage(env.STORAGE_LOCAL_DIR, env.STORAGE_PUBLIC_BASE_URL);
+  }
   const endpoint = env.STORAGE_S3_ENDPOINT;
   if (!endpoint) return new InMemoryObjectStorage(env.STORAGE_PUBLIC_BASE_URL);
   const need = (name: string) => {

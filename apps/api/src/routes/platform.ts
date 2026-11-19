@@ -22,6 +22,7 @@ import { sendCreditChangeEmail, sendMfaCodeEmail } from "../lib/email";
 import { resolveSubscription } from "../lib/subscription";
 import { ServerBusyError, sendServerBusy } from "../shared/errors";
 import { DUMMY_HASH, bcryptPasswordHasher as passwordHasher } from "../shared/passwordHasher";
+import { securityEvent } from "../lib/securityEvents";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PRINTER_ONLINE_MS = 2 * 60 * 1000;
@@ -68,6 +69,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
     const slot = throttle.reserve(email, clientIpOf(request));
     if (!slot.allowed) {
       reply.header("Retry-After", String(slot.retryAfterSeconds));
+      securityEvent(request, "platform_login_locked", { email });
       return reply.code(429).send({ error: "muitas tentativas; tente de novo em alguns minutos", code: "LOGIN_LOCKED" });
     }
     if (slot.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, slot.delayMs));
@@ -83,7 +85,10 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
       }
       throw error;
     }
-    if (!admin || admin.disabledAt || !passwordOk) return reply.code(401).send({ error: "credenciais inválidas" });
+    if (!admin || admin.disabledAt || !passwordOk) {
+      securityEvent(request, "platform_login_failed", { email });
+      return reply.code(401).send({ error: "credenciais inválidas" });
+    }
     throttle.succeed(email, clientIpOf(request));
 
     // Senha certa NÃO abre sessão: só gera o desafio. O cookie só nasce em /auth/verify.
@@ -98,15 +103,28 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
     const { challengeId, code } = parsed.data;
 
     const challenge = await prisma.mfaChallenge.findUnique({ where: { id: challengeId } });
-    if (!challenge || challenge.purpose !== "platform_login") return reply.code(400).send({ error: "código inválido", code: "MFA_INVALID" });
+    if (!challenge || challenge.purpose !== "platform_login") {
+      securityEvent(request, "platform_mfa_failed", { reason: "MFA_INVALID" });
+      return reply.code(400).send({ error: "código inválido", code: "MFA_INVALID" });
+    }
     const outcome = await verifyChallenge(challenge.userId, challengeId, code);
-    if (outcome === "locked") return reply.code(429).send({ error: "muitas tentativas; peça um código novo", code: "MFA_LOCKED" });
-    if (outcome === "expired") return reply.code(400).send({ error: "código expirado", code: "MFA_EXPIRED" });
-    if (outcome !== "ok") return reply.code(400).send({ error: "código inválido", code: "MFA_INVALID" });
+    if (outcome === "locked") {
+      securityEvent(request, "platform_mfa_failed", { reason: "MFA_LOCKED" });
+      return reply.code(429).send({ error: "muitas tentativas; peça um código novo", code: "MFA_LOCKED" });
+    }
+    if (outcome === "expired") {
+      securityEvent(request, "platform_mfa_failed", { reason: "MFA_EXPIRED" });
+      return reply.code(400).send({ error: "código expirado", code: "MFA_EXPIRED" });
+    }
+    if (outcome !== "ok") {
+      securityEvent(request, "platform_mfa_failed", { reason: "MFA_INVALID" });
+      return reply.code(400).send({ error: "código inválido", code: "MFA_INVALID" });
+    }
 
     const admin = await prisma.platformAdmin.findUnique({ where: { id: challenge.userId } });
     if (!admin || admin.disabledAt) return reply.code(401).send({ error: "credenciais inválidas" });
     await platformAudit({ adminId: admin.id, action: "platform.login" });
+    securityEvent(request, "platform_login_ok", { userId: admin.id });
     reply.setCookie(PLATFORM_COOKIE, sessionToken(admin), platformCookieOptions());
     return { ok: true, role: admin.role };
   });
@@ -141,9 +159,18 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
     const parsed = platformMfaVerifySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     const outcome = await verifyChallenge(request.platformAdmin!.id, parsed.data.challengeId, parsed.data.code);
-    if (outcome === "locked") return reply.code(429).send({ error: "muitas tentativas; peça um código novo", code: "MFA_LOCKED" });
-    if (outcome === "expired") return reply.code(400).send({ error: "código expirado", code: "MFA_EXPIRED" });
-    if (outcome !== "ok") return reply.code(400).send({ error: "código inválido", code: "MFA_INVALID" });
+    if (outcome === "locked") {
+      securityEvent(request, "platform_mfa_failed", { reason: "MFA_LOCKED" });
+      return reply.code(429).send({ error: "muitas tentativas; peça um código novo", code: "MFA_LOCKED" });
+    }
+    if (outcome === "expired") {
+      securityEvent(request, "platform_mfa_failed", { reason: "MFA_EXPIRED" });
+      return reply.code(400).send({ error: "código expirado", code: "MFA_EXPIRED" });
+    }
+    if (outcome !== "ok") {
+      securityEvent(request, "platform_mfa_failed", { reason: "MFA_INVALID" });
+      return reply.code(400).send({ error: "código inválido", code: "MFA_INVALID" });
+    }
     return { ok: true };
   });
 

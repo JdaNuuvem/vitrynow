@@ -71,6 +71,19 @@ describe("revalidação da vitrine (API-58)", () => {
     r.register(menuRevalidateJob);
     return r;
   };
+  // Quiescência: fila vazia e nenhuma chamada nova durante 600 ms, por duas janelas seguidas (nada em voo nem re-armado).
+  const settle = async () => {
+    let stable = 0;
+    let last = -1;
+    const deadline = Date.now() + 15_000;
+    while (stable < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const idle = (await prisma.menuRevalidation.count()) === 0 && web.calls.length === last;
+      stable = idle ? stable + 1 : 0;
+      last = web.calls.length;
+    }
+    expect(stable, "a fila não assentou em 15 s").toBe(2);
+  };
   const waitFor = async (check: () => boolean, ms = 4000) => {
     const start = Date.now();
     while (!check() && Date.now() - start < ms) await new Promise((resolve) => setTimeout(resolve, 25));
@@ -91,8 +104,11 @@ describe("revalidação da vitrine (API-58)", () => {
     // do gancho. Se a edição chega com o envio da CRIAÇÃO ainda em voo, o `kick` acha o job ocupado, desiste em ~1 s, e o envio da criação perde o
     // `deleteMany` (o `requestedAt` já é o da edição): a linha re-armada fica sem quem a envie. Em produção o ciclo de 3 s a envia; aqui não.
     // O ponto de partida correto é a criação ASSENTADA: chamada recebida E fila vazia (a linha só some depois do envio confirmado).
+    // A PREPARAÇÃO tem 2 mudanças (categoria e produto), cada uma com o seu envio: esperar só o 1º envio deixava o 2º cair DEPOIS do `length = 0`
+    // e contar como se fosse da edição (CI do #116: "expected 2 to have a length of 1"). O ponto de partida é a QUIESCÊNCIA: fila vazia E nenhuma
+    // chamada nova por uma janela de 600 ms (mais que o intervalo do `kick`, 300 ms), medida duas vezes seguidas.
     await vi.waitFor(() => expect(web.calls.length).toBeGreaterThan(0), { timeout: 8000, interval: 25 });
-    await vi.waitFor(async () => expect(await prisma.menuRevalidation.count()).toBe(0), { timeout: 8000, interval: 25 });
+    await settle();
     web.calls.length = 0;
 
     const started = Date.now();

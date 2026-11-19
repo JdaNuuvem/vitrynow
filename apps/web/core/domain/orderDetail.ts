@@ -19,8 +19,9 @@ export type DetailItem = {
 
 export function detailItemTotal(item: Pick<DetailItem, "quantity" | "unitPriceCents" | "additionals" | "options">) {
   const legacy = (item.additionals ?? []).reduce((sum, entry) => sum + entry.priceCents, 0);
-  const extras = (item.options ?? []).reduce((sum, entry) => sum + (entry.priceMode === "SUM" ? entry.priceCents * entry.quantity : 0), 0);
-  return (item.unitPriceCents + legacy + extras) * item.quantity;
+  // Convenção da API (RN-B8-03): `unitPriceCents` JÁ traz a variação e as opções SUM; só os adicionais LEGADOS ficam fora do unitário.
+  // `options` serve para exibir (grupo, nome, quantidade): somar de novo aqui cobraria o extra em dobro.
+  return (item.unitPriceCents + legacy) * item.quantity;
 }
 
 export type DetailPayment = {

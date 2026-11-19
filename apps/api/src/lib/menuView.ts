@@ -1,6 +1,8 @@
 import type { Store } from "@meucardapio/db";
 import { prisma } from "@meucardapio/db";
 import { isSoldOutNow } from "./soldOut";
+import { unavailableGroups, type GroupRow } from "../modules/optionGroups/optionGroups.domain";
+import { PrismaOptionGroupsRepository } from "../modules/optionGroups/optionGroups.repository";
 import { publicCategory, publicStore } from "./publicDto";
 import { orderOptionFields } from "./orderItems";
 import { optionGroupsService } from "../modules/optionGroups/optionGroups.module";
@@ -20,15 +22,15 @@ export async function buildMenuView(store: Store) {
       },
     },
   });
-  // Os adicionais existentes vêm de ProductAdditional. O espelho da migração não passa pelo checkout novo.
-  const groups = await optionGroupsService.groupsForProducts(store.id, categories.flatMap((category) => category.products.map((product) => product.id)), true);
+  const groupsByProduct = await new PrismaOptionGroupsRepository(prisma).groupsForProducts(store.id, categories.flatMap((c) => c.products.map((p) => p.id)));
   const now = new Date();
   const visibleCategories = categories.map(({ products, ...category }) => ({
     ...category,
     products: products
       .map(({ soldOut, soldOutUntil, ...product }) => {
-        const optionFields = orderOptionFields(groups.get(product.id) ?? []);
-        return { ...product, ...optionFields, soldOut: optionFields.unavailableByOptions || isSoldOutNow({ soldOut, soldOutUntil }, now) };
+        // O espelho LEGACY_ADDITIONALS ja sai em `additionals`; aqui so os grupos reais (sem duplicar a escolha).
+        const real: GroupRow[] = (groupsByProduct.get(product.id) ?? []).filter((g) => g.source !== "LEGACY_ADDITIONALS");
+        return { ...product, soldOut: isSoldOutNow({ soldOut, soldOutUntil }, now), optionGroups: real, unavailable: unavailableGroups(real).length > 0 };
       })
       .filter((product) => !(store.hideSoldOutProducts && product.soldOut)),
   }));

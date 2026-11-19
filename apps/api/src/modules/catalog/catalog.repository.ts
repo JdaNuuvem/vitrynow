@@ -1,6 +1,7 @@
 import type { Category, Product, ProductAdditional, prisma as prismaClient } from "@meucardapio/db";
 import { orderOptionFields } from "../../lib/orderItems";
 import { PrismaOptionGroupsRepository } from "../optionGroups/optionGroups.repository";
+import type { Category, Product, ProductAdditional, Prisma, prisma as prismaClient } from "@meucardapio/db";
 
 type Db = typeof prismaClient;
 
@@ -129,13 +130,17 @@ export class PrismaCatalogRepository implements CatalogRepository {
   }
 
   createProduct(storeId: string, data: ProductData & { name: string; priceCents: number }, additionals?: AdditionalData[]) {
-    return this.db.product.create({
-      data: {
-        ...data,
-        storeId,
-        additionals: additionals ? { create: additionals.map(({ name, priceCents }) => ({ name, priceCents })) } : undefined,
-      },
-      include: { additionals: true },
+    return this.db.$transaction(async (tx) => {
+      const product = await tx.product.create({
+        data: {
+          ...data,
+          storeId,
+          additionals: additionals ? { create: additionals.map(({ name, priceCents }) => ({ name, priceCents })) } : undefined,
+        },
+        include: { additionals: true },
+      });
+      if (additionals) await syncLegacyMirror(tx, storeId, product.id);
+      return product;
     });
   }
 
@@ -161,7 +166,9 @@ export class PrismaCatalogRepository implements CatalogRepository {
           }
         }
       }
-      return tx.product.update({ where: { id }, data, include: { additionals: true } });
+      const updated = await tx.product.update({ where: { id }, data, include: { additionals: true } });
+      if (additionals) await syncLegacyMirror(tx, updated.storeId, id);
+      return updated;
     });
   }
 
@@ -191,4 +198,33 @@ export class PrismaCatalogRepository implements CatalogRepository {
       where: { status: { notIn: ["CONCLUIDO", "CANCELADO"] }, items: { some: { productId } } },
     });
   }
+}
+
+// API-15 parte 3 (RN-B8-08): enquanto o painel antigo edita ProductAdditional, o grupo "Adicionais" (LEGACY_ADDITIONALS, id `og_leg_<produto>`)
+// espelha os adicionais, com o MESMO id na opcao. Assim `additionalIds` e `options` valem para o mesmo preco (CA-B8-06). Na mesma transacao.
+async function syncLegacyMirror(tx: Prisma.TransactionClient, storeId: string, productId: string) {
+  const groupId = `og_leg_${productId}`;
+  const additionals = await tx.productAdditional.findMany({ where: { productId }, orderBy: { id: "asc" } });
+  if (additionals.length === 0) {
+    await tx.optionGroup.deleteMany({ where: { id: groupId, storeId } }); // opcoes e vinculo saem em cascata
+    return;
+  }
+  await tx.optionGroup.upsert({
+    where: { id_storeId: { id: groupId, storeId } },
+    create: { id: groupId, storeId, name: "Adicionais", minSelect: 0, maxSelect: null, maxPerOption: 1, priceMode: "SUM", source: "LEGACY_ADDITIONALS" },
+    update: {},
+  });
+  await tx.option.deleteMany({ where: { groupId, storeId, id: { notIn: additionals.map((a) => a.id) } } });
+  for (const [position, a] of additionals.entries()) {
+    await tx.option.upsert({
+      where: { id_storeId: { id: a.id, storeId } },
+      create: { id: a.id, storeId, groupId, name: a.name, priceCents: a.priceCents, position },
+      update: { name: a.name, priceCents: a.priceCents, position },
+    });
+  }
+  await tx.productOptionGroup.upsert({
+    where: { productId_groupId: { productId, groupId } },
+    create: { productId, groupId, storeId, position: 0 },
+    update: {},
+  });
 }

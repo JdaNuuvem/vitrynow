@@ -16,6 +16,7 @@ describe("NG-04: WebSocket — Origin e revogação", () => {
     await app.ready();
   });
   afterAll(async () => {
+    await resetDb(); // não deixa loja/usuário para o próximo arquivo (o mfa-notices só limpa DEPOIS de cada teste)
     await prisma.$disconnect();
   });
   const json = (r: { body: string }) => JSON.parse(r.body);
