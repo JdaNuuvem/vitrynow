@@ -724,3 +724,20 @@ export const platformCreditGrantSchema = z
     if (value.credits < 0 && (value.priceCents !== undefined || value.externalRef !== undefined)) ctx.addIssue({ code: "custom", path: ["priceCents"], message: "ajuste negativo não leva preço nem referência de pagamento" });
   });
 export type PlatformCreditGrantInput = z.infer<typeof platformCreditGrantSchema>;
+
+// Campanha principal do cardápio (CONTRATO-CAMPANHA). O rascunho pode ter texto vazio; a publicação exige título e, havendo ação, rótulo e destino (conferidos no servidor).
+export const CAMPAIGN_IMAGE_LAYOUTS = ["photo", "cutout"] as const;
+export const CAMPAIGN_IMAGE_POSITIONS = ["center", "center top", "center bottom", "left center", "right center"] as const;
+export const campaignContentSchema = z
+  .object({
+    title: textField({ max: 80 }),
+    description: textField({ max: 250, multiline: true }),
+    imageUrl: z.string().trim().max(500), // vazio, https sem usuário/senha, ou endereço gerenciado da PRÓPRIA loja (conferido no servidor)
+    imageLayout: z.enum(CAMPAIGN_IMAGE_LAYOUTS),
+    imagePosition: z.enum(CAMPAIGN_IMAGE_POSITIONS),
+    action: z.object({ label: textField({ max: 35 }), target: z.object({ kind: z.enum(["category", "product"]), id: z.string().min(1).max(100) }).strict() }).strict().nullable(),
+  })
+  .strict();
+export type CampaignContent = z.infer<typeof campaignContentSchema>;
+export const campaignRevisionSchema = z.object({ revision: z.number().int().nonnegative() }).strict();
+export const campaignSaveSchema = z.object({ revision: z.number().int().nonnegative(), draft: campaignContentSchema }).strict();

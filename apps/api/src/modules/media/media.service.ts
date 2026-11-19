@@ -3,6 +3,7 @@ import type { PrismaClient } from "@meucardapio/db";
 import { BadRequestError, CodedError } from "../../shared/errors";
 import { ImageRejectedError, processImage, type ImageKind } from "../../lib/imagePipeline";
 import { imageLane } from "../../lib/imageLane";
+import { campaignUsesImage } from "../campaign/campaign.service";
 import { storeKeyPrefix, type ObjectStorage } from "../../lib/objectStorage";
 
 // API-18 / ADR-0010: upload de imagem pela API. Toda chave nasce de um uuid gerado aqui, sob stores/<storeId>/;
@@ -73,7 +74,7 @@ export class MediaService {
       this.db.product.count({ where: { storeId, imageUrl: { contains: image.keyBase } } }),
       this.db.store.count({ where: { id: storeId, OR: [{ logoUrl: { contains: image.keyBase } }, { coverImageUrl: { contains: image.keyBase } }] } }),
     ]);
-    if (products + store > 0) throw new CodedError(409, "IMAGE_IN_USE", "A imagem está em uso por um produto ou pela loja. Troque-a antes de apagar.");
+    if (products + store > 0 || (await campaignUsesImage(storeId, image.keyBase))) throw new CodedError(409, "IMAGE_IN_USE", "A imagem está em uso por um produto ou pela loja. Troque-a antes de apagar.");
     await this.removeObjects(image);
     await this.db.image.deleteMany({ where: { id: image.id, storeId } });
   }
