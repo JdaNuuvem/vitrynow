@@ -10,7 +10,7 @@ export const PUBLIC_CAMPAIGN_KEYS = ["id", "title", "description", "imageUrl", "
 // Horário DERIVADO da grade (PR-01, SSOT D2): acrescentados pelo portão público do cardápio (subscriptionGate), não pelo `publicStore`.
 export const PUBLIC_STORE_HOURS_KEYS = ["openNow", "nextOpensAt", "hoursText"] as const;
 export const PUBLIC_CATEGORY_KEYS = ["id", "name", "icon", "products"] as const;
-export const PUBLIC_PRODUCT_KEYS = ["id", "name", "description", "imageUrl", "priceCents", "featured", "soldOut", "additionals", "optionGroups", "unavailable", "unavailableByOptions", "fromPriceCents", "promoCents", "promoEndsAt", "saleUnit", "minGrams", "stepGrams", "maxGrams", "portionGrams", "serves", "isSingleDish", "sellAlone"] as const;
+export const PUBLIC_PRODUCT_KEYS = ["id", "name", "description", "imageUrl", "priceCents", "featured", "soldOut", "additionals", "optionGroups", "unavailable", "unavailableByOptions", "fromPriceCents", "tags", "promoCents", "promoEndsAt", "saleUnit", "minGrams", "stepGrams", "maxGrams", "portionGrams", "serves", "isSingleDish", "sellAlone"] as const;
 export const PUBLIC_ADDITIONAL_KEYS = ["id", "name", "priceCents"] as const;
 // API-15 parte 3 (B8): grupos de opcoes REAIS (MANUAL) do produto. Sem `source`, `active`, `position` nem ids de loja. So opcoes ATIVAS.
 export const PUBLIC_OPTION_GROUP_KEYS = ["id", "name", "helpText", "minSelect", "maxSelect", "maxPerOption", "priceMode", "options"] as const;
@@ -64,6 +64,7 @@ export const publicProduct = (p: PublicProductInput) => ({
   // Produto detalhado (PD, §7 da spec): a promoção SÓ aparece enquanto ativa AGORA (futura/vencida nunca; `promoStartsAt` nunca é público); sem `sku`, `listPriceCents`, `storeId`.
   promoCents: p.promoActiveNow ? p.promoCents : null,
   promoEndsAt: p.promoActiveNow ? p.promoEndsAt : null,
+  tags: p.tags, // selos (lista fechada); `sku` nunca é público
   saleUnit: p.saleUnit,
   minGrams: p.saleUnit === "UN" ? null : p.minGrams,
   stepGrams: p.saleUnit === "UN" ? null : p.stepGrams,

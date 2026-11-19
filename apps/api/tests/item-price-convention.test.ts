@@ -106,7 +106,7 @@ describe("C1 — convenção do preço do item: total, tíquete, relatório e ca
     const dia = storeToday(c.createdAt);
     const rep = json(await app.inject({ method: "GET", url: `/api/reports/summary?from=${dia}&to=${dia}`, headers: { cookie: c.cookie } }));
     expect(rep.revenueCents).toBe(caso.linha); // faturamento (sem gorjeta)
-    expect(rep.topProducts).toEqual([{ productName: "Pizza", quantity: caso.qtd, revenueCents: caso.linha }]); // receita por produto COM as opções ou o adicional, uma vez só
+    expect(rep.topProducts).toMatchObject([{ productName: "Pizza", quantity: caso.qtd, revenueCents: caso.linha }]); // só os campos de DINHEIRO: o relatório ganhou `weightGrams` (aditivo, PD RN-PD-22) // receita por produto COM as opções ou o adicional, uma vez só
   });
 
   it.each(CASOS)("caixa: o mesmo pedido pago em dinheiro soma o MESMO valor no esperado: $nome", async (caso) => {
