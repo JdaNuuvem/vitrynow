@@ -12,7 +12,27 @@ set -uo pipefail
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${SMOKE_PORT:-55443}"; export SMOKE_PORT="$PORT"
-PROJ="mc-smoke-hopper"
+PROJ="${SMOKE_PROJECT:-mc-smoke-hopper}"   # projeto (e redes) próprios: outro agente usa SMOKE_PROJECT=mc-smoke-<nome> SMOKE_PORT=<porta da faixa dele>
+# Contêineres AUXILIARES (clientes de carga, eco, testes de rede): rotulados (docker ps --filter label=mc-smoke=$PROJ mostra de quem são), com teto de memória e CPU,
+# para não sufocar o Docker Desktop e derrubar o banco de teste de outro agente (visto em 18/11: o Postgres do Deming caiu 5 vezes durante o smoke).
+HELPER=(--label "mc-smoke=$PROJ" --memory 256m --cpus 1)
+# Antes das fases PESADAS (10 clientes simultâneos e 2 levas de 20 mil chaves), espera a máquina ficar sem NENHUMA suíte vitest rodando (a de outro agente, p.ex. a
+# do Deming no banco 55450). SMOKE_ESPERA_QUIETA = minutos de espera máxima (padrão 15; 0 desliga). Passado o prazo, segue e AVISA: o smoke não trava para sempre.
+vitest_rodando() {
+  if command -v powershell.exe >/dev/null 2>&1; then powershell.exe -NoProfile -Command "@(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" -ErrorAction SilentlyContinue | Where-Object { \$_.CommandLine -match 'vitest' }).Count" | tr -d '\r\n'
+  else pgrep -fc vitest 2>/dev/null || echo 0; fi
+}
+espera_quieta() { # $1 = nome da fase
+  local max="${SMOKE_ESPERA_QUIETA:-15}" t=0 n
+  [ "$max" = 0 ] && return 0
+  n="$(vitest_rodando)"
+  while [ "${n:-0}" != 0 ] && [ "$t" -lt $((max * 60)) ]; do
+    [ "$t" = 0 ] && echo "   (fase pesada '$1': há $n suíte(s) vitest rodando na máquina; espero até $max min por silêncio; SMOKE_ESPERA_QUIETA=0 desliga)"
+    sleep 20; t=$((t + 20)); n="$(vitest_rodando)"
+  done
+  [ "${n:-0}" != 0 ] && echo "   AVISO: segui na fase '$1' com $n suíte(s) vitest ainda rodando (prazo de $max min esgotado)"
+  return 0
+}
 ENVF="$ROOT/infra/.smoke.env"; PASS=0; FAILS=0   # dentro do worktree (gitignored por .env.*): o compose no Windows não lê /tmp do Git Bash
 rnd() { node -e "process.stdout.write(require('crypto').randomBytes(24).toString('base64url'))"; }
 cat > "$ENVF" <<EOF
@@ -52,7 +72,7 @@ echo "== validando e subindo a stack ($PROJ)"
 out="$("${DC[@]}" up -d --build 2>&1)"; rc=$?
 echo "$out" | tail -25
 [ "$rc" -eq 0 ] || { echo "FALHA: 'compose up --build' saiu com $rc (build ou subida); o smoke para aqui: o resto só geraria falhas em cascata"; exit 1; }
-docker run -d --name "$PROJ-xffecho" --network "${PROJ}_default" --network-alias xffecho node:24-alpine node -e \
+docker run -d --name "$PROJ-xffecho" "${HELPER[@]}" --network "${PROJ}_default" --network-alias xffecho node:24-alpine node -e \
   "require('http').createServer((q,s)=>s.end(JSON.stringify({xff:q.headers['x-forwarded-for']||null,ip:q.socket.remoteAddress,secret:q.headers['x-internal-service-secret']||null,visitor:q.headers['x-visitor-ip']||null}))).listen(8080)" >/dev/null
 
 echo "== aguardando saúde (até 180s)"
@@ -109,14 +129,14 @@ if [ -z "$r" ]; then
   echo "   DIAGNÓSTICO: eco=$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}}' "$PROJ-xffecho" 2>&1)"
   echo "   --- logs do eco:"; docker logs --tail 5 "$PROJ-xffecho" 2>&1 | sed 's/^/   /'
   echo "   --- status direto do eco pela rede do compose:"
-  docker run --rm --network "${PROJ}_default" node:24-alpine node -e "require('http').get('http://xffecho:8080',r=>{console.log('eco responde',r.statusCode)}).on('error',e=>console.log('eco inacessível:',e.code))" 2>&1 | sed 's/^/   /'
+  docker run --rm "${HELPER[@]}" --network "${PROJ}_default" node:24-alpine node -e "require('http').get('http://xffecho:8080',r=>{console.log('eco responde',r.statusCode)}).on('error',e=>console.log('eco inacessível:',e.code))" 2>&1 | sed 's/^/   /'
   echo "   --- caddy:"; "${DC[@]}" logs --tail 8 caddy 2>&1 | sed 's/^/   /'
 fi
 case "$r" in *6.6.6.6*|*7.7.7.7*) check fail "XFF forjado chegou ao backend";; *'"xff":"'*) check ok "XFF do cliente descartado; Caddy envia o IP real da conexão";; *) check fail "resposta inesperada: $r";; esac
 
 echo "== 6e Caddy remove x-internal-service-secret e x-visitor-ip vindos da internet (SEC-24)"
 # controle: DENTRO da rede o eco devolve os cabeçalhos se eles chegarem (senão o teste abaixo seria vazio)
-ctl="$(docker run --rm --network "${PROJ}_default" node:24-alpine node -e "require('http').get('http://xffecho:8080',{headers:{'x-internal-service-secret':'ctl-secreto','x-visitor-ip':'9.9.9.9'}},r=>{let b='';r.on('data',d=>b+=d);r.on('end',()=>console.log(b))})" 2>&1)"
+ctl="$(docker run --rm "${HELPER[@]}" --network "${PROJ}_default" node:24-alpine node -e "require('http').get('http://xffecho:8080',{headers:{'x-internal-service-secret':'ctl-secreto','x-visitor-ip':'9.9.9.9'}},r=>{let b='';r.on('data',d=>b+=d);r.on('end',()=>console.log(b))})" 2>&1)"
 case "$ctl" in *ctl-secreto*9.9.9.9*|*9.9.9.9*ctl-secreto*) check ok "controle: o eco devolve os dois cabeçalhos quando eles CHEGAM (o teste abaixo não é vazio)";; *) check fail "controle falhou: o eco não devolveu os cabeçalhos ($ctl)";; esac
 # pela internet (via Caddy), com variações de caixa: nada pode chegar ao backend
 leak=""
@@ -377,13 +397,15 @@ echo "== 9 limite de requisições por IP em /loja/* (SEC-26 / ST-44, ST-45, ST-
 # Os 10 clientes precisam existir AO MESMO TEMPO: containers seguidos com --rm recebem o MESMO IP (o Docker reaproveita o que acabou
 # de sair; visto em 17/11: o Caddy via um IP só e, com razão, aplicou um balde só). Por isso cada um espera 30 s antes de pedir (com a máquina sufocada, criar os 10 levou mais de 10 s e os primeiros já tinham saído quando li os IPs) e o
 # teste confere que os IPs são mesmo distintos; se não forem, o teste é inválido e falha dizendo isso.
+espera_quieta "9a: 10 clientes simultâneos"
 tot429=0; CIDS=()
 for n in 1 2 3 4 5 6 7 8 9 10; do
-  CIDS+=("$(docker run -d --network "${PROJ}_default" node:24-alpine node -e "
+  CIDS+=("$(docker run -d --name "${PROJ}-cli-$n" "${HELPER[@]}" --network "${PROJ}_default" node:24-alpine node -e "
     const http=require('http');let c429=0,ok=0,i=0;
     const next=()=>{ if(i>=100){console.log(c429+' '+ok);return;} i++;
       http.get('http://caddy:80/loja/distinto-$n-'+i,r=>{ r.resume(); if(r.statusCode===429)c429++; else ok++; r.on('end',next); }).on('error',()=>{ ok++; next(); }); };
     setTimeout(next,30000);")")
+  sleep 1   # cria um por vez (antes: os 10 de uma vez): menos pico no Docker Desktop
 done
 ipsd="$(for c in "${CIDS[@]}"; do docker inspect -f "{{(index .NetworkSettings.Networks \"${PROJ}_default\").IPAddress}}" "$c"; done | sort -u | wc -l | tr -d ' ')"
 for c in "${CIDS[@]}"; do
@@ -507,8 +529,9 @@ CID9="$("${DC[@]}" ps -q caddy)"
 # Critério deste teste: o teto configurado sustenta >= 60 mil IPs distintos por janela a 80% (com 6 a 7 KB/chave e 768 MB dá ~90 mil).
 # Se alguém baixar o mem_limit ou o custo por chave subir, falha.
 memmb() { docker stats --no-stream --format '{{.MemUsage}}' "$1" | awk '{v=$1; if (v ~ /GiB/) {sub(/GiB/,"",v); printf "%.1f", v*1024} else if (v ~ /MiB/) {sub(/MiB/,"",v); printf "%.1f", v} else if (v ~ /KiB/) {sub(/KiB/,"",v); printf "%.1f", v/1024} else {sub(/B/,"",v); printf "%.1f", v/1048576}}'; }
+espera_quieta "ST-50: 2 levas de 20 mil chaves"
 onda() { # onda <prefixo-das-chaves>: 20 mil chaves distintas; imprime "done <429>"
-  docker run --rm --network "${PROJ}_default" node:24-alpine node -e "
+  docker run --rm "${HELPER[@]}" --network "${PROJ}_default" node:24-alpine node -e "
     const http=require('http');const agent=new http.Agent({keepAlive:true,maxSockets:64});
     let sent=0,done=0,c429=0,total=20000;
     const one=()=>{ if(sent>=total) return; const i=sent++;
@@ -573,7 +596,7 @@ actl="$("${DC[@]}" exec -T api node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -
 [ "$actl" = conectou ] && check ok "controle: a API CONECTA ao Postgres em $pgip:5432" || check fail "controle falhou: a API não conectou ao banco ($actl)"
 wcon="$("${DC[@]}" exec -T web node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -1)"
 [ "$wcon" = conectou ] && check fail "o web CONECTA ao Postgres em $pgip:5432 (rede de dados deveria estar isolada)" || check ok "o web NÃO conecta ao Postgres ($wcon)"
-ccon="$(docker run --rm --network container:"$CID" node:24-alpine node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -1)"
+ccon="$(docker run --rm "${HELPER[@]}" --network container:"$CID" node:24-alpine node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -1)"
 [ "$ccon" = conectou ] && check fail "o Caddy CONECTA ao Postgres em $pgip:5432 (rede de dados deveria estar isolada)" || check ok "o Caddy NÃO conecta ao Postgres ($ccon; testado dentro da rede dele)"
 # rastreabilidade (BOARD): versão, build-info (módulo e commit) e digest da imagem final
 echo "   caddy version: $(docker exec "$CID" caddy version 2>&1 | head -1)"
