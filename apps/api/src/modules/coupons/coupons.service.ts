@@ -2,6 +2,7 @@ import type { CreateCouponInput, UpdateCouponInput } from "@meucardapio/shared-t
 import type { Actor, AuditLogger } from "../../shared/audit";
 import { CodedError, NotFoundError } from "../../shared/errors";
 import { endOfStoreDay, isBeforeToday } from "../../lib/storeDay";
+import { storeTimeZone } from "../../lib/storeTz";
 import type { CouponsRepository } from "./coupons.repository";
 
 type CouponActor = Actor & { role: "OWNER" | "STAFF" };
@@ -24,9 +25,9 @@ function assertStaffCap(actor: CouponActor, ...shapes: CouponShape[]) {
 }
 
 // "Vale até" = fim do dia escolhido no fuso da loja (hoje vale). Só dia anterior a hoje é recusado.
-function resolveExpiry(value: string): Date {
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? endOfStoreDay(value) : new Date(value);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value) ? isBeforeToday(value) : date.getTime() <= Date.now()) {
+function resolveExpiry(value: string, timeZone: string): Date {
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? endOfStoreDay(value, timeZone) : new Date(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value) ? isBeforeToday(value, new Date(), timeZone) : date.getTime() <= Date.now()) {
     throw new CodedError(400, "COUPON_EXPIRY_INVALID", "A validade precisa ser hoje ou uma data futura.");
   }
   return date;
@@ -56,7 +57,7 @@ export class CouponsService {
     const { storeId } = actor;
     assertCouponRules({ discountType: input.discountType, discountValue: input.discountValue, maxUses: input.maxUses });
     assertStaffCap(actor, input);
-    const expiresAt = input.expiresAt ? resolveExpiry(input.expiresAt) : undefined;
+    const expiresAt = input.expiresAt ? resolveExpiry(input.expiresAt, await storeTimeZone(storeId)) : undefined;
     if (await this.repo.findByCode(storeId, input.code)) throw codeTaken();
     const { expiresAt: _ignored, ...rest } = input;
     void _ignored;
@@ -90,7 +91,7 @@ export class CouponsService {
     assertCouponRules(final);
     // Mexer em cupom acima do teto (o que já é ou o que vai virar), inclusive reativar ou "Definir limite", é do dono.
     assertStaffCap(actor, final, current);
-    const expiresAt = input.expiresAt ? resolveExpiry(input.expiresAt) : undefined;
+    const expiresAt = input.expiresAt ? resolveExpiry(input.expiresAt, await storeTimeZone(storeId)) : undefined;
     if (input.code && input.code !== current.code && (await this.repo.findByCode(storeId, input.code))) throw codeTaken();
     const { expiresAt: _ignored, ...rest } = input;
     void _ignored;

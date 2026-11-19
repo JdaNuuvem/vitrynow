@@ -1,6 +1,7 @@
 import type { CreateCategoryInput, CreateProductInput, SetSoldOutInput, UpdateProductInput } from "@meucardapio/shared-types";
 import { nextSoldOutReset } from "../../lib/soldOut";
-import { parseLocalDate, startOfStoreDay } from "../../lib/storeTime";
+import { storeTimeZone } from "../../lib/storeTz";
+import { DEFAULT_STORE_TIMEZONE, parseLocalDate, startOfStoreDay } from "../../lib/storeTime";
 import { promoAboveHalf } from "../../lib/productPrice";
 import type { Actor, AuditLogger } from "../../shared/audit";
 import { CodedError, NotFoundError } from "../../shared/errors";
@@ -165,7 +166,7 @@ export class CatalogService {
   async setSoldOut(actor: Actor, id: string, input: SetSoldOutInput) {
     const product = await this.requireProduct(actor.storeId, id);
     const duration = input.duration ?? "TODAY";
-    const soldOutUntil = input.soldOut && duration === "TODAY" ? nextSoldOutReset() : null;
+    const soldOutUntil = input.soldOut && duration === "TODAY" ? nextSoldOutReset(new Date(), await storeTimeZone(actor.storeId)) : null;
     const updated = await this.repo.updateProduct(id, { soldOut: input.soldOut, soldOutUntil });
     this.audit.log({
       ...actor,
@@ -233,7 +234,7 @@ export class CatalogService {
   ) {
     const out: { promoCents?: number | null; promoStartsAt?: Date | null; promoEndsAt?: Date | null; sellAlone?: boolean; kind?: "PRATO" | "ADICIONAL" } = {};
     const needsTz = input.promoStartsOn != null || input.promoEndsOn != null;
-    const tz = needsTz ? await this.repo.storeTimezone(actor.storeId) : ""; // sem datas de promoção o fuso não é usado (SSOT: sem literal de fuso fora de storeTime.ts)
+    const tz = needsTz ? await this.repo.storeTimezone(actor.storeId) : DEFAULT_STORE_TIMEZONE;
     const now = new Date();
 
     // Vigência: AAAA-MM-DD no fuso da loja. Início = 00:00 do dia; fim = 00:00 do dia SEGUINTE (o dia final vale inteiro; `início ≤ agora < fim`).
