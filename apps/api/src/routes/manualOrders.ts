@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
+import { buildOrderLines, optionCopiesCreate } from "../lib/orderItems";
 import { Prisma, prisma } from "@meucardapio/db";
 import { createManualOrderSchema } from "@meucardapio/shared-types";
 import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
@@ -85,23 +86,9 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
         details: { items: unavailable.map((p) => ({ id: p.id, name: p.name })) },
       });
     }
-    const productById = new Map(products.map((p) => [p.id, p]));
-    let itemsData;
-    try {
-      itemsData = input.items.map((item) => {
-        const product = productById.get(item.productId)!;
-        const byId = new Map(product.additionals.map((a) => [a.id, a]));
-        const chosen = (item.additionalIds ?? []).map((id) => {
-          const additional = byId.get(id);
-          if (!additional) throw new Error(`adicional ${id} não pertence ao produto ${product.id}`);
-          return additional;
-        });
-        const extra = chosen.reduce((sum, a) => sum + a.priceCents, 0);
-        return { productId: product.id, productName: product.name, quantity: item.quantity, unitPriceCents: product.priceCents, notes: item.notes, lineTotalCents: (product.priceCents + extra) * item.quantity, additionals: chosen };
-      });
-    } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : "pedido inválido", code: "ADDITIONAL_NOT_FOUND" });
-    }
+    const built = await buildOrderLines(storeId, products, input.items);
+    if (!built.ok) return reply.code(400).send(built.body);
+    const itemsData = built.lines;
     const subtotalCents = itemsData.reduce((sum, i) => sum + i.lineTotalCents, 0);
 
     // Cupom: mesma validação do cardápio (validade, limite, mínimo); o OWNER pode forçar um cupom ESGOTADO (RN-B2-05), nunca um inativo ou vencido.
@@ -188,6 +175,7 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
                 unitPriceCents: item.unitPriceCents,
                 notes: item.notes,
                 additionals: { create: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })) },
+              ...optionCopiesCreate(item.optionCopies),
               })),
             },
           },
