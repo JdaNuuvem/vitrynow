@@ -319,6 +319,7 @@ model Product {
   serves       Int?
   additionals ProductAdditional[]
   optionGroups ProductOptionGroup[]
+  addonOptions Option[] @relation("AddonOptions")
   orderItems  OrderItem[]
   createdAt   DateTime     @default(now())
 
@@ -549,9 +550,19 @@ model Option {
   active     Boolean     @default(true) // false = indisponível (some da escolha, RN-B8-05)
   position   Int         @default(0)
   createdAt  DateTime    @default(now())
+  // RN-PD-12: opção que aponta para um produto ADICIONAL da MESMA loja (FK composta). INHERIT = nome e preço vêm do adicional; OWN = preço próprio só aqui.
+  productId   String?
+  priceSource OptionPriceSource @default(OWN)
+  product     Product?          @relation("AddonOptions", fields: [productId, storeId], references: [id, storeId], onDelete: NoAction)
 
   @@unique([id, storeId])
   @@index([groupId])
+  @@index([productId])
+}
+
+enum OptionPriceSource {
+  OWN
+  INHERIT
 }
 
 // Vínculo produto ↔ grupo, com a ordem em que o cliente vê os grupos.

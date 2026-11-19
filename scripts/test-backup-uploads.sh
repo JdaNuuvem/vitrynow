@@ -13,6 +13,7 @@ U="$TMP/uploads"; B="$TMP/backups"; mkdir -p "$U/stores/lojaA" "$U/stores/lojaB"
 UUID1="11111111-1111-4111-8111-111111111111"; UUID2="22222222-2222-4222-8222-222222222222"
 printf 'imagem-A-1' > "$U/stores/lojaA/$UUID1-40.webp"; printf 'imagem-B-1' > "$U/stores/lojaB/$UUID2-320.webp"
 printf 'nome com espaco' > "$U/stores/lojaA/arquivo com espaco.webp"
+mkdir -p "$U/quarantine/reels/lojaA"; printf 'ORIGINAL-CRU-DO-CLIENTE' > "$U/quarantine/reels/lojaA/$UUID1.upload"   # original de vídeo em conversão (ADR-0021): NÃO pode entrar no backup
 bk() { UPLOADS_DIR="$U" BACKUP_DIR="$B" sh "$BK" "$@" 2>&1; }
 
 echo "== backup"
@@ -20,6 +21,7 @@ OUT="$(bk 20261118_100000)"; RC=$?
 caso "backup sai 0 e diz '3 arquivo(s)'" '[ "$RC" = 0 ] && echo "$OUT" | grep -q "3 arquivo(s)"'
 caso "gera tar.gz, selo sha256 e manifesto com o MESMO carimbo" '[ -s "$B/uploads_20261118_100000.tar.gz" ] && [ -s "$B/uploads_20261118_100000.tar.gz.sha256" ] && [ -s "$B/uploads_20261118_100000.manifest" ]'
 caso "o manifesto tem 1 linha por arquivo (3), com espaço no nome" '[ "$(wc -l < "$B/uploads_20261118_100000.manifest" | tr -d " ")" = 3 ] && grep -q "arquivo com espaco.webp" "$B/uploads_20261118_100000.manifest"'
+caso "a quarentena de vídeo (original cru) NÃO entra no backup: fora do manifesto e fora do tar" '! grep -q quarantine "$B/uploads_20261118_100000.manifest" && ! tar -tzf "$B/uploads_20261118_100000.tar.gz" | grep -q quarantine '
 caso "não deixa .partial nem pasta de verificação" '[ -z "$(ls -A "$B" | grep -E "partial|verif")" ]'
 caso "arquivos de backup só para o dono (modo 600)" 'm="$(stat -c %a "$B/uploads_20261118_100000.tar.gz" 2>/dev/null || echo 600)"; [ "$m" = 600 ]'
 UPLOADS_DIR="$TMP/nao-existe" BACKUP_DIR="$B" sh "$BK" 20261118_100100 >/dev/null 2>&1; RC=$?
@@ -31,7 +33,7 @@ echo "== restauração"
 R="$TMP/restaurado"
 OUT="$(sh "$RS" "$B/uploads_20261118_100000.tar.gz" "$R" 2>&1)"; RC=$?
 caso "restaura em pasta nova, exit 0, confere o manifesto" '[ "$RC" = 0 ] && echo "$OUT" | grep -q "3 arquivo(s) restaurados"'
-caso "o restaurado é IDÊNTICO ao original (diff -r)" 'diff -r "$U" "$R" >/dev/null 2>&1'
+caso "o restaurado é IDÊNTICO ao original, exceto a quarentena que não vai ao backup (diff -r)" 'rm -rf "$TMP/u-sem-q"; cp -a "$U" "$TMP/u-sem-q" && rm -rf "$TMP/u-sem-q/quarantine" && diff -r "$TMP/u-sem-q" "$R" >/dev/null 2>&1 && [ ! -e "$R/quarantine" ]'
 caso "recusa destino com arquivos (não sobrescreve)" 'sh "$RS" "$B/uploads_20261118_100000.tar.gz" "$R" >/dev/null 2>&1; [ $? = 1 ]'
 cp "$B/uploads_20261118_100000.tar.gz" "$TMP/corr.tar.gz"; cp "$B/uploads_20261118_100000.tar.gz.sha256" "$TMP/corr.tar.gz.sha256"; cp "$B/uploads_20261118_100000.manifest" "$TMP/corr.manifest"
 printf 'x' >> "$TMP/corr.tar.gz"
