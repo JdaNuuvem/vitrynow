@@ -3,7 +3,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { TICKET_SCHEMA_VERSION } from "@meucardapio/shared-types";
-import { buildPrintableOrder } from "../src/lib/printable";
+import { OPTION_GROUP_MAX, OPTION_NAME_MAX, buildPrintableOrder } from "../src/lib/printable";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
 describe("API-14b — tíquete com opções do item", () => {
@@ -100,6 +100,25 @@ describe("API-14b — tíquete com opções do item", () => {
     expect(segunda.items[0].additionals).toEqual([{ name: "Tamanho: Média", priceCents: 0 }]);
     const aviso = (await buildPrintableOrder(id, { cancelNotice: true, printedAtOriginal: new Date() }))!;
     expect(aviso.items).toEqual([]);
+  });
+
+  it("(Nightingale 1) grupo e opção de tamanho MÁXIMO (200 caracteres, emoji): o tíquete sai com corte seguro, nunca erro; cabe na largura", async () => {
+    const storeId = await loja();
+    const id = await pedido(storeId, [{ productName: "Pizza", quantity: 1, unitPriceCents: 4000, options: [{ groupName: "G".repeat(200), name: "\u{1F600}".repeat(200), quantity: 12, priceCents: 0, priceMode: "SUM" }] }]);
+    const t = (await buildPrintableOrder(id))!;
+    const nome = t.items[0].additionals[0].name;
+    expect(Array.from(nome).length).toBeLessThanOrEqual(OPTION_GROUP_MAX + 2 + OPTION_NAME_MAX + 4);
+    expect(nome.endsWith(" x12")).toBe(true); // a quantidade não é cortada
+    expect(nome).toContain("\u2026");
+    // nenhum par substituto partido: todo emoji que sobrou está inteiro
+    expect(Array.from(nome).every((c) => c.codePointAt(0)! < 0xd800 || c.codePointAt(0)! > 0xdfff)).toBe(true);
+  });
+
+  it("(Nightingale 2) item antigo inconsistente (extras maiores que o unitário): o unitário do tíquete NUNCA fica negativo", async () => {
+    const storeId = await loja();
+    const id = await pedido(storeId, [{ productName: "Pizza", quantity: 1, unitPriceCents: 500, options: [{ groupName: "Borda", name: "Cheddar", priceCents: 800, priceMode: "SUM" }] }]);
+    const t = (await buildPrintableOrder(id))!;
+    expect(t.items[0].unitPriceCents).toBe(0);
   });
 
   it("texto da opção passa pela sanitização do tíquete (sem byte de comando) e nada de outra loja entra", async () => {

@@ -25,6 +25,14 @@ export function nothingToCharge(order: { totalCents: number }, payment: { status
   return !payment || DEAD_PAYMENT.has(payment.status);
 }
 
+// Linha de uma opção do item no tíquete. Corte SEGURO (por caractere, sem partir par substituto) para a linha caber na largura da impressora e nunca derrubar a
+// montagem do tíquete: grupo até 30 e opção até 40 caracteres.
+const cutChars = (text: string, max: number) => (Array.from(text).length > max ? `${Array.from(text).slice(0, max - 1).join("")}…` : text);
+export const OPTION_GROUP_MAX = 30;
+export const OPTION_NAME_MAX = 40;
+export const optionLine = (groupName: string, name: string, quantity: number) =>
+  `${cutChars(clean(groupName) ?? "", OPTION_GROUP_MAX)}: ${cutChars(clean(name) ?? "", OPTION_NAME_MAX)}${quantity > 1 ? ` x${quantity}` : ""}`;
+
 export const tableLabelOf = (label: string) => `Mesa ${label}`;
 
 // API-23 — mesa, rodada e quem pediu. Rodada = posição do pedido entre os pedidos NÃO cancelados da mesa ainda NÃO recebidos (paidAt nulo): recomeça em 1 depois
@@ -128,12 +136,12 @@ export async function buildPrintableOrder(orderId: string, options: PrintableOpt
       return {
         productName: clean(item.productName) ?? "",
         quantity: item.quantity,
-        unitPriceCents: item.options.length > 0 ? item.unitPriceCents - extras : item.unitPriceCents,
+        unitPriceCents: item.options.length > 0 ? Math.max(0, item.unitPriceCents - extras) : item.unitPriceCents, // piso 0: item antigo com opções inconsistentes nunca sai negativo
         notes: clean(item.notes, true),
         additionals: [
           ...item.additionals.map((a) => ({ name: clean(a.name) ?? "", priceCents: a.priceCents })),
           ...item.options.map((o) => ({
-            name: `${clean(o.groupName) ?? ""}: ${clean(o.name) ?? ""}${o.quantity > 1 ? ` x${o.quantity}` : ""}`,
+            name: optionLine(o.groupName, o.name, o.quantity),
             priceCents: o.priceMode === "SUM" ? o.priceCents * o.quantity : 0,
           })),
         ],
