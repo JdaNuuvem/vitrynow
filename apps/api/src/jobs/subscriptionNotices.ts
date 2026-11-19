@@ -38,10 +38,13 @@ export const subscriptionNoticesJob: Job = {
     for (const subscription of claimed.value) {
       const due = dueNotice(subscription, now);
       if (!due) continue;
+      const key = { subscriptionId: subscription.id, kind: due.kind, dueAt: due.dueAt };
+      let reserved = false;
+      let delivered = false;
       try {
         // 1) reserva: a linha única decide quem envia (P2002 = outro tick/instância já enviou ou está enviando)
-        const reserved = await db.subscriptionNotice
-          .create({ data: { subscriptionId: subscription.id, kind: due.kind, dueAt: due.dueAt, sentAt: now } })
+        reserved = await db.subscriptionNotice
+          .create({ data: { ...key, sentAt: now } })
           .then(() => true)
           .catch((error: { code?: string }) => {
             if (error.code === "P2002") return false;
@@ -51,16 +54,23 @@ export const subscriptionNoticesJob: Job = {
         // 2) só o OWNER recebe (STAFF nunca); sem OWNER não há para quem avisar
         const owners = await db.user.findMany({ where: { storeId: subscription.storeId, role: "OWNER" }, select: { email: true } });
         const text = NOTICE_TEXT[due.kind];
-        let sent = owners.length > 0;
-        for (const owner of owners) sent = (await sendSubscriptionNoticeEmail({ to: owner.email, subject: text.subject, lines: text.lines })) && sent;
-        // 3) não saiu: desfaz a reserva para o próximo tick tentar de novo
-        if (!sent) {
-          await db.subscriptionNotice.deleteMany({ where: { subscriptionId: subscription.id, kind: due.kind, dueAt: due.dueAt } });
-          continue;
+        // Cada envio isolado: um e-mail que LANÇA (rede, provedor) não pode impedir os outros nem deixar a reserva presa. Basta UM dono ter
+        // recebido para o aviso contar como enviado (refazer o ciclo reenviaria ao que já recebeu).
+        for (const owner of owners) {
+          const ok = await sendSubscriptionNoticeEmail({ to: owner.email, subject: text.subject, lines: text.lines }).catch((error) => {
+            log.error({ subscriptionId: subscription.id, ...errorTag(error) }, "subscription.notices: o envio do e-mail lançou");
+            return false;
+          });
+          delivered = ok || delivered;
         }
-        processed += 1;
+        if (delivered) processed += 1;
       } catch (error) {
         log.error({ subscriptionId: subscription.id, ...errorTag(error) }, "subscription.notices: falha ao avisar");
+      } finally {
+        // 3) nada saiu (e-mail recusado, exceção ou falha depois da reserva): DESFAZ a reserva para o próximo ciclo tentar de novo.
+        if (reserved && !delivered) {
+          await db.subscriptionNotice.deleteMany({ where: key }).catch((error) => log.error({ subscriptionId: subscription.id, ...errorTag(error) }, "subscription.notices: não consegui desfazer a reserva"));
+        }
       }
     }
     return { processed };
