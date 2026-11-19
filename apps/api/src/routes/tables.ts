@@ -226,7 +226,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           receivedAt,
           receivedByUserId: userId,
           cashSessionId,
-          payments: { create: { storeId, method, amountCents: totalCents, changeForCents: input.changeForCents ?? null } },
+          payments: { create: { method, amountCents: totalCents, changeForCents: input.changeForCents ?? null } },
         },
         include: { payments: true },
       });

@@ -45,6 +45,7 @@ export class PrismaCouponsRepository implements CouponsRepository {
   }
 
   async delete(id: string) {
-    await this.db.coupon.delete({ where: { id } });
+    // API-48: a FK composta (couponId, storeId) nao pode anular `storeId`; o pedido antigo perde o vinculo (como antes, SetNull) na mesma transacao da exclusao.
+    await this.db.$transaction([this.db.order.updateMany({ where: { couponId: id }, data: { couponId: null } }), this.db.coupon.delete({ where: { id } })]);
   }
 }
