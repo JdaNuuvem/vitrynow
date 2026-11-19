@@ -48,19 +48,31 @@ export type OrderLine = {
 
 export type OrderLinesResult = { ok: true; lines: OrderLine[] } | { ok: false; status: number; body: { error: string; code: string; issues?: unknown[]; details?: unknown } };
 
-export async function buildOrderLines(storeId: string, products: Array<Product & { additionals: ProductAdditional[] }>, items: InputItem[], now: Date = new Date()): Promise<OrderLinesResult> {
-  const fail = (status: number, error: string, code: string, extra: { issues?: unknown[]; details?: unknown } = {}): OrderLinesResult => ({ ok: false, status, body: { error, code, ...extra } });
-  // R1: tetos ANTES de qualquer consulta; `options` e `optionSelections` juntos no mesmo item são ambíguos.
+/** R1: tetos de seleções ANTES de qualquer consulta (por item e por PEDIDO); `options` e `optionSelections` juntos no mesmo item são ambíguos. A cotação usa a MESMA função (paridade). */
+export function selectionCapFailure(items: Array<Pick<InputItem, "options" | "optionSelections">>): { status: number; body: { error: string; code: string } } | null {
   let totalSelections = 0;
   for (const item of items) {
-    if (item.options && item.optionSelections) return fail(400, "Envie `options` OU `optionSelections` no mesmo item, não os dois.", "OPTIONS_AMBIGUOUS");
+    if (item.options && item.optionSelections) return { status: 400, body: { error: "Envie `options` OU `optionSelections` no mesmo item, não os dois.", code: "OPTIONS_AMBIGUOUS" } };
     const count = (item.options ?? item.optionSelections ?? []).length;
-    if (count > MAX_OPTION_SELECTIONS_PER_ITEM) return fail(400, "Há opções demais neste item.", "OPTIONS_TOO_MANY");
+    if (count > MAX_OPTION_SELECTIONS_PER_ITEM) return { status: 400, body: { error: "Há opções demais neste item.", code: "OPTIONS_TOO_MANY" } };
     totalSelections += count;
   }
-  if (totalSelections > MAX_OPTION_SELECTIONS_PER_ORDER) return fail(400, "Há opções demais neste pedido.", "OPTIONS_TOO_MANY");
+  if (totalSelections > MAX_OPTION_SELECTIONS_PER_ORDER) return { status: 400, body: { error: "Há opções demais neste pedido.", code: "OPTIONS_TOO_MANY" } };
+  return null;
+}
+
+export async function buildOrderLines(
+  storeId: string,
+  products: Array<Product & { additionals: ProductAdditional[] }>,
+  items: InputItem[],
+  now: Date = new Date(),
+  preloadedGroups?: Map<string, GroupRow[]>, // cotação em lote: os grupos de TODOS os produtos já vieram numa consulta só
+): Promise<OrderLinesResult> {
+  const fail = (status: number, error: string, code: string, extra: { issues?: unknown[]; details?: unknown } = {}): OrderLinesResult => ({ ok: false, status, body: { error, code, ...extra } });
+  const capped = selectionCapFailure(items);
+  if (capped) return { ok: false, status: capped.status, body: capped.body };
   const productById = new Map(products.map((p) => [p.id, p]));
-  const groupsByProduct = await new PrismaOptionGroupsRepository(prisma).groupsForProducts(storeId, [...productById.keys()]);
+  const groupsByProduct = preloadedGroups ?? (await new PrismaOptionGroupsRepository(prisma).groupsForProducts(storeId, [...productById.keys()]));
   const issues: Array<{ productId: string; code: string; message: string; groupId?: string }> = [];
   const lines: OrderLine[] = [];
   const priceChanged: Array<{ index: number; productId: string; name: string; unitPriceCents: number }> = [];

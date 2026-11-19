@@ -6,7 +6,8 @@ import type { Coupon, Prisma } from "@meucardapio/db";
 import { prisma } from "@meucardapio/db";
 import type { CreateOrderInput } from "@meucardapio/shared-types";
 import { applyFreeShipping } from "./deliveryZones";
-import { buildOrderLines, orderMoneyFits, type OrderLine } from "./orderItems";
+import { buildOrderLines, orderMoneyFits, selectionCapFailure, type OrderLine } from "./orderItems";
+import { PrismaOptionGroupsRepository } from "../modules/optionGroups/optionGroups.repository";
 import { isSoldOutNow } from "./soldOut";
 
 export const COUPON_EXHAUSTED_MESSAGE = "Esse cupom acabou.";
@@ -36,6 +37,35 @@ export async function priceItems(store: Pick<StoreRow, "id">, items: CreateOrder
   }
   const built = await buildOrderLines(store.id, products, items, now);
   return built.ok ? { ok: true, lines: built.lines } : { ok: false, status: built.status, body: built.body };
+}
+
+export type EachPriced = { ok: true; line: OrderLine } | { ok: false; code: string; error: string };
+
+/**
+ * Cotação: precifica cada item SOZINHO (um item ruim não derruba os outros), mas com UMA consulta de produtos e UMA de grupos para todos os itens (custo constante por requisição,
+ * parecer da Nightingale). O teto de seleções do PEDIDO inteiro vale como na criação (paridade): estourou, a cotação inteira recusa com o mesmo corpo.
+ */
+export async function priceEachItem(store: Pick<StoreRow, "id">, items: CreateOrderInput["items"], now: Date): Promise<{ ok: true; results: EachPriced[] } | QuoteFailure> {
+  const capped = selectionCapFailure(items);
+  if (capped) return { ok: false, status: capped.status, body: capped.body };
+  const products = await prisma.product.findMany({ where: { storeId: store.id, id: { in: [...new Set(items.map((i) => i.productId))] } }, include: { additionals: true } });
+  const groups = await new PrismaOptionGroupsRepository(prisma).groupsForProducts(store.id, products.map((p) => p.id));
+  const byId = new Map(products.map((p) => [p.id, p]));
+  const results: EachPriced[] = [];
+  for (const item of items) {
+    const product = byId.get(item.productId);
+    if (!product) {
+      results.push({ ok: false, code: "PRODUCT_NOT_FOUND", error: "um ou mais produtos não existem nesta loja" });
+      continue;
+    }
+    if (!product.active || isSoldOutNow(product, now)) {
+      results.push({ ok: false, code: "ITEM_UNAVAILABLE", error: `Item indisponível no momento: ${product.name}.` });
+      continue;
+    }
+    const built = await buildOrderLines(store.id, [product], [{ ...item, expectedUnitPriceCents: undefined }], now, groups);
+    results.push(built.ok ? { ok: true, line: built.lines[0] } : { ok: false, code: String(built.body.code ?? "ITEM_UNAVAILABLE"), error: String(built.body.error ?? "") });
+  }
+  return { ok: true, results };
 }
 
 export type QuotedTotals = {

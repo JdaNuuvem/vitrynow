@@ -3,6 +3,7 @@
 // Item que não pode ser pedido (esgotado, pausado, adicional, peso fora da faixa) vem marcado na cotação (`available:false`) e a criação o recusa.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { resetLimits } from "../src/lib/slidingLimit";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
 const json = (r: { body: string }) => JSON.parse(r.body);
@@ -86,6 +87,7 @@ describe("PR-06: cotação × criação do pedido (paridade)", { timeout: 300_00
   }, 300_000);
   // Os tetos de requisição do servidor são por INSTÂNCIA e por minuto, e cada caso cria pedidos reais: uma instância nova por caso (os dados do beforeAll ficam no banco).
   beforeEach(async () => {
+    resetLimits(); // o limitador por chave é do MÓDULO (global ao processo): zera entre os casos
     await app.close();
     app = makeApp();
     await app.ready();
@@ -199,20 +201,76 @@ describe("PR-06: cotação × criação do pedido (paridade)", { timeout: 300_00
     expect(json(q).quote.items[0].unitPriceCents).toBe(2400);
   });
 
-  it("cotação COM cupom tem teto próprio (20/min/IP): a 21ª leva 429 e a cotação SEM cupom segue livre (não vira atalho para adivinhar códigos)", async () => {
+  it("tetos POR LOJA: a 61ª cotação com cupom, de IPs DIFERENTES, na mesma loja = 429; a outra loja não é afetada; sem cupom o teto da loja é 600", async () => {
+    const comCupom = (ip: string, s = slug) => app.inject({ method: "POST", url: `/stores/${s}/quote`, remoteAddress: ip, payload: { type: "BALCAO", items: [item("UN")], couponCode: "PCT10" } as never });
+    for (let i = 0; i < 60; i++) expect((await comCupom(`10.20.${Math.floor(i / 250)}.${(i % 250) + 1}`)).statusCode, `cotação ${i + 1}`).toBe(200);
+    const bloqueada = await comCupom("10.99.0.1");
+    expect(bloqueada.statusCode).toBe(429);
+    expect(json(bloqueada)).toMatchObject({ code: "RATE_LIMITED" });
+    const outraLoja = await app.inject({ method: "POST", url: `/stores/${slug2}/quote`, remoteAddress: "10.99.0.2", payload: { type: "BALCAO", items: [{ productId: id.UN2, quantity: 1 }], couponCode: "PCT10" } as never });
+    expect(outraLoja.statusCode, outraLoja.body).toBe(200);
+    const semCupom = await app.inject({ method: "POST", url: `/stores/${slug}/quote`, remoteAddress: "10.99.0.3", payload: { type: "BALCAO", items: [item("UN")] } as never });
+    expect(semCupom.statusCode).toBe(200); // o teto com cupom não derruba a cotação comum
+  });
+
+  it("cotação COM cupom tem teto próprio por IP (20/min): a 21ª leva 429 e a cotação SEM cupom segue livre", async () => {
     let status = 0;
     for (let i = 0; i < 20; i++) status = (await quote(slug, { type: "BALCAO", items: [item("UN")], couponCode: `TENTATIVA${i}` })).statusCode;
-    expect(status).toBe(400); // cupom inexistente: mesmo erro genérico da criação
+    expect(status).toBe(400); // cupom inexistente: o mesmo erro da criação
     const bloqueada = await quote(slug, { type: "BALCAO", items: [item("UN")], couponCode: "PCT10" });
     expect(bloqueada.statusCode).toBe(429);
     expect(json(bloqueada)).not.toHaveProperty("quote");
     expect((await quote(slug, { type: "BALCAO", items: [item("UN")] })).statusCode).toBe(200);
   });
 
+  it("custo constante: 50 itens = UMA consulta de produtos (não uma por item); resposta com Cache-Control: no-store", async () => {
+    const original = prisma.product.findMany;
+    let chamadas = 0;
+    (prisma.product as unknown as { findMany: unknown }).findMany = (...args: Parameters<typeof original>) => {
+      chamadas += 1;
+      return original.apply(prisma.product, args);
+    };
+    try {
+      const itens = Array.from({ length: 50 }, (_, i) => item(i % 2 === 0 ? "UN" : "PROMO"));
+      const r = await quote(slug, { type: "BALCAO", items: itens });
+      expect(r.statusCode, r.body).toBe(200);
+      expect(r.headers["cache-control"]).toBe("no-store");
+      expect(json(r).quote.items).toHaveLength(50);
+      expect(json(r).quote.subtotalCents).toBe(25 * 3000 + 25 * 2400);
+    } finally {
+      (prisma.product as unknown as { findMany: unknown }).findMany = original;
+    }
+    expect(chamadas).toBe(1);
+  });
+
+  it("regras do PEDIDO TODO dão a mesma resposta nos dois: 7 itens × 30 seleções (210 > 200) = 400 OPTIONS_TOO_MANY na cotação e na criação", async () => {
+    const trinta = Array.from({ length: 30 }, () => ({ optionId: id.G, quantity: 1 }));
+    const payload = { type: "BALCAO", items: Array.from({ length: 7 }, () => item("OPCOES", { optionSelections: trinta })) };
+    const q = await quote(slug, payload);
+    const c = await create(slug, payload);
+    expect([q.statusCode, json(q)]).toEqual([c.statusCode, json(c)]);
+    expect([c.statusCode, json(c).code]).toEqual([400, "OPTIONS_TOO_MANY"]);
+  });
+
+  it("cotar NÃO exige loja aberta: loja desligada responde com preço, accepting:false e reason; a CRIAÇÃO é que recusa (409 STORE_CLOSED)", async () => {
+    await prisma.store.updateMany({ where: { slug: slug2 }, data: { acceptingOrders: false } });
+    try {
+      const payload = { type: "BALCAO", items: [{ productId: id.UN2, quantity: 2 }] };
+      const q = await quote(slug2, payload);
+      expect(q.statusCode, q.body).toBe(200);
+      expect(json(q).quote).toMatchObject({ accepting: false, reason: "SWITCHED_OFF", totalCents: 4000 });
+      const c = await create(slug2, payload);
+      expect([c.statusCode, json(c).code]).toEqual([409, "STORE_CLOSED"]);
+    } finally {
+      await prisma.store.updateMany({ where: { slug: slug2 }, data: { acceptingOrders: true } });
+    }
+    expect(json(await quote(slug2, { type: "BALCAO", items: [{ productId: id.UN2, quantity: 1 }] })).quote).toMatchObject({ accepting: true, reason: null });
+  });
+
   it("contrato público: chaves EXATAS da cotação e dos itens; sem dado interno (id de loja, cupom, bairro, custo)", async () => {
     const q = await quote(slug, { type: "DELIVERY", neighborhoodId: id.centro, items: [item("PROMO")], couponCode: "PCT10" });
     const body = json(q).quote;
-    expect(Object.keys(body).sort()).toEqual(["couponApplied", "deliveryFeeCents", "discountCents", "hasUnavailable", "items", "subtotalCents", "tipCents", "totalCents"]);
+    expect(Object.keys(body).sort()).toEqual(["accepting", "couponApplied", "deliveryFeeCents", "discountCents", "hasUnavailable", "items", "reason", "subtotalCents", "tipCents", "totalCents"]);
     expect(Object.keys(body.items[0]).sort()).toEqual(["available", "index", "lineTotalCents", "listPriceCents", "productId", "quantity", "unitPriceCents", "weightGrams"]);
     expect(body.couponApplied).toBe(true);
     expect(q.body).not.toContain("storeId");

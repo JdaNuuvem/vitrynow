@@ -17,8 +17,10 @@ import { CAPTCHA_HEADER, captchaVerifier } from "../lib/captcha";
 import { clientIpOf } from "../lib/clientIp";
 import { clientKey } from "../lib/clientKey";
 import { newOrderToken, orderTokenMatches, ORDER_TOKEN_HEADER } from "../lib/orderToken";
+import { getEntitlements } from "../lib/subscription";
+import { storeHoursService } from "../modules/storeHours/storeHours.module";
 import { optionCopiesCreate, orderItemExtras } from "../lib/orderItems";
-import { COUPON_EXHAUSTED_MESSAGE, priceItems, totalsFor } from "../lib/orderQuote";
+import { COUPON_EXHAUSTED_MESSAGE, priceEachItem, priceItems, totalsFor } from "../lib/orderQuote";
 
 class CouponExhaustedError extends Error {}
 
@@ -26,6 +28,8 @@ class CouponExhaustedError extends Error {}
 // NG-08: tetos do pedido público (por loja e por telefone); ver o comentário no uso.
 export const PUBLIC_ORDERS_PER_STORE_PER_MINUTE = 60;
 export const PUBLIC_QUOTES_WITH_COUPON_PER_IP_PER_MINUTE = 20; // cotação COM cupom: teto mais apertado (não vira jeito barato de testar códigos de cupom)
+export const PUBLIC_QUOTES_PER_STORE_PER_MINUTE = 600; // teto por LOJA (vários IPs): a cotação consulta o banco do restaurante
+export const PUBLIC_QUOTES_WITH_COUPON_PER_STORE_PER_MINUTE = 60; // IGUAL ao teto do pedido: a cotação com cupom não é um oráculo mais barato que a criação
 export const PUBLIC_QUOTES_PER_IP_PER_MINUTE = 120; // PR-06: a cotação não grava nada, mas consulta o banco: teto por IP (a cada mudança do carrinho)
 export const MAX_PENDING_PER_PHONE = 3;
 export const CAPTCHA_AT_PENDING = 2; // com captcha ligado, a partir do 2º pedido pendente do telefone
@@ -40,29 +44,38 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     if (limited(`public-quote:${clientKey(clientIpOf(request))}`, PUBLIC_QUOTES_PER_IP_PER_MINUTE)) return tooMany(reply);
     const store = await prisma.store.findUnique({ where: { slug } });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });
+    if (limited(`public-quote-store:${store.id}`, PUBLIC_QUOTES_PER_STORE_PER_MINUTE)) return tooMany(reply);
+    reply.header("Cache-Control", "no-store"); // a cotação depende do instante (promoção, esgotado, horário): nunca cacheada
     const parsed = quoteOrderSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Corpo inválido.", code: "VALIDATION_ERROR", fields: parsed.error.flatten().fieldErrors });
     const input = parsed.data;
-    if (input.couponCode && limited(`public-quote-coupon:${clientKey(clientIpOf(request))}`, PUBLIC_QUOTES_WITH_COUPON_PER_IP_PER_MINUTE)) return tooMany(reply);
+    if (input.couponCode && (limited(`public-quote-coupon:${clientKey(clientIpOf(request))}`, PUBLIC_QUOTES_WITH_COUPON_PER_IP_PER_MINUTE) || limited(`public-quote-coupon-store:${store.id}`, PUBLIC_QUOTES_WITH_COUPON_PER_STORE_PER_MINUTE))) return tooMany(reply);
     if (input.type === "MESA") return reply.code(400).send({ error: "Pedido de mesa só é feito pelo QR da mesa.", code: "TABLE_REQUIRED" });
     if (input.type === "DELIVERY" && !store.deliveryEnabled) return reply.code(409).send({ error: "Esta loja não está fazendo entregas no momento.", code: "DELIVERY_DISABLED" });
     if (input.type === "BALCAO" && !store.pickupEnabled) return reply.code(409).send({ error: "Esta loja não está aceitando retirada no momento.", code: "PICKUP_DISABLED" });
 
     const now = new Date();
+    // Cotar NÃO exige loja aberta: a cotação responde com preço, linhas e total e acrescenta `accepting` + `reason` (a MESMA decisão do cardápio) para a tela avisar "loja fechada"
+    // sem esconder o carrinho. Quem RECUSA o pedido é só a CRIAÇÃO (STORE_CLOSED). Plano e cobrança nunca aparecem: o bloqueio por assinatura vira o mesmo "desligada".
+    const [{ access }, hours] = await Promise.all([getEntitlements(store.id), storeHoursService.publicStatus(slug)]);
+    const switchedOn = access.publicOrders && store.acceptingOrders !== false;
+    const accepting = switchedOn && (hours ? hours.status.status === "ABERTO" : true);
+    const closedReason = accepting ? null : !switchedOn ? "SWITCHED_OFF" : (hours?.status.reason ?? null);
     // Cada item é precificado SOZINHO: um item indisponível vem com `available:false` e o motivo, e fica fora do total (a tela mostra e o cliente decide).
     const items: Array<Record<string, unknown>> = [];
     const lines = [];
-    for (const [index, item] of input.items.entries()) {
-      const one = await priceItems(store, [{ ...item, expectedUnitPriceCents: undefined }], now);
-      if (!one.ok) {
-        items.push({ index, productId: item.productId, available: false, code: one.body.code ?? "ITEM_UNAVAILABLE", error: one.body.error });
+    const each = await priceEachItem(store, input.items, now); // UMA consulta de produtos e UMA de grupos para todos os itens
+    if (!each.ok) return reply.code(each.status).send(each.body);
+    for (const [index, result] of each.results.entries()) {
+      if (!result.ok) {
+        items.push({ index, productId: input.items[index].productId, available: false, code: result.code, error: result.error });
         continue;
       }
-      const line = one.lines[0];
+      const line = result.line;
       lines.push(line);
       items.push({ index, productId: line.productId, available: true, quantity: line.quantity, unitPriceCents: line.unitPriceCents, lineTotalCents: line.lineTotalCents, listPriceCents: line.listPriceCents, weightGrams: line.weightGrams });
     }
-    if (lines.length === 0) return reply.send({ quote: { items, subtotalCents: 0, discountCents: 0, deliveryFeeCents: 0, tipCents: 0, totalCents: 0, couponApplied: false, hasUnavailable: items.length > 0 } });
+    if (lines.length === 0) return reply.send({ quote: { items, subtotalCents: 0, discountCents: 0, deliveryFeeCents: 0, tipCents: 0, totalCents: 0, couponApplied: false, hasUnavailable: items.length > 0, accepting, reason: closedReason } });
     const totals = await totalsFor(store, lines, { ...input, expectedDeliveryFeeCents: undefined }, now);
     if (!totals.ok) return reply.code(totals.status).send(totals.body);
     return {
@@ -75,6 +88,8 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         totalCents: totals.totalCents,
         couponApplied: totals.coupon !== null,
         hasUnavailable: items.some((i) => i.available === false),
+        accepting,
+        reason: closedReason,
       },
     };
   });
