@@ -790,3 +790,28 @@ export const metricDictionarySchema = z.object({
 });
 export type MetricDefinition = z.infer<typeof metricDefinitionSchema>;
 export type MetricDictionary = z.infer<typeof metricDictionarySchema>;
+// ---- DADOS (i4): ranking de produtos. `revenueCents` só para o OWNER (RN-R-06). ----
+export const completenessSchema = z.object({
+  partial: z.boolean(),
+  reasons: z.array(z.enum(["PERIODO_EM_ANDAMENTO", "TETO_ATINGIDO", "SEM_HISTORICO", "ANONIMIZADOS", "REGRA_MUDOU"])),
+});
+export const reportProductsSchema = z.object({
+  fromDate: z.string(),
+  toDate: z.string(),
+  timeZone: z.string(),
+  order: z.enum(["desc", "asc"]),
+  completeness: completenessSchema,
+  items: z.array(
+    z.object({
+      productId: z.string().nullable(),
+      categoryId: z.string().nullable(),
+      name: z.string(),
+      soldBy: z.enum(["UN", "KG"]),
+      quantity: z.number().int().nullable(), // null quando vendido por peso
+      orders: z.number().int(),
+      weightKg: z.number().nullable(),
+      revenueCents: z.number().int().optional(),
+    }),
+  ),
+});
+export type ReportProducts = z.infer<typeof reportProductsSchema>;

@@ -7,6 +7,8 @@ import { REPORT_RULE_CHANGED_AT } from "../lib/saleLines";
 import { previousPeriod } from "../lib/reportPeriod";
 import { buildComparison } from "../lib/reportComparison";
 import { metricDictionary } from "../lib/metricDictionary";
+import { completenessFor } from "../lib/reportCompleteness";
+import { PRODUCTS_DEFAULT_LIMIT, PRODUCTS_MAX_LIMIT, buildProductsRanking } from "../lib/reportProducts";
 
 // SEC-16 — janela máxima e teto de pedidos por consulta; passou disso, 400/422 com a instrução de reduzir o período (nunca resposta parcial silenciosa).
 // A agregação agora é no banco (API-20), mas o teto continua: ele limita também o CSV. O resumo só traz agregados e nomes de produto/entregador:
@@ -72,6 +74,27 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
     return reply.header("Cache-Control", "private, max-age=300").send(metricDictionary());
   });
 
+  // i4 (M21): ranking de produtos (mais ou menos vendidos). Identidade estável por productId; por peso = pedidos e kg. STAFF só quantidade (RN-R-06).
+  app.get("/api/reports/products", { preHandler: app.requirePanelAuth }, async (request, reply) => {
+    const { storeId, role } = request.user;
+    const query = request.query as { from?: unknown; to?: unknown; preset?: unknown; order?: unknown; limit?: unknown };
+    const order = query.order === undefined ? "desc" : query.order;
+    const limit = query.limit === undefined ? PRODUCTS_DEFAULT_LIMIT : Number(query.limit);
+    if ((order !== "desc" && order !== "asc") || !Number.isInteger(limit) || limit < 1 || limit > PRODUCTS_MAX_LIMIT) {
+      return reply.code(400).send({ error: "Parâmetros inválidos.", code: "REPORT_PRODUCTS_QUERY_INVALID", details: { order: ["desc", "asc"], maxLimit: PRODUCTS_MAX_LIMIT } });
+    }
+    const range = await periodOrReply(storeId, query, reply);
+    if (!range) return reply;
+    const items = await buildProductsRanking(storeId, range, order, limit);
+    return {
+      fromDate: range.fromDate,
+      toDate: range.toDate,
+      timeZone: range.timeZone,
+      order,
+      completeness: completenessFor(range),
+      items: role === "OWNER" ? items : items.map(({ revenueCents: _revenue, ...rest }) => rest),
+    };
+  });
   app.get("/api/reports/summary", { preHandler: app.requirePanelAuth }, async (request, reply) => {
     const { storeId } = request.user;
     const range = await periodOrReply(storeId, request.query as { from?: unknown; to?: unknown }, reply);
