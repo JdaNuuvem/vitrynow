@@ -110,11 +110,11 @@ describe("catálogo — isolamento entre lojas", () => {
     expect((await prisma.product.findUniqueOrThrow({ where: { id: a.productId } })).categoryId).toBe(a.categoryId);
   });
 
-  it("SEC-11 (defesa em profundidade): produto de outra loja ligado à categoria de B por dado ruim NÃO aparece no menu de B", async () => {
+  it("SEC-11 + API-48 (defesa em profundidade): o BANCO recusa produto de A ligado à categoria de B (FK composta), e o menu de B segue só com o dele", async () => {
     const a = await storeWithProduct("a");
     const b = await storeWithProduct("b");
-    // Simula dado já corrompido (a API acima não permite mais criar isto).
-    await prisma.product.update({ where: { id: a.productId }, data: { categoryId: b.categoryId } });
+    // Antes da API-48 isto gravava o dado corrompido e o menu o filtrava; agora o banco nem deixa gravar.
+    await expect(prisma.product.update({ where: { id: a.productId }, data: { categoryId: b.categoryId } })).rejects.toMatchObject({ code: "P2003" });
     const names = (await menu(b.slug)).categories.flatMap((c: { products: { name: string }[] }) => c.products.map((p) => p.name));
     expect(names).toEqual(["Prod b"]);
   });

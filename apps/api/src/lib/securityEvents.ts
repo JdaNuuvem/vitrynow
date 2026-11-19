@@ -26,6 +26,7 @@ export const SECURITY_EVENTS = [
   "platform_login_failed",
   "platform_login_locked",
   "platform_mfa_failed",
+  "server_busy",
 ] as const;
 export type SecurityEvent = (typeof SECURITY_EVENTS)[number];
 
@@ -39,6 +40,7 @@ const WARN_EVENTS = new Set<SecurityEvent>([
   "platform_login_failed",
   "platform_login_locked",
   "platform_mfa_failed",
+  "server_busy",
 ]);
 const REASON = /^[A-Z_]{1,40}$/; // só códigos fixos (SESSION_REVOKED, TOKEN_MISSING...): texto livre nunca vai ao log
 
@@ -68,6 +70,8 @@ export const ALERT_RULES: readonly AlertRule[] = [
   { name: "DEVICE_TOKEN_REFUSED_BURST", events: ["device_token_refused"], scope: "ip", windowMs: 5 * MIN, threshold: 10 },
   { name: "SESSION_REJECTED_SPIKE", events: ["session_rejected"], scope: "global", windowMs: 5 * MIN, threshold: 50 },
   { name: "PASSWORD_RESET_FLOOD_PER_ACCOUNT", events: ["password_reset_requested", "password_reset_refused"], scope: "account", windowMs: 15 * MIN, threshold: 6 },
+  // SEC-34b: a faixa de hash (ou de imagem) recusando com 503 em ritmo alto = ataque de login em massa ou capacidade subdimensionada. Global (a faixa é do processo).
+  { name: "SERVER_BUSY_RATE", events: ["server_busy"], scope: "global", windowMs: MIN, threshold: 20 },
   { name: "PLATFORM_LOGIN_FAILURES", events: ["platform_login_failed", "platform_login_locked", "platform_mfa_failed"], scope: "ip", windowMs: 10 * MIN, threshold: 3 },
 ];
 
