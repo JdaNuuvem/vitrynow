@@ -413,6 +413,9 @@ export const optionInputSchema = z.object({
   name: z.string().trim().min(1).max(150),
   priceCents: z.number().int().min(0).max(100_000_000),
   active: z.boolean().optional(),
+  // RN-PD-12: aponta para um produto ADICIONAL da mesma loja. INHERIT (padrão ao ligar) = nome e preço do adicional; OWN = preço próprio só aqui.
+  productId: z.string().min(1).max(150).nullish(),
+  priceSource: z.enum(["OWN", "INHERIT"]).optional(),
 });
 
 export const optionGroupInputSchema = z.object({

@@ -179,6 +179,11 @@ export class CatalogService {
 
   async deleteProduct(actor: Actor, id: string) {
     const product = await this.requireProduct(actor.storeId, id);
+    // RN-PD-15: adicional em uso em algum grupo não se exclui (a saída é tirar dos grupos ou ocultar).
+    const usage = await this.repo.addonUsage(actor.storeId, id);
+    if (usage.groups.length > 0) {
+      throw new CodedError(409, "ADDON_IN_USE", `Este adicional é usado em ${usage.products} produto(s). Remova-o dos grupos primeiro.`, { products: usage.products, groups: usage.groups, hint: "REMOVE_FROM_GROUPS" });
+    }
     // RN-CT-12: com pedido em aberto a exclusão é bloqueada; a saída é ocultar (active=false).
     const openOrders = await this.repo.countOpenOrdersWithProduct(id);
     if (openOrders > 0) {
@@ -288,6 +293,11 @@ export class CatalogService {
       const state = await this.repo.optionState(actor.storeId, before.id);
       if (saleUnit !== "UN" && (state.groups > 0 || state.legacyAdditionals > 0)) throw invalid("PRODUCT_WEIGHT_NO_OPTIONS", "Produto vendido por peso não aceita opções.");
       if (kind === "ADICIONAL" && state.groups > 0) throw invalid("ADDON_HAS_GROUPS", "Um adicional não tem grupos de opções.");
+    }
+    // Deixar de ser adicional (ou virar por peso) com o produto ligado a grupos o deixaria apontado por uma opção inválida.
+    if (before && (kind !== "ADICIONAL" || saleUnit !== "UN") && (input.kind !== undefined || input.saleUnit !== undefined)) {
+      const usage = await this.repo.addonUsage(actor.storeId, before.id);
+      if (usage.groups.length > 0) throw new CodedError(409, "ADDON_IN_USE", `Este adicional é usado em ${usage.products} produto(s). Remova-o dos grupos primeiro.`, { products: usage.products, groups: usage.groups, hint: "REMOVE_FROM_GROUPS" });
     }
     if (promo !== null && before && out.promoCents !== undefined) {
       if ((await this.repo.optionState(actor.storeId, before.id)).hasBaseGroup) throw invalid("PROMO_NOT_ALLOWED", "Este produto tem o preço definido pelas variações.");
