@@ -4,6 +4,7 @@ import type { Product, ProductAdditional } from "@meucardapio/db";
 import { prisma } from "@meucardapio/db";
 import { fromPriceCents, resolveLine, unavailableGroups, type GroupRow, type OptionCopy } from "../modules/optionGroups/optionGroups.domain";
 import { CodedError } from "../shared/errors";
+import { checkWeight, effectivePriceCents, promoActive, weightLineCents, type PricedProduct } from "./productPrice";
 import { PrismaOptionGroupsRepository } from "../modules/optionGroups/optionGroups.repository";
 
 // Os valores agregados do pedido são INTEGER no PostgreSQL.
@@ -27,6 +28,7 @@ type InputItem = {
   options?: Array<{ optionId: string; quantity?: number }>;
   optionSelections?: Array<{ optionId: string; quantity?: number }>;
   expectedUnitPriceCents?: number;
+  weightGrams?: number;
 };
 
 export type OrderLine = {
@@ -38,11 +40,15 @@ export type OrderLine = {
   lineTotalCents: number;
   additionals: Array<{ name: string; priceCents: number }>;
   optionCopies: OptionCopy[];
+  // Produto detalhado: cópias do momento do pedido (null = produto comum, sem promoção e sem peso)
+  listPriceCents: number | null;
+  weightGrams: number | null;
+  pricePerKgCents: number | null;
 };
 
 export type OrderLinesResult = { ok: true; lines: OrderLine[] } | { ok: false; status: number; body: { error: string; code: string; issues?: unknown[]; details?: unknown } };
 
-export async function buildOrderLines(storeId: string, products: Array<Product & { additionals: ProductAdditional[] }>, items: InputItem[]): Promise<OrderLinesResult> {
+export async function buildOrderLines(storeId: string, products: Array<Product & { additionals: ProductAdditional[] }>, items: InputItem[], now: Date = new Date()): Promise<OrderLinesResult> {
   const fail = (status: number, error: string, code: string, extra: { issues?: unknown[]; details?: unknown } = {}): OrderLinesResult => ({ ok: false, status, body: { error, code, ...extra } });
   // R1: tetos ANTES de qualquer consulta; `options` e `optionSelections` juntos no mesmo item são ambíguos.
   let totalSelections = 0;
@@ -61,6 +67,25 @@ export async function buildOrderLines(storeId: string, products: Array<Product &
   for (const [index, item] of items.entries()) {
     const selected = item.options ?? item.optionSelections;
     const product = productById.get(item.productId)!;
+    const priced = product as unknown as PricedProduct;
+    const effective = effectivePriceCents(priced, now);
+    const onPromo = promoActive(priced, now);
+    // Adicional que não vende sozinho (RN-PD-16): nunca entra como item do pedido (vitrine, mesa e balcão).
+    if (!product.sellAlone) return fail(409, "Este item é um adicional e não é vendido sozinho.", "PRODUCT_ADDON_NOT_SOLD_ALONE");
+    if (product.saleUnit !== "UN") {
+      // Venda por peso (RN-PD-17..25): quantity = 1; weightGrams validado; unitário = valor da linha; sem opções nem adicionais no MVP.
+      if (item.quantity !== 1) return fail(400, "Produto por peso é pedido em uma só pesagem.", "WEIGHT_QUANTITY_INVALID");
+      if ((selected && selected.length > 0) || (item.additionalIds && item.additionalIds.length > 0)) return fail(400, "Produto vendido por peso não aceita opções.", "PRODUCT_WEIGHT_NO_OPTIONS");
+      const grams = item.weightGrams;
+      if (grams === undefined) return fail(400, `Escolha entre ${product.minGrams} g e ${product.maxGrams} g.`, "WEIGHT_OUT_OF_RANGE");
+      const weightIssue = checkWeight(product, grams);
+      if (weightIssue) return fail(400, weightIssue.message, weightIssue.code);
+      const lineCents = weightLineCents(effective, grams);
+      if (!orderMoneyFits(lineCents)) return fail(400, ...TOO_HIGH);
+      if (item.expectedUnitPriceCents !== undefined && item.expectedUnitPriceCents !== lineCents) priceChanged.push({ index, productId: product.id, name: product.name, unitPriceCents: lineCents });
+      lines.push({ productId: product.id, productName: product.name, quantity: 1, unitPriceCents: lineCents, notes: item.notes, lineTotalCents: lineCents, additionals: [], optionCopies: [], listPriceCents: onPromo ? weightLineCents(product.priceCents, grams) : null, weightGrams: grams, pricePerKgCents: effective });
+      continue;
+    }
     const groups: GroupRow[] = groupsByProduct.get(product.id) ?? [];
     const realGroups = groups.filter((g) => g.source !== "LEGACY_ADDITIONALS");
     // Adicional LEGADO e opções podem vir no mesmo item (o front mistura): o adicional soma POR CIMA do unitário, as opções já estão nele.
@@ -75,7 +100,7 @@ export async function buildOrderLines(storeId: string, products: Array<Product &
     }
     const additionalsCents = chosenAdditionals.reduce((sum, a) => sum + a.priceCents, 0);
     if (realGroups.length > 0 || selected) {
-      const resolved = resolveLine({ name: product.name, priceCents: product.priceCents }, groups, selected ?? []);
+      const resolved = resolveLine({ name: product.name, priceCents: effective }, groups, selected ?? []);
       if (!resolved.ok) {
         for (const issue of resolved.issues) issues.push({ productId: product.id, code: issue.code, message: issue.message, groupId: issue.groupId });
         return fail(400, "As opções escolhidas não são válidas.", "OPTION_INVALID", { issues });
@@ -83,20 +108,23 @@ export async function buildOrderLines(storeId: string, products: Array<Product &
       const unitTotal = resolved.unitPriceCents + additionalsCents;
       if (!orderMoneyFits(unitTotal * item.quantity)) return fail(400, ...TOO_HIGH);
       if (item.expectedUnitPriceCents !== undefined && item.expectedUnitPriceCents !== unitTotal) priceChanged.push({ index, productId: product.id, name: product.name, unitPriceCents: unitTotal });
-      lines.push({ productId: product.id, productName: product.name, quantity: item.quantity, unitPriceCents: resolved.unitPriceCents, notes: item.notes, lineTotalCents: unitTotal * item.quantity, additionals: chosenAdditionals.map(({ name, priceCents }) => ({ name, priceCents })), optionCopies: resolved.copies });
+      lines.push({ productId: product.id, productName: product.name, quantity: item.quantity, unitPriceCents: resolved.unitPriceCents, notes: item.notes, lineTotalCents: unitTotal * item.quantity, additionals: chosenAdditionals.map(({ name, priceCents }) => ({ name, priceCents })), optionCopies: resolved.copies, listPriceCents: onPromo ? resolved.unitPriceCents + (product.priceCents - effective) : null, weightGrams: null, pricePerKgCents: null });
       continue;
     }
     const extra = additionalsCents;
     const chosen = chosenAdditionals;
-    if (!orderMoneyFits((product.priceCents + extra) * item.quantity)) return fail(400, ...TOO_HIGH);
+    if (!orderMoneyFits((effective + extra) * item.quantity)) return fail(400, ...TOO_HIGH);
     // `expectedUnitPriceCents` compara com o TOTAL por unidade (base + opções SOMA + adicionais legados), nunca com o campo gravado, e SÓ gera 409: nunca vira preço.
-    if (item.expectedUnitPriceCents !== undefined && item.expectedUnitPriceCents !== product.priceCents + extra) priceChanged.push({ index, productId: product.id, name: product.name, unitPriceCents: product.priceCents + extra });
-    lines.push({ productId: product.id, productName: product.name, quantity: item.quantity, unitPriceCents: product.priceCents, notes: item.notes, lineTotalCents: (product.priceCents + extra) * item.quantity, additionals: chosen, optionCopies: [] });
+    if (item.expectedUnitPriceCents !== undefined && item.expectedUnitPriceCents !== effective + extra) priceChanged.push({ index, productId: product.id, name: product.name, unitPriceCents: effective + extra });
+    lines.push({ productId: product.id, productName: product.name, quantity: item.quantity, unitPriceCents: effective, notes: item.notes, lineTotalCents: (effective + extra) * item.quantity, additionals: chosen, optionCopies: [], listPriceCents: onPromo ? product.priceCents : null, weightGrams: null, pricePerKgCents: null });
   }
   if (!orderMoneyFits(lines.reduce((sum, l) => sum + l.lineTotalCents, 0))) return fail(400, ...TOO_HIGH);
   if (priceChanged.length > 0) return fail(409, "O preço de um item mudou. Confira o carrinho antes de confirmar.", "ITEM_PRICE_CHANGED", { details: { items: priceChanged } });
   return { ok: true, lines };
 }
+
+/** Cópias do produto detalhado no item (preço normal, peso e preço do quilo do momento do pedido). */
+export const orderItemExtras = (line: OrderLine) => ({ listPriceCents: line.listPriceCents, weightGrams: line.weightGrams, pricePerKgCents: line.pricePerKgCents });
 
 /** Parte `options` do `create` do item (cópia na MESMA transação do pedido). */
 export const optionCopiesCreate = (copies: OptionCopy[]) =>
