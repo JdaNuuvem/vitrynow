@@ -35,7 +35,7 @@ describe("FKs compostas por loja (API-48)", { timeout: 90_000 }, () => {
     return { storeId, cookie, post, category, product, coupon, deliverer, receipt, order };
   }
 
-  const violation = (p: Promise<unknown>) => expect(p).rejects.toMatchObject({ code: expect.stringMatching(/P2003|P2010/) });
+  const violation = (p: Promise<unknown>) => expect(p).rejects.toMatchObject({ code: "P2003" });
 
   it("A não aponta para categoria, cupom, entregador nem recibo de B (SQL/Prisma direto): violação de integridade, nada gravado", async () => {
     const a = await loja("a");
