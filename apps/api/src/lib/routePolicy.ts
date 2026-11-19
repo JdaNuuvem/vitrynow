@@ -120,6 +120,7 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/catalog/products/reorder": "blocked",
   "POST /api/media/images": "blocked", // API-18: upload e cadastro
   "POST /api/media/images/:id/delete": "blocked",
+  "POST /api/reels": "blocked", // REEL-1 (d1): enviar vídeo é cadastro; Consulta e Suspensão não aceitam envio novo (RN-REEL-11)
   "POST /api/catalog/option-groups": "blocked", // API-15
   "POST /api/catalog/option-groups/:id": "blocked",
   "POST /api/catalog/option-groups/:id/delete": "blocked",

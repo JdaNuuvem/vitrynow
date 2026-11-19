@@ -145,7 +145,7 @@ describe("contrato de recursos (CA-B10-08, ADR-0003 §2.6)", () => {
   });
 
   it("o registro tem exatamente as chaves do ADR-0003 e `released` booleano", () => {
-    expect([...FEATURES].sort()).toEqual(["advanced_reports", "multi_user", "scheduled_orders", "table_qr", "tab_service", "whatsapp_auto"].sort());
+    expect([...FEATURES].sort()).toEqual(["advanced_reports", "multi_user", "reels", "scheduled_orders", "table_qr", "tab_service", "whatsapp_auto"].sort());
     for (const feature of FEATURES) {
       expect(typeof FEATURE_REGISTRY[feature].released).toBe("boolean");
       expect(["BASICO", "PRO"]).toContain(FEATURE_REGISTRY[feature].tier);
