@@ -7,6 +7,8 @@ import type { Category, Product, ProductAdditional, Store } from "@meucardapio/d
 export const PUBLIC_STORE_KEYS = ["name", "slug", "logoUrl", "coverImageUrl", "primaryColor", "address", "whatsapp", "openingHours", "minOrderCents", "deliveryEnabled", "pickupEnabled", "acceptingOrders", "deliveryFeeCents", "hideSoldOutProducts"] as const;
 // Campanha publicada (CONTRATO-CAMPANHA): `action` so existe quando o destino ainda existe.
 export const PUBLIC_CAMPAIGN_KEYS = ["id", "title", "description", "imageUrl", "imageLayout", "imagePosition"] as const;
+// Horário DERIVADO da grade (PR-01, SSOT D2): acrescentados pelo portão público do cardápio (subscriptionGate), não pelo `publicStore`.
+export const PUBLIC_STORE_HOURS_KEYS = ["openNow", "nextOpensAt", "hoursText"] as const;
 export const PUBLIC_CATEGORY_KEYS = ["id", "name", "icon", "products"] as const;
 export const PUBLIC_PRODUCT_KEYS = ["id", "name", "description", "imageUrl", "priceCents", "featured", "soldOut", "additionals", "optionGroups", "unavailable", "unavailableByOptions", "fromPriceCents"] as const;
 export const PUBLIC_ADDITIONAL_KEYS = ["id", "name", "priceCents"] as const;
