@@ -614,6 +614,8 @@ export const storeScheduleSchema = z.object({
 });
 export type StoreScheduleInput = z.infer<typeof storeScheduleSchema>;
 export const updateStoreHoursSchema = z.object({ schedule: storeScheduleSchema.nullable() });
+// PR-03/a2: sugestão de grade a partir do texto. `text` ausente = usa o texto LEGADO da loja. Não grava nada.
+export const suggestHoursSchema = z.object({ text: textField({ max: 500, multiline: true }).optional() }).strict();
 // Tempo médio de preparo por modalidade (RN-PZ-01): 5 a 240 minutos; null limpa (sem previsão; nada é inventado).
 const prepMinutesSchema = z.number().int().min(5).max(240).nullable();
 export const updatePrepTimesSchema = z.object({ deliveryMinutes: prepMinutesSchema, pickupMinutes: prepMinutesSchema });
