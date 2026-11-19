@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { login, makeApp, registerStore, resetDb } from "./helpers";
@@ -22,8 +23,10 @@ describe("modo ocupado (g1)", () => {
     storeId = json(reg.response).store.id;
     const category = json(await app.inject({ method: "POST", url: "/api/catalog/categories", headers: { cookie: owner }, payload: { name: "C" } })).category.id;
     productId = json(await app.inject({ method: "POST", url: "/api/catalog/products", headers: { cookie: owner }, payload: { categoryId: category, name: "Combo", priceCents: 1500 } })).product.id;
-    await app.inject({ method: "POST", url: "/api/users", headers: { cookie: owner }, payload: { email: "staff-ocu@teste.com", password: "provisoria-12" } });
-    staff = (await login(app, "staff-ocu@teste.com", "provisoria-12")).cookie!;
+    const staffEmail = `staff-${randomUUID().slice(0, 8)}@exemplo.invalid`;
+    const staffPassword = `Ocu-${randomUUID()}`;
+    await app.inject({ method: "POST", url: "/api/users", headers: { cookie: owner }, payload: { email: staffEmail, password: staffPassword } });
+    staff = (await login(app, staffEmail, staffPassword)).cookie!;
   });
   afterEach(async () => {
     await app.close();
