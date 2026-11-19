@@ -1,7 +1,7 @@
 # print-client — módulo de impressão local (MeuCardapio, placeholder)
 
 App WinForms (.NET Framework 4.7.2) que roda no PC do estabelecimento e imprime os pedidos vindos
-da **nossa** API (`apps/api`), não do cardapio.ai.
+da **nossa** API (`apps/api`), não de um serviço de terceiro.
 
 ## Origem do código (PC-12)
 

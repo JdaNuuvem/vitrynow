@@ -22,7 +22,7 @@ O Windows Sandbox **não está instalado** neste computador (ativar exige admini
 | 11 | Instale uma **versão mais nova** por cima (build com versão maior) | Atualiza; `%LOCALAPPDATA%\MeuCardapioPrintClient` (settings, chave, `printed.json`, logs) **continua** e o app segue configurado | ☐ |
 | 12 | Desinstale (Configurações do Windows ou atalho "Desinstalar") | Remove EXE, atalhos e a entrada de inicialização; **mantém** `%LOCALAPPDATA%\MeuCardapioPrintClient` (dados do lojista) | ☐ |
 | 13 | Instale de novo | Volta configurado, sem pedir a chave | ☐ |
-| 14 | Procure rastro do terceiro: `Get-ChildItem -Recurse` na pasta do app e do `%LOCALAPPDATA%` e o painel "Aplicativos" | Nenhum nome, domínio ou arquivo do cardapio.ai | ☐ |
+| 14 | Procure rastro do terceiro: `Get-ChildItem -Recurse` na pasta do app e do `%LOCALAPPDATA%` e o painel "Aplicativos" | Nenhum nome, domínio ou arquivo de serviço de terceiro | ☐ |
 
 Registre por item: ✓/✗, o texto de qualquer aviso do Windows, a versão do Windows da VM e capturas de tela dos itens 2, 5, 9 e 12.
 

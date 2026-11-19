@@ -93,10 +93,8 @@ Backend (`apps/api`, `packages/db`, `infra`, `apps/print-client`): Claudio · Fr
 # Documentação técnica (original)
 # MeuCardapio (placeholder) — plataforma própria
 
-Plataforma própria de pedidos (painel + cardápio online + impressão local), construída a partir dos
-aprendizados de arquitetura do projeto de engenharia reversa em `../DOCS/` — **sem** reaproveitar marca,
-assets ou backend do cardapio.ai. Ver `../DOCS/mapa-faltas.md` (histórico) e o plano aprovado para o
-contexto completo.
+Plataforma própria de pedidos (painel + cardápio online + impressão local), **sem** reaproveitar marca,
+assets, código ou backend de serviço de terceiro.
 
 Monorepo: `apps/api` (Fastify), `apps/web` (Next.js), `apps/print-client` (C#/.NET, Fase 1), `packages/db`
 (Prisma), `packages/shared-types` (Zod).
