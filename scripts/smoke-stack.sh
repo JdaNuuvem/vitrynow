@@ -145,6 +145,10 @@ done
 if [ "$got429" = 1 ]; then check ok "14 logins, cada um com X-Forwarded-For diferente, bateram no limite (429): cabeçalho forjado não burla o rate limit"
 else check fail "nenhum 429 em 14 logins com XFF forjado: o limite pode ser burlado (B04)"; fi
 # INF-08/NG-12b: os 14 logins falhos do MESMO IP (o X-Forwarded-For forjado não conta) passam de 10 em 5 min: a API tem de EMITIR o security_alert, e o saude.sh de REPORTÁ-LO
+# só 8 dos 14 chegam ao tratador (limite de 8/min do IP na API) e geram evento (5 login_failed + 3 login_locked) = 8 < limiar 10: espera a janela do limite (62 s) e faz mais 4 falhas
+# em contas DIFERENTES (cada uma gera 1 login_failed): 12 eventos do mesmo IP em ~1 min => a regra LOGIN_FAILURES_PER_IP (10 em 5 min) tem de disparar
+echo "   (espera 62 s para a janela do limite de login esvaziar e fazer a 2ª leva de falhas)"; sleep 62
+for n in 1 2 3 4; do curl -s -o /dev/null -X POST -H "Content-Type: application/json" -d "{\"email\":\"alerta$n@existe.invalid\",\"password\":\"errada-errada\"}" "http://127.0.0.1:$PORT/auth/login"; done
 sleep 2; sa="$("${DC[@]}" logs --no-color api 2>&1 | grep '"msg":"security_alert"' | grep -o '"securityAlert":"[A-Z_]*"' | cut -d'"' -f4 | sort -u | tr '
 ' ' ')"
 [[ "$sa" == *LOGIN_FAILURES_PER_IP* ]] && check ok "NG-12b: a API emitiu security_alert LOGIN_FAILURES_PER_IP depois de 14 logins falhos do mesmo IP ($sa)" || check fail "NG-12b: nenhum security_alert LOGIN_FAILURES_PER_IP no log da API (regras vistas: '$sa')"
