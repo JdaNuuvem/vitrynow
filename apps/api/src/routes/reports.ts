@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { logAudit } from "../lib/audit";
+import { storeTimeZone } from "../lib/storeTz";
 import { CSV_TABLES, MAX_REPORT_DAYS, buildReport, reportRows, resolveRange, toCsv, type CsvTable } from "../lib/reports";
 import { REPORT_RULE_CHANGED_AT } from "../lib/saleLines";
 
@@ -50,7 +51,7 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
       void reply.code(400).send({ error: "datas inválidas" });
       return null;
     }
-    const range = resolveRange({ from: query.from as string | undefined, to: query.to as string | undefined });
+    const range = resolveRange({ from: query.from as string | undefined, to: query.to as string | undefined }, new Date(), await storeTimeZone(storeId));
     if ("error" in range) {
       void reply.code(400).send(RANGE_REPLY[range.error]);
       return null;
