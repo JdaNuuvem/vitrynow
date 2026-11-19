@@ -82,6 +82,17 @@ LOGFN=log5xx_baixo; roda env;    caso "5 respostas 5xx em 605 (0,8%): NÃO alert
 logvazio() { :; }
 LOGFN=logvazio; roda env;        caso "log vazio: ALERTA (a API parou de logar)" '[ "$RC" = 1 ] && [[ "$OUT" == *"NENHUMA linha de log"* ]]'
 
+echo "== alertas de segurança (NG-12b)"
+SA1='{"level":50,"msg":"security_alert","securityAlert":"LOGIN_FAILURES_PER_IP","scope":"ip","key":"203.0.113.0","count":11,"windowSec":300}'
+SA2='{"level":50,"msg":"security_alert","securityAlert":"ORIGIN_MISMATCH_BURST","scope":"ip","key":"198.51.100.0","count":6,"windowSec":300}'
+SE='{"level":40,"msg":"security_event","securityEvent":"login_failed","ipKey":"203.0.113.0"}'
+logseg_alerta() { logbom; echo "$SA1"; echo "$SA1"; echo "$SA2"; echo "$SE"; echo "$SE"; }
+LOGFN=logseg_alerta; roda env;   caso "security_alert: ALERTA com o nome de cada regra e a contagem" '[ "$RC" = 1 ] && [[ "$OUT" == *"LOGIN_FAILURES_PER_IP×2"* ]] && [[ "$OUT" == *"ORIGIN_MISMATCH_BURST×1"* ]]'
+logseg_eventos() { logbom; echo "$SE"; echo "$SE"; echo '{"level":30,"msg":"security_event","securityEvent":"session_rejected"}'; }
+LOGFN=logseg_eventos; roda env;  caso "só security_event (sem alerta): NÃO alerta e mostra o resumo por tipo" '[ "$RC" = 0 ] && [[ "$OUT" == *"login_failed=2"* ]] && [[ "$OUT" == *"session_rejected=1"* ]]'
+LOGFN=logbom; roda env;          caso "sem eventos de segurança: ok nas duas linhas" '[ "$RC" = 0 ] && [[ "$OUT" == *"nenhum security_alert"* ]] && [[ "$OUT" == *"nenhum security_event"* ]]'
+caso "nenhum IP nem e-mail aparece na saída do alerta (só nome da regra e contagem)" 'LOGFN=logseg_alerta; roda env; [[ "$OUT" != *"203.0.113"* && "$OUT" != *"198.51.100"* ]]'
+
 echo "== argumentos"
 LOGFN=logbom; ARGS="--minutos abc"; roda env; caso "--minutos inválido: exit 2" '[ "$RC" = 2 ]'
 ARGS="--minutos 5";  roda env; caso "--minutos 5 aparece no cabeçalho dos logs" '[[ "$OUT" == *"últimos 5 min"* ]]'
