@@ -74,7 +74,10 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
     const current = await prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { schedule: true, openingHours: true } });
     const hasGrid = parseStoredSchedule(current.schedule) !== null;
     const openingHours = hasGrid ? undefined : openingHoursInput;
-    const ignoredHours = hasGrid && openingHoursInput !== undefined && (openingHoursInput === "" ? null : openingHoursInput) !== current.openingHours;
+    // Só avisa quando o texto recebido é DIFERENTE do que o painel mostrou (o texto GERADO da grade) e do legado: o formulário reenvia o que carregou (P2-1 do Deming).
+    const generated = hasGrid ? (await storeHoursService.derivedFor(storeId)).hoursText : null;
+    const received = openingHoursInput === "" ? null : openingHoursInput;
+    const ignoredHours = hasGrid && openingHoursInput !== undefined && received !== generated && received !== current.openingHours;
     // SEC-14 (ST-18): o domínio é ÚNICO no banco; quem decide é o índice (sem "consultar e depois gravar"), então duas lojas simultâneas não passam as duas.
     const store = await prisma.store.update({
       where: { id: storeId },

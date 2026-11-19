@@ -135,6 +135,22 @@ describe("PR-01 em HTTP (relógio real)", { timeout: 90_000 }, () => {
     expect(json(igual)).not.toHaveProperty("warnings");
   });
 
+  it("ciclo do painel: carregar → reenviar (o formulário devolve o texto GERADO) NÃO avisa, mesmo mudando só o endereço; texto diferente avisa e a coluna fica intacta", async () => {
+    await post("/api/store/settings", { openingHours: "texto legado" });
+    await post("/api/store/hours", { schedule: aberta24h });
+    const carregado = json(await app.inject({ method: "GET", url: "/api/store/settings", headers: { cookie } })).store;
+    expect(carregado.openingHours).toBe("Seg a dom 00:00–24:00");
+    const reenvio = await post("/api/store/settings", { openingHours: carregado.openingHours, address: "Rua do Ciclo, 1" });
+    expect(reenvio.statusCode, reenvio.body).toBe(200);
+    expect(json(reenvio)).not.toHaveProperty("warnings");
+    expect(json(reenvio).store.address).toBe("Rua do Ciclo, 1");
+    const legadoIgual = await post("/api/store/settings", { openingHours: "texto legado" }); // igual ao legado: também sem aviso
+    expect(json(legadoIgual)).not.toHaveProperty("warnings");
+    const diferente = await post("/api/store/settings", { openingHours: "um texto novo qualquer" });
+    expect(json(diferente).warnings[0]).toMatchObject({ code: "OPENING_HOURS_DERIVED" });
+    expect((await prisma.store.findFirstOrThrow({ where: { slug } })).openingHours).toBe("texto legado");
+  });
+
   it("openNow acompanha a decisão REAL de aceitar pedido: grade aberta = pedido 201; grade fechada agora = openNow false e pedido 409 STORE_CLOSED", async () => {
     const cat = json(await post("/api/catalog/categories", { name: "C" })).category.id;
     const prod = json(await post("/api/catalog/products", { categoryId: cat, name: "P", priceCents: 1000 })).product.id;
