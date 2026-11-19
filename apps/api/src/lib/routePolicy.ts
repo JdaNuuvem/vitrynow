@@ -147,6 +147,7 @@ export const PUBLIC_ROUTE_POLICY: Record<string, PublicPolicy> = {
   "POST /auth/verify-email": "exempt", // API-26: confirma o e-mail pelo link (publico, token no corpo)
   "POST /stores/:slug/orders": "public-order",
   "GET /stores/:slug/menu": "public-menu",
+  "POST /stores/:slug/quote": "public-menu", // PR-06: cotacao sem efeito; segue o acesso do cardapio (Suspensao = 503 neutro)
   "GET /stores/:slug/orders/:orderId/payment-status": "public-allowed",
   "POST /stores/:slug/orders/:orderId/cancel": "public-allowed",
   // API-19: o cliente acompanha o pedido que já fez, também com a loja em Consulta/Suspensão (decisão do Atlas).

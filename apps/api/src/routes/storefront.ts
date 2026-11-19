@@ -1,9 +1,7 @@
-import { isSoldOutNow } from "../lib/soldOut";
 import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
-import { createOrderSchema } from "@meucardapio/shared-types";
-import { applyFreeShipping } from "../lib/deliveryZones";
+import { createOrderSchema, quoteOrderSchema } from "@meucardapio/shared-types";
 import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
 import { publishToStore } from "../realtime/hub";
 import { gatewayForStore } from "../modules/storePayments/gateway";
@@ -19,20 +17,83 @@ import { CAPTCHA_HEADER, captchaVerifier } from "../lib/captcha";
 import { clientIpOf } from "../lib/clientIp";
 import { clientKey } from "../lib/clientKey";
 import { newOrderToken, orderTokenMatches, ORDER_TOKEN_HEADER } from "../lib/orderToken";
-import { assertOrderMoneyFits, buildOrderLines, optionCopiesCreate, orderItemExtras } from "../lib/orderItems";
+import { getEntitlements } from "../lib/subscription";
+import { storeHoursService } from "../modules/storeHours/storeHours.module";
+import { optionCopiesCreate, orderItemExtras } from "../lib/orderItems";
+import { COUPON_EXHAUSTED_MESSAGE, priceEachItem, priceItems, totalsFor } from "../lib/orderQuote";
 
-const COUPON_EXHAUSTED_MESSAGE = "Esse cupom acabou.";
 class CouponExhaustedError extends Error {}
 
 // Rotas públicas do cardápio (sem autenticação) — equivalente ao /online/{slug} do original.
 // NG-08: tetos do pedido público (por loja e por telefone); ver o comentário no uso.
 export const PUBLIC_ORDERS_PER_STORE_PER_MINUTE = 60;
+export const PUBLIC_QUOTES_WITH_COUPON_PER_IP_PER_MINUTE = 20; // cotação COM cupom: teto mais apertado (não vira jeito barato de testar códigos de cupom)
+export const PUBLIC_QUOTES_PER_STORE_PER_MINUTE = 600; // teto por LOJA (vários IPs): a cotação consulta o banco do restaurante
+export const PUBLIC_QUOTES_WITH_COUPON_PER_STORE_PER_MINUTE = 60; // IGUAL ao teto do pedido: a cotação com cupom não é um oráculo mais barato que a criação
+export const PUBLIC_QUOTES_PER_IP_PER_MINUTE = 120; // PR-06: a cotação não grava nada, mas consulta o banco: teto por IP (a cada mudança do carrinho)
 export const MAX_PENDING_PER_PHONE = 3;
 export const CAPTCHA_AT_PENDING = 2; // com captcha ligado, a partir do 2º pedido pendente do telefone
 const PENDING_WINDOW_MS = 30 * 60 * 1000;
 
 const storefrontRoutes: FastifyPluginAsync = async (app) => {
   useDomainErrors(app);
+  // PR-06 (b1): COTAÇÃO do cardápio. Mesma entrada do pedido (sem dados pessoais) e a MESMA conta da criação (`lib/orderQuote.ts`), SEM efeito: não grava, não reserva
+  // cupom, não usa captcha. Preço esperado (`expected*`) é ignorado aqui: divergência só dá 409 na CRIAÇÃO. Item que não pode ser pedido vem marcado, não derruba a cotação.
+  app.post("/stores/:slug/quote", async (request, reply) => {
+    const { slug } = request.params as { slug: string };
+    if (limited(`public-quote:${clientKey(clientIpOf(request))}`, PUBLIC_QUOTES_PER_IP_PER_MINUTE)) return tooMany(reply);
+    const store = await prisma.store.findUnique({ where: { slug } });
+    if (!store) return reply.code(404).send({ error: "loja não encontrada" });
+    if (limited(`public-quote-store:${store.id}`, PUBLIC_QUOTES_PER_STORE_PER_MINUTE)) return tooMany(reply);
+    reply.header("Cache-Control", "no-store"); // a cotação depende do instante (promoção, esgotado, horário): nunca cacheada
+    const parsed = quoteOrderSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Corpo inválido.", code: "VALIDATION_ERROR", fields: parsed.error.flatten().fieldErrors });
+    const input = parsed.data;
+    if (input.couponCode && (limited(`public-quote-coupon:${clientKey(clientIpOf(request))}`, PUBLIC_QUOTES_WITH_COUPON_PER_IP_PER_MINUTE) || limited(`public-quote-coupon-store:${store.id}`, PUBLIC_QUOTES_WITH_COUPON_PER_STORE_PER_MINUTE))) return tooMany(reply);
+    if (input.type === "MESA") return reply.code(400).send({ error: "Pedido de mesa só é feito pelo QR da mesa.", code: "TABLE_REQUIRED" });
+    if (input.type === "DELIVERY" && !store.deliveryEnabled) return reply.code(409).send({ error: "Esta loja não está fazendo entregas no momento.", code: "DELIVERY_DISABLED" });
+    if (input.type === "BALCAO" && !store.pickupEnabled) return reply.code(409).send({ error: "Esta loja não está aceitando retirada no momento.", code: "PICKUP_DISABLED" });
+
+    const now = new Date();
+    // Cotar NÃO exige loja aberta: a cotação responde com preço, linhas e total e acrescenta `accepting` + `reason` (a MESMA decisão do cardápio) para a tela avisar "loja fechada"
+    // sem esconder o carrinho. Quem RECUSA o pedido é só a CRIAÇÃO (STORE_CLOSED). Plano e cobrança nunca aparecem: o bloqueio por assinatura vira o mesmo "desligada".
+    const [{ access }, hours] = await Promise.all([getEntitlements(store.id), storeHoursService.publicStatus(slug)]);
+    const switchedOn = access.publicOrders && store.acceptingOrders !== false;
+    const accepting = switchedOn && (hours ? hours.status.status === "ABERTO" : true);
+    const closedReason = accepting ? null : !switchedOn ? "SWITCHED_OFF" : (hours?.status.reason ?? null);
+    // Cada item é precificado SOZINHO: um item indisponível vem com `available:false` e o motivo, e fica fora do total (a tela mostra e o cliente decide).
+    const items: Array<Record<string, unknown>> = [];
+    const lines = [];
+    const each = await priceEachItem(store, input.items, now); // UMA consulta de produtos e UMA de grupos para todos os itens
+    if (!each.ok) return reply.code(each.status).send(each.body);
+    for (const [index, result] of each.results.entries()) {
+      if (!result.ok) {
+        items.push({ index, productId: input.items[index].productId, available: false, code: result.code, error: result.error });
+        continue;
+      }
+      const line = result.line;
+      lines.push(line);
+      items.push({ index, productId: line.productId, available: true, quantity: line.quantity, unitPriceCents: line.unitPriceCents, lineTotalCents: line.lineTotalCents, listPriceCents: line.listPriceCents, weightGrams: line.weightGrams });
+    }
+    if (lines.length === 0) return reply.send({ quote: { items, subtotalCents: 0, discountCents: 0, deliveryFeeCents: 0, tipCents: 0, totalCents: 0, couponApplied: false, hasUnavailable: items.length > 0, accepting, reason: closedReason } });
+    const totals = await totalsFor(store, lines, { ...input, expectedDeliveryFeeCents: undefined }, now);
+    if (!totals.ok) return reply.code(totals.status).send(totals.body);
+    return {
+      quote: {
+        items,
+        subtotalCents: totals.subtotalCents,
+        discountCents: totals.discountCents,
+        deliveryFeeCents: totals.deliveryFeeCents,
+        tipCents: totals.tipCents,
+        totalCents: totals.totalCents,
+        couponApplied: totals.coupon !== null,
+        hasUnavailable: items.some((i) => i.available === false),
+        accepting,
+        reason: closedReason,
+      },
+    };
+  });
+
   app.get("/stores/:slug/menu", async (request, reply) => {
     const { slug } = request.params as { slug: string };
     const store = await prisma.store.findUnique({ where: { slug } });
@@ -100,95 +161,14 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(409).send({ error: "Esta loja não está aceitando retirada no momento.", code: "PICKUP_DISABLED" });
     }
 
-    const products = await prisma.product.findMany({
-      where: { storeId: store.id, id: { in: input.items.map((i) => i.productId) } },
-      include: { additionals: true },
-    });
-    if (products.length !== new Set(input.items.map((i) => i.productId)).size) {
-      return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja", code: "PRODUCT_NOT_FOUND" });
-    }
-    // Produto pausado some do cardápio e não pode ser pedido por chamada direta (B08).
-    // API-17: esgotado hoje também é recusado (RN-B11-04), mesmo se escondido ou enviado direto à API.
+    // PR-06: a conta do pedido (produtos, preço de cada linha, mínimo, cupom, taxa, gorjeta e total) é a MESMA da cotação (`POST /stores/:slug/quote`): `lib/orderQuote.ts`.
     const orderNow = new Date();
-    const unavailable = products.filter((p) => !p.active || isSoldOutNow(p, orderNow));
-    if (unavailable.length > 0) {
-      // Mesmo código/forma para B11, QR de mesa e pedido manual (contrato B3 §8, item 3).
-      return reply.code(400).send({
-        error: `Item indisponível no momento: ${unavailable.map((p) => p.name).join(", ")}.`,
-        code: "ITEM_UNAVAILABLE",
-        details: { items: unavailable.map((p) => ({ id: p.id, name: p.name })) },
-      });
-    }
-
-    // API-15: UMA regra de preço/opções para vitrine, mesa e balcão (`lib/orderItems.ts`): preço só do servidor, cópia imutável, mesma resposta para opção alheia/inexistente.
-    const built = await buildOrderLines(store.id, products, input.items);
-    if (!built.ok) return reply.code(built.status).send(built.body);
-    const itemsData = built.lines;
-
-    const subtotalCents = itemsData.reduce((sum, item) => sum + item.lineTotalCents, 0);
-
-    if (store.minOrderCents !== null && subtotalCents < store.minOrderCents) {
-      return reply.code(400).send({ error: `pedido mínimo é R$ ${(store.minOrderCents / 100).toFixed(2)}` });
-    }
-
-    let coupon = null;
-    let discountCents = 0;
-    if (input.couponCode) {
-      coupon = await prisma.coupon.findUnique({
-        where: { storeId_code: { storeId: store.id, code: input.couponCode.trim().toUpperCase() } },
-      });
-      if (!coupon || !coupon.active) {
-        return reply.code(400).send({ error: "cupom inválido" });
-      }
-      if (coupon.expiresAt && coupon.expiresAt < new Date()) {
-        return reply.code(400).send({ error: "cupom expirado" });
-      }
-      if (coupon.maxUses !== null && coupon.usedCount >= coupon.maxUses) {
-        return reply.code(400).send({ error: COUPON_EXHAUSTED_MESSAGE, code: "COUPON_EXHAUSTED" });
-      }
-      if (coupon.minOrderCents !== null && subtotalCents < coupon.minOrderCents) {
-        return reply.code(400).send({ error: `pedido mínimo para este cupom é R$ ${(coupon.minOrderCents / 100).toFixed(2)}` });
-      }
-      discountCents =
-        coupon.discountType === "PERCENT"
-          ? Math.round((subtotalCents * coupon.discountValue) / 100)
-          : coupon.discountValue;
-      discountCents = Math.min(discountCents, subtotalCents);
-    }
-
-    // API-16 (B9): taxa por bairro, recalculada AQUI (o cliente só informa o bairro e a taxa que viu). Retirada nunca tem taxa.
-    let deliveryFeeCents = 0;
-    let zoneSnapshot: { name: string; etaMin: number | null; etaMax: number | null } | null = null;
-    if (input.type === "DELIVERY") {
-      const zoneCount = await prisma.deliveryZone.count({ where: { storeId: store.id } });
-      let baseFee = store.deliveryFeeCents; // sem bairros cadastrados: taxa única, como sempre (CA-B9-09)
-      let zoneFreeFrom: number | null = null;
-      if (zoneCount > 0) {
-        const activeZones = () => prisma.deliveryZone.findMany({ where: { storeId: store.id, active: true }, orderBy: { name: "asc" }, select: { id: true, name: true, feeCents: true } });
-        if (input.neighborhoodId) {
-          const zone = await prisma.deliveryZone.findFirst({ where: { id: input.neighborhoodId, storeId: store.id } });
-          if (!zone) return reply.code(400).send({ error: "Bairro não atendido por esta loja.", code: "NEIGHBORHOOD_NOT_FOUND" });
-          if (!zone.active) {
-            // bairro desativado enquanto o cliente montava o pedido: recusa com a lista atual, carrinho mantido
-            return reply.code(400).send({ error: "Este bairro não está mais disponível para entrega.", code: "NEIGHBORHOOD_UNAVAILABLE", details: { zones: await activeZones() } });
-          }
-          baseFee = zone.feeCents;
-          zoneFreeFrom = zone.freeFromCents;
-          zoneSnapshot = { name: zone.name, etaMin: zone.etaMinMinutes, etaMax: zone.etaMaxMinutes };
-        } else if (store.deliveryOutsideMode !== "DEFAULT_FEE") {
-          return reply.code(400).send({ error: "Escolha o bairro da entrega.", code: "NEIGHBORHOOD_REQUIRED", details: { zones: await activeZones() } });
-        }
-      }
-      // Frete grátis sobre o subtotal LÍQUIDO (itens menos desconto), RN-B9-05.
-      deliveryFeeCents = applyFreeShipping(baseFee, subtotalCents - discountCents, zoneFreeFrom, store.freeShippingFromCents);
-    }
-    const tipCents = input.tipCents ?? 0;
-    const totalCents = subtotalCents - discountCents + deliveryFeeCents + tipCents;
-    assertOrderMoneyFits(totalCents);
-    // RN-B9-03: a taxa mudou desde que o cliente viu (ou é outra): 409 com o novo valor; a tela pede confirmação.
-    if (input.expectedDeliveryFeeCents !== undefined && input.expectedDeliveryFeeCents !== deliveryFeeCents) {
-      return reply.code(409).send({ error: "A taxa de entrega mudou. Confira o novo total.", code: "DELIVERY_FEE_CHANGED", details: { deliveryFeeCents, totalCents } });
-    }
+    const priced = await priceItems(store, input.items, orderNow);
+    if (!priced.ok) return reply.code(priced.status).send(priced.body);
+    const itemsData = priced.lines;
+    const totals = await totalsFor(store, itemsData, input, orderNow);
+    if (!totals.ok) return reply.code(totals.status).send(totals.body);
+    const { subtotalCents, discountCents, deliveryFeeCents, tipCents, totalCents, coupon, zoneSnapshot } = totals;
 
     // Total ZERO (cupom cobriu todos os itens e não há taxa nem gorjeta): pedido normal, SEM cobrança. A forma de pagamento
     // informada (inclusive PIX e "troco para") é IGNORADA, não existe PIX de R$ 0,00 e o provedor nunca é chamado (RN-CP-10/11).

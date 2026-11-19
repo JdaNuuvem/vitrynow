@@ -55,6 +55,9 @@ export const createOrderSchema = z.object({
   expectedDeliveryFeeCents: z.number().int().nonnegative().max(10_000_000).optional(), // taxa que o cliente viu (RN-B9-03)
 });
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
+// PR-06 (b1): cotação = os campos do pedido que ENTRAM NA CONTA (sem nome, telefone, endereço, observação nem pagamento). Mesmos limites dos campos do pedido.
+export const quoteOrderSchema = createOrderSchema.pick({ type: true, items: true, couponCode: true, tipCents: true, neighborhoodId: true });
+export type QuoteOrderInput = z.infer<typeof quoteOrderSchema>;
 
 // API-22 — mesa e pedido pelo QR (ADR-0002 nível 1). O cliente não manda preço, telefone nem forma de pagamento: paga ao receber a mesa (API-24).
 export const createTableOrderSchema = z.object({
