@@ -128,7 +128,12 @@ const publicMenuSerializer = async (request: FastifyRequest, _reply: FastifyRepl
       const accepting = switchedOn && (hours ? hours.status === "ABERTO" : true);
       // `prepMinutes` só existe quando a loja configurou (API-57): nunca um prazo inventado.
       const prepMinutes = state.hours?.prepMinutes;
-      return { ...body, store: { ...body.store, acceptingOrders: switchedOn, accepting, hours: hours ?? null, ...(prepMinutes ? { prepMinutes } : {}) } };
+      const derived = state.hours?.derived;
+      // Horário (SSOT D2): UMA fonte, `Store.schedule`. `openNow`/`nextOpensAt`/`hoursText` saem da grade; `openingHours` vira o MESMO texto gerado quando há grade
+      // (sem grade, continua o texto legado; é a única hora em que existe dois valores, e o legado já era o único).
+      const hoursFields = derived ? { openNow: derived.openNow, nextOpensAt: derived.nextOpensAt, hoursText: derived.hoursText } : { openNow: null, nextOpensAt: null, hoursText: null };
+      const openingHours = derived && derived.openNow !== null ? derived.hoursText : body.store.openingHours;
+      return { ...body, store: { ...body.store, openingHours, ...hoursFields, acceptingOrders: switchedOn, accepting, hours: hours ?? null, ...(prepMinutes ? { prepMinutes } : {}) } };
     }
   }
   return payload;

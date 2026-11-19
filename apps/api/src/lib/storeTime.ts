@@ -13,14 +13,17 @@ function formatter(timeZone: string) {
   return f;
 }
 
+/** PADRÃO do produto (só quando a loja não tem fuso válido). É a ÚNICA vez que o fuso aparece escrito na API: o resto recebe `Store.timezone`. */
+export const DEFAULT_STORE_TIMEZONE = "America/Sao_Paulo";
+
 /** Fuso inválido nunca derruba o painel: cai no padrão do produto. */
 export function safeTimeZone(timeZone: string | null | undefined): string {
-  const candidate = timeZone || "America/Sao_Paulo";
+  const candidate = timeZone || DEFAULT_STORE_TIMEZONE;
   try {
     formatter(candidate);
     return candidate;
   } catch {
-    return "America/Sao_Paulo";
+    return DEFAULT_STORE_TIMEZONE;
   }
 }
 
