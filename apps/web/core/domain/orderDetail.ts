@@ -1,4 +1,5 @@
 import type { Order, PaymentStatus } from "./orders";
+import type { OrderOptionSnapshot } from "./storefront";
 
 // Detalhe do pedido no painel (GET /api/orders/:id, API-54a, PRD-15). O SERVIDOR já aplicou a máscara por papel e por
 // idade do pedido: quando `contactMasked` é verdadeiro, `customerPhone` vem mascarado e `address` vem nulo.
@@ -11,9 +12,17 @@ export type DetailItem = {
   productName: string;
   quantity: number;
   unitPriceCents: number;
-  // Observação do item ("sem cebola"), em linha própria. As opções escolhidas ainda não vêm separadas (API-15).
+  additionals?: { name: string; priceCents: number }[];
+  options?: OrderOptionSnapshot[];
   notes: string | null;
 };
+
+export function detailItemTotal(item: Pick<DetailItem, "quantity" | "unitPriceCents" | "additionals" | "options">) {
+  const legacy = (item.additionals ?? []).reduce((sum, entry) => sum + entry.priceCents, 0);
+  // Convenção da API (RN-B8-03): `unitPriceCents` JÁ traz a variação e as opções SUM; só os adicionais LEGADOS ficam fora do unitário.
+  // `options` serve para exibir (grupo, nome, quantidade): somar de novo aqui cobraria o extra em dobro.
+  return (item.unitPriceCents + legacy) * item.quantity;
+}
 
 export type DetailPayment = {
   status: PaymentStatus;
@@ -21,6 +30,7 @@ export type DetailPayment = {
   expiresAt: string | null;
   refundPending: boolean;
   reconcileRequired: boolean;
+  refundManual?: boolean;
 };
 
 // Quem cancelou e por quê (só em pedido cancelado). `by` é o PAPEL (nunca o e-mail).

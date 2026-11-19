@@ -1,27 +1,21 @@
 import type { Deliverer } from "@/core/domain/orders";
+import { Button, StatusBadge } from "@/shared/design/components";
 
-type DelivererRowProps = {
+export function DelivererRow({ deliverer, onToggleActive, onEdit, onRemove, busy }: {
   deliverer: Deliverer;
   onToggleActive: () => void;
-  onRemove: () => void;
-};
-
-export function DelivererRow({ deliverer, onToggleActive, onRemove }: DelivererRowProps) {
-  return (
-    <div className="entregadores__row">
-      <div>
-        <strong>{deliverer.name}</strong>
-        {deliverer.phone && <span className="entregadores__phone">{deliverer.phone}</span>}
-        {!deliverer.active && <span className="entregadores__inactive">(inativo)</span>}
-      </div>
-      <div className="entregadores__actions">
-        <button type="button" onClick={onToggleActive}>
-          {deliverer.active ? "desativar" : "ativar"}
-        </button>
-        <button type="button" className="entregadores__danger" onClick={onRemove}>
-          excluir
-        </button>
-      </div>
-    </div>
-  );
+  onEdit: () => void;
+  onRemove?: () => void;
+  busy: boolean;
+}) {
+  return <tr>
+    <th scope="row">{deliverer.name}</th>
+    <td>{deliverer.phone || "—"}</td>
+    <td><StatusBadge tone={deliverer.active ? "success" : "neutral"}>{deliverer.active ? "Ativo" : "Inativo"}</StatusBadge></td>
+    <td><div className="entregadores__actions">
+      <Button disabled={busy} onClick={onEdit}>Editar</Button>
+      <Button disabled={busy} onClick={onToggleActive}>{deliverer.active ? "Desativar" : "Ativar"}</Button>
+      {onRemove && <Button variant="quiet" disabled={busy} onClick={onRemove}>Excluir</Button>}
+    </div></td>
+  </tr>;
 }

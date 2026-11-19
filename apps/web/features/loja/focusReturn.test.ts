@@ -11,6 +11,21 @@ function page(html: string) {
 }
 
 describe("restoreReturnPoint (WEB-22, F2)", () => {
+  it("distingue o mesmo produto na grade de destaques e na categoria", () => {
+    page(`<button data-featured-product-id="p1">Destaque</button><button ${PRODUCT_ID_ATTR}="p1">Categoria</button>`);
+    restoreReturnPoint(document, { productId: "p1", scrollY: 0, featured: true }, vi.fn());
+    expect(document.querySelector("[data-featured-product-id]")).toHaveFocus();
+    restoreReturnPoint(document, { productId: "p1", scrollY: 300 }, vi.fn());
+    expect(document.querySelector(`[${PRODUCT_ID_ATTR}]`)).toHaveFocus();
+  });
+
+  it("detalhe aberto pela campanha devolve foco à ação que o abriu", () => {
+    page(`<button data-banner-action='campanha'>Ver prato</button><button ${PRODUCT_ID_ATTR}='p1'>Produto</button>`);
+    const target = restoreReturnPoint(document, { productId: "p1", scrollY: 240, bannerId: "campanha" }, vi.fn());
+    expect(target).toBe(document.querySelector("[data-banner-action]"));
+    expect(target).toHaveFocus();
+  });
+
   it("devolve a rolagem e o foco ao produto que abriu o detalhe", () => {
     page(`<main><div id="cardapio-conteudo" tabindex="-1"><div ${PRODUCT_ID_ATTR}="p1" tabindex="0">A</div><div ${PRODUCT_ID_ATTR}="p2" tabindex="0">B</div></div></main>`);
     const scrollTo = vi.fn();

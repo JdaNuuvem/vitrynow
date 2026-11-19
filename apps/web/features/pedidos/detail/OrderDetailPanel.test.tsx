@@ -5,6 +5,7 @@ import type { OrderDetail } from "@/core/domain/orderDetail";
 import type { Deliverer } from "@/core/domain/orders";
 import type { HttpResult } from "@/core/http/HttpClient";
 import { PanelServicesProvider, type PanelServices } from "@/core/services/PanelServices";
+import { SecurityConfirmProvider } from "@/features/seguranca/SecurityConfirmProvider";
 import { OrderDetailPanel } from "./OrderDetailPanel";
 
 // Id no formato real da API (cuid): o detalhe recusa qualquer outro formato sem fazer requisição.
@@ -64,7 +65,9 @@ function setup(get: ReturnType<typeof vi.fn>, over: Partial<React.ComponentProps
   const handlers = { onClose: vi.fn(), onAdvance: vi.fn(), onOpenCancel: vi.fn(), onUndo: vi.fn(), onRetryRefund: vi.fn(), onAssignDeliverer: vi.fn() };
   render(
     <PanelServicesProvider services={{ orders: { get } } as unknown as PanelServices}>
-      <OrderDetailPanel orderId={OID} listOrder={undefined} refreshKey="a" deliverers={deliverers} nowMs={NOW} busy={false} canRetryRefund desktop {...handlers} {...over} />
+      <SecurityConfirmProvider>
+        <OrderDetailPanel orderId={OID} listOrder={undefined} refreshKey="a" deliverers={deliverers} nowMs={NOW} busy={false} canRetryRefund desktop {...handlers} {...over} />
+      </SecurityConfirmProvider>
     </PanelServicesProvider>,
   );
   return { get, ...handlers };

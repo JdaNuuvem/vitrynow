@@ -66,7 +66,8 @@ describe("SEC-18 - respostas das rotas publicas so com campos permitidos", { tim
       payload: { type: "DELIVERY", items: [{ productId: l.productId, quantity: 1 }], paymentMethod: "DINHEIRO", customerName: "Maria Segredo", customerPhone: "11987654321", address: "Rua Reservada 123", notes: "obs secreta" },
     });
     expect(created.statusCode, created.body).toBe(201);
-    expect(keys(json(created))).toEqual(["code", "orderId", "token"]);
+    expect(keys(json(created))).toEqual(["code", "discountCents", "orderId", "token", "totalCents"]);
+    expect(json(created)).toMatchObject({ discountCents: 0, totalCents: 3000 });
     const orderId = json(created).orderId as string;
     const headers = orderTokenHeader(orderId);
 

@@ -3,6 +3,7 @@ import { prisma } from "@meucardapio/db";
 import { ONBOARDING_STEPS, isReservedSlug, onboardingStepStatusSchema, verifyEmailSchema, type OnboardingStepId } from "@meucardapio/shared-types";
 import { logAudit } from "../lib/audit";
 import { consumeVerificationToken, sendVerificationEmail } from "../lib/emailVerification";
+import { parseStoredSchedule } from "../modules/storeHours/storeHours.domain";
 
 const SLUG_PATTERN = /^[a-z0-9-]{1,80}$/;
 // Passos que o sistema enxerga sozinho nos dados da loja; os outros o dono marca (feito/pulado).
@@ -47,7 +48,7 @@ const onboardingRoutes: FastifyPluginAsync = async (app) => {
   app.get("/api/onboarding", { preHandler: app.requirePanelAuth }, async (request) => {
     const { storeId, userId } = request.user;
     const [store, user, productFirst, deviceSeen, orderFirst, marks] = await Promise.all([
-      prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { address: true, whatsapp: true, logoUrl: true, primaryColor: true, openingHours: true } }),
+      prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { address: true, whatsapp: true, logoUrl: true, primaryColor: true, openingHours: true, schedule: true } }),
       prisma.user.findUnique({ where: { id: userId }, select: { emailVerifiedAt: true } }),
       prisma.product.findFirst({ where: { storeId }, orderBy: { createdAt: "asc" }, select: { createdAt: true } }),
       prisma.deviceToken.findFirst({ where: { storeId, revokedAt: null, lastSeenAt: { not: null } }, orderBy: { lastSeenAt: "asc" }, select: { lastSeenAt: true } }),
@@ -57,7 +58,7 @@ const onboardingRoutes: FastifyPluginAsync = async (app) => {
     const markOf = new Map(marks.map((m) => [m.step, m.status]));
     const autoDone: Record<string, boolean> = {
       STORE_DATA: Boolean(store.address || store.whatsapp || store.logoUrl || store.primaryColor),
-      HOURS: Boolean(store.openingHours?.trim()),
+      HOURS: Boolean(parseStoredSchedule(store.schedule) || store.openingHours?.trim()),
       FIRST_PRODUCT: productFirst !== null,
       PRINTER: deviceSeen !== null,
     };

@@ -1,8 +1,11 @@
 import type { CartLine, DeliveryType, PaymentMethod, PlaceOrderInput, Product } from "@/core/domain/storefront";
 import { digitsToCents } from "@/shared/format/money";
+import { choiceLabels } from "./productOptions";
 
 export type CheckoutForm = {
   deliveryType: DeliveryType;
+  neighborhoodId?: string;
+  expectedDeliveryFeeCents?: number;
   customerName: string;
   customerPhone: string;
   address: string;
@@ -81,9 +84,10 @@ export function validateChange(form: CheckoutForm, totalCents: number): string |
   return cents < totalCents ? CHANGE_TOO_LOW_MESSAGE : null;
 }
 
-export function toPlaceOrderInput(form: CheckoutForm, cart: CartLine[]): PlaceOrderInput {
+export function toPlaceOrderInput(form: CheckoutForm, cart: PlaceOrderInput["cart"]): PlaceOrderInput {
   return {
     type: form.deliveryType,
+    ...(form.deliveryType === "DELIVERY" ? { neighborhoodId: form.neighborhoodId, expectedDeliveryFeeCents: form.expectedDeliveryFeeCents } : {}),
     customerName: form.customerName,
     customerPhone: form.customerPhone,
     address: form.address,
@@ -127,7 +131,8 @@ export function firstInvalidField(errors: CheckoutErrors): CheckoutField | null 
 // ---------- resumo mostrado na tela de resultado (spec 09 §10.2) ----------
 export type OrderSummary = {
   lines: string[];
-  totalCents: number;
+  totalCents: number | null;
+  discountCents?: number;
   paymentLabel: string;
   deliveryLabel: string;
   address: string | null;
@@ -145,9 +150,7 @@ export function paymentLabel(method: PaymentMethod): string {
 export function buildOrderSummary(form: CheckoutForm, cart: CartLine[], products: Map<string, Product>, totalCents: number): OrderSummary {
   const lines = cart.map((line) => {
     const product = products.get(line.productId);
-    const extras = product
-      ? line.additionalIds.map((id) => product.additionals.find((a) => a.id === id)?.name).filter((name): name is string => Boolean(name))
-      : [];
+    const extras = product ? choiceLabels(product, line) : [];
     return `${line.quantity}× ${product?.name ?? "Item"}${extras.length > 0 ? ` + ${extras.join(", ")}` : ""}`;
   });
   const delivery = form.deliveryType === "DELIVERY";

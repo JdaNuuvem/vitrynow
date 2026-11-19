@@ -1,0 +1,22 @@
+{
+  "contract": "../EXECUCAO-FRONTEND.md — contrato visual da etapa 1",
+  "targetViewports": ["360x800", "1440x900"],
+  "accessibility": {
+    "status": "untested",
+    "evidence": "Revisão estática e testes escritos para foco/teclado; navegador e suíte oficial indisponíveis."
+  },
+  "responsive": {
+    "status": "untested",
+    "evidence": "CSS e bundle preparados; nenhuma captura renderizada pôde ser inspecionada."
+  },
+  "contentStates": {
+    "loading": { "status": "untested", "evidence": "Skeleton conferido por SSR isolado; aparência/interação no navegador pendente." },
+    "empty": { "status": "untested", "evidence": "Mensagem e ausência de CTA órfão conferidas por SSR isolado; aparência pendente." },
+    "error": { "status": "untested", "evidence": "Tratamento e testes implementados; retry no navegador e Vitest não executados." },
+    "partial": { "status": "untested", "evidence": "Reserva de imagem e fallback revisados no código; falha de carregamento no navegador pendente." },
+    "success": { "status": "untested", "evidence": "Menu, identidade, banner e preço conferidos por SSR isolado; fluxo interativo de pedido pendente." },
+    "permission": { "status": "not-applicable", "reason": "O cardápio é público e esta entrega não acrescenta controles de permissão. Disponibilidade da loja fechada é tratada separadamente e verificada em SSR." }
+  },
+  "renderedEvidence": [],
+  "limitation": "O browser host estava indisponível. A tentativa de controlar Chrome nativo pelo CUA foi encerrada porque a URL não pôde ser determinada com confiança. Gate visual não aprovado."
+}

@@ -11,25 +11,18 @@ import { PixUnavailableError } from "../modules/storePayments/storePayments.serv
 import { orderService } from "../modules/orders/orders.module";
 import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { customerMessageFor, messageActorFor, moneyLineFor } from "../lib/cancelMessages";
-import { DomainError } from "../shared/errors";
+import { DomainError, useDomainErrors } from "../shared/errors";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
 import { buildMenuView } from "../lib/menuView";
-import { resolveLine, type GroupRow } from "../modules/optionGroups/optionGroups.domain";
-import { PrismaOptionGroupsRepository } from "../modules/optionGroups/optionGroups.repository";
 import { limited, tooMany } from "../lib/slidingLimit";
 import { CAPTCHA_HEADER, captchaVerifier } from "../lib/captcha";
 import { clientIpOf } from "../lib/clientIp";
 import { clientKey } from "../lib/clientKey";
 import { newOrderToken, orderTokenMatches, ORDER_TOKEN_HEADER } from "../lib/orderToken";
+import { assertOrderMoneyFits, buildOrderLines, optionCopiesCreate } from "../lib/orderItems";
 
 const COUPON_EXHAUSTED_MESSAGE = "Esse cupom acabou.";
 class CouponExhaustedError extends Error {}
-// API-15: erro de escolha de opções do item (vira 400 com `code`, sem dizer se a opção existe em outra loja/produto).
-class OptionRequestError extends Error {
-  constructor(message: string, readonly code: string) {
-    super(message);
-  }
-}
 
 // Rotas públicas do cardápio (sem autenticação) — equivalente ao /online/{slug} do original.
 // NG-08: tetos do pedido público (por loja e por telefone); ver o comentário no uso.
@@ -39,6 +32,7 @@ export const CAPTCHA_AT_PENDING = 2; // com captcha ligado, a partir do 2º pedi
 const PENDING_WINDOW_MS = 30 * 60 * 1000;
 
 const storefrontRoutes: FastifyPluginAsync = async (app) => {
+  useDomainErrors(app);
   app.get("/stores/:slug/menu", async (request, reply) => {
     const { slug } = request.params as { slug: string };
     const store = await prisma.store.findUnique({ where: { slug } });
@@ -110,9 +104,8 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       where: { storeId: store.id, id: { in: input.items.map((i) => i.productId) } },
       include: { additionals: true },
     });
-    const productById = new Map(products.map((p) => [p.id, p]));
     if (products.length !== new Set(input.items.map((i) => i.productId)).size) {
-      return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja" });
+      return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja", code: "PRODUCT_NOT_FOUND" });
     }
     // Produto pausado some do cardápio e não pode ser pedido por chamada direta (B08).
     // API-17: esgotado hoje também é recusado (RN-B11-04), mesmo se escondido ou enviado direto à API.
@@ -127,60 +120,10 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    // API-15 parte 2 (B8): produto com grupo de opções REAL (MANUAL) é precificado por `resolveLine` (o servidor é a única fonte do preço);
-    // produto só com o espelho legado dos adicionais (LEGACY_ADDITIONALS) segue o caminho antigo, idêntico ao de antes (CA-B8-06).
-    const groupsByProduct = await new PrismaOptionGroupsRepository(prisma).groupsForProducts(store.id, [...productById.keys()]);
-    const optionIssues: Array<{ productId: string; code: string; message: string; groupId?: string }> = [];
-    let itemsData;
-    try {
-      itemsData = input.items.map((item) => {
-        const product = productById.get(item.productId)!;
-        const groups: GroupRow[] = groupsByProduct.get(product.id) ?? [];
-        const realGroups = groups.filter((g) => g.source !== "LEGACY_ADDITIONALS");
-        if (item.options && item.additionalIds?.length) throw new OptionRequestError("Envie `options` OU `additionalIds` no mesmo item, não os dois.", "OPTIONS_AMBIGUOUS");
-        if (realGroups.length > 0 || item.options) {
-          // grupo legado entra no cálculo só como lista de opções válidas (ids iguais aos dos adicionais): produto sem grupo real aceita `options` também
-          const resolved = resolveLine({ name: product.name, priceCents: product.priceCents }, groups, item.options ?? []);
-          if (!resolved.ok) {
-            for (const issue of resolved.issues) optionIssues.push({ productId: product.id, code: issue.code, message: issue.message, groupId: issue.groupId });
-            throw new OptionRequestError("As opções escolhidas não são válidas.", "OPTION_INVALID");
-          }
-          return {
-            productId: item.productId,
-            productName: product.name,
-            quantity: item.quantity,
-            unitPriceCents: resolved.unitPriceCents, // preço UNITÁRIO já com a variação e as opções (RN-B8-03)
-            notes: item.notes,
-            lineTotalCents: resolved.unitPriceCents * item.quantity,
-            additionals: [] as Array<{ name: string; priceCents: number }>,
-            optionCopies: resolved.copies,
-          };
-        }
-        const additionalsByProduct = new Map(product.additionals.map((a) => [a.id, a]));
-        const chosenAdditionals = (item.additionalIds ?? []).map((id) => {
-          const additional = additionalsByProduct.get(id);
-          if (!additional) throw new Error(`adicional ${id} não pertence ao produto ${product.id}`);
-          return additional;
-        });
-        const additionalsCents = chosenAdditionals.reduce((sum, a) => sum + a.priceCents, 0);
-        return {
-          productId: item.productId,
-          productName: product.name,
-          quantity: item.quantity,
-          unitPriceCents: product.priceCents,
-          notes: item.notes,
-          lineTotalCents: (product.priceCents + additionalsCents) * item.quantity,
-          additionals: chosenAdditionals,
-          optionCopies: [] as Array<{ groupName: string; name: string; priceCents: number; quantity: number; priceMode: "SUM" | "BASE" }>,
-        };
-      });
-    } catch (error) {
-      if (error instanceof OptionRequestError) {
-        // Uma resposta SÓ para opção inexistente, inativa, de outro produto ou de outra loja: nenhuma pista (RN-B8-02).
-        return reply.code(400).send({ error: error.message, code: error.code, ...(optionIssues.length ? { issues: optionIssues } : {}) });
-      }
-      return reply.code(400).send({ error: error instanceof Error ? error.message : "pedido inválido" });
-    }
+    // API-15: UMA regra de preço/opções para vitrine, mesa e balcão (`lib/orderItems.ts`): preço só do servidor, cópia imutável, mesma resposta para opção alheia/inexistente.
+    const built = await buildOrderLines(store.id, products, input.items);
+    if (!built.ok) return reply.code(built.status).send(built.body);
+    const itemsData = built.lines;
 
     const subtotalCents = itemsData.reduce((sum, item) => sum + item.lineTotalCents, 0);
 
@@ -241,6 +184,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     }
     const tipCents = input.tipCents ?? 0;
     const totalCents = subtotalCents - discountCents + deliveryFeeCents + tipCents;
+    assertOrderMoneyFits(totalCents);
     // RN-B9-03: a taxa mudou desde que o cliente viu (ou é outra): 409 com o novo valor; a tela pede confirmação.
     if (input.expectedDeliveryFeeCents !== undefined && input.expectedDeliveryFeeCents !== deliveryFeeCents) {
       return reply.code(409).send({ error: "A taxa de entrega mudou. Confira o novo total.", code: "DELIVERY_FEE_CHANGED", details: { deliveryFeeCents, totalCents } });
@@ -336,7 +280,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     if (!usePix) {
       publishToStore(store.id, { type: "order.created", orderId: order.id });
       if (ticketQueued) publishToStore(store.id, { type: "print.available" });
-      return reply.code(201).send({ orderId: order.id, code: order.code, token: accessToken.token });
+      return reply.code(201).send({ orderId: order.id, code: order.code, token: accessToken.token, totalCents, discountCents });
     }
 
     const payment = await prisma.payment.findUniqueOrThrow({ where: { orderId: order.id } });
@@ -364,6 +308,8 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         orderId: order.id,
         code: order.code,
         token: accessToken.token,
+        totalCents,
+        discountCents,
         payment: { pixQrCode: pix.pixQrCode, pixQrCodeBase64: pix.pixQrCodeBase64, expiresAt: pix.expiresAt },
       });
     } catch (error) {

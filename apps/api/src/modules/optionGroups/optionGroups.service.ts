@@ -33,6 +33,7 @@ export class OptionGroupsService {
 
   async updateGroup(actor: Actor, id: string, input: GroupInput): Promise<GroupResult> {
     const before = await this.requireGroup(actor.storeId, id);
+    assertEditable(before);
     const warnings = this.assertConfig(input);
     if (input.priceMode === "BASE" && before.priceMode !== "BASE") {
       const clashes = await this.repo.productsWithAnotherBase(actor.storeId, id);
@@ -61,6 +62,7 @@ export class OptionGroupsService {
   // RN-B8-14: excluir é permitido (pedidos usam cópia). O painel mostra "usado em N produtos" antes (productCount).
   async deleteGroup(actor: Actor, id: string) {
     const group = await this.requireGroup(actor.storeId, id);
+    assertEditable(group);
     const usedIn = await this.repo.countProductsUsing(id);
     await this.repo.deleteGroup(actor.storeId, id);
     this.audit.log({ ...actor, action: "option_group.delete", targetType: "OptionGroup", targetId: id, metadata: { name: group.name, usedIn } });
@@ -84,6 +86,7 @@ export class OptionGroupsService {
     if (new Set(groupIds).size !== groupIds.length) throw new CodedError(400, "DUPLICATE_GROUP", "O mesmo grupo foi enviado mais de uma vez.");
     const found = await this.repo.findGroupsByIds(actor.storeId, groupIds);
     if (found.length !== groupIds.length) throw new NotFoundError("grupo de opções não encontrado");
+    found.forEach(assertEditable);
     const ordered = groupIds.map((id) => found.find((g) => g.id === id)!);
     const problems = checkProductGroups(ordered);
     if (problems.length > 0) throw new CodedError(400, problems[0].code, problems[0].message, { problems });
@@ -93,8 +96,8 @@ export class OptionGroupsService {
   }
 
   /** Para o cardápio e para o pedido: grupos de vários produtos da loja de uma vez. */
-  groupsForProducts(storeId: string, productIds: string[]): Promise<Map<string, GroupRow[]>> {
-    return this.repo.groupsForProducts(storeId, productIds);
+  groupsForProducts(storeId: string, productIds: string[], nativeOnly = false): Promise<Map<string, GroupRow[]>> {
+    return this.repo.groupsForProducts(storeId, productIds, nativeOnly);
   }
 
   private assertConfig(input: GroupInput): ConfigProblem[] {
@@ -113,5 +116,11 @@ export class OptionGroupsService {
     const product = await this.repo.findProduct(storeId, id);
     if (!product) throw new NotFoundError("produto não encontrado");
     return product;
+  }
+}
+
+function assertEditable(group: GroupWithOptions) {
+  if (group.source === "LEGACY_ADDITIONALS") {
+    throw new CodedError(409, "LEGACY_ADDITIONALS_READ_ONLY", "Edite os adicionais legados no próprio produto.");
   }
 }

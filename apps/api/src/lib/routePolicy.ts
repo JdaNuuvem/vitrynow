@@ -66,6 +66,7 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/users": "blocked",
   "POST /api/users/:id/delete": "blocked",
   // LGPD (API-52a, RN-PV-10): anonimizar é obrigação legal e NÃO pode depender de pagamento: liberada na Consulta e, na Suspensão, só para OWNER.
+  "GET /api/privacy/status": "export",
   "POST /api/privacy/anonymize/preview": "export",
   "POST /api/privacy/anonymize": "export",
   "POST /api/privacy/export": "export",

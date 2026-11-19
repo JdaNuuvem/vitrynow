@@ -1,6 +1,6 @@
 .panel-root {
   min-height: 100vh;
-  background: #ffffff;
+  background: var(--panel-canvas, #fff);
   color: var(--ink);
 }
 
@@ -16,50 +16,37 @@
 
 .shell-sidebar {
   position: fixed;
-  top: 0;
-  left: 0;
-  z-index: 10000001;
+  inset: 0 0 0 auto;
+  z-index: 8;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  box-sizing: border-box;
-  width: 280px;
+  width: min(380px, 100%);
   height: 100%;
-  padding-top: 16px;
-  border: 1px solid var(--line);
-  border-left: none;
+  padding: 18px;
   background: var(--surface);
-  transition: width var(--transition);
+  border-inline-start: 1px solid var(--line);
+  box-shadow: var(--shadow-float);
 }
 
-.shell-sidebar.is-collapsed {
-  width: 88px;
+.shell-sidebar[hidden] { display: none; }
+.shell-sidebar:focus { outline: none; }
+body:has(.shell-sidebar:not([hidden])) { overflow: hidden; }
+.shell-scrim { position: fixed; inset: 0; z-index: 7; background: var(--ds-scrim); }
+
+.shell-sidebar__preferences { display: flex; align-items: center; gap: 6px; }
+.shell-nav-stack { display: grid; gap: 14px; margin-bottom: 16px; }
+.shell-nav-group > h2 {
+  padding: 0 10px 4px;
+  color: var(--ink-soft);
+  font-size: var(--ds-text-xs);
+  font-weight: 750;
 }
 
-.shell-sidebar__toggle {
-  position: absolute;
-  top: 16px;
-  right: -16px;
-  z-index: 1;
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #ffffff;
-  color: var(--ink);
-  cursor: pointer;
-  transition: var(--transition);
-}
-
-.shell-sidebar__toggle:hover {
-  border-color: var(--color-primary);
-  color: var(--color-primary);
-}
-
-.shell-sidebar.is-collapsed .shell-sidebar__toggle svg {
-  transform: rotate(180deg);
+.shell-sidebar__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 12px;
 }
 
 .shell-avatar {
@@ -68,7 +55,7 @@
   height: 80px;
   border: 1px solid var(--line);
   border-radius: 200px;
-  background: #ffffff;
+  background: var(--surface);
   object-fit: cover;
 }
 
@@ -81,12 +68,6 @@
   font-weight: 600;
 }
 
-.shell-sidebar.is-collapsed .shell-avatar {
-  width: 56px;
-  height: 56px;
-  font-size: 18px;
-}
-
 .shell-store {
   display: flex;
   align-items: center;
@@ -96,11 +77,6 @@
   min-height: 80px;
   margin-bottom: 12px;
   padding: 0 12px;
-}
-
-.shell-sidebar.is-collapsed .shell-store {
-  justify-content: center;
-  min-height: 56px;
 }
 
 .shell-store__texts {
@@ -169,10 +145,6 @@
   background: var(--line);
 }
 
-.shell-sidebar.is-collapsed .shell-sidebar__scroll {
-  padding: 0 6px;
-}
-
 .shell-hours {
   flex-shrink: 0;
   margin-bottom: 16px;
@@ -184,7 +156,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 32px;
+  width: 100%;
+  min-height: 44px;
   padding: 0 8px;
   cursor: pointer;
 }
@@ -202,7 +175,7 @@
 }
 
 .shell-hours__status.is-closed {
-  color: #a80606;
+  color: var(--ink-soft);
 }
 
 .shell-hours__dot {
@@ -210,13 +183,6 @@
   height: 8px;
   border-radius: 50%;
   background: var(--ok);
-  animation: shell-blink 1.25s linear infinite;
-}
-
-@keyframes shell-blink {
-  50% {
-    opacity: 0.3;
-  }
 }
 
 .shell-hours__action {
@@ -264,7 +230,7 @@
 }
 
 .onboarding-widget:hover {
-  background: #efefef;
+  background: var(--surface-soft);
 }
 
 .onboarding-widget__ring {
@@ -284,7 +250,7 @@
 .onboarding-widget__count {
   display: grid;
   place-items: center;
-  color: #1d1d1f;
+  color: var(--ink);
   font-size: 10px;
   font-weight: 600;
 }
@@ -298,7 +264,7 @@
 }
 
 .onboarding-widget__title {
-  color: #1d1d1f;
+  color: var(--ink);
   font-size: 14px;
   font-weight: 600;
   line-height: 20px;
@@ -314,7 +280,7 @@
 .shell-nav {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 3px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -327,30 +293,31 @@
 .shell-nav__item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   box-sizing: border-box;
   width: 100%;
-  min-height: 48px;
-  padding: 12px;
+  min-height: 44px;
+  padding: 8px 10px;
   border: 1px solid transparent;
-  border-radius: 12px;
+  border-radius: 8px;
   background: transparent;
-  color: var(--color-primary);
-  font-size: 16px;
-  font-weight: 500;
-  line-height: 24px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 22px;
   white-space: nowrap;
   cursor: pointer;
   transition: border-color var(--transition), background-color var(--transition);
 }
 
 .shell-nav__item:hover {
-  border-color: var(--line);
+  background: var(--surface-soft);
 }
 
 .shell-nav__item.is-active {
-  border-color: var(--color-primary);
+  border-color: var(--color-primary-twenty-five);
   background: var(--color-primary-ten);
+  color: var(--color-primary);
 }
 
 .shell-nav__label {
@@ -364,9 +331,10 @@
 
 .shell-nav__item--search {
   min-height: 44px;
-  padding: 10px 12px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
   border-color: var(--line);
-  background: #ffffff;
+  background: var(--surface);
   font-family: inherit;
 }
 
@@ -390,14 +358,10 @@
   padding: 0 4px;
   border-radius: 4px;
   background: var(--info-ink);
-  color: #ffffff;
+  color: var(--on-info);
   font-size: 12px;
   font-weight: 500;
   line-height: 16px;
-}
-
-.shell-sidebar.is-collapsed .shell-nav__badge {
-  display: none;
 }
 
 .shell-nav__shortcut {
@@ -409,17 +373,6 @@
   font-family: inherit;
   font-size: 12px;
   line-height: 16px;
-}
-
-.shell-sidebar.is-collapsed .shell-nav__item {
-  justify-content: center;
-  gap: 0;
-}
-
-.shell-sidebar.is-collapsed .shell-nav__label,
-.shell-sidebar.is-collapsed .shell-nav__shortcut,
-.shell-sidebar.is-collapsed .shell-nav__arrow {
-  display: none;
 }
 
 .shell-footer {
@@ -446,98 +399,107 @@
 }
 
 .shell-content {
+  width: 100%;
+  min-width: 0;
+}
+
+.shell-topbar {
   position: relative;
-  left: 280px;
+  z-index: 3;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.shell-topbar__inner {
   display: flex;
-  flex-direction: column;
-  width: calc(100% - 280px);
-  transition: var(--transition);
+  align-items: center;
+  gap: 22px;
+  min-height: 70px;
+  max-width: 1536px;
+  margin-inline: auto;
+  padding: 10px clamp(16px, 2.2vw, 32px);
 }
 
-.shell-content.is-sidebar-collapsed {
-  left: 88px;
-  width: calc(100% - 88px);
+.shell-brand {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  flex-shrink: 0;
 }
 
-.shell-topbar,
-.shell-bottombar {
-  display: none;
+.shell-tabs, .shell-tools { display: flex; align-items: center; gap: 4px; }
+.shell-tools { margin-left: auto; gap: 10px; }
+.shell-tabs {
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-canvas);
+}
+.shell-brand .vitry-brand { font-size: 20px; }
+.shell-brand .vitry-brand img { width: 30px; height: 30px; }
+@media (min-width: 801px) and (max-width: 1120px) {
+  .shell-brand .vitry-brand > span { display: none; }
+}
+
+.shell-tabs a, .shell-account, .shell-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.shell-tabs a {
+  min-height: 36px;
+  gap: 7px;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.shell-tabs a:hover, .shell-tool:hover, .shell-account:hover { color: var(--color-primary); background: var(--surface-soft); }
+.shell-tabs a[aria-current="page"] { color: var(--color-primary); background: var(--surface); border-color: var(--line); }
+.shell-tabs a[aria-current="page"] svg { color: var(--color-primary); }
+.shell-tool { width: 40px; background: var(--surface); border-color: var(--line); }
+.shell-account { gap: 8px; padding: 4px 8px; color: var(--ink); font-weight: 600; }
+.shell-tools .shell-account { background: var(--surface); border-color: var(--line); }
+.shell-account .shell-avatar { width: 32px; height: 32px; font-size: 13px; }
+.shell-account > span:not(.shell-avatar) { max-width: 112px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+
+.shell-bottombar { display: none; }
+.shell-sidebar .shell-nav { margin-bottom: 16px; }
+
+@media (min-width: 801px) and (max-width: 1080px) {
+  .shell-topbar__inner { gap: 8px; }
+  .shell-tabs a { padding-inline: 8px; }
+  .shell-account > span:not(.shell-avatar) { display: none; }
+}
+
+@media (min-width: 801px) and (max-width: 950px) {
+  .shell-tabs a svg { display: none; }
 }
 
 @media (max-width: 800px) {
-  .shell-sidebar {
-    width: 100% !important;
-    transform: translateX(-100%);
-    border: none;
-    transition: transform 0.3s var(--ease-smooth-out);
-  }
-
-  .shell-sidebar.is-mobile-open {
-    transform: translateX(0);
-  }
-
-  /* O menu recebe o foco por código ao abrir (useMobileMenuFocus); o anel vai nos itens, não no painel inteiro. */
-  .shell-sidebar:focus {
-    outline: none;
-  }
-
-  /* Fechado, o menu sai da tela E da árvore de acessibilidade: sem isto o Tab passava por mais de 13
-     controles invisíveis antes do conteúdo (UX-17). O visibility só muda DEPOIS da animação ao fechar. */
-  .shell-sidebar:not(.is-mobile-open) {
-    visibility: hidden;
-    transition:
-      transform 0.3s var(--ease-smooth-out),
-      visibility 0s linear 0.3s;
-  }
-
-  .shell-sidebar__toggle {
-    display: none;
-  }
-
-  .shell-sidebar__scroll {
-    padding-bottom: 92px;
-  }
-
-  .shell-content,
-  .shell-content.is-sidebar-collapsed {
-    left: 0;
-    width: 100%;
-  }
-
-  .shell-topbar {
-    position: sticky;
-    top: 0;
-    z-index: 9999999;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 56px;
-    border-bottom: 0.5px solid var(--line);
-    background: rgba(246, 246, 246, 0.85);
-    backdrop-filter: saturate(120%) blur(10px);
-  }
-
-  .shell-topbar p {
-    font-size: 16px;
-    font-weight: 500;
-    line-height: 24px;
-  }
-
-  .panel-root--home .shell-topbar {
-    display: none;
-  }
-
+  .shell-topbar__inner { min-height: 64px; padding: 8px 16px; }
+  .shell-tabs, .shell-account { display: none; }
+  .shell-tool { min-width: 44px; min-height: 44px; }
+  .shell-sidebar { width: min(410px, 100%); }
   .shell-bottombar {
     position: fixed;
     bottom: 0;
-    z-index: 10000002;
+    z-index: 3;
     display: flex;
     gap: 20px;
     box-sizing: border-box;
     justify-content: space-between;
     width: 100%;
-    padding: 0 20px 16px;
-    background: #ffffff;
+    padding: 0 10px max(8px, env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--line);
+    background: var(--surface);
   }
 
   .shell-bottombar a,

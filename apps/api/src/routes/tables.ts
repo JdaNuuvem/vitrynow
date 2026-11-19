@@ -12,6 +12,7 @@ import { newOrderToken } from "../lib/orderToken";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
 import { SALE_STATUSES } from "../lib/saleLines";
 import { limited, tooMany } from "../lib/slidingLimit";
+import { isSoldOutNow } from "../lib/soldOut";
 import { hashToken } from "../lib/tokenHash";
 import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { publishToStore } from "../realtime/hub";
@@ -282,7 +283,8 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (products.length !== new Set(input.items.map((i) => i.productId)).size) {
       return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja", code: "PRODUCT_NOT_FOUND" });
     }
-    const unavailable = products.filter((p) => !p.active);
+    const now = new Date();
+    const unavailable = products.filter((p) => !p.active || isSoldOutNow(p, now));
     if (unavailable.length > 0) {
       return reply.code(400).send({
         error: `Item indisponível no momento: ${unavailable.map((p) => p.name).join(", ")}.`,
@@ -291,7 +293,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
     }
     const built = await buildOrderLines(store.id, products, input.items);
-    if (!built.ok) return reply.code(400).send(built.body);
+    if (!built.ok) return reply.code(built.status).send(built.body);
     const itemsData = built.lines;
     const subtotalCents = itemsData.reduce((sum, i) => sum + i.lineTotalCents, 0);
     if (store.minOrderCents !== null && subtotalCents < store.minOrderCents) {
@@ -369,7 +371,21 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           where: { storeId: found.store.id, tableId: found.table.id, deviceTokenHash: hash },
           orderBy: { createdAt: "asc" },
           take: 100,
-          select: { id: true, code: true, status: true, totalCents: true, createdAt: true, items: { select: { productName: true, quantity: true, unitPriceCents: true, notes: true, additionals: { select: { name: true, priceCents: true } } } } },
+          select: {
+            id: true,
+            code: true,
+            status: true,
+            totalCents: true,
+            createdAt: true,
+            items: { select: {
+              productName: true,
+              quantity: true,
+              unitPriceCents: true,
+              notes: true,
+              additionals: { select: { name: true, priceCents: true } },
+              options: { select: { groupName: true, name: true, priceCents: true, quantity: true, priceMode: true } },
+            } },
+          },
         })
       : [];
     return { table: { label: found.table.label }, orders };

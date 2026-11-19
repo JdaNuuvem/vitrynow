@@ -12,6 +12,8 @@ import { HttpAuditGateway } from "../gateways/http/HttpAuditGateway";
 import { HttpCatalogGateway } from "../gateways/http/HttpCatalogGateway";
 import { HttpCouponsGateway } from "../gateways/http/HttpCouponsGateway";
 import { HttpDeviceTokensGateway } from "../gateways/http/HttpDeviceTokensGateway";
+import { HttpDeliveryZonesGateway } from "../gateways/http/HttpDeliveryZonesGateway";
+import { HttpPrintQueueGateway } from "../gateways/http/HttpPrintQueueGateway";
 import { HttpUsersGateway } from "../gateways/http/HttpUsersGateway";
 import { HttpMfaGateway } from "../gateways/http/HttpMfaGateway";
 import { HttpNoticesGateway } from "../gateways/http/HttpNoticesGateway";
@@ -20,6 +22,8 @@ import type { PanelServices } from "./PanelServices";
 
 export function createHttpPanelServices(http: HttpClient = new FetchHttpClient()): PanelServices {
   return {
+    deliveryZones: new HttpDeliveryZonesGateway(http),
+    printQueue: new HttpPrintQueueGateway(http),
     catalog: new HttpCatalogGateway(http),
     coupons: new HttpCouponsGateway(http),
     deviceTokens: new HttpDeviceTokensGateway(http),

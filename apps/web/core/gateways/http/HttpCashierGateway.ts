@@ -1,6 +1,6 @@
-import type { HttpClient } from "../../http/HttpClient";
+import type { HttpClient, RequestOptions } from "../../http/HttpClient";
 import type { CashierGateway } from "../CashierGateway";
-import type { CashMovementType, CashierState } from "../../domain/cashier";
+import type { CashClosedSession, CashClosingPreview, CashClosingResult, CashCloseInput, CashMovementInput, CashSessionDetail, CashierState } from "../../domain/cashier";
 
 export class HttpCashierGateway implements CashierGateway {
   constructor(private readonly http: HttpClient) {}
@@ -13,11 +13,27 @@ export class HttpCashierGateway implements CashierGateway {
     return this.http.post("/api/cashier/open", { openingBalanceCents, notes: notes || undefined });
   }
 
-  close(closingBalanceCents: number, notes?: string) {
-    return this.http.post("/api/cashier/close", { closingBalanceCents, notes: notes || undefined });
+  previewClose(countedCents: number) {
+    return this.http.get<CashClosingPreview>("/api/cashier/close-preview?countedCents=" + countedCents);
   }
 
-  addMovement(input: { type: CashMovementType; amountCents: number; notes?: string }) {
-    return this.http.post("/api/cashier/movements", input);
+  close(input: CashCloseInput) {
+    return this.http.post<CashClosingResult>("/api/cashier/close", input);
+  }
+
+  addMovement(input: CashMovementInput, options?: RequestOptions) {
+    return this.http.post("/api/cashier/movements", input, options);
+  }
+
+  listClosed() {
+    return this.http.get<{ sessions: CashClosedSession[] }>("/api/cashier/sessions");
+  }
+
+  closedDetail(sessionId: string) {
+    return this.http.get<CashSessionDetail>("/api/cashier/sessions/" + encodeURIComponent(sessionId) + "/summary");
+  }
+
+  dismissRuleNotice(noticeId: string) {
+    return this.http.post("/api/cashier/notices/" + encodeURIComponent(noticeId) + "/dismiss");
   }
 }

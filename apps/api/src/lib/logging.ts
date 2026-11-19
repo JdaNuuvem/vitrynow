@@ -5,6 +5,7 @@ import { clientIpOf } from "./clientIp";
 
 export const REDACT_PATHS = [
   'req.headers["x-order-token"]',
+  'req.headers["x-device-token"]',
   'req.headers["x-mfa-challenge"]',
   'req.headers["x-admin-token"]',
   'req.headers["x-internal-service-secret"]',
@@ -12,6 +13,7 @@ export const REDACT_PATHS = [
   "req.headers.cookie",
   'res.headers["set-cookie"]',
   'headers["x-order-token"]',
+  'headers["x-device-token"]',
   'headers["x-mfa-challenge"]',
   'headers["x-admin-token"]',
   'headers["x-internal-service-secret"]',
@@ -53,7 +55,7 @@ const QUERY_SEPARATOR = /([&;])/;
 // Parâmetro SOLTO (sem `=`) que parece uma credencial: ≥ 16 caracteres de token (letras, números, `_`, `-`, `.`) com letra e número.
 const BARE_CREDENTIAL = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9_.-]{16,}$/;
 
-function redactPair(pair: string): string {
+function redactPair(pair: string, redactSearch: boolean): string {
   const eq = pair.indexOf("=");
   if (eq === -1) return BARE_CREDENTIAL.test(pair) ? "[redigido]" : pair;
   const name = pair.slice(0, eq);
@@ -63,7 +65,7 @@ function redactPair(pair: string): string {
   } catch {
     // nome malformado: usa o texto cru para a checagem
   }
-  return SENSITIVE_QUERY_KEY.test(decoded) ? `${name}=[redigido]` : pair;
+  return SENSITIVE_QUERY_KEY.test(decoded) || (redactSearch && decoded === "q") ? `${name}=[redigido]` : pair;
 }
 
 export function redactLogUrl(url: string | undefined): string | undefined {
@@ -71,10 +73,12 @@ export function redactLogUrl(url: string | undefined): string | undefined {
   const queryAt = url.indexOf("?");
   if (queryAt === -1) return url;
   const hashAt = url.indexOf("#", queryAt);
+  // A busca do back-office aceita o e-mail do dono da loja.
+  const redactSearch = /^\/api\/platform\/stores\/?$/.test(url.slice(0, queryAt));
   const query = url.slice(queryAt + 1, hashAt === -1 ? undefined : hashAt);
   const redacted = query
     .split(QUERY_SEPARATOR)
-    .map((piece, index) => (index % 2 === 1 ? piece : redactPair(piece)))
+    .map((piece, index) => (index % 2 === 1 ? piece : redactPair(piece, redactSearch)))
     .join("");
   return `${url.slice(0, queryAt)}?${redacted}${hashAt === -1 ? "" : url.slice(hashAt)}`;
 }

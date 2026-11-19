@@ -147,12 +147,16 @@ describe("pedido com grupos de opções (API-15 parte 2)", () => {
     expect(await prisma.orderItemOption.count()).toBe(0);
   });
 
-  it("`options` e `additionalIds` no MESMO item ⇒ 400 OPTIONS_AMBIGUOUS", async () => {
+  it("`options` e `additionalIds` no mesmo item: adicional inexistente ⇒ 400; o MESMO id como opção e como adicional ⇒ 400 OPTIONS_AMBIGUOUS (não cobra em dobro)", async () => {
     const l = await loja();
     const { t, pizza } = await pizzaria(l);
     const res = await pedido(l, [{ productId: pizza, quantity: 1, options: [{ optionId: t.options[0].id }], additionalIds: ["x"] }]);
     expect(res.statusCode).toBe(400);
-    expect(json(res).code).toBe("OPTIONS_AMBIGUOUS");
+    expect(json(res).code).toBe("ADDITIONAL_NOT_FOUND");
+    const adicional = await prisma.productAdditional.create({ data: { productId: pizza, name: "Ovo", priceCents: 300 } });
+    const dobro = await pedido(l, [{ productId: pizza, quantity: 1, options: [{ optionId: t.options[0].id }, { optionId: adicional.id }], additionalIds: [adicional.id] }]);
+    expect(dobro.statusCode).toBe(400);
+    expect(json(dobro).code).toBe("OPTIONS_AMBIGUOUS");
   });
 
   it("CA-B8-06: produto SÓ com adicionais antigos segue o caminho legado com o MESMO preço (e aceita `options` pelos mesmos ids)", async () => {

@@ -5,9 +5,10 @@ import { auditActionLabel } from "@/core/domain/auditLabels";
 
 export function LogRow({ log }: { log: AuditLogEntry }) {
   return (
-    <div className="auditoria-row">
-      <span>{auditActionLabel(log.action)}</span>
-      <time>{new Date(log.createdAt).toLocaleString("pt-BR")}</time>
-    </div>
+    <tr>
+      <th scope="row">{auditActionLabel(log.action)}</th>
+      <td>{log.userId ? "Usuário da loja" : "Sistema"}</td>
+      <td><time dateTime={log.createdAt}>{new Date(log.createdAt).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" })}</time></td>
+    </tr>
   );
 }

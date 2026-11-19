@@ -57,6 +57,7 @@ export function SecurityConfirmProvider({ children }: { children: ReactNode }) {
   const requestConfirmation = useCallback(
     (target: MfaPurpose) =>
       new Promise<string | null>((resolve) => {
+        if (resolver.current) return resolve(null);
         resolver.current = resolve;
         setChallenge(null);
         setPurpose(target);

@@ -67,11 +67,11 @@ describe("catálogo base (API-56)", () => {
     expect(await prisma.product.count()).toBe(0);
   });
 
-  it("featured não é aceito na escrita (RN-CT-14, CA-CT-15): enviado, é ignorado", async () => {
+  it("persiste o destaque escolhido no catálogo do CRM", async () => {
     const c = await category("Lanches");
     const created = await post("/api/catalog/products", { categoryId: c.id, name: "Destaque", priceCents: 100, featured: true });
     expect(created.statusCode).toBe(201);
-    expect((await prisma.product.findFirstOrThrow()).featured).toBe(false);
+    expect((await prisma.product.findFirstOrThrow()).featured).toBe(true);
   });
 
   it("CA-CT-02: nome de categoria repetido (maiúsculas/acentos) é 409 CATEGORY_NAME_TAKEN; renomear para si mesma é livre", async () => {

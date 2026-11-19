@@ -1,0 +1,55 @@
+.product-choice {
+  min-width: 0;
+  margin: 1.125rem 0 0;
+  padding: 0;
+  color: var(--loja-ink, var(--ink));
+  border: 0;
+}
+.product-choice legend { width: 100%; color: inherit; font-weight: 750; }
+.product-choice__help { margin: .25rem 0 .625rem; color: var(--loja-ink-3, var(--ink-soft)); font-size: .875rem; }
+.product-choice__help > span { display: block; margin-top: .125rem; }
+.product-choice__list { display: grid; gap: .375rem; }
+.product-choice__entry {
+  display: grid;
+  grid-template-columns: min-content minmax(0, 1fr) auto;
+  align-items: center;
+  gap: .625rem;
+  min-height: 44px;
+  padding: .375rem .75rem;
+  border: 1px solid var(--loja-line, var(--line));
+  border-radius: 10px;
+  background: var(--loja-glass-solid, var(--surface));
+}
+.product-choice__entry:has(input:checked) {
+  border-color: var(--loja-accent-active-ink, var(--color-primary));
+  background: color-mix(in srgb, var(--loja-accent, var(--color-primary)) 8%, var(--loja-glass-solid, var(--surface)));
+}
+.product-choice__entry:has(input:focus-visible) { outline: 2px solid var(--loja-accent-active-ink, var(--color-primary)); outline-offset: 2px; }
+.product-choice__entry > input {
+  width: 1.125rem;
+  height: 1.125rem;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--loja-accent, var(--color-primary));
+}
+.product-choice__entry > span { overflow-wrap: anywhere; }
+.product-choice__entry > strong { font-size: .875rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.product-choice__entry--step { grid-template-columns: minmax(0, 1fr) auto auto; }
+.product-choice__step { display: flex; align-items: center; gap: .25rem; margin-inline-end: -.375rem; }
+.product-choice__step output { min-width: 1.5ch; text-align: center; font-variant-numeric: tabular-nums; }
+.product-choice__step button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  font-size: 1.25rem;
+  color: var(--loja-accent-active-ink, var(--color-primary));
+  background: transparent;
+}
+.product-choice__step button:disabled { opacity: .45; }
+.product-choice__step button:not(:disabled):hover { background: var(--loja-surface-2, var(--surface-soft)); }
+@media (max-width: 440px) {
+  .product-choice__entry--step { grid-template-columns: minmax(0, 1fr) auto; }
+  .product-choice__step { grid-column: 1 / -1; justify-self: end; }
+}

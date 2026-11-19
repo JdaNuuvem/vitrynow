@@ -32,6 +32,16 @@ function setup(over: Partial<React.ComponentProps<typeof CartDrawer>> = {}) {
 }
 
 describe("CartDrawer", () => {
+  it("preserva a remoção de linhas esgotadas e removidas do catálogo", async () => {
+    const { onChangeQuantity } = setup({
+      productsById: new Map([["p1", { ...burger, soldOut: true }]]),
+      cart: [line, { ...line, productId: "ausente" }],
+    });
+    expect(screen.getByRole("button", { name: "Continuar" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Aumentar quantidade de Cheeseburguer" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Remover Item removido do cardápio" }));
+    expect(onChangeQuantity).toHaveBeenCalledWith(1, -2);
+  });
   it("é um diálogo 'Seu carrinho' com a lista de itens", () => {
     setup();
     expect(screen.getByRole("dialog", { name: "Seu carrinho" })).toBeInTheDocument();
