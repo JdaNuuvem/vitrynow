@@ -26,6 +26,7 @@ export class OptionGroupsService {
 
   async createGroup(actor: Actor, input: GroupInput): Promise<GroupResult> {
     const warnings = this.assertConfig(input);
+    await this.assertLinkedProducts(actor.storeId, input);
     const group = await this.repo.createGroup(actor.storeId, input);
     this.audit.log({ ...actor, action: "option_group.create", targetType: "OptionGroup", targetId: group.id, metadata: { name: group.name, options: group.options.length } });
     return { group, warnings };
@@ -35,6 +36,7 @@ export class OptionGroupsService {
     const before = await this.requireGroup(actor.storeId, id);
     assertEditable(before);
     const warnings = this.assertConfig(input);
+    await this.assertLinkedProducts(actor.storeId, input);
     if (input.priceMode === "BASE" && before.priceMode !== "BASE") {
       const clashes = await this.repo.productsWithAnotherBase(actor.storeId, id);
       if (clashes.length > 0) {
@@ -101,6 +103,11 @@ export class OptionGroupsService {
     return this.productGroups(actor.storeId, productId);
   }
 
+  /** Onde o adicional é usado (grupos e produtos), para a trava de exclusão e a tela do dono. */
+  addonUsage(storeId: string, productId: string) {
+    return this.repo.addonUsage(storeId, productId);
+  }
+
   /** Para o cardápio e para o pedido: grupos de vários produtos da loja de uma vez. */
   groupsForProducts(storeId: string, productIds: string[], nativeOnly = false): Promise<Map<string, GroupRow[]>> {
     return this.repo.groupsForProducts(storeId, productIds, nativeOnly);
@@ -110,6 +117,17 @@ export class OptionGroupsService {
     const { errors, warnings } = checkGroupConfig(input);
     if (errors.length > 0) throw new CodedError(400, "OPTION_GROUP_INVALID", errors[0].message, { problems: errors });
     return warnings;
+  }
+
+  // RN-PD-12/15: a opção só aponta para produto ADICIONAL (por unidade) DA MESMA LOJA. Produto de outra loja ou inexistente = 404, a mesma resposta (nada de oráculo entre lojas).
+  private async assertLinkedProducts(storeId: string, input: GroupInput) {
+    const ids = [...new Set(input.options.map((o) => o.productId).filter((id): id is string => Boolean(id)))];
+    if (ids.length === 0) return;
+    const found = await this.repo.findProductKinds(storeId, ids);
+    if (found.length !== ids.length) throw new NotFoundError("produto não encontrado");
+    if (found.some((p) => p.kind !== "ADICIONAL")) throw new CodedError(400, "OPTION_PRODUCT_NOT_ADDON", "Só um produto do tipo Adicional pode ser ligado a um grupo.");
+    if (found.some((p) => p.saleUnit !== "UN")) throw new CodedError(400, "OPTION_PRODUCT_BY_WEIGHT", "Adicional vendido por peso não pode ser opção de grupo.");
+    if (input.priceMode === "BASE" && input.options.some((o) => o.productId)) throw new CodedError(400, "OPTION_ADDON_IN_BASE_GROUP", "Adicional não pode ser variação de preço-base.");
   }
 
   private async requireGroup(storeId: string, id: string) {
