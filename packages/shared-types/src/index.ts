@@ -503,6 +503,28 @@ export type UpdateCouponInput = z.infer<typeof updateCouponSchema>;
 
 // ---- Conta / personalização da loja ----
 
+// PR-04b: fusos que o produto aceita (Brasil, os 4 offsets em uso). Lista FECHADA: a loja só escolhe daqui; `Store.timezone` guarda o IANA.
+export const STORE_TIMEZONES = [
+  "America/Sao_Paulo", // UTC−3 (padrão do produto)
+  "America/Bahia",
+  "America/Fortaleza",
+  "America/Recife",
+  "America/Belem",
+  "America/Maceio",
+  "America/Araguaina",
+  "America/Santarem",
+  "America/Campo_Grande", // UTC−4
+  "America/Cuiaba",
+  "America/Manaus",
+  "America/Porto_Velho",
+  "America/Boa_Vista",
+  "America/Rio_Branco", // UTC−5
+  "America/Eirunepe",
+  "America/Noronha", // UTC−2
+] as const;
+export type StoreTimezone = (typeof STORE_TIMEZONES)[number];
+export const isStoreTimezone = (value: unknown): value is StoreTimezone => typeof value === "string" && (STORE_TIMEZONES as readonly string[]).includes(value);
+
 export const updateStoreSettingsSchema = z.object({
   name: textField({ max: 150, min: 1 }).optional(),
   logoUrl: mediaImageUrl.optional().or(z.literal("")),
@@ -525,6 +547,7 @@ export const updateStoreSettingsSchema = z.object({
   pickupEnabled: z.boolean().optional(),
   hideSoldOutProducts: z.boolean().optional(),
   deliveryFeeCents: z.number().int().nonnegative().max(10_000_000).optional(),
+  timezone: z.enum(STORE_TIMEZONES).optional(), // PR-04b: só OWNER (a rota já exige); fora da lista = TIMEZONE_INVALID (a rota traduz)
 });
 export type UpdateStoreSettingsInput = z.infer<typeof updateStoreSettingsSchema>;
 
