@@ -4,6 +4,9 @@ import { DomainError } from "../../shared/errors";
 import {
   closeTodayUntil,
   computeStoreStatus,
+  hoursText,
+  isOpenAt,
+  nextOpening,
   parseStoredSchedule,
   pruneExceptions,
   validateSchedule,
@@ -16,6 +19,7 @@ export type StoreHoursRow = {
   timezone: string;
   acceptingOrders: boolean;
   schedule: unknown;
+  openingHours: string | null; // texto LEGADO (só leitura): vale apenas enquanto a loja não tem grade
   pausedUntil: Date | null;
   closedUntil: Date | null;
   prepMinutesDelivery: number | null;
@@ -40,7 +44,10 @@ export class InvalidScheduleError extends DomainError {
   }
 }
 
-export type StoreHoursView = {
+/** Horário DERIVADO da grade (fonte única `Store.schedule`, SSOT D2). Sem grade: `openNow`/`nextOpensAt` nulos e `hoursText` = texto legado. */
+export type DerivedHours = { openNow: boolean | null; nextOpensAt: string | null; hoursText: string | null };
+
+export type StoreHoursView = DerivedHours & {
   configured: boolean;
   schedule: Schedule | null;
   timezone: string;
@@ -77,9 +84,24 @@ export class StoreHoursService {
     });
   }
 
+  /** `openNow` = a grade tem uma janela de aceitar pedido agora (o mesmo cálculo do status); `nextOpensAt` só quando fechado. */
+  derive(row: StoreHoursRow): DerivedHours {
+    const schedule = parseStoredSchedule(row.schedule);
+    if (!schedule) return { openNow: null, nextOpensAt: null, hoursText: row.openingHours?.trim() ? row.openingHours : null };
+    const now = this.clock.now();
+    const open = isOpenAt(schedule, row.timezone, now);
+    return { openNow: open, nextOpensAt: open ? null : (nextOpening(schedule, row.timezone, now)?.toISOString() ?? null), hoursText: hoursText(schedule) };
+  }
+
+  /** Para as telas de configuração da loja (painel). */
+  async derivedFor(storeId: string): Promise<DerivedHours> {
+    return this.derive(await this.load(storeId));
+  }
+
   private view(row: StoreHoursRow): StoreHoursView {
     const schedule = parseStoredSchedule(row.schedule);
     return {
+      ...this.derive(row),
       configured: schedule !== null,
       schedule,
       timezone: row.timezone,
@@ -101,9 +123,9 @@ export class StoreHoursService {
   }
 
   /** Estado público pelo slug (cardápio); `null` se a loja não existe. */
-  async publicStatus(slug: string): Promise<{ storeId: string; status: StoreStatus; prepMinutes: PrepMinutes | null } | null> {
+  async publicStatus(slug: string): Promise<{ storeId: string; status: StoreStatus; prepMinutes: PrepMinutes | null; derived: DerivedHours } | null> {
     const row = await this.repo.findBySlug(slug);
-    return row ? { storeId: row.id, status: this.statusOf(row), prepMinutes: publicPrepMinutes(row) } : null;
+    return row ? { storeId: row.id, status: this.statusOf(row), prepMinutes: publicPrepMinutes(row), derived: this.derive(row) } : null;
   }
 
   // "Minha loja → Atendimento" (RN-PZ-01): tempo médio de preparo por modalidade. Mudar não altera previsões já dadas (RN-PZ-07).
