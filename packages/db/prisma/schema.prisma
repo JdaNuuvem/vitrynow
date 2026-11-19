@@ -309,14 +309,19 @@ model Product {
   stepGrams    Int       @default(50)
   maxGrams     Int       @default(5000)
   isSingleDish Boolean   @default(false)
+  // Produto detalhado, extras (PD-800000): codigo interno do dono (NUNCA publico) e selos do cardapio. Alergenos ficam FORA (decisao do Claudio; o juridico define a lista).
+  sku          String?
+  tags         ProductTag[] @default([])
   portionGrams Int?
   serves       Int?
   additionals ProductAdditional[]
   optionGroups ProductOptionGroup[]
+  addonOptions Option[] @relation("AddonOptions")
   orderItems  OrderItem[]
   createdAt   DateTime     @default(now())
 
   @@unique([id, storeId]) // ADR-0009: base das FKs compostas por loja (ProductOptionGroup)
+  @@unique([storeId, sku]) // SKU unico na loja; varios produtos sem SKU (NULL) convivem
   @@index([storeId])
   @@index([categoryId])
 }
@@ -407,6 +412,15 @@ model Order {
 enum ProductKind {
   PRATO
   ADICIONAL
+}
+
+enum ProductTag {
+  VEGANO
+  VEGETARIANO
+  SEM_GLUTEN
+  SEM_LACTOSE
+  PICANTE
+  FIT
 }
 
 enum SaleUnit {
@@ -533,9 +547,19 @@ model Option {
   active     Boolean     @default(true) // false = indisponível (some da escolha, RN-B8-05)
   position   Int         @default(0)
   createdAt  DateTime    @default(now())
+  // RN-PD-12: opção que aponta para um produto ADICIONAL da MESMA loja (FK composta). INHERIT = nome e preço vêm do adicional; OWN = preço próprio só aqui.
+  productId   String?
+  priceSource OptionPriceSource @default(OWN)
+  product     Product?          @relation("AddonOptions", fields: [productId, storeId], references: [id, storeId], onDelete: NoAction)
 
   @@unique([id, storeId])
   @@index([groupId])
+  @@index([productId])
+}
+
+enum OptionPriceSource {
+  OWN
+  INHERIT
 }
 
 // Vínculo produto ↔ grupo, com a ordem em que o cliente vê os grupos.

@@ -25,6 +25,8 @@ export type ProductData = {
   stepGrams?: number;
   maxGrams?: number;
   isSingleDish?: boolean;
+  sku?: string | null;
+  tags?: Array<"VEGANO" | "VEGETARIANO" | "SEM_GLUTEN" | "SEM_LACTOSE" | "PICANTE" | "FIT">;
   portionGrams?: number | null;
   serves?: number | null;
   active?: boolean;
@@ -70,6 +72,8 @@ export interface CatalogRepository {
   /** Fuso da loja (as datas da promoção são escolhidas nele). */
   storeTimezone(storeId: string): Promise<string>;
   /** Grupos de opções ligados ao produto: tem grupo BASE (preço vem da variação) e quantos grupos/adicionais legados existem. */
+  /** Onde o produto é usado como adicional de grupo (RN-PD-15): grupos e quantidade de produtos que os têm. */
+  addonUsage(storeId: string, productId: string): Promise<{ groups: Array<{ id: string; name: string }>; products: number }>;
   optionState(storeId: string, productId: string): Promise<{ hasBaseGroup: boolean; groups: number; legacyAdditionals: number }>;
 }
 
@@ -217,6 +221,12 @@ export class PrismaCatalogRepository implements CatalogRepository {
 
   async storeTimezone(storeId: string) {
     return (await this.db.store.findUniqueOrThrow({ where: { id: storeId }, select: { timezone: true } })).timezone;
+  }
+
+  async addonUsage(storeId: string, productId: string) {
+    const options = await this.db.option.findMany({ where: { storeId, productId }, select: { group: { select: { id: true, name: true, products: { select: { productId: true } } } } } });
+    const groups = new Map(options.map((o) => [o.group.id, { id: o.group.id, name: o.group.name }]));
+    return { groups: [...groups.values()], products: new Set(options.flatMap((o) => o.group.products.map((p) => p.productId))).size };
   }
 
   async optionState(storeId: string, productId: string) {

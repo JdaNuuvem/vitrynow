@@ -30,6 +30,14 @@ type DetailInput = {
 };
 const invalid = (code: string, message: string, status = 400) => new CodedError(status, code, message);
 
+// SKU repetido na loja: a chave única (storeId, sku) do banco decide; duas gravações simultâneas nunca passam as duas.
+const isSkuTaken = (error: unknown) => {
+  const known = error as { code?: string; meta?: { target?: string[] | string } };
+  const target = Array.isArray(known.meta?.target) ? known.meta.target.join(",") : String(known.meta?.target ?? "");
+  return known.code === "P2002" && target.includes("sku");
+};
+const skuTaken = () => new CodedError(409, "SKU_TAKEN", "Este código já está em uso.");
+
 // Nome de categoria único na loja, sem diferenciar maiúsculas nem acentos (RN-CT-01, CA-CT-02).
 export function normalizeName(name: string): string {
   return name
@@ -120,7 +128,12 @@ export class CatalogService {
     }
     // Produto novo entra no FIM da categoria (RN-CT-02).
     const position = data.position ?? (await this.repo.nextProductPosition(data.categoryId));
-    return this.repo.createProduct(storeId, { ...data, position }, additionals);
+    try {
+      return await this.repo.createProduct(storeId, { ...data, position }, additionals);
+    } catch (error) {
+      if (isSkuTaken(error)) throw skuTaken();
+      throw error;
+    }
   }
 
   async updateProduct(actor: ProductActor, id: string, input: UpdateProductInput) {
@@ -134,6 +147,7 @@ export class CatalogService {
     } catch (error) {
       // SEC-10: adicional que não é deste produto (inclusive de outra loja) => 404, nada alterado.
       if (error instanceof AdditionalNotInProductError) throw new NotFoundError("adicional não encontrado neste produto");
+      if (isSkuTaken(error)) throw skuTaken();
       throw error;
     }
     // RN-PD-09: toda mudança de promoção (valor, início ou fim) também grava auditoria (só números e instantes, sem texto livre).
@@ -145,7 +159,7 @@ export class CatalogService {
           action: "product.promo_change",
           targetType: "Product",
           targetId: id,
-          metadata: { name: before.name, beforeCents: before.promoCents, afterCents: product.promoCents, startsAt: product.promoStartsAt, endsAt: product.promoEndsAt },
+          metadata: { name: before.name, beforeCents: before.promoCents, afterCents: product.promoCents, beforeStartsAt: before.promoStartsAt, beforeEndsAt: before.promoEndsAt, startsAt: product.promoStartsAt, endsAt: product.promoEndsAt },
         });
       }
     }
@@ -180,6 +194,11 @@ export class CatalogService {
 
   async deleteProduct(actor: Actor, id: string) {
     const product = await this.requireProduct(actor.storeId, id);
+    // RN-PD-15: adicional em uso em algum grupo não se exclui (a saída é tirar dos grupos ou ocultar).
+    const usage = await this.repo.addonUsage(actor.storeId, id);
+    if (usage.groups.length > 0) {
+      throw new CodedError(409, "ADDON_IN_USE", `Este adicional é usado em ${usage.products} produto(s). Remova-o dos grupos primeiro.`, { products: usage.products, groups: usage.groups, hint: "REMOVE_FROM_GROUPS" });
+    }
     // RN-CT-12: com pedido em aberto a exclusão é bloqueada; a saída é ocultar (active=false).
     const openOrders = await this.repo.countOpenOrdersWithProduct(id);
     if (openOrders > 0) {
@@ -188,7 +207,13 @@ export class CatalogService {
         hint: "HIDE_INSTEAD",
       });
     }
-    await this.repo.deleteProduct(id);
+    try {
+      await this.repo.deleteProduct(id);
+    } catch (error) {
+      // Corrida: alguém ligou o adicional a um grupo entre a conferência e a exclusão; a FK recusa (P2003).
+      if ((error as { code?: string }).code === "P2003") throw new CodedError(409, "ADDON_IN_USE", "Este adicional está em uso. Remova-o dos grupos primeiro.", { hint: "REMOVE_FROM_GROUPS" });
+      throw error;
+    }
     this.audit.log({
       ...actor,
       action: "product.delete",
@@ -266,7 +291,15 @@ export class CatalogService {
       if (promo < 1 || promo >= price) throw invalid("PROMO_INVALID", "O preço promocional precisa ser menor que o preço normal.");
       if (startsAt && endsAt && endsAt.getTime() <= startsAt.getTime()) throw invalid("PROMO_INVALID", "A promoção termina antes de começar.");
       // RN-PD-10: acima de 50% só o dono (inteiros: promo × 2 < normal; 50% exato passa).
-      if (actor.role !== "OWNER" && promoAboveHalf(price, promo)) throw invalid("FORBIDDEN_ROLE", "Acima do seu limite. Peça ao dono.", 403);
+      // Só quando preço ou promoção vieram no corpo: o STAFF segue podendo editar nome, foto etc. de produto com promoção do dono acima de 50%.
+      // RN-PD-10b: mexer nas DATAS também é "tocar a promoção" quando a mudança AUMENTA a vigência (adiar ou tirar o fim, antecipar ou tirar o início): reaplica o desconto.
+      // Encurtar a vigência continua liberado ao STAFF (e desligar a promoção, que não chega aqui porque `promo` fica nulo).
+      const extendsValidity =
+        before !== null &&
+        ((out.promoEndsAt !== undefined && (out.promoEndsAt === null ? before.promoEndsAt !== null : before.promoEndsAt !== null && out.promoEndsAt.getTime() > before.promoEndsAt.getTime())) ||
+          (out.promoStartsAt !== undefined && (out.promoStartsAt === null ? before.promoStartsAt !== null : before.promoStartsAt !== null && out.promoStartsAt.getTime() < before.promoStartsAt.getTime())));
+      const touchedPrice = input.priceCents !== undefined || input.promoCents !== undefined || extendsValidity;
+      if (touchedPrice && actor.role !== "OWNER" && promoAboveHalf(price, promo)) throw invalid("FORBIDDEN_ROLE", "Acima do seu limite. Peça ao dono.", 403);
     }
 
     // Tipo: ADICIONAL nasce sem vender sozinho (RN-PD-11); o dono pode marcar "Também vender sozinho".
@@ -289,6 +322,11 @@ export class CatalogService {
       const state = await this.repo.optionState(actor.storeId, before.id);
       if (saleUnit !== "UN" && (state.groups > 0 || state.legacyAdditionals > 0)) throw invalid("PRODUCT_WEIGHT_NO_OPTIONS", "Produto vendido por peso não aceita opções.");
       if (kind === "ADICIONAL" && state.groups > 0) throw invalid("ADDON_HAS_GROUPS", "Um adicional não tem grupos de opções.");
+    }
+    // Deixar de ser adicional (ou virar por peso) com o produto ligado a grupos o deixaria apontado por uma opção inválida.
+    if (before && (kind !== "ADICIONAL" || saleUnit !== "UN") && (input.kind !== undefined || input.saleUnit !== undefined)) {
+      const usage = await this.repo.addonUsage(actor.storeId, before.id);
+      if (usage.groups.length > 0) throw new CodedError(409, "ADDON_IN_USE", `Este adicional é usado em ${usage.products} produto(s). Remova-o dos grupos primeiro.`, { products: usage.products, groups: usage.groups, hint: "REMOVE_FROM_GROUPS" });
     }
     if (promo !== null && before && out.promoCents !== undefined) {
       if ((await this.repo.optionState(actor.storeId, before.id)).hasBaseGroup) throw invalid("PROMO_NOT_ALLOWED", "Este produto tem o preço definido pelas variações.");
