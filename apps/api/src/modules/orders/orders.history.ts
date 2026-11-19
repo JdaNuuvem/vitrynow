@@ -1,5 +1,5 @@
 import { Prisma, type prisma as prismaClient } from "@meucardapio/db";
-import { HISTORY_PERIODS, HISTORY_STATUS_FILTERS } from "@meucardapio/shared-types";
+import { HISTORY_PERIODS, HISTORY_STATUS_FILTERS, ORDER_STATUS_GROUPS } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
 import { parseLocalDate, safeTimeZone, startOfStoreDay } from "../../lib/storeTime";
 import { MAX_REFUND_AUTO_ATTEMPTS } from "../../lib/refundPolicy";
@@ -18,7 +18,7 @@ export const HISTORY_MAX_DAYS = 90;
 export const HISTORY_PHONE_MIN_DIGITS = 4;
 export const HISTORY_STAFF_FULL_PHONE_DIGITS = 10;
 /** Status "em andamento" (mesma lista do kanban e do contato completo do STAFF). */
-export const OPEN_ORDER_STATUSES = ["PENDENTE", "CONFIRMADO", "EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA"] as const;
+export const OPEN_ORDER_STATUSES = ORDER_STATUS_GROUPS.open;
 // Literais do enum no SQL (constantes do código, nunca dado do usuário): comparar a coluna com `status::text` desligava o índice (3 ms ⇒ 40 ms com 10 mil abertos).
 const OPEN_SQL = Prisma.raw(OPEN_ORDER_STATUSES.map((status) => `'${status}'`).join(", "));
 

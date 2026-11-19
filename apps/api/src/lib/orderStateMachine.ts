@@ -1,10 +1,11 @@
 import type { OrderStatus, OrderType, PaymentStatus } from "@meucardapio/db";
+import { ORDER_STATUS_GROUPS } from "@meucardapio/shared-types";
 
 // Máquina de estados do pedido (ADR-0007 §3) — única tabela de arestas do sistema. Funções
 // puras: sem banco, sem relógio implícito. O servidor decide; a UI só desenha `allowedTransitions`.
 
 export type Role = "OWNER" | "STAFF";
-export const FINAL_STATUSES: readonly OrderStatus[] = ["CONCLUIDO", "CANCELADO"];
+export const FINAL_STATUSES: readonly OrderStatus[] = ORDER_STATUS_GROUPS.final;
 export const UNDO_WINDOW_MS = 2 * 60 * 1000;
 
 // Motivos de cancelamento escolhidos por pessoas. PAGAMENTO_NAO_APROVADO é só do sistema.

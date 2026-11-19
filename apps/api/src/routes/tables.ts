@@ -3,7 +3,7 @@ import { buildOrderLines, optionCopiesCreate, orderItemExtras } from "../lib/ord
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { Prisma, prisma } from "@meucardapio/db";
-import { createTableOrderSchema, createTableSchema, qrSettingsSchema, receiveTableSchema, updateTableSchema } from "@meucardapio/shared-types";
+import { ORDER_STATUS_GROUPS, createTableOrderSchema, createTableSchema, qrSettingsSchema, receiveTableSchema, updateTableSchema } from "@meucardapio/shared-types";
 import { logAudit } from "../lib/audit";
 import { buildMenuView } from "../lib/menuView";
 import { clientKey } from "../lib/clientKey";
@@ -300,7 +300,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.code(400).send({ error: `pedido mínimo é R$ ${(store.minOrderCents / 100).toFixed(2)}`, code: "MIN_ORDER" });
     }
 
-    if ((await prisma.order.count({ where: { storeId: store.id, tableId: table.id, status: { in: ["PENDENTE", "CONFIRMADO", "EM_PREPARO"] } } })) >= QR_OPEN_CAP) {
+    if ((await prisma.order.count({ where: { storeId: store.id, tableId: table.id, status: { in: [...ORDER_STATUS_GROUPS.queued] } } })) >= QR_OPEN_CAP) {
       return reply.code(429).send({ error: "Há muitos pedidos abertos nesta mesa. Chame o atendente.", code: "TABLE_BUSY" });
     }
 

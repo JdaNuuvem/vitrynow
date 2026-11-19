@@ -21,6 +21,17 @@ export const orderStatusSchema = z.enum([
   "CONCLUIDO",
   "CANCELADO",
 ]);
+export type OrderStatusValue = z.infer<typeof orderStatusSchema>;
+// FONTE ÚNICA do status do pedido (SSOT D3 / PR-08): a lista e os grupos nascem AQUI; API e web importam (o ssot-guard reprova a lista escrita à mão).
+export const ORDER_STATUSES = orderStatusSchema.options;
+export const ORDER_STATUS_GROUPS = {
+  /** Encerrados: não andam mais (saem do kanban depois do dia). */
+  final: ["CONCLUIDO", "CANCELADO"],
+  /** Em andamento: tudo que ainda não encerrou. */
+  open: ["PENDENTE", "CONFIRMADO", "EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA"],
+  /** Ainda na fila da cozinha (antes de ficar pronto): conta no teto de pedidos abertos pelo QR da mesa. */
+  queued: ["PENDENTE", "CONFIRMADO", "EM_PREPARO"],
+} as const satisfies Record<string, readonly OrderStatusValue[]>;
 
 export const createOrderItemSchema = z.object({
   productId: z.string().min(1),
