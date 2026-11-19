@@ -118,7 +118,7 @@ describe("modo ocupado (g1)", () => {
     expect(res.statusCode).toBe(200);
     const row = await prisma.store.findUniqueOrThrow({ where: { id: storeId } });
     expect(row.busyUntil!.getTime()).toBeLessThanOrEqual(row.busyStartedAt!.getTime() + 240 * 60_000);
-    const again = await busy({ minutes: 15 });
+    const again = await busy({ minutes: 120 }); // passa do teto e a loja já está nele
     expect(again.statusCode).toBe(409);
     expect(json(again).code).toBe("BUSY_LIMIT_REACHED");
     await rewind(1); // venceu: um novo ocupado recomeça o início
