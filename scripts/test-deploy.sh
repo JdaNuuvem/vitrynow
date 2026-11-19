@@ -39,11 +39,6 @@ ACME_EMAIL=ops@exemplo.invalid
 APP_VERSION=abc1234
 MFA_ENFORCED=true
 RESEND_API_KEY=re_chave_ficticia_para_o_teste
-STORAGE_S3_ENDPOINT=https://s3.exemplo.invalid
-STORAGE_S3_BUCKET=cardapio-media
-STORAGE_S3_ACCESS_KEY_ID=AKIAFICTICIA
-STORAGE_S3_SECRET_ACCESS_KEY=chave-secreta-ficticia-do-teste
-STORAGE_PUBLIC_BASE_URL=https://cdn.exemplo.invalid/cardapio-media
 WEB_ORIGIN=https://pedidos.exemplo.invalid
 NEXT_PUBLIC_API_URL=https://pedidos.exemplo.invalid
 EOF
