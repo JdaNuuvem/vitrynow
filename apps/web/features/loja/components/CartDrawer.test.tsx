@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CartLine, Product } from "@/core/domain/storefront";
 import { CartDrawer } from "./CartDrawer";
 
@@ -96,9 +96,13 @@ describe("CartDrawer", () => {
   });
 
   it("Esc fecha e o botão Fechar tem nome acessível", async () => {
+    // sem animação de saída (menos movimento): fecha na hora
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
     const { onClose } = setup();
     expect(screen.getByRole("button", { name: "Fechar" })).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
+
+afterEach(() => vi.unstubAllGlobals());

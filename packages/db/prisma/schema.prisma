@@ -280,6 +280,7 @@ model Category {
   createdAt DateTime  @default(now())
 
   @@index([storeId])
+  @@unique([id, storeId]) // API-48: alvo das FKs compostas por loja (ADR-0009)
 }
 
 model Product {
@@ -287,7 +288,7 @@ model Product {
   storeId     String
   store       Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
   categoryId  String?
-  category    Category?    @relation(fields: [categoryId], references: [id])
+  category    Category?    @relation(fields: [categoryId, storeId], references: [id, storeId], onDelete: NoAction) // API-48: o banco recusa categoria de outra loja
   name        String
   description String?
   imageUrl    String?
@@ -297,6 +298,19 @@ model Product {
   position    Int          @default(0)
   soldOut      Boolean     @default(false) // API-17 (B11): esgotado; vale até soldOutUntil (null = até reativar)
   soldOutUntil DateTime?
+  // Produto detalhado (PD, carimbo 790000): tudo opcional/com padrao neutro; produto antigo segue identico. Dinheiro em centavos, peso em gramas inteiras.
+  promoCents   Int?      // preco promocional (< priceCents); vale entre promoStartsAt e promoEndsAt pelo relogio do SERVIDOR
+  promoStartsAt DateTime? // instante UTC (00:00 do dia escolhido no fuso da loja)
+  promoEndsAt   DateTime? // instante UTC EXCLUSIVO (00:00 do dia seguinte ao dia final escolhido)
+  kind         ProductKind @default(PRATO)
+  sellAlone    Boolean   @default(true) // false = adicional que nao vende sozinho
+  saleUnit     SaleUnit  @default(UN)   // KG/HG: priceCents e o preco do QUILO (HG so muda como a tela digita e mostra)
+  minGrams     Int       @default(100)
+  stepGrams    Int       @default(50)
+  maxGrams     Int       @default(5000)
+  isSingleDish Boolean   @default(false)
+  portionGrams Int?
+  serves       Int?
   additionals ProductAdditional[]
   optionGroups ProductOptionGroup[]
   orderItems  OrderItem[]
@@ -338,9 +352,9 @@ model Order {
   discountCents Int         @default(0)
   totalCents    Int         @default(0)
   couponId      String?
-  coupon        Coupon?     @relation(fields: [couponId], references: [id], onDelete: SetNull)
+  coupon        Coupon?     @relation(fields: [couponId, storeId], references: [id, storeId], onDelete: NoAction) // API-48: composta; apagar o cupom zera `couponId` no serviço (a FK composta nao pode anular `storeId`)
   delivererId   String?
-  deliverer     Deliverer?  @relation(fields: [delivererId], references: [id], onDelete: SetNull)
+  deliverer     Deliverer?  @relation(fields: [delivererId, storeId], references: [id, storeId], onDelete: NoAction) // API-48: idem cupom
   paymentMethod  OrderPaymentMethod? // null = forma de pagamento não identificada
   changeForCents Int? // "troco para" informado pelo cliente (só DINHEIRO)
   deliveryFeeCents Int      @default(0) // snapshot da taxa de entrega — já incluída em totalCents
@@ -368,7 +382,7 @@ model Order {
   table             Table?      @relation(fields: [tableId, storeId], references: [id, storeId])
   // API-24 (ADR-0012): recebimento que pagou este pedido de mesa. Pedido de mesa só vira venda/caixa no `receivedAt` do Receipt (RN-MB-04).
   receiptId         String?
-  receipt           Receipt?    @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+  receipt           Receipt?    @relation(fields: [receiptId, storeId], references: [id, storeId], onDelete: NoAction) // API-48
   deviceTokenHash   String?
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
@@ -390,6 +404,17 @@ model Order {
   @@index([delivererId])
 }
 
+enum ProductKind {
+  PRATO
+  ADICIONAL
+}
+
+enum SaleUnit {
+  UN
+  KG
+  HG
+}
+
 model OrderItem {
   id           String   @id @default(cuid())
   orderId      String
@@ -400,6 +425,10 @@ model OrderItem {
   quantity     Int
   unitPriceCents Int
   notes        String?
+  // Produto detalhado: copias do momento do pedido. `listPriceCents` = preco normal da unidade (so quando havia promocao); venda por peso: quantity=1, `unitPriceCents` = valor da linha.
+  listPriceCents Int?
+  weightGrams    Int?
+  pricePerKgCents Int?
 
   additionals  OrderItemAdditional[]
   options      OrderItemOption[]
@@ -628,6 +657,7 @@ model Coupon {
 
   @@unique([storeId, code])
   @@index([storeId])
+  @@unique([id, storeId]) // API-48: alvo das FKs compostas por loja (ADR-0009)
 }
 
 // Pagamento online do pedido (hoje: PIX via Mercado Pago). Pedido sem Payment = pago
@@ -747,6 +777,7 @@ model Deliverer {
   orders Order[]
 
   @@index([storeId])
+  @@unique([id, storeId]) // API-48: alvo das FKs compostas por loja (ADR-0009)
 }
 
 // ---- Planos e assinatura ----
@@ -1009,12 +1040,13 @@ model Receipt {
 
   @@index([storeId, receivedAt])
   @@index([storeId, tableId])
+  @@unique([id, storeId]) // API-48: alvo das FKs compostas por loja (ADR-0009)
 }
 
 model ReceiptPayment {
   id             String             @id @default(cuid())
   receiptId      String
-  receipt        Receipt            @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  receipt        Receipt            @relation(fields: [receiptId, storeId], references: [id, storeId], onDelete: Cascade) // API-48
   storeId        String
   method         OrderPaymentMethod
   amountCents    Int

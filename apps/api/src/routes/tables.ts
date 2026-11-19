@@ -1,5 +1,5 @@
 import { clientIpOf } from "../lib/clientIp";
-import { buildOrderLines, optionCopiesCreate } from "../lib/orderItems";
+import { buildOrderLines, optionCopiesCreate, orderItemExtras } from "../lib/orderItems";
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { Prisma, prisma } from "@meucardapio/db";
@@ -227,7 +227,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           receivedAt,
           receivedByUserId: userId,
           cashSessionId,
-          payments: { create: { storeId, method, amountCents: totalCents, changeForCents: input.changeForCents ?? null } },
+          payments: { create: { method, amountCents: totalCents, changeForCents: input.changeForCents ?? null } },
         },
         include: { payments: true },
       });
@@ -339,6 +339,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
               notes: item.notes,
               additionals: { create: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })) },
               ...optionCopiesCreate(item.optionCopies),
+              ...orderItemExtras(item),
             })),
           },
         },

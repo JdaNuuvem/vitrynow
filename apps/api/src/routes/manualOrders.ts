@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
-import { buildOrderLines, optionCopiesCreate } from "../lib/orderItems";
+import { buildOrderLines, optionCopiesCreate, orderItemExtras } from "../lib/orderItems";
 import { Prisma, prisma } from "@meucardapio/db";
 import { createManualOrderSchema } from "@meucardapio/shared-types";
 import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
@@ -178,6 +178,7 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
                 notes: item.notes,
                 additionals: { create: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })) },
               ...optionCopiesCreate(item.optionCopies),
+              ...orderItemExtras(item),
               })),
             },
           },

@@ -61,8 +61,20 @@ describe("orçamento de desempenho dos @keyframes (critério 1)", () => {
     content: body(motionCss, match.index + match[0].length),
   }));
 
-  it("declara as duas animações da base", () => {
-    expect(keyframes.map((k) => k.name)).toEqual(["loja-reveal", "loja-shimmer"]);
+  it("declara as animações (base da WEB-28 + Fatia 2): nenhuma a mais sem passar pelo orçamento", () => {
+    expect(keyframes.map((k) => k.name)).toEqual([
+      "loja-reveal",
+      "loja-shimmer",
+      "loja-pop",
+      "loja-pill-in",
+      "loja-roll",
+      "loja-scrim-in",
+      "loja-scrim-out",
+      "loja-sheet-in",
+      "loja-sheet-out",
+      "loja-modal-in",
+      "loja-modal-out",
+    ]);
   });
 
   it.each(keyframes)("$name anima só transform e opacity (compositor, sem reflow)", ({ content }) => {
@@ -81,21 +93,87 @@ describe("orçamento de desempenho dos @keyframes (critério 1)", () => {
   });
 });
 
-describe("a base não muda a aparência de hoje", () => {
-  it("motion.css só tem seletores de classes novas (opt-in)", () => {
-    // Tira o miolo dos @keyframes e dos @media, sobrando os seletores de nível raiz e os de dentro do @media.
-    let rules = motionCss;
-    for (const match of [...rules.matchAll(/@keyframes\s+[\w-]+\s*\{/g)].reverse()) {
-      rules = rules.slice(0, match.index) + rules.slice(match.index + match[0].length + body(rules, match.index + match[0].length).length + 1);
+// Orçamento (spec 12 §8, critério 1): nada anima width, height, top, left, sombra ou filtro. Transitions só de `transform`,
+// `opacity` e cor (fundo/texto dos chips, M-03). A exceção do M-12 (grid-template-rows) é da Fatia 3, com justificativa.
+describe("orçamento de desempenho das transitions (critério 1)", () => {
+  const ALLOWED = ["transform", "opacity", "background-color", "color", "visibility", "none"];
+  const transitionProperties = (css: string) => {
+    const found: string[] = [];
+    for (const declaration of css.matchAll(/transition\s*:\s*([^;]+);/g)) {
+      // vírgulas dentro de var()/calc() não separam transições; as de nível raiz sim
+      let depth = 0;
+      let current = "";
+      const parts: string[] = [];
+      for (const char of declaration[1]) {
+        if (char === "(") depth++;
+        if (char === ")") depth--;
+        if (char === "," && depth === 0) {
+          parts.push(current);
+          current = "";
+        } else current += char;
+      }
+      parts.push(current);
+      for (const part of parts) found.push(part.trim().split(/\s+/)[0]);
     }
-    const selectors = rules
-      .split("{")
-      .slice(0, -1)
-      .map((part) => part.split("}").pop()!.trim())
-      .filter((selector) => selector && !selector.startsWith("@media"));
-    expect(selectors.length).toBeGreaterThan(0);
-    for (const selector of selectors) {
-      expect(selector, "seletor que atinge elemento já existente").toMatch(/^\.loja \.(loja-reveal|loja__skeleton(-menu)?(::after)?|loja__visually-hidden)$/);
+    return found;
+  };
+
+  it("loja.css e motion.css só fazem transition das propriedades permitidas", () => {
+    const properties = [...transitionProperties(lojaCss), ...transitionProperties(motionCss)];
+    expect(properties.length).toBeGreaterThan(5);
+    for (const property of properties) expect(ALLOWED, `transition de "${property}" fora do orçamento`).toContain(property);
+  });
+
+  it("nenhuma transition usa 'all' (anima o que não devia)", () => {
+    expect(lojaCss + motionCss).not.toMatch(/transition\s*:\s*all\b/);
+  });
+
+  it("nenhum will-change fixo: só durante a animação", () => {
+    expect(lojaCss + motionCss).not.toMatch(/will-change\s*:/);
+  });
+
+  it("toda duração e curva de movimento usa os tokens (nada de milissegundos soltos)", () => {
+    const loose = [...(lojaCss + motionCss).matchAll(/(?:transition|animation)\s*:[^;]*?(?<![\w-])(\d+(?:\.\d+)?m?s)\b/g)].map((match) => match[1]);
+    // `0s` do atraso de visibilidade é o único literal permitido
+    expect(loose.filter((value) => value !== "0s")).toEqual([]);
+  });
+});
+
+describe("M-03/M-13: o chip afunda e troca de cor sem uma transition apagar a outra", () => {
+  it("a regra do chip leva transform, background-color e color juntos", () => {
+    const rule = /\.loja \.loja__chip-body\s*\{([^}]*)\}/.exec(motionCss)?.[1] ?? "";
+    for (const property of ["transform", "background-color", "color"]) expect(rule, property).toContain(property);
+  });
+
+  it("nenhum outro seletor do chip redefine a transition (senão a última venceria e apagaria a outra)", () => {
+    const rules = [...(lojaCss + motionCss).matchAll(/([^{}]*\.loja__chip-body[^{}]*)\{([^}]*)\}/g)].filter((m) => /transition/.test(m[2]));
+    expect(rules).toHaveLength(1);
+  });
+});
+
+describe("camadas fixas: a folha fica acima de tudo (visto no clipe da folha)", () => {
+  const zIndexOf = (selector: string) => {
+    // String.raw: as barras invertidas valem para o REGEX (num string comum "\\." viraria só ".")
+    const escaped = selector.replace(/[.]/g, String.raw`\.`);
+    const rule = new RegExp(String.raw`(?:^|\n)` + escaped + String.raw`\s*\{([^}]*)\}`).exec(lojaCss)?.[1] ?? "";
+    return Number(/z-index:\s*(\d+)/.exec(rule)?.[1]);
+  };
+
+  it("a folha (carrinho/checkout) tem z-index maior que a pílula, a barra inferior, os chips e a barra superior", () => {
+    const sheet = zIndexOf(".loja__sheet");
+    for (const other of [".loja__cart-bar", ".loja__nav", ".loja__chipsbox", ".loja__bar"]) {
+      expect(zIndexOf(other), other).toBeGreaterThan(0);
+      expect(sheet, `.loja__sheet deve ficar acima de ${other}`).toBeGreaterThan(zIndexOf(other));
     }
+  });
+});
+
+describe("a entrada em cascata e o JS de movimento", () => {
+  it("a cascata do M-01 usa a duração e a curva dos tokens, com atraso por posição", () => {
+    expect(motionCss).toMatch(/\.loja__item\[data-reveal\]\s*\{[^}]*var\(--loja-dur-3\)[^}]*var\(--loja-ease-out\)[^}]*--reveal-i/);
+  });
+
+  it("o cartão só nasce escondido pelo JS (data-reveal): sem JS o HTML do servidor aparece inteiro", () => {
+    expect(lojaCss).not.toMatch(/\.loja__item\s*\{[^}]*opacity:\s*0/);
   });
 });

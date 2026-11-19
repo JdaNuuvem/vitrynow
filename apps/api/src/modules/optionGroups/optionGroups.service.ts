@@ -82,7 +82,7 @@ export class OptionGroupsService {
 
   // Substitui os vínculos do produto, na ordem recebida. Grupo de outra loja => 404 (SEC-11).
   async setProductGroups(actor: Actor, productId: string, groupIds: string[]) {
-    await this.requireProduct(actor.storeId, productId);
+    const product = await this.requireProduct(actor.storeId, productId);
     if (new Set(groupIds).size !== groupIds.length) throw new CodedError(400, "DUPLICATE_GROUP", "O mesmo grupo foi enviado mais de uma vez.");
     const found = await this.repo.findGroupsByIds(actor.storeId, groupIds);
     if (found.length !== groupIds.length) throw new NotFoundError("grupo de opções não encontrado");
@@ -90,6 +90,12 @@ export class OptionGroupsService {
     const ordered = groupIds.map((id) => found.find((g) => g.id === id)!);
     const problems = checkProductGroups(ordered);
     if (problems.length > 0) throw new CodedError(400, problems[0].code, problems[0].message, { problems });
+    // Produto detalhado (RN-PD-15/24/07): adicional não tem grupos; produto por peso não aceita opções; grupo BASE (preço da variação) não convive com promoção.
+    if (groupIds.length > 0) {
+      if (product.kind === "ADICIONAL") throw new CodedError(400, "ADDON_HAS_GROUPS", "Um adicional não tem grupos de opções.");
+      if (product.saleUnit !== "UN") throw new CodedError(400, "PRODUCT_WEIGHT_NO_OPTIONS", "Produto vendido por peso não aceita opções.");
+      if (product.promoCents !== null && ordered.some((g) => g.priceMode === "BASE")) throw new CodedError(400, "PROMO_NOT_ALLOWED", "Este produto tem o preço definido pelas variações.");
+    }
     await this.repo.setProductGroups(actor.storeId, productId, groupIds);
     this.audit.log({ ...actor, action: "product.option_groups_set", targetType: "Product", targetId: productId, metadata: { groupIds } });
     return this.productGroups(actor.storeId, productId);

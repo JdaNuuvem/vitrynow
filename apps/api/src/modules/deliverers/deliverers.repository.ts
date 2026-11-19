@@ -40,7 +40,8 @@ export class PrismaDeliverersRepository implements DeliverersRepository {
   }
 
   async delete(id: string) {
-    await this.db.deliverer.delete({ where: { id } });
+    // API-48: idem cupom: zera o vinculo dos pedidos na mesma transacao (a FK composta nao tem SET NULL).
+    await this.db.$transaction([this.db.order.updateMany({ where: { delivererId: id }, data: { delivererId: null } }), this.db.deliverer.delete({ where: { id } })]);
   }
 
   findOrder(storeId: string, orderId: string) {
