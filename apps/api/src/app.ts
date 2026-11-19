@@ -24,6 +24,7 @@ import cashierRoutes from "./routes/cashier";
 import couponRoutes from "./modules/coupons/coupons.module";
 import paymentRoutes from "./modules/payments/payments.module";
 import storeRoutes from "./routes/store";
+import menuCampaignRoutes from "./routes/menuCampaign";
 import delivererRoutes from "./modules/deliverers/deliverers.module";
 import reportRoutes from "./routes/reports";
 import userRoutes from "./modules/users/users.module";
@@ -160,6 +161,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(couponRoutes);
   app.register(paymentRoutes);
   app.register(storeRoutes);
+  app.register(menuCampaignRoutes);
   app.register(delivererRoutes);
   app.register(reportRoutes);
   app.register(userRoutes);

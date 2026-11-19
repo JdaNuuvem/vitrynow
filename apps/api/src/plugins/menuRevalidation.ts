@@ -11,6 +11,7 @@ import { revalidateConfig, scheduleMenuRevalidation } from "../lib/menuRevalidat
 const MENU_AFFECTING: RegExp[] = [
   /^\/api\/catalog\//, // categorias, produtos, adicionais, grupos de opções, esgotado, ordem
   /^\/api\/store\/(settings|availability|hours|status|prep-times)$/, // dados da loja, horário, pausa, prazo de preparo
+  /^\/api\/store\/menu-campaign\/(publish|unpublish)$/, // campanha: só publicar/retirar muda o que o cliente vê (salvar rascunho não)
 ];
 
 export const isMenuAffectingRoute = (method: string, url: string) =>
