@@ -302,6 +302,35 @@ describe("produto detalhado: API", { timeout: 120_000 }, () => {
     expect([promo.statusCode, json(promo).code]).toEqual([403, "FORBIDDEN_ROLE"]);
   });
 
+  it("RN-PD-10b: STAFF não PROLONGA nem religa promoção acima de 50% por data (403); encurta e desliga (200); até 50% mexe livre; OWNER sempre; auditoria guarda antes e depois", async () => {
+    const bcrypt = await import("bcryptjs");
+    await prisma.user.create({ data: { storeId, email: "staff-pd3@teste.com", passwordHash: await bcrypt.hash(credentials.password, 10), role: "STAFF" } });
+    const staff = (await login(app, "staff-pd3@teste.com", credentials.password)).cookie!;
+    const codigo = async (id: string, payload: Record<string, unknown>, c: string) => {
+      const r = await post(`/api/catalog/products/${id}`, payload, c);
+      return [r.statusCode, json(r).code];
+    };
+    const alto = await produto({ promoCents: 1000, promoStartsOn: "2099-01-01", promoEndsOn: "2099-06-30", name: "Alto" }); // 66% do dono
+    expect(await codigo(alto.id, { promoEndsOn: "2099-12-31" }, staff)).toEqual([403, "FORBIDDEN_ROLE"]); // estende o fim
+    expect(await codigo(alto.id, { promoEndsOn: null }, staff)).toEqual([403, "FORBIDDEN_ROLE"]); // tira o fim
+    expect(await codigo(alto.id, { promoStartsOn: "2098-12-01" }, staff)).toEqual([403, "FORBIDDEN_ROLE"]); // antecipa o início
+    expect(await codigo(alto.id, { promoStartsOn: null }, staff)).toEqual([403, "FORBIDDEN_ROLE"]); // tira o início
+    expect((await prisma.product.findUniqueOrThrow({ where: { id: alto.id } })).promoEndsAt?.toISOString()).toBe("2099-07-01T03:00:00.000Z"); // nada mudou
+    expect(await codigo(alto.id, { promoEndsOn: "2099-03-31" }, staff)).toEqual([200, undefined]); // encurta
+    expect(await codigo(alto.id, { promoStartsOn: "2099-02-01" }, staff)).toEqual([200, undefined]); // adia o início = encurta
+    expect(await codigo(alto.id, { promoCents: null }, staff)).toEqual([200, undefined]); // desliga
+    expect(await codigo(alto.id, { promoCents: 1000 }, staff)).toEqual([403, "FORBIDDEN_ROLE"]); // religar acima de 50%
+    expect(await codigo(alto.id, { promoEndsOn: "2099-12-31" }, cookie)).toEqual([200, undefined]); // dono estende
+    const meio = await produto({ promoCents: 1500, promoEndsOn: "2099-06-30", name: "Meio" }); // 50% exato
+    expect(await codigo(meio.id, { promoEndsOn: "2099-12-31" }, staff)).toEqual([200, undefined]);
+    const quarenta = await produto({ promoCents: 1800, promoEndsOn: "2099-06-30", name: "Quarenta" });
+    expect(await codigo(quarenta.id, { promoEndsOn: null }, staff)).toEqual([200, undefined]);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const log = await prisma.auditLog.findFirstOrThrow({ where: { storeId, action: "product.promo_change", targetId: alto.id }, orderBy: { createdAt: "asc" } });
+    expect(log.metadata).toHaveProperty("beforeEndsAt");
+    expect(log.metadata).toHaveProperty("endsAt");
+  });
+
   it("campanha não aponta para adicional que não vende sozinho; o banco recusa promoção >= preço e faixa de peso invertida (CHECKs 801000)", async () => {
     const ad = await produto({ kind: "ADICIONAL", name: "Ovo", priceCents: 300 });
     const prato = await produto({ name: "Prato X" });
