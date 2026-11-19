@@ -2,9 +2,17 @@ import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { isStoreTimezone, storeAvailabilitySchema, updateStoreSettingsSchema } from "@meucardapio/shared-types";
 import { logAudit } from "../lib/audit";
+import { storeHoursService } from "../modules/storeHours/storeHours.module";
+import { parseStoredSchedule } from "../modules/storeHours/storeHours.domain";
 import { bannerStateOf, getSubscriptionView } from "../lib/subscription";
 
 // Conta/personalização da loja (nome, logo, cor, domínio) — autenticado pelo painel.
+// Horário (SSOT D2): `Store.schedule` é a ÚNICA fonte; aqui o painel recebe os derivados e `openingHours` já como o texto gerado quando a loja tem grade.
+async function withDerivedHours<T extends { openingHours: string | null }>(storeId: string, store: T) {
+  const derived = await storeHoursService.derivedFor(storeId);
+  return { ...store, openingHours: derived.openNow !== null ? derived.hoursText : store.openingHours, ...derived };
+}
+
 const storeRoutes: FastifyPluginAsync = async (app) => {
   app.get("/api/store/settings", { preHandler: app.requirePanelAuth }, async (request, reply) => {
     const { storeId } = request.user;
@@ -32,7 +40,7 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
       },
     });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });
-    return { store };
+    return { store: await withDerivedHours(storeId, store) };
   });
 
   // Estado do período de teste/assinatura no formato do banner do painel; o detalhe completo
@@ -66,7 +74,15 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
     // PR-04b: o fuso muda só o "dia" daqui para a frente (relatório, hoje, cupom, esgotado); pedidos já gravados ficam em UTC, intactos. Auditoria guarda valor anterior e novo.
     const before = parsed.data.timezone ? (await prisma.store.findUnique({ where: { id: storeId }, select: { timezone: true } }))?.timezone : undefined;
 
-    const { logoUrl, coverImageUrl, primaryColor, customDomain, address, whatsapp, openingHours, ...rest } = parsed.data;
+    const { logoUrl, coverImageUrl, primaryColor, customDomain, address, whatsapp, openingHours: openingHoursInput, ...rest } = parsed.data;
+    // `openingHours` (texto livre) só vale para loja SEM grade. Com grade ele é derivado: a escrita é IGNORADA (o painel atual segue salvando o resto sem erro) e a resposta avisa.
+    const current = await prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { schedule: true, openingHours: true } });
+    const hasGrid = parseStoredSchedule(current.schedule) !== null;
+    const openingHours = hasGrid ? undefined : openingHoursInput;
+    // Só avisa quando o texto recebido é DIFERENTE do que o painel mostrou (o texto GERADO da grade) e do legado: o formulário reenvia o que carregou (P2-1 do Deming).
+    const generated = hasGrid ? (await storeHoursService.derivedFor(storeId)).hoursText : null;
+    const received = openingHoursInput === "" ? null : openingHoursInput;
+    const ignoredHours = hasGrid && openingHoursInput !== undefined && received !== generated && received !== current.openingHours;
     // SEC-14 (ST-18): o domínio é ÚNICO no banco; quem decide é o índice (sem "consultar e depois gravar"), então duas lojas simultâneas não passam as duas.
     const store = await prisma.store.update({
       where: { id: storeId },
@@ -107,8 +123,11 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
       throw error;
     });
     if (!store) return reply.code(409).send({ error: "este domínio já está em uso por outra loja", code: "CUSTOM_DOMAIN_TAKEN" });
-    logAudit({ storeId, userId: request.user.userId, action: "store.settings_update", targetType: "Store", targetId: storeId, metadata: { fields: Object.keys(parsed.data), ...(parsed.data.timezone && before !== parsed.data.timezone ? { timezone: { from: before, to: parsed.data.timezone } } : {}) } }); // só QUAIS campos mudaram, nunca os valores (endereço, telefone, textos; ADR-0014 §3.4)
-    return { store };
+    logAudit({ storeId, userId: request.user.userId, action: "store.settings_update", targetType: "Store", targetId: storeId, metadata: { fields: Object.keys(parsed.data).filter((key) => !(hasGrid && key === "openingHours")), ...(parsed.data.timezone && before !== parsed.data.timezone ? { timezone: { from: before, to: parsed.data.timezone } } : {}) } }); // só QUAIS campos mudaram, nunca os valores (endereço, telefone, textos; ADR-0014 §3.4)
+    return {
+      store: await withDerivedHours(storeId, store),
+      ...(ignoredHours ? { warnings: [{ code: "OPENING_HOURS_DERIVED", message: "O horário vem da grade de funcionamento; o texto livre foi ignorado. Edite em Horário de funcionamento." }] } : {}),
+    };
   });
 };
 
