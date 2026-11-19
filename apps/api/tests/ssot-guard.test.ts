@@ -56,8 +56,6 @@ describe("catraca de fonte única (nenhuma cópia nova)", () => {
   });
   // STATUS: lista de status do pedido como valor de execução
   catraca("lista de status do pedido redefinida", /\[\s*["']PENDENTE["']\s*,\s*["']CONFIRMADO["']/g, {
-    "apps/api/src/modules/orders/orders.history.ts": 1,
-    "apps/api/src/routes/tables.ts": 1,
     "apps/web/core/domain/orders.ts": 1,
     "apps/web/features/pedidos/kanban.ts": 1
   });
