@@ -228,7 +228,7 @@ export class CatalogService {
   ) {
     const out: { promoCents?: number | null; promoStartsAt?: Date | null; promoEndsAt?: Date | null; sellAlone?: boolean; kind?: "PRATO" | "ADICIONAL" } = {};
     const needsTz = input.promoStartsOn != null || input.promoEndsOn != null;
-    const tz = needsTz ? await this.repo.storeTimezone(actor.storeId) : "America/Sao_Paulo";
+    const tz = needsTz ? await this.repo.storeTimezone(actor.storeId) : ""; // sem datas de promoção o fuso não é usado (SSOT: sem literal de fuso fora de storeTime.ts)
     const now = new Date();
 
     // Vigência: AAAA-MM-DD no fuso da loja. Início = 00:00 do dia; fim = 00:00 do dia SEGUINTE (o dia final vale inteiro; `início ≤ agora < fim`).
