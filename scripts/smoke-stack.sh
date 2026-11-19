@@ -345,7 +345,8 @@ curl -s -b "$jar" -X POST -H 'Content-Type: application/json' -d '{"name":"Produ
 tB="$(espera_nome "Produto Beta9j")"; [ "$tB" -le 20 ] && check ok "9j produto EDITADO (nome e preço) atualiza na vitrine em ${tB} s" || check fail "9j produto editado só apareceu em ${tB} s"
 vitrine | grep -q "Produto Alfa9j" && check fail "9j o nome antigo continua na vitrine" || check ok "9j o nome antigo saiu da vitrine"
 # a rota do web só abre com o segredo e só pela rede interna
-rv() { "${DC[@]}" exec -T web node -e "fetch('http://127.0.0.1:3000/api/revalidate',{method:'POST',headers:{'content-type':'application/json',...(process.argv[1]?{'x-revalidate-secret':process.argv[1]}:{})},body:JSON.stringify({slug:process.argv[2]})}).then(r=>console.log(r.status)).catch(()=>console.log('erro'))" "$1" "$2" | tr -d '\r\n'; }
+# O Next standalone escuta no HOSTNAME do contêiner (não em 127.0.0.1): chamar pelo hostname (achado no smoke de 19/11 sobre a main 168dcb5)
+rv() { "${DC[@]}" exec -T web node -e "fetch('http://'+require('os').hostname()+':3000/api/revalidate',{method:'POST',headers:{'content-type':'application/json',...(process.argv[1]?{'x-revalidate-secret':process.argv[1]}:{})},body:JSON.stringify({slug:process.argv[2]})}).then(r=>console.log(r.status)).catch(()=>console.log('erro'))" "$1" "$2" | tr -d '\r\n'; }
 [ "$(rv '' "$slug")" = 401 ] && check ok "9j /api/revalidate do web SEM segredo: 401" || check fail "9j rota do web sem segredo não deu 401"
 [ "$(rv "segredo-errado-$RANDOM" "$slug")" = 401 ] && check ok "9j /api/revalidate do web com segredo ERRADO: 401" || check fail "9j rota do web com segredo errado não deu 401"
 [ "$(rv "$RVS" 'slug inválido!')" = 400 ] && check ok "9j slug inválido com o segredo certo: 400" || check fail "9j slug inválido não deu 400"
