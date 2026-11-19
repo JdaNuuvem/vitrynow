@@ -8,6 +8,7 @@ import { previousPeriod } from "../lib/reportPeriod";
 import { buildComparison } from "../lib/reportComparison";
 import { metricDictionary } from "../lib/metricDictionary";
 import { completenessFor } from "../lib/reportCompleteness";
+import { buildByHour, buildByWeekday } from "../lib/reportSeries";
 import { PRODUCTS_DEFAULT_LIMIT, PRODUCTS_MAX_LIMIT, buildProductsRanking } from "../lib/reportProducts";
 
 // SEC-16 — janela máxima e teto de pedidos por consulta; passou disso, 400/422 com a instrução de reduzir o período (nunca resposta parcial silenciosa).
@@ -95,6 +96,23 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
       items: role === "OWNER" ? items : items.map(({ revenueCents: _revenue, ...rest }) => rest),
     };
   });
+  // i6 (M11/M12, BASICO por decisão do Claudio, sem trava de plano): pico por hora (24 posições) e por dia da semana (7), hora LOCAL da loja,
+  // zero explícito. STAFF só contagens (RN-R-06).
+  for (const [url, key, build] of [["/api/reports/by-hour", "byHour", buildByHour], ["/api/reports/by-weekday", "byWeekday", buildByWeekday]] as const) {
+    app.get(url, { preHandler: app.requirePanelAuth }, async (request, reply) => {
+      const { storeId, role } = request.user;
+      const range = await periodOrReply(storeId, request.query as { from?: unknown; to?: unknown; preset?: unknown }, reply);
+      if (!range) return reply;
+      const points = await build(storeId, range);
+      return {
+        fromDate: range.fromDate,
+        toDate: range.toDate,
+        timeZone: range.timeZone,
+        completeness: completenessFor(range),
+        [key]: role === "OWNER" ? points : points.map(({ revenueCents: _revenue, ...rest }) => rest),
+      };
+    });
+  }
   app.get("/api/reports/summary", { preHandler: app.requirePanelAuth }, async (request, reply) => {
     const { storeId } = request.user;
     const range = await periodOrReply(storeId, request.query as { from?: unknown; to?: unknown }, reply);

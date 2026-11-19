@@ -815,3 +815,10 @@ export const reportProductsSchema = z.object({
   ),
 });
 export type ReportProducts = z.infer<typeof reportProductsSchema>;
+// ---- DADOS (i6): pico por hora (0..23) e por dia da semana (1 = segunda ... 7 = domingo), hora local da loja. ----
+const seriesPointShape = { orderCount: z.number().int(), revenueCents: z.number().int().optional() }; // revenueCents só para o OWNER
+export const reportSeriesSchema = z.union([
+  z.object({ fromDate: z.string(), toDate: z.string(), timeZone: z.string(), completeness: completenessSchema, byHour: z.array(z.object({ hour: z.number().int().min(0).max(23), ...seriesPointShape })).length(24) }),
+  z.object({ fromDate: z.string(), toDate: z.string(), timeZone: z.string(), completeness: completenessSchema, byWeekday: z.array(z.object({ weekday: z.number().int().min(1).max(7), ...seriesPointShape })).length(7) }),
+]);
+export type ReportSeries = z.infer<typeof reportSeriesSchema>;
