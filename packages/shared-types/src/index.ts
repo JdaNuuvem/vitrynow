@@ -347,6 +347,15 @@ const mediaImageUrl = z.string().trim().max(500).refine((value) => {
   return env?.NODE_ENV === "development" && env.STORAGE_PUBLIC_BASE_URL === "/media" && localMediaUrl.test(value);
 }, "use um endereço que comece com https://");
 
+// Produto detalhado, extras (PD-800000). Tags: lista FECHADA (selos do cardápio); SKU: código interno do dono, 1 a 30 caracteres, único na loja, sempre em maiúsculas.
+export const PRODUCT_TAGS = ["VEGANO", "VEGETARIANO", "SEM_GLUTEN", "SEM_LACTOSE", "PICANTE", "FIT"] as const;
+export type ProductTag = (typeof PRODUCT_TAGS)[number];
+export const productSkuSchema = z
+  .string()
+  .transform((value) => value.trim().toUpperCase())
+  .pipe(z.string().regex(/^[A-Z0-9_-]{1,30}$/, "Use de 1 a 30 caracteres: letras sem acento, números, hífen ou sublinhado."));
+export const productTagsSchema = z.array(z.enum(PRODUCT_TAGS)).max(PRODUCT_TAGS.length).transform((tags) => [...new Set(tags)]);
+
 export const createProductSchema = z.object({
   categoryId: z.string().min(1), // obrigatório (RN-CT-07, API-56): produto sem categoria nunca aparece na vitrine
   name: textField({ max: 80, min: 1 }), // API-49: sanitiza e limita (o 150 era o limite antigo, anterior a API-49)
@@ -364,6 +373,8 @@ export const createProductSchema = z.object({
   stepGrams: z.number().int().min(1).max(100_000).optional(),
   maxGrams: z.number().int().min(1).max(100_000).optional(),
   isSingleDish: z.boolean().optional(),
+  sku: productSkuSchema.nullable().optional(),
+  tags: productTagsSchema.optional(),
   portionGrams: z.number().int().min(1).max(5000).nullable().optional(),
   serves: z.number().int().min(1).max(20).nullable().optional(),
   active: z.boolean().optional(),
