@@ -1,10 +1,13 @@
+import { randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { prisma } from "../src/index";
 
 const storeId = "local-ramenku";
 const slug = "ramenku";
 const email = "dono@ramenku.local";
-const initialPassword = "Ramenku-Local-2026!";
+// SEC: nenhuma senha fixa no repositorio (publico). Vem de SEED_LOCAL_PASSWORD ou e gerada na hora e mostrada UMA vez, so quando a loja e criada.
+const initialPassword = process.env.SEED_LOCAL_PASSWORD?.trim() || randomBytes(12).toString("base64url");
+const passwordFromEnv = Boolean(process.env.SEED_LOCAL_PASSWORD?.trim());
 const media = "/local-ramenku";
 
 type LocalProduct = {
@@ -107,7 +110,7 @@ async function main() {
     }
     return true;
   });
-  console.log(created ? `Ramenku local criada em /loja/${slug}. Proprietário: ${email}.` : "A loja Ramenku local já foi inicializada.");
+  console.log(created ? `Ramenku local criada em /loja/${slug}. Proprietário: ${email}.${passwordFromEnv ? " Senha: a de SEED_LOCAL_PASSWORD." : ` Senha gerada (anote, não aparece de novo): ${initialPassword}`}` : "A loja Ramenku local já foi inicializada.");
 }
 
 main()
