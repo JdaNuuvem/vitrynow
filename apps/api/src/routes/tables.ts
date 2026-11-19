@@ -1,4 +1,5 @@
 import { clientIpOf } from "../lib/clientIp";
+import { buildOrderLines, optionCopiesCreate } from "../lib/orderItems";
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { Prisma, prisma } from "@meucardapio/db";
@@ -289,23 +290,9 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         details: { items: unavailable.map((p) => ({ id: p.id, name: p.name })) },
       });
     }
-    const productById = new Map(products.map((p) => [p.id, p]));
-    let itemsData;
-    try {
-      itemsData = input.items.map((item) => {
-        const product = productById.get(item.productId)!;
-        const byId = new Map(product.additionals.map((a) => [a.id, a]));
-        const chosen = (item.additionalIds ?? []).map((id) => {
-          const additional = byId.get(id);
-          if (!additional) throw new Error(`adicional ${id} não pertence ao produto ${product.id}`);
-          return additional;
-        });
-        const extra = chosen.reduce((sum, a) => sum + a.priceCents, 0);
-        return { productId: product.id, productName: product.name, quantity: item.quantity, unitPriceCents: product.priceCents, notes: item.notes, lineTotalCents: (product.priceCents + extra) * item.quantity, additionals: chosen };
-      });
-    } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : "pedido inválido", code: "ADDITIONAL_NOT_FOUND" });
-    }
+    const built = await buildOrderLines(store.id, products, input.items);
+    if (!built.ok) return reply.code(400).send(built.body);
+    const itemsData = built.lines;
     const subtotalCents = itemsData.reduce((sum, i) => sum + i.lineTotalCents, 0);
     if (store.minOrderCents !== null && subtotalCents < store.minOrderCents) {
       return reply.code(400).send({ error: `pedido mínimo é R$ ${(store.minOrderCents / 100).toFixed(2)}`, code: "MIN_ORDER" });
@@ -349,6 +336,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
               unitPriceCents: item.unitPriceCents,
               notes: item.notes,
               additionals: { create: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })) },
+              ...optionCopiesCreate(item.optionCopies),
             })),
           },
         },
