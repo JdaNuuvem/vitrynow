@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { securityEvent } from "../lib/securityEvents";
 
 // Erros de regra de negócio. Os serviços lançam estes (sem saber de HTTP); a tradução para
 // status + corpo { error } acontece em useDomainErrors, na borda.
@@ -37,6 +38,7 @@ export class ServerBusyError extends CodedError {
   }
 }
 export function sendServerBusy(reply: FastifyReply) {
+  securityEvent(reply.request, "server_busy", { reason: "SERVER_BUSY" }); // alimenta a regra SERVER_BUSY_RATE (nunca lança)
   return reply.header("Retry-After", String(SERVER_BUSY_RETRY_AFTER_SECONDS)).code(503).send({ error: "Servidor ocupado. Tente de novo em instantes.", code: "SERVER_BUSY" });
 }
 

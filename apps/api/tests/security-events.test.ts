@@ -52,7 +52,7 @@ describe("NG-12: securityEvent (unidade)", () => {
   it("a lista de eventos é fechada e cada um é usado como nome estável de alerta", () => {
     expect([...SECURITY_EVENTS].sort()).toEqual([
       "device_token_refused", "login_failed", "login_locked", "login_ok", "logout_all", "origin_mismatch", "password_reset_done", "password_reset_refused",
-      "password_reset_requested", "platform_login_failed", "platform_login_locked", "platform_login_ok", "platform_mfa_failed", "session_rejected",
+      "password_reset_requested", "platform_login_failed", "platform_login_locked", "platform_login_ok", "platform_mfa_failed", "server_busy", "session_rejected",
     ]);
   });
 });
