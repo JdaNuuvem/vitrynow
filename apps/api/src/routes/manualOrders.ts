@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
+import { buildOrderLines, optionCopiesCreate } from "../lib/orderItems";
 import { Prisma, prisma } from "@meucardapio/db";
 import { createManualOrderSchema } from "@meucardapio/shared-types";
 import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
@@ -11,8 +12,7 @@ import { getJwtSecret } from "../lib/securityConfig";
 import { logAudit } from "../lib/audit";
 import { limited, tooMany } from "../lib/slidingLimit";
 import { CodedError, useDomainErrors } from "../shared/errors";
-import { assertOrderMoneyFits, resolveOrderItems } from "../lib/orderItems";
-import { optionGroupsService } from "../modules/optionGroups/optionGroups.module";
+import { assertOrderMoneyFits } from "../lib/orderItems";
 
 // API-13 — pedido lançado no PAINEL (B2). O servidor decide TODO preço (RN-B2-01); o pedido nasce CONFIRMADO (o atendente já o aceitou), com tíquete na MESMA
 // transação (nunca pedido sem job) e `source = PAINEL`. Ignora "loja fechada", horário, pedido mínimo e modalidade desligada: a loja decide (RN-B2-04).
@@ -87,8 +87,10 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
         details: { items: unavailable.map((p) => ({ id: p.id, name: p.name })) },
       });
     }
-    const optionGroups = await optionGroupsService.groupsForProducts(storeId, products.map((product) => product.id), true);
-    const { items: itemsData, subtotalCents } = resolveOrderItems(input.items, products, optionGroups);
+    const built = await buildOrderLines(storeId, products, input.items);
+    if (!built.ok) return reply.code(built.status).send(built.body);
+    const itemsData = built.lines;
+    const subtotalCents = itemsData.reduce((sum, i) => sum + i.lineTotalCents, 0);
 
     // Cupom: mesma validação do cardápio (validade, limite, mínimo); o OWNER pode forçar um cupom ESGOTADO (RN-B2-05), nunca um inativo ou vencido.
     let coupon = null;
@@ -167,7 +169,17 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
             paidAt: receivedNow ? new Date() : null, // RN-CX-02(a): "já pago" = recebido agora
             publicTokenHash: accessToken.hash,
             statusHistory: { create: { status: "CONFIRMADO", userId, source: "PANEL", kind: "ADVANCE" } },
-            items: { create: itemsData },
+            items: {
+              create: itemsData.map((item) => ({
+                productId: item.productId,
+                productName: item.productName,
+                quantity: item.quantity,
+                unitPriceCents: item.unitPriceCents,
+                notes: item.notes,
+                additionals: { create: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })) },
+              ...optionCopiesCreate(item.optionCopies),
+              })),
+            },
           },
         });
         ticketQueued = await enqueueOrderTicket(tx, { id: created.id, storeId });

@@ -1,4 +1,5 @@
 import { clientIpOf } from "../lib/clientIp";
+import { buildOrderLines, optionCopiesCreate } from "../lib/orderItems";
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { Prisma, prisma } from "@meucardapio/db";
@@ -16,8 +17,6 @@ import { hashToken } from "../lib/tokenHash";
 import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { publishToStore } from "../realtime/hub";
 import { CodedError, useDomainErrors } from "../shared/errors";
-import { resolveOrderItems } from "../lib/orderItems";
-import { optionGroupsService } from "../modules/optionGroups/optionGroups.module";
 
 // API-22 — mesa e QR (ADR-0002 nível 1; spec do Leonardo B, RN-MB-01..13).
 // Segurança (ADR-0002 §7): o QR é estático e NÃO abre a conta da mesa. O primeiro pedido emite um token anônimo do APARELHO (256 bits; só o hash vai ao banco)
@@ -293,8 +292,10 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         details: { items: unavailable.map((p) => ({ id: p.id, name: p.name })) },
       });
     }
-    const optionGroups = await optionGroupsService.groupsForProducts(store.id, products.map((product) => product.id), true);
-    const { items: itemsData, subtotalCents } = resolveOrderItems(input.items, products, optionGroups);
+    const built = await buildOrderLines(store.id, products, input.items);
+    if (!built.ok) return reply.code(built.status).send(built.body);
+    const itemsData = built.lines;
+    const subtotalCents = itemsData.reduce((sum, i) => sum + i.lineTotalCents, 0);
     if (store.minOrderCents !== null && subtotalCents < store.minOrderCents) {
       return reply.code(400).send({ error: `pedido mínimo é R$ ${(store.minOrderCents / 100).toFixed(2)}`, code: "MIN_ORDER" });
     }
@@ -329,7 +330,17 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           awaitingPayment: false,
           publicTokenHash: orderToken.hash,
           statusHistory: { create: { status: direct ? "CONFIRMADO" : "PENDENTE" } },
-          items: { create: itemsData },
+          items: {
+            create: itemsData.map((item) => ({
+              productId: item.productId,
+              productName: item.productName,
+              quantity: item.quantity,
+              unitPriceCents: item.unitPriceCents,
+              notes: item.notes,
+              additionals: { create: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })) },
+              ...optionCopiesCreate(item.optionCopies),
+            })),
+          },
         },
       });
       // Decisão do Claudio (18/11): imprime AO CHEGAR, com ou sem aceite; o aceite só muda o estado. O tíquete nasce na MESMA transação (nunca pedido sem job).

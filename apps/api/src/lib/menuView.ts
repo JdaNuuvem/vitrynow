@@ -1,11 +1,9 @@
 import type { Store } from "@meucardapio/db";
 import { prisma } from "@meucardapio/db";
 import { isSoldOutNow } from "./soldOut";
-import { unavailableGroups, type GroupRow } from "../modules/optionGroups/optionGroups.domain";
+import { fromPriceCents, unavailableGroups, type GroupRow } from "../modules/optionGroups/optionGroups.domain";
 import { PrismaOptionGroupsRepository } from "../modules/optionGroups/optionGroups.repository";
 import { publicCategory, publicStore } from "./publicDto";
-import { orderOptionFields } from "./orderItems";
-import { optionGroupsService } from "../modules/optionGroups/optionGroups.module";
 
 // Cardapio publico da loja (mesmo formato no link da loja e no QR da mesa). So produto ATIVO e DESTA loja (SEC-11).
 // Lote 2: junta API-22 (builder unico para o link e o QR), API-17 (`soldOut` EFETIVO agora; com "esconder esgotados" o produto
@@ -30,7 +28,7 @@ export async function buildMenuView(store: Store) {
       .map(({ soldOut, soldOutUntil, ...product }) => {
         // O espelho LEGACY_ADDITIONALS ja sai em `additionals`; aqui so os grupos reais (sem duplicar a escolha).
         const real: GroupRow[] = (groupsByProduct.get(product.id) ?? []).filter((g) => g.source !== "LEGACY_ADDITIONALS");
-        return { ...product, soldOut: isSoldOutNow({ soldOut, soldOutUntil }, now), optionGroups: real, unavailable: unavailableGroups(real).length > 0 };
+        return { ...product, soldOut: isSoldOutNow({ soldOut, soldOutUntil }, now), optionGroups: real, unavailable: unavailableGroups(real).length > 0, fromPriceCents: fromPriceCents(real) };
       })
       .filter((product) => !(store.hideSoldOutProducts && product.soldOut)),
   }));
