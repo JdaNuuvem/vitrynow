@@ -629,6 +629,16 @@ export const storeStatusActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("RESUME") }),
 ]);
 export type StoreStatusAction = z.infer<typeof storeStatusActionSchema>;
+// Modo ocupado (g1, RN-OCU-01/05): 15, 30, 60 ou 120 min (máx. 4 h seguidas); prazo extra opcional de 10, 20 ou 30 min.
+export const BUSY_MAX_MINUTES = 240;
+export const busyRequestSchema = z.object({
+  minutes: z.union([z.literal(15), z.literal(30), z.literal(60), z.literal(120)]),
+  extraMinutes: z.union([z.literal(10), z.literal(20), z.literal(30)]).optional(),
+});
+export type BusyRequest = z.infer<typeof busyRequestSchema>;
+// Motivo de a loja não receber pedido agora (`hours.reason` e `store.reason` do cardápio público): o web lê pelo enum, não por texto.
+export const storeClosedReasonSchema = z.enum(["SWITCHED_OFF", "PAUSED", "CLOSED_TODAY", "OUTSIDE_HOURS", "BUSY"]);
+export type StoreClosedReason = z.infer<typeof storeClosedReasonSchema>;
 
 // ---- Planos e assinatura ----
 

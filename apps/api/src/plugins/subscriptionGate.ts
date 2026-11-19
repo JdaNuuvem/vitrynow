@@ -96,7 +96,9 @@ const publicOrderGate = async (request: FastifyRequest, reply: FastifyReply) => 
   const hours = await storeHoursService.publicStatus(slug);
   if (hours && hours.status.status !== "ABERTO") {
     const { reason, nextOpenAt, message } = hours.status;
-    return reply.code(409).send({ error: message, code: "STORE_CLOSED", details: { reason, nextOpenAt } });
+    // g1: modo ocupado tem código próprio (RN-OCU-03): não se confunde com loja fechada.
+    const code = reason === "BUSY" ? "STORE_BUSY" : "STORE_CLOSED";
+    return reply.code(409).send({ error: message, code, details: { reason, nextOpenAt } });
   }
   return undefined;
 };
@@ -133,7 +135,7 @@ const publicMenuSerializer = async (request: FastifyRequest, _reply: FastifyRepl
       // (sem grade, continua o texto legado; é a única hora em que existe dois valores, e o legado já era o único).
       const hoursFields = derived ? { openNow: derived.openNow, nextOpensAt: derived.nextOpensAt, hoursText: derived.hoursText } : { openNow: null, nextOpensAt: null, hoursText: null };
       const openingHours = derived && derived.openNow !== null ? derived.hoursText : body.store.openingHours;
-      return { ...body, store: { ...body.store, openingHours, ...hoursFields, acceptingOrders: switchedOn, accepting, hours: hours ?? null, ...(prepMinutes ? { prepMinutes } : {}) } };
+      return { ...body, store: { ...body.store, openingHours, ...hoursFields, acceptingOrders: switchedOn, accepting, busyUntil: state.hours?.busyUntil ?? null, reason: hours?.reason ?? null, hours: hours ?? null, ...(prepMinutes ? { prepMinutes } : {}) } };
     }
   }
   return payload;
