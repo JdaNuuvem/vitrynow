@@ -199,6 +199,16 @@ describe("PR-06: cotação × criação do pedido (paridade)", { timeout: 300_00
     expect(json(q).quote.items[0].unitPriceCents).toBe(2400);
   });
 
+  it("cotação COM cupom tem teto próprio (20/min/IP): a 21ª leva 429 e a cotação SEM cupom segue livre (não vira atalho para adivinhar códigos)", async () => {
+    let status = 0;
+    for (let i = 0; i < 20; i++) status = (await quote(slug, { type: "BALCAO", items: [item("UN")], couponCode: `TENTATIVA${i}` })).statusCode;
+    expect(status).toBe(400); // cupom inexistente: mesmo erro genérico da criação
+    const bloqueada = await quote(slug, { type: "BALCAO", items: [item("UN")], couponCode: "PCT10" });
+    expect(bloqueada.statusCode).toBe(429);
+    expect(json(bloqueada)).not.toHaveProperty("quote");
+    expect((await quote(slug, { type: "BALCAO", items: [item("UN")] })).statusCode).toBe(200);
+  });
+
   it("contrato público: chaves EXATAS da cotação e dos itens; sem dado interno (id de loja, cupom, bairro, custo)", async () => {
     const q = await quote(slug, { type: "DELIVERY", neighborhoodId: id.centro, items: [item("PROMO")], couponCode: "PCT10" });
     const body = json(q).quote;

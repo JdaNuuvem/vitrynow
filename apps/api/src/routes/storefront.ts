@@ -25,6 +25,7 @@ class CouponExhaustedError extends Error {}
 // Rotas públicas do cardápio (sem autenticação) — equivalente ao /online/{slug} do original.
 // NG-08: tetos do pedido público (por loja e por telefone); ver o comentário no uso.
 export const PUBLIC_ORDERS_PER_STORE_PER_MINUTE = 60;
+export const PUBLIC_QUOTES_WITH_COUPON_PER_IP_PER_MINUTE = 20; // cotação COM cupom: teto mais apertado (não vira jeito barato de testar códigos de cupom)
 export const PUBLIC_QUOTES_PER_IP_PER_MINUTE = 120; // PR-06: a cotação não grava nada, mas consulta o banco: teto por IP (a cada mudança do carrinho)
 export const MAX_PENDING_PER_PHONE = 3;
 export const CAPTCHA_AT_PENDING = 2; // com captcha ligado, a partir do 2º pedido pendente do telefone
@@ -42,6 +43,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     const parsed = quoteOrderSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Corpo inválido.", code: "VALIDATION_ERROR", fields: parsed.error.flatten().fieldErrors });
     const input = parsed.data;
+    if (input.couponCode && limited(`public-quote-coupon:${clientKey(clientIpOf(request))}`, PUBLIC_QUOTES_WITH_COUPON_PER_IP_PER_MINUTE)) return tooMany(reply);
     if (input.type === "MESA") return reply.code(400).send({ error: "Pedido de mesa só é feito pelo QR da mesa.", code: "TABLE_REQUIRED" });
     if (input.type === "DELIVERY" && !store.deliveryEnabled) return reply.code(409).send({ error: "Esta loja não está fazendo entregas no momento.", code: "DELIVERY_DISABLED" });
     if (input.type === "BALCAO" && !store.pickupEnabled) return reply.code(409).send({ error: "Esta loja não está aceitando retirada no momento.", code: "PICKUP_DISABLED" });
