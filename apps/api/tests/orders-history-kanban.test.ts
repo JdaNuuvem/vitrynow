@@ -98,13 +98,18 @@ describe("puros: período, busca e limite", () => {
 
 describe("API-54 / API-62 — kanban, histórico e observação interna", () => {
   let app: ReturnType<typeof makeApp>;
+  // INF-16: o relógio do TESTE é fixo (só o `Date`): 12:00 de Brasília. Sem isso, rodar entre 21h e 03h UTC (ou logo após 00:00 BRT) joga pedidos de "há 1 h" para
+  // ONTEM no fuso da loja e o kanban de "hoje" os esconde (o CI quebrou às 00:15 BRT). Timers reais continuam: o banco e o Fastify não dependem dele.
+  const RELOGIO = new Date("2026-11-17T15:00:00Z");
   beforeEach(async () => {
     vi.clearAllMocks();
     resetHistoryRate();
+    vi.useFakeTimers({ toFake: ["Date"], now: RELOGIO });
     app = makeApp();
     await app.ready();
   });
   afterEach(async () => {
+    vi.useRealTimers();
     await app.close();
     await resetDb();
   });
