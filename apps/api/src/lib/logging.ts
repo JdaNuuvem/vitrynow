@@ -1,8 +1,11 @@
 // NG-16 / NG-11: redação de segredos nas linhas de log. O serializador padrão do Fastify não loga cabeçalhos, mas
 // qualquer `log.info({ req })`/serializador futuro os traria: o token do pedido, a sessão, o MFA e o token do admin
 // nunca podem aparecer em texto. `censor` fixo; testado em tests/order-token.test.ts.
+import { clientIpOf } from "./clientIp";
+
 export const REDACT_PATHS = [
   'req.headers["x-order-token"]',
+  'req.headers["x-device-token"]',
   'req.headers["x-mfa-challenge"]',
   'req.headers["x-admin-token"]',
   'req.headers["x-internal-service-secret"]',
@@ -10,6 +13,7 @@ export const REDACT_PATHS = [
   "req.headers.cookie",
   'res.headers["set-cookie"]',
   'headers["x-order-token"]',
+  'headers["x-device-token"]',
   'headers["x-mfa-challenge"]',
   'headers["x-admin-token"]',
   'headers["x-internal-service-secret"]',
@@ -51,7 +55,7 @@ const QUERY_SEPARATOR = /([&;])/;
 // Parâmetro SOLTO (sem `=`) que parece uma credencial: ≥ 16 caracteres de token (letras, números, `_`, `-`, `.`) com letra e número.
 const BARE_CREDENTIAL = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9_.-]{16,}$/;
 
-function redactPair(pair: string): string {
+function redactPair(pair: string, redactSearch: boolean): string {
   const eq = pair.indexOf("=");
   if (eq === -1) return BARE_CREDENTIAL.test(pair) ? "[redigido]" : pair;
   const name = pair.slice(0, eq);
@@ -61,7 +65,7 @@ function redactPair(pair: string): string {
   } catch {
     // nome malformado: usa o texto cru para a checagem
   }
-  return SENSITIVE_QUERY_KEY.test(decoded) ? `${name}=[redigido]` : pair;
+  return SENSITIVE_QUERY_KEY.test(decoded) || (redactSearch && decoded === "q") ? `${name}=[redigido]` : pair;
 }
 
 export function redactLogUrl(url: string | undefined): string | undefined {
@@ -69,10 +73,12 @@ export function redactLogUrl(url: string | undefined): string | undefined {
   const queryAt = url.indexOf("?");
   if (queryAt === -1) return url;
   const hashAt = url.indexOf("#", queryAt);
+  // A busca do back-office aceita o e-mail do dono da loja.
+  const redactSearch = /^\/api\/platform\/stores\/?$/.test(url.slice(0, queryAt));
   const query = url.slice(queryAt + 1, hashAt === -1 ? undefined : hashAt);
   const redacted = query
     .split(QUERY_SEPARATOR)
-    .map((piece, index) => (index % 2 === 1 ? piece : redactPair(piece)))
+    .map((piece, index) => (index % 2 === 1 ? piece : redactPair(piece, redactSearch)))
     .join("");
   return `${url.slice(0, queryAt)}?${redacted}${hashAt === -1 ? "" : url.slice(hashAt)}`;
 }
@@ -178,10 +184,11 @@ const isSecretKey = (key: string) => SECRET_KEY.test(key) || SECRET_KEY_EXACT.te
 // segredo dentro de texto, em passes separados (a ordem importa):
 //  1) linha de cabeçalho inteira: `Authorization: Digest …`, `Cookie: a=b; c=d`, `Set-Cookie: …` (vai até o fim da linha)
 const HEADER_LINE = /\b(proxy-authorization|authorization|set-cookie|cookie)(\s*:\s*)[^\r\n]+/gi;
+//  Sem `\b` antes do NOME de propósito (SEC-33e): `currentPassword`, `newPassword`, `userToken`, `apiSecret` (camelCase) também têm o valor redigido em texto.
 //  1b) senha SEM aspas e com espaço (`password=ab cd ef`): vai até o fim da linha ou do parâmetro (`&`, `,`, `;`, `}`); redige a mais de propósito (SEC-33d)
-const PASSWORD_UNQUOTED = /\b((?:password|passwd|pwd|senha)\s*[:=]\s*)([^\s"'\r\n&,};][^\r\n&,};"']*)/gi;
+const PASSWORD_UNQUOTED = /((?:password|passwd|pwd|senha)\s*[:=]\s*)([^\s"'\r\n&,};][^\r\n&,};"']*)/gi;
 //  2) `nome=valor` / `"nome":"valor"` com valor entre aspas (aceita espaço e aspas ESCAPADAS dentro) ou sem aspas; inclui `token=`, `secret=` e `"cookie":"…"` soltos em texto
-const NAMED_VALUE = /\b((?:access_token|refresh_token|client_secret|id_token|api[-_]?key|password|passwd|pwd|senha|token|secret|cookie|set-cookie|authorization|x-order-token|x-mfa-challenge|x-admin-token)\\?["']?\s*[:=]\s*)(\\"(?:(?!\\").)*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|(?:(?:bearer|basic|digest)\s+)?[^\s"'&,}]+)/gi;
+const NAMED_VALUE = /((?:access_token|refresh_token|client_secret|id_token|api[-_]?key|password|passwd|pwd|senha|token|secret|cookie|set-cookie|authorization|x-order-token|x-mfa-challenge|x-admin-token)\\?["']?\s*[:=]\s*)(\\"(?:(?!\\").)*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|(?:(?:bearer|basic|digest)\s+)?[^\s"'&,}]+)/gi;
 //  2a) JSON serializado DUAS vezes (`{\"access_token\":\"X\"}`, o que um erro de biblioteca produz ao pôr o corpo em texto): a barra antes da aspa do nome e a do valor
 //      (`\"…\"`) entram no padrão acima (SEC-33d, resto (a) do Sun Tzu). Escape de 3 ou mais níveis fica como resíduo aceito.
 //  2b) credencial na URL (`postgres://usuario:SENHA@host`): é o que um erro de conexão do banco coloca em texto (SEC-33d)
@@ -295,7 +302,7 @@ export function loggerOptions() {
     serializers: {
       // mesmo formato do serializador padrão do Fastify (método, URL, host, IP), com o MODELO da rota e a query sem segredos
       req(request: { method?: string; url?: string; routeOptions?: { url?: string }; hostname?: string; ip?: string; socket?: { remotePort?: number } }) {
-        return { method: request.method, url: routeLogUrl(request), hostname: clip(request.hostname, LOG_HOSTNAME_MAX), remoteAddress: request.ip, remotePort: request.socket?.remotePort };
+        return { method: request.method, url: routeLogUrl(request), hostname: clip(request.hostname, LOG_HOSTNAME_MAX), ip: clientIpOf(request as unknown as Parameters<typeof clientIpOf>[0]), remotePort: request.socket?.remotePort };
       },
       // o tipo do Fastify exige type/message/stack; o conteúdo real (sem message/stack para erro do Prisma) é o de `safeError`
       err: ((error: unknown) => {

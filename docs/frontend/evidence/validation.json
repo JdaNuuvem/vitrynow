@@ -1,0 +1,86 @@
+{
+  "date": "2026-11-18T06:00:39.985Z",
+  "scope": "Etapa 1 — verificação local alternativa",
+  "runtime": "Node24.22.1; TypeScript5.9.3; React19.3.1/react-dom19.3.1/esbuild0.28.2 isolados do cache npm com SHA512 conferido",
+  "sources": "apps/web código real; Next/font adaptado para fixture e gateways fictícios. React do app é 18; isto não substitui build/testes oficiais.",
+  "parsedTypeScriptFiles": 353,
+  "testedThemeColors": 4096,
+  "checks": [
+    {
+      "name": "Parse sintático de todos os arquivos TS/TSX apps/web",
+      "status": "pass"
+    },
+    {
+      "name": "Resolver de banner: categoria existente com produtos",
+      "status": "pass"
+    },
+    {
+      "name": "Resolver de banner: produto existente é o objeto original",
+      "status": "pass"
+    },
+    {
+      "name": "Resolver de banner: categoria vazia ou destino removido não resolve",
+      "status": "pass"
+    },
+    {
+      "name": "Configuração por loja: sem vazamento por protótipo",
+      "status": "pass"
+    },
+    {
+      "name": "Tema: cor inválida preserva verde padrão",
+      "status": "pass"
+    },
+    {
+      "name": "Contraste de texto 4.5:1 em 4096 cores RGB e tinta sobre branco",
+      "status": "pass"
+    },
+    {
+      "name": "SSR LojaPage real: identidade, preço, banner opcional e navegação presentes",
+      "status": "pass"
+    },
+    {
+      "name": "SSR LojaPage real: loja fechada sem ação adicionar",
+      "status": "pass"
+    },
+    {
+      "name": "SSR LojaPage real: cardápio vazio sem CTA órfão",
+      "status": "pass"
+    },
+    {
+      "name": "SSR LojaPage real: skeleton inicial anuncia carregamento",
+      "status": "pass"
+    },
+    {
+      "name": "SSR MenuBanner: ausência de configuração não gera seção",
+      "status": "pass"
+    },
+    {
+      "name": "SSR MenuBanner: destino removido mantém título e omite botão",
+      "status": "pass"
+    },
+    {
+      "name": "SSR LojaPage real: configuração de loja sem banner funciona",
+      "status": "pass"
+    }
+  ],
+  "visual": {
+    "status": "untested",
+    "reason": "CUA sem browser host e sem determinar URL Chrome com confiança; nenhuma aprovação visual."
+  },
+  "officialChecks": {
+    "typecheck": "not-run: dependências ausentes; registry bloqueado",
+    "lint": "not-run: dependências ausentes",
+    "vitest": "not-run: dependências ausentes",
+    "build": "not-run: Next14 e dependências ausentes"
+  },
+  "fixture": {
+    "url": "http://127.0.0.1:4173",
+    "files": [
+      "node_modules/.validation/fixture.tsx",
+      "node_modules/.validation/serve-fixture.cjs",
+      "node_modules/.validation/ssr-fixture.tsx",
+      "node_modules/.validation/run-checks.cjs"
+    ],
+    "note": "Tudo ignorado por node_modules/; sem alterar manifests ou lockfile. Banner e imagem de teste só na fixture."
+  }
+}

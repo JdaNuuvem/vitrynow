@@ -1,4 +1,5 @@
-FROM node:20-alpine AS build
+# Base FIXA por digest (INF-26): node 24.22.3 / alpine. Atualizar so de proposito (docs/RUNBOOK-infra.md, 'Atualizar a imagem base do Node').
+FROM node:24-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS development
 WORKDIR /repo
 RUN corepack enable
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
@@ -12,18 +13,20 @@ RUN node -e "const v=require('./package.json').packageManager.split('@')[1].spli
 RUN pnpm install --frozen-lockfile --filter "@meucardapio/web..."
 COPY packages/shared-types packages/shared-types
 COPY apps/web apps/web
+# @meucardapio/shared-types resolve pra src/index.ts em dev (via tsx); o build do Next (sem tsx) precisa do dist/ compilado.
+RUN pnpm --filter @meucardapio/shared-types build
+
+# Estágio "development" (stack local do sócio: `next dev` com todas as dependências). Produção usa o estágio "build" abaixo e a imagem FINAL (a última FROM).
+FROM development AS build
 ARG NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 ENV NEXT_OUTPUT_STANDALONE=1
-# @meucardapio/shared-types resolve pra src/index.ts em dev (via tsx); o build do Next (sem
-# tsx) precisa do dist/ compilado.
-RUN pnpm --filter @meucardapio/shared-types build
 # output: "standalone" (next.config.mjs) resolve as dependências reais usadas em runtime
 # (inclusive o pacote workspace @meucardapio/shared-types) sem precisar dos symlinks do
 # node_modules da raiz do monorepo na imagem final.
 RUN pnpm --filter @meucardapio/web build
 
-FROM node:20-alpine
+FROM node:24-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build --chown=node:node /repo/apps/web/.next/standalone ./

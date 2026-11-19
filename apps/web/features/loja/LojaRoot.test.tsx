@@ -73,8 +73,22 @@ describe("LojaRoot com o menu vindo do servidor (ADR-0013)", () => {
     const fetchMock = vi.fn().mockReturnValue(new Promise(() => {}));
     vi.stubGlobal("fetch", fetchMock);
     render(<LojaRoot slug="boa-massa" />);
-    expect(screen.getByText("Carregando...")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Carregando o cardápio…");
+    expect(screen.getByRole("status")).not.toHaveAttribute("aria-busy");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("indisponibilidade temporária oferece nova tentativa e recupera o cardápio", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({ error: "Indisponível" }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => menu });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<LojaRoot slug="boa-massa" />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível carregar o cardápio");
+    expect(screen.queryByText("Loja não encontrada.")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Tentar novamente" }));
+    expect(await screen.findByText("Calabresa Especial")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 

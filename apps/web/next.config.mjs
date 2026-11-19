@@ -1,3 +1,5 @@
+import { securityHeaders } from "./lib/securityHeaders.mjs";
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -6,10 +8,20 @@ const nextConfig = {
   // build Docker (NEXT_OUTPUT_STANDALONE=1): a etapa de "trace" do standalone cria symlinks,
   // e isso quebra `next build` local no Windows sem Modo de Desenvolvedor/Administrador.
   output: process.env.NEXT_OUTPUT_STANDALONE ? "standalone" : undefined,
-  // ST-56: a rota de redefinição de senha nunca manda Referer (o endereço dela carrega o token no fragmento/query legada).
+  poweredByHeader: false,
   async headers() {
-    return [{ source: "/reset-senha", headers: [{ key: "Referrer-Policy", value: "no-referrer" }] }];
+    const dev = process.env.NODE_ENV !== "production";
+    const common = securityHeaders({ apiUrl: process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001", dev });
+    const privateLink = common.map((header) =>
+      header.key === "Referrer-Policy" ? { ...header, value: "no-referrer" } : header,
+    );
+    return [
+      { source: "/reset-senha", headers: privateLink },
+      { source: "/loja/:slug/m/:token", headers: privateLink },
+      { source: "/((?!reset-senha$|loja/[^/]+/m/[^/]+$).*)", headers: common },
+    ];
   },
 };
 
 export default nextConfig;
+

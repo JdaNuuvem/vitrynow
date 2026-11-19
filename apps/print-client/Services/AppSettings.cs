@@ -12,7 +12,7 @@ namespace MeuCardapio.PrintClient.Services
         SaveFailed,  // não conseguiu regravar: o texto puro CONTINUA no disco; tenta de novo no próximo início
     }
 
-    // Settings locais do print-client — nada aqui aponta para o cardapio.ai: ApiBaseUrl é a URL
+    // Settings locais do print-client — nada aqui aponta para um serviço de terceiro: ApiBaseUrl é a URL
     // do NOSSO backend (apps/api) e DeviceToken é a "chave de impressora" emitida no NOSSO painel.
     public class AppSettings
     {
@@ -54,7 +54,7 @@ namespace MeuCardapio.PrintClient.Services
         [JsonIgnore] public bool MigratedFromPlaintext { get; private set; }
         [JsonIgnore] public TokenMigration Migration { get; private set; }
 
-        // URL do servidor de downloads (nosso, não cardapio.ai) onde version.txt + instalador
+        // URL do servidor de downloads (nosso, não de terceiro) onde version.txt + instalador
         // ficam publicados. Vazio = auto-update desligado (padrão até você publicar isso).
         public string UpdateBaseUrl { get; set; } = "";
         public bool ReceivePrints { get; set; } = true;

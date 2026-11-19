@@ -10,9 +10,11 @@ describe("rota /reset-senha: nada de Referer e fora do índice (ST-56)", () => {
     expect(rule?.headers).toContainEqual({ key: "Referrer-Policy", value: "no-referrer" });
   });
 
-  it("o cabeçalho não vaza para as outras rotas (a regra é só desta)", async () => {
+  it("no-referrer vale para as rotas com tokens, mantendo a política comum nas demais", async () => {
     const rules = await nextConfig.headers!();
-    expect(rules.every((r: { source: string }) => r.source === "/reset-senha")).toBe(true);
+    const withToken = rules.filter((rule: { headers: { key: string; value: string }[] }) =>
+      rule.headers.some(({ key, value }) => key === "Referrer-Policy" && value === "no-referrer"));
+    expect(withToken.map((rule: { source: string }) => rule.source)).toEqual(["/reset-senha", "/loja/:slug/m/:token"]);
   });
 
   it("o metadata também pede no-referrer e noindex (vale em navegação no cliente)", () => {

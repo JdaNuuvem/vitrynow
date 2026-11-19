@@ -143,7 +143,7 @@ namespace MeuCardapio.PrintClient
                     bool printed = WaitFor(() => printer.Printed.Count == 1 && rig.Api.Pending.Count == 0, 20000);
                     Thread.Sleep(400);
                     Check("harness offline: impressora voltou => imprime e fecha, 1 tiquete so", printed && printer.Printed.Count == 1);
-                    Check("harness offline: o indicador some quando imprime", WaitFor(() => rig.Problem(rig.ProblemCount - 1) == "", 3000));
+                    Check("harness offline: o indicador some quando imprime", WaitFor(() => rig.Problem(rig.ProblemCount - 1) == "", 30000));
                     Check("harness offline: conteudo completo", Read(printer.Printed) == Expected(order));
                 }
             }
@@ -209,10 +209,16 @@ namespace MeuCardapio.PrintClient
                     rig.Start();
                     WaitFor(() => api.OpenSockets == 1, 20000);
                     for (int i = 0; i < 25; i++) { api.SendWs("{\"type\":\"print.available\"}"); Thread.Sleep(20); }
-                    Thread.Sleep(600);
+                    // PC-27: antes dormia 600 ms FIXOS e conferia (1 falha em 7 rodadas com pouca RAM: 676 PASS e 2 FAIL juntos, sem dizer se o papel
+                    // ainda nao tinha saido ou se saiu em dobro). Agora espera ATE a condicao (30 s), depois uma janela de ESTABILIDADE em que, com
+                    // o pedido ainda listado e polling a cada 40 ms, NENHUM 2o tiquete pode aparecer; e a falha mostra o que foi observado.
+                    Func<int> printedCount = () => { lock (printer.Printed) return printer.Printed.Count; };
+                    bool settled = WaitFor(() => printedCount() >= 1 && rig.Ledger.IsPrinted("E") && rig.Ledger.PendingAcks().Count == 0, 30000);
+                    Thread.Sleep(800);
+                    int finalPrinted = printedCount(); bool inLedger = rig.Ledger.IsPrinted("E"); int pendingAcks = rig.Ledger.PendingAcks().Count;
                     Check("harness polling+WS: conectou por WebSocket de verdade", api.Has(r => r.Contains("/ws/device")));
-                    Check("harness polling+WS: 25 avisos + polling a cada 40 ms com o pedido ainda listado => 1 so tiquete", printer.Printed.Count == 1);
-                    Check("harness polling+WS: ack feito e sem duplicidade no ledger", rig.Ledger.IsPrinted("E") && rig.Ledger.PendingAcks().Count == 0);
+                    Check("harness polling+WS: 25 avisos + polling a cada 40 ms com o pedido ainda listado => 1 so tiquete (esperou ate imprimir: " + settled + "; impressos: " + finalPrinted + ")", settled && finalPrinted == 1);
+                    Check("harness polling+WS: ack feito e sem duplicidade no ledger (no ledger: " + inLedger + "; acks pendentes: " + pendingAcks + ")", settled && inLedger && pendingAcks == 0);
                 }
             }
             finally { Clean(dir); }

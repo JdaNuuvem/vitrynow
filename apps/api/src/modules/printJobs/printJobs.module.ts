@@ -3,11 +3,12 @@ import { prisma } from "@meucardapio/db";
 import { printAckSchema, setPrintModeSchema } from "@meucardapio/shared-types";
 import { prismaAuditLogger } from "../../shared/audit";
 import { useDomainErrors } from "../../shared/errors";
-import { publishToStore } from "../../realtime/hub";
+import { limited, tooMany } from "../../lib/slidingLimit";
+import { publishToPanel, publishToStore } from "../../realtime/hub";
 import { PrintJobService } from "./printJobs.service";
 import { PrintModeService, loadPrintMode } from "./printMode.service";
 
-export const printJobService = new PrintJobService(prisma, prismaAuditLogger, publishToStore);
+export const printJobService = new PrintJobService(prisma, prismaAuditLogger, publishToStore, () => new Date(), publishToPanel);
 export const printModeService = new PrintModeService(prisma, prismaAuditLogger);
 
 // Rotas da fila de impressão. Dispositivo (token da impressora): claim e ack. Painel (sessão): reimprimir, teste e lista.
@@ -34,28 +35,15 @@ const printJobRoutes: FastifyPluginAsync = async (app) => {
   // ───────────── Painel ─────────────
   // Modo de impressão da loja: só o OWNER altera (auditado). A troca RECONCILIA no mesmo ato (ADR-0004 §8.13).
   app.get("/api/store/print-mode", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request) => printModeService.get(request.user.storeId));
-  // Limite de taxa em memória (janela deslizante de 1 min), um balde por chave. A troca de modo é rara e mexe na impressão da cozinha
-  // inteira; cada tentativa NEGADA grava auditoria, então ela também conta (balde por USUÁRIO: o STAFF nunca gasta a cota do dono).
-  const hits = new Map<string, number[]>();
-  const limited = (key: string, max: number) => {
-    const now = Date.now();
-    const recent = (hits.get(key) ?? []).filter((t) => now - t < 60_000);
-    const over = recent.length >= max;
-    if (!over) recent.push(now);
-    hits.set(key, recent);
-    return over;
-  };
-  const tooMany = (reply: FastifyReply) => {
-    reply.header("Retry-After", "60");
-    return reply.code(429).send({ error: "Muitas tentativas. Aguarde um minuto e tente de novo.", code: "RATE_LIMITED" });
-  };
+  // Limite de taxa (lib/slidingLimit): cada tentativa NEGADA grava auditoria, então ela também conta (balde por USUÁRIO: o STAFF nunca
+  // gasta a cota do dono, que é por LOJA).
   // Quem não é OWNER recebe 403 e a TENTATIVA fica registrada (print.mode_change_denied); passando de 10 por minuto por usuário,
   // 429 sem gravar mais nada. A rota NUNCA se abre ao STAFF: a resposta é 403 ou 429, nunca o efeito.
   const ownerOrRecordDenied = async (request: FastifyRequest, reply: FastifyReply) => {
     if (request.user.role === "OWNER") return;
     if (limited(`denied:${request.user.userId}`, 10)) return tooMany(reply);
     await printModeService.recordDenied(request.user, (request.body as { mode?: unknown } | null)?.mode);
-    reply.code(403).send({ error: "ação restrita ao dono da loja" });
+    return reply.code(403).send({ error: "ação restrita ao dono da loja" });
   };
   app.put("/api/store/print-mode", { preHandler: [app.requirePanelAuth, ownerOrRecordDenied] }, async (request, reply) => {
     if (limited(`mode:${request.user.storeId}`, 10)) return tooMany(reply); // balde da LOJA (10 trocas por minuto)
@@ -76,6 +64,15 @@ const printJobRoutes: FastifyPluginAsync = async (app) => {
   app.post("/api/print-jobs/test", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request, reply) => {
     return reply.code(201).send({ job: await printJobService.createTest(actorOf(request)) });
   });
+
+  // N6: "Imprimir agora" num trabalho que passou da janela de 12 h. OWNER e STAFF; limite por USUÁRIO; STAFF segue a regra de contato da 2ª via.
+  app.post("/api/print-jobs/:id/print-now", panel, async (request, reply) => {
+    if (limited(`printnow:${request.user.userId}`, 30)) return tooMany(reply);
+    const { id } = request.params as { id: string };
+    return { job: await printJobService.printNow(actorOf(request), id) };
+  });
+
+  app.get("/api/print-jobs/summary", panel, async (request) => printJobService.summary(request.user.storeId));
 
   app.get("/api/print-jobs", panel, async (request) => {
     const query = request.query as { orderId?: string; limit?: string };

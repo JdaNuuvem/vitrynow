@@ -5,6 +5,7 @@ import type { Deliverer, Order } from "@/core/domain/orders";
 import { Modal } from "@/shared/ui/Modal";
 import { OrderDetailView, type DetailHandlers } from "./OrderDetailView";
 import { useOrderDetail } from "./useOrderDetail";
+import { ManualRefundAction, ManualRefundRecord } from "./ManualRefundAction";
 
 type Props = {
   orderId: string;
@@ -79,9 +80,13 @@ export function OrderDetailPanel({ orderId, listOrder, refreshKey, deliverers, n
         </div>
       )}
 
-      {detail && (
+      {detail && <>
         <OrderDetailView order={detail} deliverers={deliverers} nowMs={nowMs} busy={busy} canRetryRefund={canRetryRefund} onRetryContact={retry} retryingContact={refreshing} {...handlers} />
-      )}
+        {detail.payment?.refundManual && <ManualRefundRecord />}
+        {state.status === "ready" && canRetryRefund && detail.status !== "CONCLUIDO" && detail.paymentMethod === "PIX"
+          && (detail.payment?.status === "APROVADO" || detail.payment?.status === "ESTORNO_PENDENTE")
+          && <ManualRefundAction key={detail.id} order={detail} onRegistered={retry} />}
+      </>}
     </>
   );
 

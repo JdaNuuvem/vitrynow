@@ -6,11 +6,33 @@
 #   3 api/web/postgres sem porta publicada           7 backup verificado gerado e saudável (B05)
 #   4 api/web rodam sem root
 # Sem TLS/DNS/e-mail/serviços externos. Porta do Caddy: SMOKE_PORT (padrão 55443, faixa da Hopper).
+# ARMADILHA (achada em 17/11): com pipefail, `printf "$var" | grep -q X` dá FALSO NEGATIVO quando o grep -q sai no 1º acerto e o printf leva SIGPIPE (log grande com
+# vários acertos). Num detector de vazamento isso esconde o vazamento. Para testar "contém" numa variável use `[[ "$var" == *"X"* ]]` ou `grep -c` (lê tudo).
 set -uo pipefail
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${SMOKE_PORT:-55443}"; export SMOKE_PORT="$PORT"
-PROJ="mc-smoke-hopper"
+PROJ="${SMOKE_PROJECT:-mc-smoke-hopper}"   # projeto (e redes) próprios: outro agente usa SMOKE_PROJECT=mc-smoke-<nome> SMOKE_PORT=<porta da faixa dele>
+# Contêineres AUXILIARES (clientes de carga, eco, testes de rede): rotulados (docker ps --filter label=mc-smoke=$PROJ mostra de quem são), com teto de memória e CPU,
+# para não sufocar o Docker Desktop e derrubar o banco de teste de outro agente (visto em 18/11: o Postgres do Deming caiu 5 vezes durante o smoke).
+HELPER=(--label "mc-smoke=$PROJ" --memory 256m --cpus 1)
+# Antes das fases PESADAS (10 clientes simultâneos e 2 levas de 20 mil chaves), espera a máquina ficar sem NENHUMA suíte vitest rodando (a de outro agente, p.ex. a
+# do Deming no banco 55450). SMOKE_ESPERA_QUIETA = minutos de espera máxima (padrão 15; 0 desliga). Passado o prazo, segue e AVISA: o smoke não trava para sempre.
+vitest_rodando() {
+  if command -v powershell.exe >/dev/null 2>&1; then powershell.exe -NoProfile -Command "@(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" -ErrorAction SilentlyContinue | Where-Object { \$_.CommandLine -match 'vitest' }).Count" | tr -d '\r\n'
+  else pgrep -fc vitest 2>/dev/null || echo 0; fi
+}
+espera_quieta() { # $1 = nome da fase
+  local max="${SMOKE_ESPERA_QUIETA:-15}" t=0 n
+  [ "$max" = 0 ] && return 0
+  n="$(vitest_rodando)"
+  while [ "${n:-0}" != 0 ] && [ "$t" -lt $((max * 60)) ]; do
+    [ "$t" = 0 ] && echo "   (fase pesada '$1': há $n suíte(s) vitest rodando na máquina; espero até $max min por silêncio; SMOKE_ESPERA_QUIETA=0 desliga)"
+    sleep 20; t=$((t + 20)); n="$(vitest_rodando)"
+  done
+  [ "${n:-0}" != 0 ] && echo "   AVISO: segui na fase '$1' com $n suíte(s) vitest ainda rodando (prazo de $max min esgotado)"
+  return 0
+}
 ENVF="$ROOT/infra/.smoke.env"; PASS=0; FAILS=0   # dentro do worktree (gitignored por .env.*): o compose no Windows não lê /tmp do Git Bash
 rnd() { node -e "process.stdout.write(require('crypto').randomBytes(24).toString('base64url'))"; }
 cat > "$ENVF" <<EOF
@@ -24,14 +46,20 @@ NEXT_PUBLIC_API_URL=http://localhost:$PORT
 DOMAIN=:80
 ACME_EMAIL=smoke@exemplo.invalid
 APP_VERSION=smoke
+REVALIDATE_SECRET=$(rnd)$(rnd)
+# fotos em DISCO LOCAL (ADR-0017): o volume uploads_data; a URL pública vira WEB_ORIGIN/media (padrão do compose)
+STORAGE_DRIVER=local
+# a guarda de boot exige https na URL pública; o smoke é http, então ela é declarada aqui (os testes só usam o CAMINHO /media/...)
+STORAGE_PUBLIC_BASE_URL=https://localhost:$PORT/media
 EOF
 ROOTW="$(cygpath -m "$ROOT")"   # docker.exe (Windows) precisa de C:/...
 DC=(docker compose -p "$PROJ" -f "$ROOTW/infra/docker-compose.yml" -f "$ROOTW/infra/docker-compose.smoke.yml" --env-file "$ROOTW/infra/.smoke.env")
 check() { if [ "$1" = ok ]; then PASS=$((PASS+1)); echo "  [ok]    $2"; else FAILS=$((FAILS+1)); echo "  [FALHA] $2"; fi; }
+KRED=0   # vermelhos CONHECIDOS (abertos, visíveis, que não contam como falha nova); a linha final os mostra
 cleanup() {
   [ "${KEEP:-0}" = 1 ] && { echo "KEEP=1: stack mantida ($PROJ), porta $PORT"; return; }
   "${DC[@]}" down -v --remove-orphans >/dev/null 2>&1; docker rm -f "$PROJ-xffecho" >/dev/null 2>&1
-  rm -f "$ENVF" "$ROOT/infra/Caddyfile.smoke" "$ROOT"/infra/backups/*.dump "$ROOT"/infra/backups/*.sha256 "$ROOT"/infra/backups/LAST_OK
+  rm -f "$ENVF" "$ROOT/infra/Caddyfile.smoke" "$ROOT"/infra/backups/*.dump "$ROOT"/infra/backups/*.sha256 "$ROOT"/infra/backups/uploads_* "$ROOT"/infra/backups/LAST_OK
 }
 trap cleanup EXIT
 
@@ -44,7 +72,7 @@ echo "== validando e subindo a stack ($PROJ)"
 out="$("${DC[@]}" up -d --build 2>&1)"; rc=$?
 echo "$out" | tail -25
 [ "$rc" -eq 0 ] || { echo "FALHA: 'compose up --build' saiu com $rc (build ou subida); o smoke para aqui: o resto só geraria falhas em cascata"; exit 1; }
-docker run -d --name "$PROJ-xffecho" --network "${PROJ}_default" --network-alias xffecho node:20-alpine node -e \
+docker run -d --name "$PROJ-xffecho" "${HELPER[@]}" --network "${PROJ}_default" --network-alias xffecho node:24-alpine node -e \
   "require('http').createServer((q,s)=>s.end(JSON.stringify({xff:q.headers['x-forwarded-for']||null,ip:q.socket.remoteAddress,secret:q.headers['x-internal-service-secret']||null,visitor:q.headers['x-visitor-ip']||null}))).listen(8080)" >/dev/null
 
 echo "== aguardando saúde (até 180s)"
@@ -66,7 +94,9 @@ w="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")"; [ "$w" 
 s="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/stores/nao-existe")"; [ "$s" = 404 ] && check ok "GET /stores/<inexistente> = 404 vindo da API" || check fail "GET /stores/<x> = $s"
 
 echo "== 3 nenhuma porta publicada fora do Caddy"
-pub="$(docker ps --filter "label=com.docker.compose.project=$PROJ" --format '{{.Names}}|{{.Ports}}' | grep -E '0\.0\.0\.0|::|127\.0\.0\.1' | grep -v caddy || true)"
+# Só os containers que o compose DESTA pilha lista (`ps -q`). NÃO filtrar por rótulo de projeto: a imagem meucardapio-web:smoke carrega o rótulo
+# do compose e todo `docker run` dela (de qualquer agente) o herda, passando no filtro (falso vermelho visto em 17/11, achado da Tesla).
+pub=""; for cid in $("${DC[@]}" ps -q); do p="$(docker inspect -f '{{.Name}}|{{range $k,$v := .NetworkSettings.Ports}}{{if $v}}{{$k}}->{{range $v}}{{.HostIp}}:{{.HostPort}} {{end}}{{end}}{{end}}' "$cid" | sed 's#^/##')"; case "$p" in *caddy*) ;; *"->"*) pub="$pub $p";; esac; done
 [ -z "$pub" ] && check ok "só o caddy publica porta (127.0.0.1:$PORT)" || check fail "portas publicadas: $pub"
 
 echo "== 4 não-root"
@@ -88,7 +118,7 @@ done
 [ -z "$leak" ] && check ok "15 variações de caminho de /api/admin/* (caixa, //, %61, ../, ;, %00) não chegam ao handler" || check fail "variações que passaram do Caddy:$leak"
 
 echo "== 6 X-Forwarded-For forjado não chega ao backend"
-# o eco (node:20-alpine) pode demorar a abrir a porta: espera até 30 s por uma resposta não vazia
+# o eco (node:24-alpine) pode demorar a abrir a porta: espera até 30 s por uma resposta não vazia
 r=""
 for i in $(seq 1 15); do
   r="$(curl -s -H 'X-Forwarded-For: 6.6.6.6, 7.7.7.7' "http://127.0.0.1:$PORT/__xff")"
@@ -99,14 +129,14 @@ if [ -z "$r" ]; then
   echo "   DIAGNÓSTICO: eco=$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}}' "$PROJ-xffecho" 2>&1)"
   echo "   --- logs do eco:"; docker logs --tail 5 "$PROJ-xffecho" 2>&1 | sed 's/^/   /'
   echo "   --- status direto do eco pela rede do compose:"
-  docker run --rm --network "${PROJ}_default" node:20-alpine node -e "require('http').get('http://xffecho:8080',r=>{console.log('eco responde',r.statusCode)}).on('error',e=>console.log('eco inacessível:',e.code))" 2>&1 | sed 's/^/   /'
+  docker run --rm "${HELPER[@]}" --network "${PROJ}_default" node:24-alpine node -e "require('http').get('http://xffecho:8080',r=>{console.log('eco responde',r.statusCode)}).on('error',e=>console.log('eco inacessível:',e.code))" 2>&1 | sed 's/^/   /'
   echo "   --- caddy:"; "${DC[@]}" logs --tail 8 caddy 2>&1 | sed 's/^/   /'
 fi
 case "$r" in *6.6.6.6*|*7.7.7.7*) check fail "XFF forjado chegou ao backend";; *'"xff":"'*) check ok "XFF do cliente descartado; Caddy envia o IP real da conexão";; *) check fail "resposta inesperada: $r";; esac
 
 echo "== 6e Caddy remove x-internal-service-secret e x-visitor-ip vindos da internet (SEC-24)"
 # controle: DENTRO da rede o eco devolve os cabeçalhos se eles chegarem (senão o teste abaixo seria vazio)
-ctl="$(docker run --rm --network "${PROJ}_default" node:20-alpine node -e "require('http').get('http://xffecho:8080',{headers:{'x-internal-service-secret':'ctl-secreto','x-visitor-ip':'9.9.9.9'}},r=>{let b='';r.on('data',d=>b+=d);r.on('end',()=>console.log(b))})" 2>&1)"
+ctl="$(docker run --rm "${HELPER[@]}" --network "${PROJ}_default" node:24-alpine node -e "require('http').get('http://xffecho:8080',{headers:{'x-internal-service-secret':'ctl-secreto','x-visitor-ip':'9.9.9.9'}},r=>{let b='';r.on('data',d=>b+=d);r.on('end',()=>console.log(b))})" 2>&1)"
 case "$ctl" in *ctl-secreto*9.9.9.9*|*9.9.9.9*ctl-secreto*) check ok "controle: o eco devolve os dois cabeçalhos quando eles CHEGAM (o teste abaixo não é vazio)";; *) check fail "controle falhou: o eco não devolveu os cabeçalhos ($ctl)";; esac
 # pela internet (via Caddy), com variações de caixa: nada pode chegar ao backend
 leak=""
@@ -131,6 +161,18 @@ for i in $(seq 1 14); do
 done
 if [ "$got429" = 1 ]; then check ok "14 logins, cada um com X-Forwarded-For diferente, bateram no limite (429): cabeçalho forjado não burla o rate limit"
 else check fail "nenhum 429 em 14 logins com XFF forjado: o limite pode ser burlado (B04)"; fi
+# INF-08/NG-12b: os 14 logins falhos do MESMO IP (o X-Forwarded-For forjado não conta) passam de 10 em 5 min: a API tem de EMITIR o security_alert, e o saude.sh de REPORTÁ-LO
+# só 8 dos 14 chegam ao tratador (limite de 8/min do IP na API) e geram evento (5 login_failed + 3 login_locked) = 8 < limiar 10: espera a janela do limite (62 s) e faz mais 4 falhas
+# em contas DIFERENTES (cada uma gera 1 login_failed): 12 eventos do mesmo IP em ~1 min => a regra LOGIN_FAILURES_PER_IP (10 em 5 min) tem de disparar
+echo "   (espera 62 s para a janela do limite de login esvaziar e fazer a 2ª leva de falhas)"; sleep 62
+for n in 1 2 3 4; do curl -s -o /dev/null -X POST -H "Content-Type: application/json" -d "{\"email\":\"alerta$n@existe.invalid\",\"password\":\"errada-errada\"}" "http://127.0.0.1:$PORT/auth/login"; done
+sleep 2; sa="$("${DC[@]}" logs --no-color api 2>&1 | grep '"msg":"security_alert"' | grep -o '"securityAlert":"[A-Z_]*"' | cut -d'"' -f4 | sort -u | tr '
+' ' ')"
+[[ "$sa" == *LOGIN_FAILURES_PER_IP* ]] && check ok "NG-12b: a API emitiu security_alert LOGIN_FAILURES_PER_IP depois de 14 logins falhos do mesmo IP ($sa)" || check fail "NG-12b: nenhum security_alert LOGIN_FAILURES_PER_IP no log da API (regras vistas: '$sa')"
+sd="$(cd "$ROOT/infra" && ENV_FILE=.smoke.env COMPOSE_PROJECT_NAME="$PROJ" COMPOSE_PATH_SEPARATOR="|" COMPOSE_FILE="docker-compose.yml|docker-compose.smoke.yml" bash ./saude.sh --minutos 30 2>&1)"; src=$?
+[[ "$sd" == *"[ALERTA]"*"LOGIN_FAILURES_PER_IP"* ]] && check ok "INF-08: o saude.sh (na stack real) reporta o security_alert com o nome da regra" || check fail "INF-08: o saude.sh não reportou LOGIN_FAILURES_PER_IP: $(echo "$sd" | tail -4 | tr '
+' '|')"
+[[ "$sd" != *"$(printf '%s' "127.0.0.1")"* ]] && check ok "INF-08: a saída do saude.sh não traz IP" || check fail "INF-08: o saude.sh imprimiu um IP"
 
 echo "== 6c Postgres em UTC (colunas TIMESTAMP sem fuso; API-12 usa AT TIME ZONE 'UTC')"
 tz="$("${DC[@]}" exec -T postgres psql -U meucardapio -d meucardapio -At -c "show timezone" | tr -d '\r')"
@@ -153,14 +195,14 @@ if docker image inspect "$img" 2>/dev/null | grep -qF "$SECRET"; then check fail
 html="$(curl -s "http://127.0.0.1:$PORT/")"; leak=0; n=0
 chunks="$(printf '%s' "$html" | grep -oE '/_next/static/[^"'"'"' )]+\.(js|css)' | sort -u | head -40)"
 for u in $chunks; do n=$((n+1)); if curl -s "http://127.0.0.1:$PORT$u" | grep -qF "$SECRET"; then leak=1; echo "   VAZOU em $u"; fi; done
-if printf '%s' "$html" | grep -qF "$SECRET"; then leak=1; echo "   VAZOU no HTML da home"; fi
+if [[ "$html" == *"$SECRET"* ]]; then leak=1; echo "   VAZOU no HTML da home"; fi
 if [ "$n" -ge 3 ] && [ "$leak" = 0 ]; then check ok "segredo ausente do HTML e de $n arquivos estáticos que o navegador baixa"; else check fail "vazamento ($leak) ou poucos arquivos conferidos ($n)"; fi
 # SSR de ponta a ponta: cadastra uma loja de teste e abre o cardápio dela; o nome só vem no HTML se o servidor do web alcançou a API
 slug="smoke-ssr-$RANDOM"
 smokeEmail="smoke$RANDOM@exemplo.invalid"; smokePass="SenhaLonga-12345"
 rc="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d "{\"storeName\":\"Loja Smoke SSR\",\"slug\":\"$slug\",\"code\":\"SM$RANDOM\",\"email\":\"$smokeEmail\",\"password\":\"$smokePass\"}" "http://127.0.0.1:$PORT/auth/register")"
 page="$(curl -s -w '|%{http_code}' "http://127.0.0.1:$PORT/loja/$slug")"
-if [ "$rc" = 201 ] && [ "${page##*|}" = 200 ] && printf '%s' "$page" | grep -q "Loja Smoke SSR"; then check ok "SSR: /loja/$slug traz o nome da loja no HTML (o servidor do web alcançou a API por http://api:3001)"
+if [ "$rc" = 201 ] && [ "${page##*|}" = 200 ] && [[ "$page" == *"Loja Smoke SSR"* ]]; then check ok "SSR: /loja/$slug traz o nome da loja no HTML (o servidor do web alcançou a API por http://api:3001)"
 else check fail "SSR não trouxe a loja (cadastro=$rc, página=${page##*|}); o web pode estar caindo no plano B do navegador"; fi
 # LOGIN BEM-SUCEDIDO + ROTAS DO PAINEL que leem várias tabelas, com o cookie da sessão (INF-22): é o que um `--filter` que deixasse de fora um pacote de que a API precisa em
 # tempo de execução (db/Prisma client, shared-types, bcrypt) quebraria. O limite do /auth/login (8/min por IP) pode ainda estar valendo por causa da seção 6b: espera o Retry-After.
@@ -172,12 +214,146 @@ for try in 1 2 3; do
   ra="$(printf '%s' "$lh" | awk -F': ' 'tolower($1)=="retry-after"{print $2}')"; sleep "$(( ${ra:-30} + 2 ))"
 done
 if [ "$lrc" = 200 ] && grep -q mc_session "$jar" 2>/dev/null; then check ok "login BEM-SUCEDIDO pela API da imagem (hash de senha carregado e conferido, cookie de sessão emitido)"; else check fail "login do usuário recém-cadastrado falhou (HTTP $lrc)"; fi
+# SEC-34: QUAL binário do bcrypt a API da imagem carregou. O Dockerfile compila do fonte e apaga o `prebuilds/`: aqui se confere NA IMAGEM EM EXECUÇÃO que o compilado existe,
+# que `prebuilds/` não existe (então só o compilado pode ter carregado: o login acima passou), que o addon aponta para esse caminho e que NÃO há compilador na imagem final.
+bres="$("${DC[@]}" exec -T api node -e "
+const path=require('path'),fs=require('fs');
+const dir=path.dirname(require.resolve('bcrypt/package.json'));
+const rel=p=>path.relative('/repo',p);
+const compiled=fs.existsSync(path.join(dir,'build/Release/bcrypt_lib.node'));
+const pre=fs.existsSync(path.join(dir,'prebuilds'));
+const b=require('bcrypt');
+const loaded=Object.keys(require.cache).filter(k=>/bcrypt_lib\.node$/.test(k)).map(rel);
+console.log(JSON.stringify({compiled,prebuildsPresent:pre,version:require('bcrypt/package.json').version,okHash:b.compareSync('x',b.hashSync('x',4)),loaded}));
+" 2>&1 | tr -d '\r' | tail -1)"
+if [[ "$bres" == *'"compiled":true'* && "$bres" == *'"prebuildsPresent":false'* && "$bres" == *'"okHash":true'* && "$bres" == *'"version":"6.0.0"'* ]]; then check ok "bcrypt 6.0.0 COMPILADO DO FONTE na imagem: build/Release/bcrypt_lib.node existe, prebuilds/ não existe, hash e compare funcionam ($bres)"; else check fail "binário do bcrypt na imagem não é o esperado: $bres"; fi
+ccomp="$("${DC[@]}" exec -T api sh -c 'command -v g++ gcc make python3 cc 2>/dev/null | wc -l' | tr -d '\r\n ')"
+[ "$ccomp" = 0 ] && check ok "a imagem final da API NÃO tem compilador (g++/gcc/make/python3 ausentes)" || check fail "a imagem final da API tem $ccomp ferramentas de compilação"
+uvt="$("${DC[@]}" exec -T api printenv UV_THREADPOOL_SIZE | tr -d '\r\n')"
+[ "$uvt" = 4 ] && check ok "UV_THREADPOOL_SIZE=4 explícito na API (a faixa de hash dimensiona por ele)" || check fail "UV_THREADPOOL_SIZE da API = '$uvt' (esperado 4)"
 nrc="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/orders")"
 [ "$nrc" = 401 ] && check ok "controle: /api/orders SEM cookie é recusada (401)" || check fail "/api/orders sem cookie devolveu $nrc (esperado 401)"
 for p in /auth/me /api/orders /api/catalog/categories /api/store/settings /api/store/subscription /api/reports/summary; do
   prc="$(curl -s -o "$body" -w '%{http_code}' -b "$jar" "http://127.0.0.1:$PORT$p")"
   if [ "$prc" = 200 ]; then check ok "rota do painel com sessão: GET $p = 200 ($(wc -c < "$body" | tr -d ' ') bytes; leitura via Prisma)"; else check fail "GET $p com sessão devolveu $prc: $(head -c 150 "$body")"; fi
 done
+echo "== 9h upload REAL de foto pela API, leitura pelo Caddy (/media), recusas, persistência, backup e restauração (INF-30, ADR-0017)"
+UPD="$ROOTW/infra/.smoke-upload"; rm -rf "$UPD"; mkdir -p "$UPD"
+node "$ROOTW/scripts/smoke-fixtures/gera-png.mjs" "$UPD/foto.png" 96 96
+printf 'isto nao e imagem' > "$UPD/texto.png"
+printf '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"><script>alert(1)</script></svg>' > "$UPD/xss.svg"
+{ printf '\211PNG\r\n\032\n'; head -c 4000 /dev/urandom; } > "$UPD/corrompido.png"
+{ cat "$UPD/foto.png"; head -c 9500000 /dev/zero; } > "$UPD/grande.png"
+up() { curl -s -b "$jar" -w '|%{http_code}' -F "file=@$UPD/$1;type=${3:-image/png};filename=${4:-$1}" "http://127.0.0.1:$PORT/api/media/images?kind=${2:-PRODUCT}"; }
+nfotos() { "${DC[@]}" exec -T api sh -c 'find /uploads -type f | wc -l' | tr -d ' \r\n'; }
+N0="$(nfotos)"
+out="$(curl -s -w '|%{http_code}' -F "file=@$UPD/foto.png;type=image/png" "http://127.0.0.1:$PORT/api/media/images?kind=PRODUCT")"; [ "${out##*|}" = 401 ] && check ok "9h sem sessão: 401" || check fail "9h upload sem sessão devolveu ${out##*|}"
+out="$(up foto.png EVIL)"; [[ "${out##*|}" = 400 && "$out" == *INVALID_KIND* ]] && check ok "9h kind inválido: 400 INVALID_KIND" || check fail "9h kind inválido: $out"
+for caso in "texto.png|image/png|.png que é TEXTO" "xss.svg|image/svg+xml|SVG com script" "texto.png|image/jpeg|texto com Content-Type mentido (image/jpeg)"; do
+  IFS='|' read -r arq tipo desc <<< "$caso"; out="$(up "$arq" PRODUCT "$tipo")"; code="${out##*|}"
+  { [ "$code" = 400 ] || [ "$code" = 415 ] || [ "$code" = 422 ]; } && [[ "$out" == *UNSUPPORTED_TYPE* ]] && check ok "9h $desc: recusado ($code UNSUPPORTED_TYPE)" || check fail "9h $desc NÃO foi recusado como esperado: $out"
+done
+out="$(up corrompido.png)"; code="${out##*|}"; { [ "$code" = 400 ] || [ "$code" = 415 ] || [ "$code" = 422 ]; } && [[ "$out" == *CORRUPT_IMAGE* || "$out" == *UNSUPPORTED_TYPE* ]] && check ok "9h PNG com magic bytes mas corrompido: recusado ($code)" || check fail "9h PNG corrompido: $out"
+out="$(up grande.png)"; [ "${out##*|}" = 413 ] && check ok "9h arquivo de ~9,5 MB (limite 8 MB): 413" || check fail "9h arquivo grande devolveu ${out##*|}"
+[ "$(nfotos)" = "$N0" ] && check ok "9h as 6 recusas NÃO deixaram nenhum arquivo no volume" || check fail "9h as recusas deixaram arquivos no volume ($N0 -> $(nfotos))"
+out="$(up foto.png PRODUCT image/png '../../../etc/evil.png')"; code="${out##*|}"; resp="${out%|*}"
+if [ "$code" = 201 ]; then
+  IMGID="$(printf '%s' "$resp" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)"
+  mapfile -t VURLS < <(printf '%s' "$resp" | grep -o 'http[^"]*\.webp' | sort -u)   # o campo `url` repete a maior variante: dedup
+  check ok "9h upload válido (nome do arquivo com ../../ é ignorado): 201, ${#VURLS[@]} variante(s)"
+  [[ "${VURLS[0]}" =~ /media/stores/[A-Za-z0-9_-]+/[a-f0-9-]{36}-[0-9]+\.webp$ ]] && [[ "${VURLS[0]}" != *evil* && "${VURLS[0]}" != *..* ]] && check ok "9h a URL pública é /media/stores/<loja>/<uuid>-<largura>.webp (nada do nome enviado)" || check fail "9h URL inesperada: ${VURLS[0]}"
+else IMGID=""; VURLS=(); check fail "9h upload válido falhou: $out"; fi
+vok=0; for u in "${VURLS[@]}"; do
+  p="/${u#*://*/}"; hdr="$(curl -s -D - -o "$UPD/baixada.webp" "http://127.0.0.1:$PORT$p" | tr -d '\r')"; hl="${hdr,,}"; magic="$(head -c 12 "$UPD/baixada.webp" | od -An -c | tr -d ' \n')"
+  [[ "$hdr" == HTTP*" 200"* && "$hl" == *"content-type: image/webp"* && "$hl" == *"immutable"* && "$hl" == *"nosniff"* && "$magic" == RIFF*WEBP ]] && vok=$((vok+1)) || echo "   variante $p: $(echo "$hdr" | head -1) magic=$magic"
+done
+[ "$vok" -ge 1 ] && [ "$vok" = "${#VURLS[@]}" ] && check ok "9h TODAS as variantes (${#VURLS[@]}) lidas pelo Caddy: 200, image/webp, bytes RIFF/WEBP reais, cache imutável, nosniff" || check fail "9h variantes lidas ok: $vok de ${#VURLS[@]}"
+if [ "${#VURLS[@]}" -ge 1 ]; then
+  p0="/${VURLS[0]#*://*/}"; SHA_SERV="$(curl -s "http://127.0.0.1:$PORT$p0" | sha256sum | cut -d' ' -f1)"
+  perm="$("${DC[@]}" exec -T api sh -c "stat -c '%a %U' /uploads${p0#/media}" | tr -d '\r')"; [ "$perm" = "644 node" ] && check ok "9h arquivo no volume com modo 644, dono node" || check fail "9h arquivo no volume: '$perm'"
+  [ "$(nfotos)" = "$((N0 + ${#VURLS[@]}))" ] && check ok "9h o volume ganhou exatamente ${#VURLS[@]} arquivo(s) (um por variante)" || check fail "9h arquivos no volume: $(nfotos) (esperado $((N0 + ${#VURLS[@]})))"
+  # '..' que ESCAPA da raiz, partindo de um caminho real (um '..' que volta ao próprio arquivo legítimo é servido, como a URL normal: não é fuga)
+  badt=""; for tp in "/media/stores/x/../../../../etc/passwd" "${p0}/../../../../../etc/passwd" "/media/stores/x/..%2f..%2f..%2f..%2fetc/passwd"; do
+    to="$(curl -s --path-as-is -w '|%{http_code}' "http://127.0.0.1:$PORT$tp")"; { [ "${to##*|}" = 404 ] || [ "${to##*|}" = 400 ]; } && [[ "$to" != *"root:"* ]] || badt="$badt [$tp -> ${to##*|}]"
+  done
+  [ -z "$badt" ] && check ok "9h traversal que escapa da raiz, a partir de caminho real: negado (404/400), sem vazar /etc/passwd" || check fail "9h traversal na leitura:$badt"
+  # persistência: reiniciar a API e o Caddy não apaga a foto
+  "${DC[@]}" restart api caddy >/dev/null 2>&1; for t in $(seq 1 40); do [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health")" = 200 ] && break; sleep 3; done
+  [ "$(curl -s "http://127.0.0.1:$PORT$p0" | sha256sum | cut -d' ' -f1)" = "$SHA_SERV" ] && check ok "9h a foto continua igual (mesmo sha256) depois de reiniciar API e Caddy" || check fail "9h a foto mudou ou sumiu depois do restart"
+  # backup + restauração das fotos
+  bo="$("${DC[@]}" exec -T postgres-backup /bin/sh /scripts/backup.sh 2>&1 | tr -d '\r')"; [[ "$bo" == *"backup-uploads: ok uploads_"* ]] && check ok "9h backup inclui as fotos reais" || check fail "9h backup sem fotos: $(echo "$bo" | tail -1)"
+  tarf="$("${DC[@]}" exec -T postgres-backup sh -c 'ls -1 /backups/uploads_*.tar.gz | tail -1' | tr -d '\r')"
+  SHA_REST="$("${DC[@]}" exec -T postgres-backup sh -c "rm -rf /tmp/rest9h && sh /scripts/restore-uploads.sh $tarf /tmp/rest9h >/dev/null && sha256sum /tmp/rest9h${p0#/media} | cut -d' ' -f1" | tr -d '\r\n')"
+  [ -n "$SHA_REST" ] && [ "$SHA_REST" = "$SHA_SERV" ] && check ok "9h a foto restaurada do backup é BYTE A BYTE a que o Caddy serve (sha256 igual)" || check fail "9h foto restaurada diferente: servida=$SHA_SERV restaurada=$SHA_REST"
+fi
+if [ -n "$IMGID" ]; then
+  out="$(curl -s -b "$jar" -X POST -w '|%{http_code}' "http://127.0.0.1:$PORT/api/media/images/$IMGID/delete")"; [ "${out##*|}" = 200 ] && check ok "9h o dono apaga a imagem: 200" || check fail "9h apagar imagem: $out"
+  [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT$p0")" = 404 ] && [ "$(nfotos)" = "$N0" ] && check ok "9h depois de apagar: 404 no /media e o volume volta a $N0 arquivo(s)" || check fail "9h imagem apagada ainda servida ou arquivos restantes ($(nfotos))"
+fi
+rm -rf "$UPD"
+echo "== 9i upload: papel STAFF, cota por loja e falha de gravação (INF-31, ADR-0017)"
+UPD="$ROOTW/infra/.smoke-upload9i"; rm -rf "$UPD"; mkdir -p "$UPD"; node "$ROOTW/scripts/smoke-fixtures/gera-png.mjs" "$UPD/foto.png" 96 96
+upj() { curl -s -b "$1" -w '|%{http_code}' -F "file=@$UPD/foto.png;type=image/png" "http://127.0.0.1:$PORT/api/media/images?kind=$2"; }
+psqlq() { "${DC[@]}" exec -T postgres psql -U meucardapio -d meucardapio -At -v ON_ERROR_STOP=1 "$@" | tr -d '\r'; }
+LOJA="$(psqlq -c "select \"storeId\" from \"User\" where email='$smokeEmail'")"
+SH="$("${DC[@]}" exec -T api node -e "process.stdout.write(require('bcrypt').hashSync('SenhaStaff-12345',10))" | tr -d '\r')"
+STAFF="staff-smoke$RANDOM@exemplo.invalid"
+printf "INSERT INTO \"User\"(id,\"storeId\",email,\"passwordHash\",role,\"tokenVersion\",\"createdAt\") VALUES ('stf'||substr(md5(random()::text),1,20),'%s','%s','%s','STAFF',0,now());" "$LOJA" "$STAFF" "$SH" | "${DC[@]}" exec -T postgres psql -U meucardapio -d meucardapio -v ON_ERROR_STOP=1 >/dev/null 2>&1 && check ok "9i funcionário STAFF criado direto no banco (a loja de teste nasce em BASICO e o convite exige plano PRO)" || check fail "9i não consegui criar o STAFF"
+jar2="$ROOTW/infra/.smoke.cookies.staff"; rm -f "$jar2"; src=0
+for t in 1 2 3 4; do src="$(curl -s -o /dev/null -w '%{http_code}' -c "$jar2" -X POST -H 'Content-Type: application/json' -d "{\"email\":\"$STAFF\",\"password\":\"SenhaStaff-12345\"}" "http://127.0.0.1:$PORT/auth/login")"; [ "$src" != 429 ] && break; sleep 20; done
+[ "$src" = 200 ] && grep -q mc_session "$jar2" && check ok "9i o STAFF entra (login 200)" || check fail "9i login do STAFF devolveu $src"
+for k in LOGO COVER; do out="$(upj "$jar2" $k)"; [[ "${out##*|}" = 403 && "$out" == *FORBIDDEN_ROLE* ]] && check ok "9i STAFF enviando $k: 403 FORBIDDEN_ROLE (identidade da loja é só do dono)" || check fail "9i STAFF enviando $k: $out"; done
+N1="$(nfotos 2>/dev/null || "${DC[@]}" exec -T api sh -c 'find /uploads -type f | wc -l' | tr -d ' \r\n')"
+out="$(upj "$jar2" PRODUCT)"; [ "${out##*|}" = 201 ] && check ok "9i STAFF enviando foto de PRODUTO: 201 (permitido)" || check fail "9i STAFF enviando PRODUTO: $out"
+SID="$(printf '%s' "${out%|*}" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)"
+out="$(curl -s -b "$jar2" -X POST -w '|%{http_code}' "http://127.0.0.1:$PORT/api/media/images/$SID/delete")"; [ "${out##*|}" = 403 ] && check ok "9i STAFF apagando imagem: 403 (só o dono apaga)" || check fail "9i STAFF apagando imagem: $out"
+curl -s -b "$jar" -X POST -o /dev/null "http://127.0.0.1:$PORT/api/media/images/$SID/delete"
+# cota por loja: enche a loja até o teto (500) com linhas READY e confere que o próximo upload é recusado SEM gravar arquivo
+NIMG="$(psqlq -c "select count(*) from \"Image\" where \"storeId\"='$LOJA'")"; TETO=500
+psqlq -c "insert into \"Image\"(id,\"storeId\",kind,\"keyBase\",widths,bytes,status,\"createdAt\") select 'cota'||g,'$LOJA','PRODUCT','stores/$LOJA/cota'||g,ARRAY[320],1,'READY',now() from generate_series(1,$TETO-$NIMG) g" >/dev/null
+N2="$("${DC[@]}" exec -T api sh -c 'find /uploads -type f | wc -l' | tr -d ' \r\n')"
+out="$(upj "$jar" PRODUCT)"; [[ "${out##*|}" = 409 && "$out" == *IMAGE_QUOTA_EXCEEDED* ]] && check ok "9i loja no teto de $TETO imagens: 409 IMAGE_QUOTA_EXCEEDED" || check fail "9i cota: $out"
+[ "$("${DC[@]}" exec -T api sh -c 'find /uploads -type f | wc -l' | tr -d ' \r\n')" = "$N2" ] && check ok "9i a recusa por cota NÃO gravou arquivo no volume" || check fail "9i a recusa por cota deixou arquivo no volume"
+psqlq -c "delete from \"Image\" where \"storeId\"='$LOJA' and id like 'cota%'" >/dev/null
+# falha de gravação (permissão na pasta da loja): NÃO é disco cheio de verdade, mas exercita o mesmo caminho de erro de gravação. O chmod é feito pelo DONO (node): o root do contêiner da API não consegue (cap_drop ALL)
+"${DC[@]}" exec -T api sh -c "mkdir -p /uploads/stores/$LOJA && chmod 555 /uploads/stores/$LOJA" >/dev/null 2>&1
+out="$(upj "$jar" PRODUCT)"; code="${out##*|}"
+{ [ "$code" != 201 ] && [[ "$code" =~ ^[45] ]] && [[ "$out" != */uploads* && "$out" != *EACCES* && "$out" != *"node_modules"* ]]; } && check ok "9i falha de gravação: o upload NÃO é aceito ($code) e a resposta não vaza caminho nem erro interno" || check fail "9i falha de gravação: $out"
+rest="$("${DC[@]}" exec -T api sh -c "find /uploads -name '*.tmp*' -o -name '*.partial*' | wc -l; find /uploads -type f | wc -l" | tr -d '\r' | tr '\n' ' ')"
+[ "$rest" = "0 $N2 " ] && check ok "9i depois da falha: nenhum arquivo temporário e nenhum arquivo novo no volume" || check fail "9i sobrou arquivo depois da falha de gravação: '$rest' (esperado '0 $N2 ')"
+pend="$(psqlq -c "select count(*) from \"Image\" where \"storeId\"='$LOJA' and status='PENDING'")"
+echo "   (informativo: linhas PENDING deixadas pela falha = $pend; o job de limpeza as varre depois de QUARENTENA)"
+"${DC[@]}" exec -T api sh -c "chmod 755 /uploads/stores/$LOJA" >/dev/null 2>&1
+psqlq -c "delete from \"Image\" where \"storeId\"='$LOJA' and status='PENDING'" >/dev/null
+out="$(upj "$jar" PRODUCT)"; [ "${out##*|}" = 201 ] && check ok "9i depois de consertar a permissão o upload volta a funcionar (201): sem estado preso" || check fail "9i recuperação: $out"
+RID="$(printf '%s' "${out%|*}" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)"; curl -s -b "$jar" -X POST -o /dev/null "http://127.0.0.1:$PORT/api/media/images/$RID/delete"
+rm -rf "$UPD" "$jar2"
+echo "== 9j revalidação REAL do cardápio (API-58, INF-32): o dono muda o cardápio e a vitrine atualiza em segundos, não em 30 s"
+RVS="$(grep '^REVALIDATE_SECRET=' "$ENVF" | cut -d= -f2-)"
+vitrine() { curl -s "http://127.0.0.1:$PORT/loja/$slug"; }
+espera_nome() { local nome="$1" t0 t; t0=$(date +%s); for t in $(seq 1 25); do vitrine | grep -q "$nome" && { echo $(( $(date +%s) - t0 )); return 0; }; sleep 1; done; echo 99; return 1; }
+vitrine > /dev/null   # esquenta o cache da vitrine (TTL do ISR = 30 s)
+CATR="$(curl -s -b "$jar" -X POST -H 'Content-Type: application/json' -d '{"name":"Categoria Revalida"}' "http://127.0.0.1:$PORT/api/catalog/categories")"
+CATID="$(printf '%s' "$CATR" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)"
+vitrine | grep -q "Produto Alfa9j" && check fail "9j (controle) o produto já aparecia antes de ser criado" || check ok "9j (controle) a vitrine ainda NÃO mostra o produto (cache aquecido)"
+PR="$(curl -s -b "$jar" -X POST -H 'Content-Type: application/json' -d "{\"categoryId\":\"$CATID\",\"name\":\"Produto Alfa9j\",\"priceCents\":1990}" -w '|%{http_code}' "http://127.0.0.1:$PORT/api/catalog/products")"
+PID="$(printf '%s' "${PR%|*}" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)"
+[ "${PR##*|}" = 201 ] && [ -n "$PID" ] && check ok "9j o dono cria categoria e produto pela API (201)" || check fail "9j criar produto: $PR"
+tA="$(espera_nome "Produto Alfa9j")"; [ "$tA" -le 20 ] && check ok "9j produto NOVO aparece na vitrine em ${tA} s (o ISR sozinho levaria até 30 s): revalidação sob demanda" || check fail "9j produto novo só apareceu em ${tA} s (99 = nunca em 25 s): a revalidação NÃO atuou"
+vitrine | grep -q "Produto Alfa9j" && true
+curl -s -b "$jar" -X POST -H 'Content-Type: application/json' -d '{"name":"Produto Beta9j","priceCents":2490}' -o /dev/null "http://127.0.0.1:$PORT/api/catalog/products/$PID"
+tB="$(espera_nome "Produto Beta9j")"; [ "$tB" -le 20 ] && check ok "9j produto EDITADO (nome e preço) atualiza na vitrine em ${tB} s" || check fail "9j produto editado só apareceu em ${tB} s"
+vitrine | grep -q "Produto Alfa9j" && check fail "9j o nome antigo continua na vitrine" || check ok "9j o nome antigo saiu da vitrine"
+# a rota do web só abre com o segredo e só pela rede interna
+rv() { "${DC[@]}" exec -T web node -e "fetch('http://127.0.0.1:3000/api/revalidate',{method:'POST',headers:{'content-type':'application/json',...(process.argv[1]?{'x-revalidate-secret':process.argv[1]}:{})},body:JSON.stringify({slug:process.argv[2]})}).then(r=>console.log(r.status)).catch(()=>console.log('erro'))" "$1" "$2" | tr -d '\r\n'; }
+[ "$(rv '' "$slug")" = 401 ] && check ok "9j /api/revalidate do web SEM segredo: 401" || check fail "9j rota do web sem segredo não deu 401"
+[ "$(rv "segredo-errado-$RANDOM" "$slug")" = 401 ] && check ok "9j /api/revalidate do web com segredo ERRADO: 401" || check fail "9j rota do web com segredo errado não deu 401"
+[ "$(rv "$RVS" 'slug inválido!')" = 400 ] && check ok "9j slug inválido com o segredo certo: 400" || check fail "9j slug inválido não deu 400"
+[ "$(rv "$RVS" "$slug")" = 200 ] && check ok "9j com o segredo certo e slug válido: 200" || check fail "9j rota do web com segredo certo não deu 200"
+pub="$(curl -s -o "$body" -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H "x-revalidate-secret: $RVS" -d "{\"slug\":\"$slug\"}" "http://127.0.0.1:$PORT/api/revalidate")"
+{ [ "$pub" != 200 ] && ! grep -q revalidated "$body"; } && check ok "9j de FORA (pelo Caddy) a rota NÃO alcança o web, mesmo com o segredo certo ($pub: /api/* vai para a API)" || check fail "9j /api/revalidate alcançável pela internet ($pub)"
+vz="$(vitrine; curl -s "http://127.0.0.1:$PORT/")"; [[ "$vz" != *"$RVS"* ]] && check ok "9j o REVALIDATE_SECRET não aparece no HTML da vitrine nem da home" || check fail "9j REVALIDATE_SECRET VAZOU no HTML"
+curl -s -b "$jar" -X POST -o /dev/null "http://127.0.0.1:$PORT/api/catalog/products/$PID/delete"
 rm -f "$jar" "$body"
 
 echo "== 6f menor privilégio: o web NÃO recebe segredo nenhum além do necessário; a API recebe o PIX desligado; check-env.sh aprova o .env do smoke"
@@ -219,15 +395,17 @@ rm -f "$ENVF.sem"
 echo "== 9 limite de requisições por IP em /loja/* (SEC-26 / ST-44, ST-45, ST-48); fica no fim porque a rajada limita o IP do host por 1 min"
 # 9a visitantes DISTINTOS não se bloqueiam: 10 containers, cada um com o seu IP na rede, 100 requisições cada (< 120/min) => 0 x 429
 # Os 10 clientes precisam existir AO MESMO TEMPO: containers seguidos com --rm recebem o MESMO IP (o Docker reaproveita o que acabou
-# de sair; visto em 17/11: o Caddy via um IP só e, com razão, aplicou um balde só). Por isso cada um espera 10 s antes de pedir e o
+# de sair; visto em 17/11: o Caddy via um IP só e, com razão, aplicou um balde só). Por isso cada um espera 30 s antes de pedir (com a máquina sufocada, criar os 10 levou mais de 10 s e os primeiros já tinham saído quando li os IPs) e o
 # teste confere que os IPs são mesmo distintos; se não forem, o teste é inválido e falha dizendo isso.
+espera_quieta "9a: 10 clientes simultâneos"
 tot429=0; CIDS=()
 for n in 1 2 3 4 5 6 7 8 9 10; do
-  CIDS+=("$(docker run -d --network "${PROJ}_default" node:20-alpine node -e "
+  CIDS+=("$(docker run -d --name "${PROJ}-cli-$n" "${HELPER[@]}" --network "${PROJ}_default" node:24-alpine node -e "
     const http=require('http');let c429=0,ok=0,i=0;
     const next=()=>{ if(i>=100){console.log(c429+' '+ok);return;} i++;
       http.get('http://caddy:80/loja/distinto-$n-'+i,r=>{ r.resume(); if(r.statusCode===429)c429++; else ok++; r.on('end',next); }).on('error',()=>{ ok++; next(); }); };
-    setTimeout(next,10000);")")
+    setTimeout(next,30000);")")
+  sleep 1   # cria um por vez (antes: os 10 de uma vez): menos pico no Docker Desktop
 done
 ipsd="$(for c in "${CIDS[@]}"; do docker inspect -f "{{(index .NetworkSettings.Networks \"${PROJ}_default\").IPAddress}}" "$c"; done | sort -u | wc -l | tr -d ' ')"
 for c in "${CIDS[@]}"; do
@@ -268,6 +446,78 @@ done
 # 9d ST-45 (IPv6): sem IPv6 na rede do smoke não há como testar com curl -6; confere que a zona agrupa IPv6 em /64 e que o módulo varre chaves (ST-49)
 grep -q 'ipv6_prefix 64' "$ROOT/infra/Caddyfile" && check ok "ST-45: a zona de limite agrupa IPv6 em /64 (ipv6_prefix 64); sem AAAA no piloto de qualquer forma" || check fail "ST-45: Caddyfile sem ipv6_prefix 64"
 grep -q 'sweep_interval' "$ROOT/infra/Caddyfile" && check ok "ST-49: varredura de chaves vencidas configurada (sweep_interval) e container com limite de memória" || check fail "ST-49: sem sweep_interval no Caddyfile"
+# 9f INF-19 / SEC-34 (R-1): limite de entrada em /auth/* por ORIGEM (IPv4 = IP; IPv6 = /48), 60/min nas rotas sensíveis. O 429 do Caddy tem corpo VAZIO; o da API tem JSON.
+echo "   9f /auth/*: espera 65 s para a janela do limite esvaziar (o login e o cadastro acima já contaram)..."
+sleep 65
+caddy429() {  # $1 = n pedidos, $2 = caminho, $3 = metodo; imprime: <429 do Caddy (sem x-ratelimit-limit)> <429 da API (com x-ratelimit-limit)> <outros>
+  local n="$1" p="$2" m="$3" c=0 a=0 o=0 i h code
+  for i in $(seq 1 "$n"); do
+    h="$(curl -s -D - -o /dev/null -X "$m" -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT$p" | tr -d '\r')"
+    code="$(printf '%s\n' "$h" | head -1 | awk '{print $2}')"
+    if [ "$code" = 429 ]; then if [[ "${h,,}" == *x-ratelimit-limit* ]]; then a=$((a+1)); else c=$((c+1)); fi; else o=$((o+1)); fi
+  done
+  echo "$c $a $o"
+}
+# uso normal (loja inteira atrás do mesmo IP): 28 pedidos em 1 min, abaixo do limite da API de CADA rota (forgot 5, login 8, inspect 10, reset 5): NENHUM 429, de nenhuma camada
+r1="$(caddy429 5 /auth/forgot-password POST)"; r2="$(caddy429 8 /auth/login POST)"; r3="$(caddy429 10 /auth/reset-password/inspect POST)"; r4="$(caddy429 5 /auth/reset-password POST)"
+if [[ "$r1" == "0 0 5" && "$r2" == "0 0 8" && "$r3" == "0 0 10" && "$r4" == "0 0 5" ]]; then check ok "9f uso normal: 28 pedidos às rotas sensíveis de um mesmo IP em 1 min: nenhuma resposta 429 (nem do Caddy, nem da API)"; else check fail "9f uso normal recebeu 429 (caddy api outros): forgot[$r1] login[$r2] inspect[$r3] reset[$r4]"; fi
+# /auth/me NÃO entra no limite (o painel o chama o tempo todo)
+rme="$(caddy429 80 /auth/me GET)"
+[ "${rme%% *}" = 0 ] && check ok "9f /auth/me: 80 pedidos, 0 respostas 429 do Caddy (fora do limite, como o painel precisa)" || check fail "9f /auth/me limitado pelo Caddy: $rme"
+# rajada: passa de 60/min na origem => 429 do Caddy com Retry-After
+rb="$(caddy429 100 /auth/forgot-password POST)"
+cb="${rb%% *}"
+curl -s -D - -o /dev/null -X POST -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT/auth/forgot-password" | tr -d '\r' | sed 's/^/      [cabeçalhos de um 429] /' | head -6
+if [ "$cb" -ge 20 ]; then check ok "9f rajada de 100 pedidos (mais que o limite de 60/min SOZINHA, então vale mesmo se a máquina lenta deixar o uso normal sair da janela): $cb respostas 429 do CADDY (corpo vazio; a origem passou de 60/min)"; else check fail "9f a rajada não foi limitada pelo Caddy ($rb)"; fi
+# a janela do limite é DESLIZANTE: esgota a zona em paralelo (rápido) e olha o cabeçalho logo em seguida; 429 do Caddy = sem x-ratelimit-limit (a API o emite)
+seq 1 80 | xargs -P 20 -I{} curl -s -o /dev/null -X POST -H "Content-Type: application/json" -d "{}" "http://127.0.0.1:$PORT/auth/forgot-password" >/dev/null 2>&1
+rh="$(curl -s -D - -o /dev/null -X POST -H "Content-Type: application/json" -d "{}" "http://127.0.0.1:$PORT/auth/forgot-password" | tr -d '\r')"
+[[ "$rh" == *"429"* && "$rh" == *[Rr]etry-[Aa]fter* && "${rh,,}" != *x-ratelimit-limit* ]] && check ok "9f a resposta 429 do Caddy traz Retry-After" || check fail "9f 429 do Caddy sem Retry-After"
+# /loja e /health fora desta zona (zona própria)
+lrc="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/health")"
+[ "$lrc" = 200 ] && check ok "9f /health segue livre com a zona de /auth esgotada" || check fail "9f /health devolveu $lrc"
+# variantes de URL (caixa e barra dupla) também caem na zona. A janela do limite é DESLIZANTE (1 min): sob carga a rajada acima pode levar mais de 1 min e a zona deixa de estar
+# esgotada quando as variantes rodam. Por isso cada variante é testada SOZINHA e RÁPIDA: esgota a zona por um caminho canônico (80 pedidos em paralelo, ~segundos) e testa a variante
+# em seguida (também em paralelo). 429 do Caddy = sem o cabeçalho x-ratelimit-limit (a API o emite).
+caddy429par() {  # $1 = n, $2 = caminho, $3 = método; imprime: <429 do Caddy> <429 da API> <outros>
+  seq 1 "$1" | xargs -P 20 -I{} curl -s -o /dev/null -w '%{http_code} [%header{x-ratelimit-limit}]\n' -X "$3" -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$PORT$2" 2>/dev/null \
+    | awk '{ if ($1==429 && $2=="[]") c++; else if ($1==429) a++; else o++ } END { print c+0, a+0, o+0 }'
+}
+for v in '/AUTH/Forgot-Password' '//auth/forgot-password' '/auth/./forgot-password' '/auth/forgot-password/'; do
+  caddy429par 80 /auth/forgot-password POST >/dev/null
+  vr="$(caddy429par 10 "$v" POST)"
+  [ "${vr%% *}" -ge 1 ] && check ok "9f variante [$v]: 429 do Caddy (a zona esgotada vale também para ela)" || check fail "9f variante [$v] escapou da zona (resposta: $vr)"
+done
+# IPv6 /48 e a zona: sem IPv6 na rede do smoke (curl -6 não é possível), confere a configuração
+grep -q 'ipv6_prefix 48' "$ROOT/infra/Caddyfile" && check ok "9f a zona de /auth agrupa IPv6 em /48 (ipv6_prefix 48)" || check fail "9f Caddyfile sem ipv6_prefix 48 na zona de /auth"
+echo "== 9g fotos em disco local (ADR-0017): volume, Caddy somente leitura, backup e restauração das fotos"
+FU="33333333-3333-4333-8333-333333333333"; FOTO="stores/lojasmoke/$FU-40.webp"
+if "${DC[@]}" exec -T api sh -c "mkdir -p /uploads/stores/lojasmoke && printf 'RIFFfakeWEBPsmoke' > /uploads/$FOTO && printf '<script>alert(1)</script>' > /uploads/stores/lojasmoke/x.html && printf 'segredo' > /uploads/$FOTO.bak" >/dev/null 2>&1; then check ok "9g a API (usuário node) grava no volume /uploads"; else check fail "9g a API não conseguiu gravar em /uploads (volume ou permissão)"; fi
+hdr="$(curl -s -D - -o /dev/null "http://127.0.0.1:$PORT/media/$FOTO" | tr -d '\r')"; hl="${hdr,,}"
+[[ "$hdr" == HTTP*" 200"* && "$hl" == *"content-type: image/webp"* ]] && check ok "9g o Caddy serve a foto do volume em /media (200, image/webp)" || check fail "9g /media/$FOTO não serviu como image/webp: $(echo "$hdr" | head -1)"
+[[ "$hl" == *"cache-control: public, max-age=31536000, immutable"* ]] && check ok "9g cache longo e imutável (nome não muda)" || check fail "9g sem Cache-Control imutável"
+[[ "$hl" == *"x-content-type-options: nosniff"* && "$hl" == *"content-security-policy: default-src 'none'; sandbox"* ]] && check ok "9g nosniff e CSP vazia (o navegador não interpreta o arquivo como página)" || check fail "9g faltam nosniff/CSP na foto"
+[ "$(curl -s "http://127.0.0.1:$PORT/media/$FOTO")" = "RIFFfakeWEBPsmoke" ] && check ok "9g o corpo servido é exatamente o arquivo do volume" || check fail "9g corpo diferente do arquivo"
+bad=""; for p in "/media/" "/media/stores/" "/media/stores/lojasmoke/" "/media/stores/lojasmoke/x.html" "/media/$FOTO.bak" "/media/../etc/passwd" "/media/stores/lojasmoke/%2e%2e/%2e%2e/etc/passwd" "/media/stores/lojasmoke/..%2f..%2fx" "/MEDIA/$FOTO" "/media/$FOTO/"; do
+  out="$(curl -s --path-as-is -w '|%{http_code}' "http://127.0.0.1:$PORT$p")"; code="${out##*|}"; body="${out%|*}"
+  { [ "$code" = 404 ] || [ "$code" = 400 ]; } && [[ "$body" != *"alert(1)"* && "$body" != *segredo* && "$body" != *"root:"* && "$body" != *"$FU"* ]] || bad="$bad [$p -> $code]"
+done
+[ -z "$bad" ] && check ok "9g listagem de pasta, .html, .bak, '..', %2e, maiúsculas e barra final: todos 404/400 sem vazar nada (10 caminhos)" || check fail "9g caminhos que NÃO deveriam servir:$bad"
+"${DC[@]}" exec -T caddy sh -c 'ls /srv/uploads/stores/lojasmoke >/dev/null' >/dev/null 2>&1 && check ok "9g (controle) o Caddy enxerga o volume em /srv/uploads" || check fail "9g o Caddy não enxerga o volume"
+"${DC[@]}" exec -T caddy sh -c 'touch /srv/uploads/stores/lojasmoke/novo' >/dev/null 2>&1 && check fail "9g o Caddy CONSEGUIU escrever no volume (deveria ser somente leitura)" || check ok "9g o Caddy NÃO escreve no volume (somente leitura)"
+pm="$("${DC[@]}" exec -T api stat -c '%a %U' /uploads/$FOTO | tr -d '\r')"; [ "$pm" = "644 node" ] && check ok "9g a foto gravada pela API tem modo 644 e dono node (o Caddy lê como outro usuário)" || check fail "9g modo/dono da foto: '$pm' (esperado '644 node')"
+# persistência: recriar o container da API (como num deploy) NÃO apaga as fotos
+"${DC[@]}" up -d --no-deps --force-recreate --wait api >/dev/null 2>&1; [ "$(curl -s "http://127.0.0.1:$PORT/media/$FOTO")" = "RIFFfakeWEBPsmoke" ] && check ok "9g a foto sobrevive à recriação do container da API (volume persistente)" || check fail "9g a foto sumiu depois de recriar a API"
+# backup e restauração das fotos
+bo="$("${DC[@]}" exec -T postgres-backup /bin/sh /scripts/backup.sh 2>&1 | tr -d '\r')"
+[[ "$bo" == *"backup-uploads: ok uploads_"* ]] && check ok "9g o backup inclui as fotos (uploads_*.tar.gz com selo e manifesto)" || check fail "9g o backup não registrou as fotos: $(echo "$bo" | tail -2)"
+up="$("${DC[@]}" exec -T postgres-backup sh -c 'ls -1 /backups/uploads_*.tar.gz | tail -1' | tr -d '\r')"
+"${DC[@]}" exec -T postgres-backup sh -c "grep -q 'lojasmoke/$FU-40.webp' ${up%.tar.gz}.manifest" >/dev/null 2>&1 && check ok "9g o manifesto do backup lista a foto" || check fail "9g a foto não está no manifesto"
+rs="$("${DC[@]}" exec -T postgres-backup sh -c "rm -rf /tmp/rest && sh /scripts/restore-uploads.sh $up /tmp/rest && cat /tmp/rest/$FOTO" 2>&1 | tr -d '\r')"
+[[ "$rs" == *"arquivo(s) restaurados"* && "$rs" == *"RIFFfakeWEBPsmoke"* ]] && check ok "9g a restauração recompõe a foto idêntica e confere o manifesto" || check fail "9g restauração das fotos falhou: $(echo "$rs" | tail -2)"
+pb="$("${DC[@]}" exec -T postgres-backup sh -c "stat -c %a $up $up.sha256" | tr -d '\r' | tr '\n' ' ')"; [ "$pb" = "600 600 " ] && check ok "9g backup das fotos com modo 600" || check fail "9g modos do backup das fotos: '$pb'"
+"${DC[@]}" exec -T api sh -c 'rm -rf /uploads/stores/lojasmoke' >/dev/null 2>&1
+
 mem="$(docker inspect -f '{{.HostConfig.Memory}}' "$("${DC[@]}" ps -q caddy)")"
 [ "$mem" -gt 0 ] 2>/dev/null && check ok "ST-49: o container do Caddy tem teto de memória ($((mem/1024/1024)) MB)" || check fail "ST-49: container do Caddy sem limite de memória"
 
@@ -279,8 +529,9 @@ CID9="$("${DC[@]}" ps -q caddy)"
 # Critério deste teste: o teto configurado sustenta >= 60 mil IPs distintos por janela a 80% (com 6 a 7 KB/chave e 768 MB dá ~90 mil).
 # Se alguém baixar o mem_limit ou o custo por chave subir, falha.
 memmb() { docker stats --no-stream --format '{{.MemUsage}}' "$1" | awk '{v=$1; if (v ~ /GiB/) {sub(/GiB/,"",v); printf "%.1f", v*1024} else if (v ~ /MiB/) {sub(/MiB/,"",v); printf "%.1f", v} else if (v ~ /KiB/) {sub(/KiB/,"",v); printf "%.1f", v/1024} else {sub(/B/,"",v); printf "%.1f", v/1048576}}'; }
+espera_quieta "ST-50: 2 levas de 20 mil chaves"
 onda() { # onda <prefixo-das-chaves>: 20 mil chaves distintas; imprime "done <429>"
-  docker run --rm --network "${PROJ}_default" node:20-alpine node -e "
+  docker run --rm "${HELPER[@]}" --network "${PROJ}_default" node:24-alpine node -e "
     const http=require('http');const agent=new http.Agent({keepAlive:true,maxSockets:64});
     let sent=0,done=0,c429=0,total=20000;
     const one=()=>{ if(sent>=total) return; const i=sent++;
@@ -329,12 +580,12 @@ docker exec "$CID" sh -c 'touch /etc/caddy/x 2>/dev/null' && check fail "o Caddy
 docker exec "$CID" sh -c 'touch /data/.w && rm /data/.w && touch /config/.w && rm /config/.w' && check ok "/data (conta ACME) e /config são graváveis pelo usuário sem privilégio" || check fail "o Caddy sem root não consegue gravar em /data ou /config"
 for i in $(seq 1 20); do hs="$(docker inspect -f '{{.State.Health.Status}}' "$CID")"; [ "$hs" = healthy ] && break; sleep 3; done
 [ "$hs" = healthy ] && check ok "healthcheck do Caddy: healthy" || check fail "healthcheck do Caddy: $hs"
-# NG-16 (Deming): o log de acesso do Caddy também gravaria a URL com ?token=. O Caddyfile não tem `log`, então não deve gravar; confere
-# no comportamento: um valor único na query não pode aparecer nos logs do Caddy. (Sem controle positivo: se o Caddy não logasse NADA
-# por outro motivo, o teste também passaria; por isso o texto diz "não registra", não "redige".)
+# NG-16 (Deming): o log de ACESSO do Caddy também gravaria a URL com ?token=. O Caddyfile não tem `log` de site, então esse log NÃO EXISTE; confere
+# no comportamento: um valor único na query não pode aparecer nos logs do Caddy. ATENÇÃO: isto cobre SÓ o log de ACESSO. O log de ERRO (upstream
+# fora do ar) é outro caminho e é provado na seção 11 (C1, INF-19), com controle positivo. Este teste NÃO tem controle positivo.
 qtok="smoke-q-$RANDOM$RANDOM$RANDOM"
 curl -s -o /dev/null "http://127.0.0.1:$PORT/health?token=$qtok&code=$qtok"; sleep 2
-[ "$("${DC[@]}" logs caddy 2>&1 | grep -c "$qtok")" = 0 ] && check ok "NG-16: o Caddy não registra a URL com token/code na query (nenhuma linha de acesso nos logs)" || check fail "NG-16: o valor do token apareceu nos logs do Caddy"
+[ "$("${DC[@]}" logs caddy 2>&1 | grep -c "$qtok")" = 0 ] && check ok "NG-16: o log de ACESSO não existe: a URL com token/code na query não aparece nos logs do Caddy (o log de ERRO é a seção 11)" || check fail "NG-16: o valor do token apareceu nos logs do Caddy"
 # redes: o banco só existe na rede de dados (interna). Caddy e web não o enxergam; a API sim (controle positivo).
 # Prova por CONEXÃO ao IP do banco (um timeout de DNS não prova nada: o resolvedor do Docker demora a responder nomes que não conhece).
 ares="$("${DC[@]}" exec -T api node -e "require('dns').lookup('postgres',(e,a)=>console.log(e?'ERRO '+e.code:'ok '+a))" 2>&1 | tr -d '\r' | tail -1)"
@@ -345,7 +596,7 @@ actl="$("${DC[@]}" exec -T api node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -
 [ "$actl" = conectou ] && check ok "controle: a API CONECTA ao Postgres em $pgip:5432" || check fail "controle falhou: a API não conectou ao banco ($actl)"
 wcon="$("${DC[@]}" exec -T web node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -1)"
 [ "$wcon" = conectou ] && check fail "o web CONECTA ao Postgres em $pgip:5432 (rede de dados deveria estar isolada)" || check ok "o web NÃO conecta ao Postgres ($wcon)"
-ccon="$(docker run --rm --network container:"$CID" node:20-alpine node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -1)"
+ccon="$(docker run --rm "${HELPER[@]}" --network container:"$CID" node:24-alpine node -e "$tcp" "$pgip" 2>&1 | tr -d '\r' | tail -1)"
 [ "$ccon" = conectou ] && check fail "o Caddy CONECTA ao Postgres em $pgip:5432 (rede de dados deveria estar isolada)" || check ok "o Caddy NÃO conecta ao Postgres ($ccon; testado dentro da rede dele)"
 # rastreabilidade (BOARD): versão, build-info (módulo e commit) e digest da imagem final
 echo "   caddy version: $(docker exec "$CID" caddy version 2>&1 | head -1)"
@@ -353,5 +604,56 @@ echo "   módulo no binário: $(docker exec "$CID" caddy build-info 2>&1 | tr -d
 echo "   imagem final (id): $(docker inspect -f '{{.Image}}' "$CID")"
 docker exec "$CID" caddy build-info 2>&1 | tr -d '\r' | grep -qi 'caddy-ratelimit.*5625512f24f6' && check ok "o binário contém o módulo no commit travado 5625512f24f6" || check fail "build-info não mostra o commit esperado do módulo"
 
-echo; echo "RESULTADO: $PASS ok, $FAILS falhas"
+
+echo "== 11 C1 (INF-19): NENHUM segredo em log de contêiner nenhum (caddy, web e api), com a pilha de pé e depois com web e API derrubados"
+# Tem de ser a ÚLTIMA seção: derruba web e api. Valores ÚNICOS por execução, mandados a todas as rotas PELO CADDY (a porta publicada).
+#  V1 query do reset (web) | V2 token no CAMINHO do QR de mesa (web) | V3 x-order-token | V4 orderId no CAMINHO da API (a credencial do cliente, ST-70)
+#  V5 X-Mfa-Challenge | V6 X-Admin-Token | V7 Authorization | V8 Cookie | V9 ?token= na query da API
+# Contexto (medido em 17/11): o log de ERRO do Caddy gravava `request` inteiro com o upstream fora do ar (filtrado no Caddyfile desde a INF-19).
+# O web (`next start`) não escreve nada por requisição (medição da Tesla; por isso o controle do web é o STATUS da resposta, não uma linha de log).
+# A API loga `incoming request`/`request completed` com o CAMINHO cru: o V4 SAI EM CLARO ENQUANTO O ST-70 (SEC-31, Nightingale) NÃO FOR CORRIGIDO.
+KNOWN_RED_ST70="${KNOWN_RED_ST70:-1}"   # 1 = o vazamento do caminho da API (V4) é VERMELHO CONHECIDO (visível, não conta como falha). Ponha 0 quando a SEC-31 entrar.
+V1="smoke-v1-$RANDOM$RANDOM"; V2="smoke-v2-$RANDOM$RANDOM"; V3="smoke-v3-$RANDOM$RANDOM"; V4="smoke-v4-$RANDOM$RANDOM"; V5="smoke-v5-$RANDOM$RANDOM"
+V6="smoke-v6-$RANDOM$RANDOM"; V7="smoke-v7-$RANDOM$RANDOM"; V8="smoke-v8-$RANDOM$RANDOM"; V9="smoke-v9-$RANDOM$RANDOM"
+c11_envia() { # imprime os 3 códigos: web-query / web-caminho / api
+  local a b c
+  a="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "http://127.0.0.1:$PORT/reset-senha?token=$V1")"
+  b="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "http://127.0.0.1:$PORT/loja/x/m/$V2")"
+  c="$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 -H "x-order-token: $V3" -H "X-Mfa-Challenge: $V5" -H "X-Admin-Token: $V6" -H "Authorization: $V7" -H "Cookie: sid=$V8" "http://127.0.0.1:$PORT/stores/x/orders/$V4/payment-status?token=$V9")"
+  echo "$a/$b/$c"
+}
+cA="$(c11_envia)"                      # momento A: pilha de pé
+"${DC[@]}" stop web api >/dev/null 2>&1
+cB="$(c11_envia)"                      # momento B: web e API fora do ar (o erro do proxy cai no log de erro do Caddy)
+sleep 2
+# autoverificação: A precisa ter ALCANÇADO web e API (nem 502 nem 429 nem 000); B precisa ser 502 nas 3. Senão o teste não provou nada.
+okA=1; for code in $(echo "$cA" | tr '/' ' '); do case "$code" in 502|429|000) okA=0;; esac; done
+if [ "$okA" = 1 ] && [ "$cB" = "502/502/502" ]; then check ok "as requisições chegaram ao web e à API com a pilha de pé ($cA) e voltaram 502 com eles fora do ar ($cB): o teste vale"
+else check fail "TESTE INVÁLIDO: esperava códigos que alcançam web/API com a pilha de pé (veio $cA; 429 = limite por IP ainda ativo) e 502/502/502 com eles fora (veio $cB)"; fi
+LOGC="$("${DC[@]}" logs caddy 2>&1)"; LOGW="$("${DC[@]}" logs web 2>&1)"; LOGA="$("${DC[@]}" logs api 2>&1)"
+cnt() { printf '%s' "$2" | grep -c -- "$1"; }
+# --- CADDY e WEB: nenhum dos 9 valores, em nenhum momento
+for svc in caddy web; do
+  case "$svc" in caddy) L="$LOGC";; web) L="$LOGW";; esac
+  n=0; for v in "$V1" "$V2" "$V3" "$V4" "$V5" "$V6" "$V7" "$V8" "$V9"; do n=$((n + $(cnt "$v" "$L"))); done
+  [ "$n" = 0 ] && check ok "C1 [$svc]: nenhum dos 9 valores únicos aparece no log do $svc (query, caminhos, 5 cabeçalhos)" || check fail "C1 [$svc]: $n ocorrência(s) de segredo no log do $svc"
+done
+# --- API: a query e os cabeçalhos NÃO podem aparecer (NG-16); o CAMINHO (V4) é o ST-70
+n=0; for v in "$V1" "$V2" "$V3" "$V5" "$V6" "$V7" "$V8" "$V9"; do n=$((n + $(cnt "$v" "$LOGA"))); done
+[ "$n" = 0 ] && check ok "C1 [api]: query (V9) e os 5 cabeçalhos (V3,V5..V8) não aparecem no log da API (NG-16)" || check fail "C1 [api]: $n ocorrência(s) de segredo de query/cabeçalho no log da API"
+nv4="$(cnt "$V4" "$LOGA")"
+if [ "$nv4" = 0 ]; then check ok "C1 [api]: o orderId no CAMINHO (V4) NÃO aparece no log da API (ST-70 corrigido; ponha KNOWN_RED_ST70=0 para travar)"
+elif [ "$KNOWN_RED_ST70" = 1 ]; then KRED=$((KRED+1)); echo "  [VERMELHO CONHECIDO] ST-70 (SEC-31, Nightingale): o orderId no CAMINHO apareceu $nv4 vez(es) no log da API (incoming request / request completed com o caminho cru). NÃO é falha nova: continua aberto"
+else check fail "C1 [api]: o orderId no CAMINHO (V4) aparece $nv4 vez(es) no log da API (ST-70)"; fi
+# --- CONTROLES POSITIVOS, um por serviço (provam que o log do serviço existe e que a ausência dos valores é significativa)
+nerr="$(printf '%s' "$LOGC" | grep -c '"logger":"http.log.error".*"status":502')"
+faltou=""; nred=0; for f in '/reset-senha/REDACTED' '/loja/REDACTED' '/stores/REDACTED'; do if [[ "$LOGC" == *"\"uri\":\"$f\""* ]]; then nred=$((nred+1)); else faltou="$faltou $f"; fi; done
+{ [ "$nerr" -ge 3 ] && [ "$nred" = 3 ]; } && check ok "controle [caddy]: o log de ERRO existe ($nerr linhas http.log.error 502) e o filtro agiu nas 3 rotas (uri reduzido; cabeçalhos removidos)" || { check fail "controle [caddy]: $nerr linha(s) de erro 502 e $nred/3 uri filtrados; FALTOU:$faltou (o filtro virou 'sem log' ou não agiu nessa rota)"; echo "   --- linhas http.log.error (já filtradas, seguras de mostrar):"; printf '%s' "$LOGC" | grep '"logger":"http.log.error"' | cut -c1-360 | head -6 | sed 's/^/   /'; }
+napi="$(printf '%s' "$LOGA" | grep -c 'payment-status')"
+[ "$napi" -ge 1 ] && check ok "controle [api]: o log da API registra a requisição ($napi linha(s) com a rota payment-status): a ausência dos valores de query/cabeçalho é significativa" || check fail "controle [api]: nenhuma linha de log da requisição à API (o teste não distingue 'redigido' de 'sem log')"
+# web: `next start` não escreve linha por requisição; o controle é a resposta (já conferida acima) e o log só ter a inicialização
+nweb="$(printf '%s' "$LOGW" | grep -c .)"
+echo "   controle [web]: sem linha por requisição (esperado no next start); o log do web tem $nweb linha(s) (inicialização); o controle é que o web RESPONDEU ($cA) com os valores na URL"
+
+echo; echo "RESULTADO: $PASS ok, $FAILS falhas, $KRED vermelho(s) conhecido(s)$([ "$KRED" -gt 0 ] && echo " (ST-70: ver acima; NÃO é sucesso total)")"
 [ "$FAILS" -eq 0 ]

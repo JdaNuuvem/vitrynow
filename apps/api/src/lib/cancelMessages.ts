@@ -20,6 +20,9 @@ const STORE_MESSAGES: Record<string, string> = {
   DUPLICADO_OU_ERRO: "Pedido cancelado pela loja.", // o motivo real fica só no painel
   OUTRO: "Pedido cancelado pela loja.", // a nota do dono é interna
   AGENDAMENTO_NAO_ATENDIDO: "A loja não conseguiu atender no horário agendado.",
+  ESTORNO_MANUAL: "Pedido cancelado pela loja.", // API-65: a linha de dinheiro diz que foi estornado
+  // API-61 (RN-ABD-04): estorno encerrado sem devolução automática. NUNCA promete devolução; a linha de dinheiro some (moneyLineFor).
+  ESTORNO_NAO_CONCLUIDO: "Seu pedido foi cancelado. A loja entrará em contato sobre a devolução.",
 };
 
 const SYSTEM_MESSAGES: Record<string, string> = {
@@ -52,8 +55,9 @@ export function formatBRL(cents: number): string {
 // Linha de dinheiro, montada pelo sistema com o valor REAL do pagamento (nunca digitado) e SEM prometer prazo.
 // Só existe quando havia dinheiro online; devolve null nos demais casos (dinheiro/cartão na entrega, cobrança
 // que ainda pode ser paga porque o cancelamento no provedor falhou, etc.).
-export function moneyLineFor(payment: { status: PaymentStatus; amountCents: number } | null | undefined, reasonCode: string | null | undefined): string | null {
+export function moneyLineFor(payment: { status: PaymentStatus; amountCents: number; refundAbandonedAt?: Date | null } | null | undefined, reasonCode: string | null | undefined): string | null {
   if (!payment) return null;
+  if (payment.refundAbandonedAt) return null; // API-61: o estorno foi encerrado sem devolução; "em andamento" seria falso e "estornado" também
   const value = formatBRL(payment.amountCents);
   switch (payment.status) {
     case "ESTORNO_PENDENTE":

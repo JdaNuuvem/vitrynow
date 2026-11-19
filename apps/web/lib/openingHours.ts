@@ -37,11 +37,16 @@ export function isStoreOpenNow(openingHours: string | null | undefined, now: Dat
     }
   }
 
-  if (allowedDays && !allowedDays.includes(now.getDay())) return false;
-
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const today = now.getDay();
+  const isOpenDay = (day: number) => !allowedDays || allowedDays.includes(day);
+
   if (startMinutes <= endMinutes) {
-    return nowMinutes >= startMinutes && nowMinutes < endMinutes;
+    return isOpenDay(today) && nowMinutes >= startMinutes && nowMinutes < endMinutes;
   }
-  return nowMinutes >= startMinutes || nowMinutes < endMinutes;
+  // Turno que atravessa a meia-noite: pertence ao dia em que COMEÇA. Depois da meia-noite vale o
+  // turno de ONTEM (se ontem era dia de funcionamento); antes da meia-noite, o de hoje.
+  const startedToday = isOpenDay(today) && nowMinutes >= startMinutes;
+  const startedYesterday = isOpenDay((today + 6) % 7) && nowMinutes < endMinutes;
+  return startedToday || startedYesterday;
 }

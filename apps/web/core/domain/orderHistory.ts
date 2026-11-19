@@ -29,12 +29,15 @@ export type HistoryResponse = {
   timezone: string;
 };
 
-// Filtros da Fatia 1: só a situação "Em aberto" (sem período: a API-72 devolve TODO pedido aberto). Busca, tipo, pagamento e estorno pendente chegam na Fatia 2.
 export type HistoryQuery = {
   status?: "ALL" | "ABERTO" | "CONCLUIDO" | "CANCELADO" | "AGUARDANDO_PAGAMENTO" | "PAGAMENTO_EXPIRADO";
   period?: "today" | "yesterday" | "7d" | "30d" | "custom";
   from?: string; // AAAA-MM-DD no fuso da loja (period=custom)
   to?: string;
+  q?: string;
+  type?: "MESA" | "DELIVERY" | "BALCAO";
+  paymentMethod?: string;
+  refundPending?: "true" | "false";
   cursor?: string;
   limit?: number;
 };

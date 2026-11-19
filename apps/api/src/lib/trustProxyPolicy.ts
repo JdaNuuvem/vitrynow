@@ -45,3 +45,16 @@ export function assertTrustProxyList(list: string[]): void {
   const problems = list.map(trustProxyEntryProblem).filter((p): p is string => p !== null);
   if (problems.length > 0) throw new Error(`TRUST_PROXY_CIDR recusado em produção: ${problems.join("; ")}.`);
 }
+
+// SEC-24: o endereço da CONEXÃO (socket) é de rede interna (privada ou loopback)? Aceita o alias IPv4-mapeado
+// (`::ffff:172.18.0.3`, como o Node mostra num socket dual-stack).
+export function isPrivateAddress(address: string | undefined | null): boolean {
+  if (!address) return false;
+  let value = address.split("%")[0];
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(value);
+  if (mapped) value = mapped[1];
+  const family = isIP(value);
+  if (family === 0) return false;
+  const type = family === 4 ? "ipv4" : "ipv6";
+  return blocks.some((b) => b.family === type && b.list.check(value, type));
+}

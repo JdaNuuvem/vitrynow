@@ -15,6 +15,7 @@ export type PlanOffer = {
   name: string;
   priceCents: number;
   features: string[];
+  limits?: { maxUsers?: number | null; maxPrinters?: number | null };
 };
 
 export type PixCheckout = {

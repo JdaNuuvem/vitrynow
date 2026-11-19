@@ -59,6 +59,12 @@ namespace MeuCardapio.PrintClient
         // Modo de impressao da loja decidido pelo servidor (ADR-0004 §8 itens 12-13): null = API antiga (sem "mode"); "LEGACY" = claim
         // devolve {job:null, mode:"LEGACY"} e o endpoint legado funciona; "QUEUE" = claim normal com mode e o legado responde 409 MODE_QUEUE.
         public volatile string PrintMode;
+        // POST /api/device/alerts (PC-24): corpos CRUS recebidos, status e atraso configuraveis (204 padrao, como a API).
+        public readonly List<string> AlertBodies = new List<string>();
+        public int AlertStatus = 204;
+        public int AlertDelayMs;
+        public int AlertCalls { get { lock (Lock) return AlertBodies.Count; } }
+        public string[] AlertSnapshot() { lock (Lock) return AlertBodies.ToArray(); }
         public bool ConfigEnabled = true;                              // GET /api/device/config (API-12b); false = API antiga (404)
         public int ConfigStatus = 200;                                 // 500 etc. para simular erro da configuracao
         public string ConfigBody;                                      // corpo bruto no lugar de {"mode":...} (lixo, vazio)
@@ -229,6 +235,14 @@ namespace MeuCardapio.PrintClient
                     else reply = 409;                                                                             // lease vencida ou nao e o dono
                 }
                 Reply(c, reply, "{}");
+                return;
+            }
+            if (path == "/api/device/alerts" && c.Request.HttpMethod == "POST")
+            {
+                string raw; using (var rd = new StreamReader(c.Request.InputStream, Encoding.UTF8)) raw = rd.ReadToEnd();
+                lock (Lock) AlertBodies.Add(raw);
+                if (AlertDelayMs > 0) Thread.Sleep(AlertDelayMs);
+                Reply(c, AlertStatus, AlertStatus == 204 ? "" : "{}");
                 return;
             }
             if (path == "/api/device/config")

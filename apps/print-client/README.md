@@ -1,7 +1,7 @@
 # print-client — módulo de impressão local (MeuCardapio, placeholder)
 
 App WinForms (.NET Framework 4.7.2) que roda no PC do estabelecimento e imprime os pedidos vindos
-da **nossa** API (`apps/api`), não do cardapio.ai.
+da **nossa** API (`apps/api`), não de um serviço de terceiro.
 
 ## Origem do código (PC-12)
 
@@ -217,6 +217,14 @@ desenvolvimento (padrão `false` = começa no legado). Contrato conferido contra
 - Tipos: `ORDER_KITCHEN` (com alerta sonoro), `ORDER_REPRINT` (2ª via, aviso de cancelamento via `cancelNotice`) e `TEST` (tíquete de teste próprio com acentos e régua de colunas). Tipo desconhecido (`TAB_BILL` é do PC-08) ⇒ `FAILED`.
 - Teste: `SelfTestJobs.cs` roda o `DeviceClient` real contra uma API falsa que implementa lease, ack idempotente, 409 e attempts (feliz, fila vazia, offline, 2ª via/cancelamento/teste, tipo desconhecido,
   lease vencida, re-oferta, ack com falha + reinício, duas impressoras, chave recusada, recuo sem laço quente, impressora com defeito não segura o job, padrão legado intacto).
+
+## Alerta central (PC-24)
+
+Os avisos do cliente (`nothingToCharge` incoerente, tíquete sem itens e total zero, modo da loja que não consigo confirmar) também vão ao servidor: `POST /api/device/alerts` com **só** `code` (lista fechada de 5), `orderId` opcional (cuid) e `clientVersion`; sem texto livre e sem dado do cliente. É melhor esforço e nunca atrasa impressão nem ack (segundo plano, 3 s, no máximo 5 em voo, dedupe de 10 min, falha descartada). Detalhes e testes em `docs\contrato-printjob-cliente.md`.
+
+**Alertas de modo que se perdem são reenviados (PC-24d).** `MODE_UNCONFIRMED` e `MODE_RECOVERED` descrevem um ESTADO: se o envio falhar (rede, timeout de 3 s, 5xx, 404, 401/403), o cliente desfaz a marca "já enviei" e tenta de novo na próxima falha/resposta da configuração, com intervalo mínimo de 60 s entre tentativas; depois de entregue (2xx) não repete. Os outros códigos (dinheiro, tíquete) seguem em melhor esforço, sem reenvio, com dedupe de 10 min.
+
+**(PC-24e) `live-check.ps1 -AlertOrderIds`** usa a chave de impressora passada em `-Token`, que fica na linha de comando e no histórico do shell: só chave de TESTE de banco descartável de DEV (prefira `PC_LIVE_TOKEN` ou o prompt). Resposta 400/422 do servidor é descarte definitivo (contrato desencontrado), não é reenviada. Suporte: o reenvio dos alertas de modo vive só na memória do app; se o app fechar com um `MODE_RECOVERED` ainda não entregue, o painel mantém o aviso "modo sem confirmar" até a janela do servidor vencer (não é defeito do PC da loja).
 
 ## Confiabilidade e segredos (PC-02)
 

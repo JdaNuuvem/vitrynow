@@ -2,7 +2,7 @@
 // (leonardo\regras-cupom-e-total-zero.md, CA-CP-01..11).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { makeApp, registerStore, resetDb } from "./helpers";
+import { makeApp, registerStore, resetDb, useMockedProvider } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/mercadopago")>();
@@ -14,6 +14,7 @@ import { storeToday } from "../src/lib/storeDay";
 describe("FUNC-01/02 — cupom e total zero", () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => {
+    useMockedProvider(mp);
     vi.clearAllMocks();
     app = makeApp();
     await app.ready();
@@ -388,16 +389,41 @@ describe("FUNC-01/02 — cupom e total zero", () => {
     expect([o.subtotalCents, o.discountCents, o.deliveryFeeCents, o.tipCents, o.totalCents]).toEqual([3000, 3000, 400, 200, 600]);
   });
 
-  it("CA-CP-08: relatório e caixa contam o pedido de R$ 0,00 em \"Sem cobrança\" e somam o desconto; o caixa não ganha dinheiro", async () => {
+  // `quando`: instante em que os pedidos "nascem" (null = agora). O dia pedido ao relatório sai SEMPRE do próprio pedido, no fuso da loja: o teste não depende da hora em
+  // que roda (o CI quebrava entre 21h e 24h de Brasília, quando o dia UTC já virou e o da loja ainda não).
+  async function cenarioCA_CP_08(quando: Date | null) {
     const ctx = await setup(4000);
     await coupon(ctx, { code: "TUDO", discountType: "PERCENT", discountValue: 100, maxUses: 10 });
     const id = json(await order(ctx, { couponCode: "TUDO" })).orderId as string;
-    await order(ctx, { paymentMethod: "DINHEIRO" }); // venda normal de R$ 40,00
+    const outro = json(await order(ctx, { paymentMethod: "DINHEIRO" })).orderId as string; // venda normal de R$ 40,00
     for (const to of ["CONFIRMADO", "EM_PREPARO", "PRONTO", "CONCLUIDO"]) {
       await app.inject({ method: "POST", url: `/api/orders/${id}/transition`, headers: { cookie: ctx.owner }, payload: { to } });
     }
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
-    const rep = json(await app.inject({ method: "GET", url: `/api/reports/summary?from=${today}&to=${today}`, headers: { cookie: ctx.owner } }));
+    if (quando) await prisma.order.updateMany({ where: { id: { in: [id, outro] } }, data: { createdAt: quando } });
+    const criado = (await prisma.order.findUniqueOrThrow({ where: { id } })).createdAt;
+    const dia = storeToday(criado);
+    const relatorio = (de: string, ate: string) => app.inject({ method: "GET", url: `/api/reports/summary?from=${de}&to=${ate}`, headers: { cookie: ctx.owner } });
+    return { ctx, dia, relatorio };
+  }
+
+  // O MESMO pedido nas bordas do dia da loja: 21:07 BRT (já é o dia seguinte em UTC) e 00:30 BRT (virou o dia na loja).
+  it.each([
+    ["00:07Z (21:07 de Brasília, véspera na loja)", "2026-11-19T00:07:00Z", "2026-11-18"],
+    ["03:30Z (00:30 de Brasília, dia novo na loja)", "2026-11-19T03:30:00Z", "2026-11-19"],
+  ])("CA-CP-08 nas bordas do dia: pedido às %s cai só no dia certo da loja", async (_nome, quando, diaEsperado) => {
+    const { dia, relatorio } = await cenarioCA_CP_08(new Date(quando));
+    expect(dia).toBe(diaEsperado);
+    const certo = json(await relatorio(dia, dia));
+    expect(JSON.stringify(certo)).toContain("SEM_COBRANCA");
+    const [y, m, d] = dia.split("-").map(Number);
+    const vizinho = (delta: number) => new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10);
+    for (const outroDia of [vizinho(-1), vizinho(1)]) expect(JSON.stringify(json(await relatorio(outroDia, outroDia)))).not.toContain("SEM_COBRANCA");
+  }, 60_000);
+
+  it("CA-CP-08: relatório e caixa contam o pedido de R$ 0,00 em \"Sem cobrança\" e somam o desconto; o caixa não ganha dinheiro", async () => {
+    const { ctx, dia, relatorio } = await cenarioCA_CP_08(null);
+    void ctx;
+    const rep = json(await relatorio(dia, dia));
     const text = JSON.stringify(rep);
     expect(text).toContain("SEM_COBRANCA");
     expect(text).not.toContain("NAO_IDENTIFICADO");

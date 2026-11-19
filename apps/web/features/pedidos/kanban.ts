@@ -14,6 +14,31 @@ export function ordersByStatus(orders: Order[], status: OrderStatus): Order[] {
   return orders.filter((order) => order.status === status);
 }
 
+// Ordem dentro da coluna (RN-KB-04, Leonardo): quem espera há mais tempo fica no TOPO. Novos, Em preparo, Prontos e Em
+// entrega: o mais ANTIGO primeiro. Concluídos: o mais RECENTE primeiro (é histórico do dia). A API devolve `createdAt`
+// decrescente e a tela não reordenava: o pedido vermelho (há mais tempo em Novos) ficava no fim da coluna.
+// Hora de referência = quando entrou no estado atual (`statusChangedAt`); sem ela, `createdAt`. Pedido sem nenhuma das
+// duas vai para o fim e mantém a ordem em que chegou (nunca embaralha).
+const NEWEST_FIRST: readonly string[] = ["CONCLUIDO"];
+
+function enteredStateAt(order: Order): number | null {
+  const reference = order.statusChangedAt ?? order.createdAt;
+  const time = reference ? Date.parse(reference) : Number.NaN;
+  return Number.isNaN(time) ? null : time;
+}
+
+export function sortForColumn(orders: Order[], status: string): Order[] {
+  const newestFirst = NEWEST_FIRST.includes(status);
+  // `sort` do JS é estável: empate ou sem hora conserva a ordem de chegada
+  return [...orders].sort((a, b) => {
+    const [x, y] = [enteredStateAt(a), enteredStateAt(b)];
+    if (x === null && y === null) return 0;
+    if (x === null) return 1;
+    if (y === null) return -1;
+    return newestFirst ? y - x : x - y;
+  });
+}
+
 export type BoardGroups = {
   byStatus: Record<string, Order[]>;
   // Coletor genérico: pedido cujo status nenhuma coluna conhece (a API ganhou um valor antes da tela).
@@ -31,5 +56,6 @@ export function groupOrders(orders: Order[]): BoardGroups {
     if (KANBAN_COLUMNS.includes(status as OrderStatus)) byStatus[status].push(order);
     else if (!OFF_BOARD_STATUSES.includes(status)) others.push(order);
   }
-  return { byStatus, others };
+  for (const status of KANBAN_COLUMNS) byStatus[status] = sortForColumn(byStatus[status], status);
+  return { byStatus, others: sortForColumn(others, "OUTROS") };
 }

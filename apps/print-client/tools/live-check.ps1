@@ -2,7 +2,7 @@
 # Compila o nucleo do print-client + tools\LiveCheck.cs e executa em memoria (Smart App Control). Nao toca producao.
 # Passo a passo e resultados: docs\conferencia-cruzada-api12.md
 # TOKEN: prefira a variavel de ambiente PC_LIVE_TOKEN ou o prompt (sem eco); -Token na linha de comando fica no historico do shell:
-#   so aceitavel para chave de teste de banco DESCARTAVEL de DEV. Nunca use uma chave de loja real.
+#   so aceitavel para chave de teste de banco DESCARTAVEL de DEV. Nunca use uma chave de loja real (vale tambem para -AlertOrderIds).
 # Uso: .\live-check.ps1 [-Token mcd_...] -OutDir <pasta> -Ledger <printed.json> -Seconds 20 [-Fault offline|nopaper]
 param(
   [string]$Token = "",
@@ -12,6 +12,8 @@ param(
   [int]$Seconds = 20,
   [string]$Fault = "",
   [switch]$StartLegacy,
+  [int]$PollMs = 1500,   # polling de reserva; use 60000 para provar que o pedido chega pelo WebSocket (tempo real)
+  [string]$AlertOrderIds = "",   # "proprio,outraLoja,inexistente": em vez de rodar o ciclo, manda os 5 alertas do PC-24 com o cliente REAL
   [string]$ClientDir = "",
   [string]$RoslynDir = ""
 )
@@ -44,8 +46,15 @@ if ($LASTEXITCODE -ne 0) { Write-Error "csc falhou:`n$o"; exit 1 }
 [Reflection.Assembly]::LoadFrom($json) | Out-Null
 $a = [Reflection.Assembly]::Load([IO.File]::ReadAllBytes($dll))
 $t = $a.GetType("MeuCardapio.PrintClient.LiveCheck")
-$args2 = New-Object object[] 7
-$args2[0] = $BaseUrl; $args2[1] = $Token; $args2[2] = $OutDir; $args2[3] = $Ledger; $args2[4] = $Seconds; $args2[5] = $Fault; $args2[6] = [bool]$StartLegacy
+if ($AlertOrderIds) {
+  $ids = $AlertOrderIds.Split(",")
+  $res = $t.GetMethod("Alerts").Invoke($null, [object[]]@($BaseUrl, $Token, $ids[0], $ids[1], $ids[2]))
+  Write-Output $res
+  Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+  exit 0
+}
+$args2 = New-Object object[] 8
+$args2[0] = $BaseUrl; $args2[1] = $Token; $args2[2] = $OutDir; $args2[3] = $Ledger; $args2[4] = $Seconds; $args2[5] = $Fault; $args2[6] = [bool]$StartLegacy; $args2[7] = $PollMs
 $res = $t.GetMethod("Run").Invoke($null, $args2)
 Write-Output $res
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue

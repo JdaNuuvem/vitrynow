@@ -16,11 +16,12 @@ export class UsersService {
     return this.repo.listByStore(storeId);
   }
 
-  async invite(storeId: string, input: CreateStaffUserInput) {
+  // `laneKey`: a origem do pedido (`clientKey(ip)`), para a faixa de hash (SEC-34). O hash vem ANTES de qualquer escrita: 503 não deixa nada pela metade.
+  async invite(storeId: string, input: CreateStaffUserInput, laneKey: string) {
     if (await this.repo.findByEmail(input.email)) {
       throw new ConflictError("já existe um usuário com este e-mail");
     }
-    const passwordHash = await this.hasher.hash(input.password);
+    const passwordHash = await this.hasher.hash(input.password, laneKey);
     return this.repo.create({ storeId, email: input.email, passwordHash, role: input.role ?? "STAFF" });
   }
 
@@ -39,11 +40,11 @@ export class UsersService {
   }
 
   // Qualquer usuário troca a própria senha, desde que saiba a atual (não depende de e-mail).
-  async changePassword(userId: string, input: ChangePasswordInput) {
+  async changePassword(userId: string, input: ChangePasswordInput, laneKey: string) {
     const user = await this.repo.findById(userId);
-    if (!user || !(await this.hasher.verify(input.currentPassword, user.passwordHash))) {
+    if (!user || !(await this.hasher.verify(input.currentPassword, user.passwordHash, laneKey))) {
       throw new UnauthorizedError("senha atual incorreta");
     }
-    return this.repo.updatePasswordHash(userId, await this.hasher.hash(input.newPassword));
+    return this.repo.updatePasswordHash(userId, await this.hasher.hash(input.newPassword, laneKey));
   }
 }

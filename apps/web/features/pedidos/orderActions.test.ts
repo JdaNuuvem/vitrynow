@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AllowedTransition, BlockedReasonCode, Order } from "@/core/domain/orders";
-import { BLOCK_REASON_TEXT, blockReasonText, confirmCancelLabel, deriveCardActions } from "./orderActions";
+import { BLOCK_REASON_TEXT, blockReasonText, confirmCancelLabel, deriveCardActions, kitchenNotWarned } from "./orderActions";
 
 const brl = (cents: number) => `R$ ${(cents / 100).toFixed(2).replace(".", ",")}`;
 
@@ -113,5 +113,17 @@ describe("confirmCancelLabel: o botão repete o efeito e o valor", () => {
   it("com estorno cita o valor ('Cancelar e estornar R$ 69,00')", () => {
     expect(confirmCancelLabel(order({ status: "EM_PREPARO", allowedTransitions: [refuseRefund] }), brl)).toBe("Cancelar e estornar R$ 69,00");
     expect(confirmCancelLabel(order({ status: "PENDENTE", allowedTransitions: [refuseRefund] }), brl)).toBe("Recusar e estornar R$ 69,00");
+  });
+});
+
+
+describe("kitchenNotWarned (API-67)", () => {
+  const base = { id: "o", code: "1", type: "BALCAO", status: "EM_PREPARO", customerName: null, totalCents: 1, items: [], delivererId: null, payment: null } as unknown as Order;
+  it("só LEGACY explícito com printedAt", () => {
+    expect(kitchenNotWarned({ ...base, printMode: "LEGACY", printedAt: "2026-11-17T12:00:00Z" })).toBe(true);
+    expect(kitchenNotWarned({ ...base, printMode: "LEGACY", printedAt: null })).toBe(false);
+    expect(kitchenNotWarned({ ...base, printMode: "LEGACY" })).toBe(false);
+    expect(kitchenNotWarned({ ...base, printMode: "QUEUE", printedAt: "2026-11-17T12:00:00Z" })).toBe(false);
+    expect(kitchenNotWarned(base)).toBe(false);
   });
 });

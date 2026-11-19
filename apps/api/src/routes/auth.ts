@@ -1,21 +1,26 @@
 import type { FastifyPluginAsync } from "fastify";
-import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
 import { prisma } from "@meucardapio/db";
-import { loginSchema, registerStoreSchema, forgotPasswordSchema,
+import { isReservedSlug, loginSchema, registerStoreSchema, forgotPasswordSchema,
   inspectResetTokenSchema, resetPasswordSchema } from "@meucardapio/shared-types";
 import { maskEmail, sendLoginAlertEmail, sendPasswordResetEmail } from "../lib/email";
 import { newTrialEndsAt } from "../lib/subscription";
+import { sendVerificationEmail } from "../lib/emailVerification";
+import { generateStoreCode } from "../lib/storeCode";
 import { SESSION_COOKIE, revokeSession, sessionCookieOptions, signSession } from "../lib/session";
 import { disconnectSession, disconnectUser } from "../realtime/hub";
 import { hashToken } from "../lib/tokenHash";
 import { LoginThrottle } from "../lib/loginThrottle";
+import { clientKey } from "../lib/clientKey";
+import { ServerBusyError, sendServerBusy } from "../shared/errors";
+import { DUMMY_HASH, bcryptPasswordHasher as passwordHasher } from "../shared/passwordHasher";
 import { RESET_FAIL_MIN_DURATION_MS, RESET_MAX_EMAIL_FAILURES, constantTimeEqual, issueResetToken, markResetSendFailed, padToMinimum, runBeforeClaimHook } from "../lib/passwordReset";
 import { NOW_UTC as NOW } from "../lib/sqlTime";
+import { clientIpOf } from "../lib/clientIp";
+import { securityEvent } from "../lib/securityEvents";
 
-// Hash de uma senha que ninguém conhece, no mesmo custo dos hashes reais: login com e-mail inexistente
-// gasta o mesmo tempo do login com senha errada (ST-05, sem enumeração de contas por tempo).
-const DUMMY_HASH = bcrypt.hashSync(`nao-existe-${Math.random()}-${Date.now()}`, 10);
+// Sentinela interno (não vira resposta): desfaz a transação da redefinição quando o claim passou sem hash pronto (ver o comentário no uso).
+class ResetHashNotReady extends Error {}
 
 type PrismaKnownError = { code?: string; meta?: { target?: string[] | string } };
 function uniqueTarget(error: unknown): string | null {
@@ -36,7 +41,10 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    const { storeName, slug, code, email, password } = parsed.data;
+    const { storeName, slug, email, password } = parsed.data;
+    // RN-ONB-02: endereço reservado da plataforma. RN-ONB-01: o código da loja não é pedido; o servidor gera.
+    if (isReservedSlug(slug)) return reply.code(400).send({ error: "este endereço é reservado; escolha outro", code: "SLUG_RESERVED" });
+    const code = parsed.data.code ?? (await generateStoreCode());
 
     const existing = await prisma.store.findFirst({ where: { OR: [{ slug }, { code }] } });
     if (existing) {
@@ -46,7 +54,14 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(409).send({ error: "este e-mail já está cadastrado", code: "EMAIL_IN_USE" });
     }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    // SEC-34 (R7): o hash vem ANTES de qualquer escrita; se a faixa estiver cheia, 503 e nenhuma loja nem usuário fica pela metade.
+    let passwordHash: string;
+    try {
+      passwordHash = await passwordHasher.hash(password, clientKey(clientIpOf(request)));
+    } catch (error) {
+      if (error instanceof ServerBusyError) return sendServerBusy(reply);
+      throw error;
+    }
     let store;
     try {
       store = await prisma.store.create({
@@ -69,6 +84,8 @@ const authRoutes: FastifyPluginAsync = async (app) => {
 
     const user = store.users[0];
     reply.setCookie(SESSION_COOKIE, signSession(app, user), sessionCookieOptions());
+    // RN-ONB-03: o cardápio já pode ser montado sem verificar; o e-mail de confirmação sai em segundo plano (falha não derruba o cadastro).
+    void sendVerificationEmail({ id: user.id, email: user.email }).catch((error) => request.log.warn({ err: error }, "falha ao enviar o e-mail de verificação"));
     return reply.code(201).send({ store: { id: store.id, name: store.name, slug: store.slug } });
   });
 
@@ -81,22 +98,36 @@ const authRoutes: FastifyPluginAsync = async (app) => {
 
     // Reserva a tentativa ANTES de qualquer await (ST-32): uma rajada paralela não passa toda pela checagem.
     // Limite estrito por (conta, IP); o total da conta só atrasa e avisa o dono, nunca tranca (ST-33).
-    const slot = throttle.reserve(email, request.ip);
+    const slot = throttle.reserve(email, clientIpOf(request));
     if (!slot.allowed) {
       reply.header("Retry-After", String(slot.retryAfterSeconds));
+      securityEvent(request, "login_locked", { email });
       return reply.code(429).send({ error: "muitas tentativas de login; tente de novo em alguns minutos", code: "LOGIN_LOCKED" });
     }
     if (slot.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, slot.delayMs));
 
     const user = await prisma.user.findUnique({ where: { email } });
-    // Sempre compara com algum hash (o falso, se a conta não existe): mesmo tempo nos dois casos (ST-05).
-    const passwordOk = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
-    // Muitos erros na conta (de vários IPs): avisa o dono UMA vez por janela. A resposta não muda.
+    // Muitos erros na conta (de vários IPs): avisa o dono UMA vez por janela. A resposta não muda. Sai ANTES do hash: a faixa cheia (503) não
+    // pode engolir o aviso cuja janela a reserva já consumiu.
     if (slot.alertOwner && user) void sendLoginAlertEmail({ to: user.email }).catch(() => {});
+    // Sempre compara com algum hash (o falso, se a conta não existe) e SEMPRE pela mesma faixa: mesmo tempo, mesma fila e mesmo 503 nos dois casos
+    // (ST-05, R4). Faixa cheia ⇒ 503 SEM ter testado senha alguma: devolve a tentativa reservada (R5), igual para conta existente e inexistente.
+    let passwordOk: boolean;
+    try {
+      passwordOk = await passwordHasher.verify(password, user?.passwordHash ?? DUMMY_HASH, clientKey(clientIpOf(request)));
+    } catch (error) {
+      if (error instanceof ServerBusyError) {
+        throttle.refund(email, clientIpOf(request));
+        return sendServerBusy(reply);
+      }
+      throw error;
+    }
     if (!user || !passwordOk) {
+      securityEvent(request, "login_failed", { email });
       return reply.code(401).send({ error: "credenciais inválidas" });
     }
-    throttle.succeed(email, request.ip);
+    throttle.succeed(email, clientIpOf(request));
+    securityEvent(request, "login_ok", { email, userId: user.id });
 
     reply.setCookie(SESSION_COOKIE, signSession(app, user), sessionCookieOptions());
     return { ok: true };
@@ -130,6 +161,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       select: { id: true, tokenVersion: true },
     });
     disconnectUser(user.id);
+    securityEvent(request, "logout_all", { userId: user.id });
     reply.setCookie(SESSION_COOKIE, signSession(app, user), sessionCookieOptions());
     return { ok: true };
   });
@@ -147,6 +179,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       const startedAt = performance.now();
       const parsed = forgotPasswordSchema.safeParse(request.body);
       if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+      securityEvent(request, "password_reset_requested", { email: parsed.data.email }); // NG-12: igual para conta existente, inexistente e limitada (sem oráculo)
 
       // SEC-28: a emissão do token (por conta: 3/hora, 60 s entre pedidos, um só token ativo) fica em `issueResetToken`; o envio NÃO é
       // esperado (ST-57: esperar o provedor de e-mail revelaria por tempo se a conta existe) e o piso de duração iguala os três caminhos
@@ -201,6 +234,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
         // com o erro de validação, que não depende do token e por isso não é oráculo.
         const onlyEmail = parsed.error.issues.length > 0 && parsed.error.issues.every((issue) => issue.path[0] === "email");
         if (onlyEmail) {
+          securityEvent(request, "password_reset_refused", { reason: "EMAIL_MISSING" });
           await padToMinimum(startedAt, RESET_FAIL_MIN_DURATION_MS, "reset");
           return reply.code(400).send({ error: "token inválido ou expirado" });
         }
@@ -214,6 +248,21 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       const resetToken = await prisma.passwordResetToken.findUnique({ where: { tokenHash: hashToken(parsed.data.token) } });
       const owner = await prisma.user.findUnique({ where: { id: resetToken?.userId ?? "-" }, select: { email: true } });
       const sameEmail = constantTimeEqual(parsed.data.email, owner?.email ?? "");
+
+      // SEC-34 (R1, R2): o hash da senha nova é calculado ANTES da transação e FORA dela. Só quem já provou token VIVO e e-mail CERTO paga bcrypt (as
+      // recusas continuam sem pagar nada: nenhum oráculo novo). Se a faixa estiver cheia, 503 aqui: o token ainda NÃO foi tocado (nada de `usedAt`,
+      // nem de `emailFailures`) e o mesmo link funciona na próxima tentativa. Nunca se espera a faixa com transação nem conexão do pool seguradas.
+      // A DECISÃO continua sendo só a do UPDATE no banco (ST-68): esta leitura apenas escolhe se vale calcular o hash; se o claim perder a corrida,
+      // o hash é descartado (1 hash a mais, só para quem tinha o token e o e-mail).
+      let passwordHash: string | null = null;
+      if (resetToken && sameEmail && !resetToken.usedAt && resetToken.expiresAt.getTime() >= Date.now() && resetToken.emailFailures < RESET_MAX_EMAIL_FAILURES) {
+        try {
+          passwordHash = await passwordHasher.hash(parsed.data.newPassword, clientKey(clientIpOf(request)));
+        } catch (error) {
+          if (error instanceof ServerBusyError) return sendServerBusy(reply);
+          throw error;
+        }
+      }
       // Gancho só de TESTE (ST-69: honrado só com NODE_ENV=test, sem receber dado): deixa um teste atrasar o pedido entre a leitura de cima
       // e o UPDATE, para provar que a decisão não depende da leitura velha.
       await runBeforeClaimHook();
@@ -224,6 +273,11 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       // anteriores. (a) e-mail certo: marca `usedAt` (consome o token); (b) e-mail errado: soma a falha e, na 5ª, invalida o token.
       // Para token que não existe, a mesma instrução roda sobre 0 linhas (mesmo trabalho em todos os ramos).
       const outcome = await prisma.$transaction(async (tx) => {
+        // SEC-38 (mesma ideia do SEC-35): só o ramo "e-mail errado" GRAVA (soma `emailFailures`) e por isso espera o fsync do commit, o que o torna mais lento que as
+        // outras recusas quando o disco está disputado. Na RECUSA (e-mail que não bate ou token que não existe) o commit não espera o disco (`set_config(..., true)` =
+        // SET LOCAL, só nesta transação; perder a contagem de uma falha num crash de ~200 ms é aceitável). Com o e-mail CERTO a troca de senha e o consumo do token
+        // seguem DURÁVEIS (`on`): nunca se confirma ao dono uma senha nova que um crash desfaria. É a 1ª instrução em TODOS os ramos que chegam ao banco.
+        await tx.$executeRaw`SELECT set_config('synchronous_commit', ${sameEmail ? "on" : "off"}, true)`;
         const claimed = await tx.$queryRaw<{ id: string }[]>`
           UPDATE "PasswordResetToken"
              SET "usedAt" = CASE WHEN ${sameEmail}::boolean THEN ${NOW} ELSE "usedAt" END,
@@ -232,21 +286,25 @@ const authRoutes: FastifyPluginAsync = async (app) => {
            WHERE "id" = ${resetToken?.id ?? "-"} AND "usedAt" IS NULL AND "expiresAt" >= ${NOW} AND "emailFailures" < ${RESET_MAX_EMAIL_FAILURES}
           RETURNING "id"`;
         if (claimed.length !== 1 || !sameEmail || !resetToken) return null;
-        // O bcrypt só roda DEPOIS de o banco ter dado o token a este pedido: nenhuma recusa o paga, então o tempo de uma recusa não revela
-        // que o e-mail estava certo (token morto + e-mail certo seria mais lento que as outras). Dentro da transação: a troca de senha e o
-        // consumo do token continuam atômicos, e quem esperava a linha só segue depois do COMMIT.
-        const passwordHash = await bcrypt.hash(parsed.data.newPassword, 10);
+        // Defensivo: o banco deu o token mas a leitura de cima não o achou vivo (relógio do app e do banco discordando no limite do vencimento),
+        // então NÃO há hash pronto. Hash aqui dentro não pode (R2); desfaz o claim (o token volta a valer) e responde a recusa genérica.
+        if (!passwordHash) throw new ResetHashNotReady();
         // Na MESMA transação do consumo do token: se a troca da senha falhar, o token volta a valer (nada de token queimado sem senha nova).
         // tokenVersion+1: redefinir a senha derruba todas as sessões abertas (token roubado inclusive).
         await tx.user.update({ where: { id: resetToken.userId }, data: { passwordHash, tokenVersion: { increment: 1 } } });
         return resetToken.userId;
+      }).catch((error: unknown) => {
+        if (error instanceof ResetHashNotReady) return null; // o claim foi desfeito junto com a transação: o token continua valendo
+        throw error;
       });
       if (!outcome || !resetToken) {
+        securityEvent(request, "password_reset_refused", { email: parsed.data.email, reason: "TOKEN_REFUSED" }); // o mesmo evento para token morto, e-mail errado ou inexistente
         await padToMinimum(startedAt, RESET_FAIL_MIN_DURATION_MS, "reset");
         return reply.code(400).send({ error: "token inválido ou expirado" });
       }
 
       disconnectUser(outcome);
+      securityEvent(request, "password_reset_done", { userId: outcome });
       return { ok: true };
     },
   );

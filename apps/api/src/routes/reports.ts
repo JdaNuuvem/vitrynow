@@ -1,129 +1,94 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { prisma } from "@meucardapio/db";
+import { logAudit } from "../lib/audit";
+import { CSV_TABLES, MAX_REPORT_DAYS, buildReport, reportRows, resolveRange, toCsv, type CsvTable } from "../lib/reports";
+import { REPORT_RULE_CHANGED_AT } from "../lib/saleLines";
 
-const STORE_TIMEZONE = "America/Sao_Paulo";
+// SEC-16 — janela máxima e teto de pedidos por consulta; passou disso, 400/422 com a instrução de reduzir o período (nunca resposta parcial silenciosa).
+// A agregação agora é no banco (API-20), mas o teto continua: ele limita também o CSV. O resumo só traz agregados e nomes de produto/entregador:
+// nenhum telefone, nome de cliente ou endereço sai daqui (teste trava).
+export const REPORT_MAX_WINDOW_DAYS = MAX_REPORT_DAYS;
+export const REPORT_MAX_ORDERS = 20_000;
+/** Só para teste: baixa o teto sem criar 20 mil pedidos. */
+export const reportLimits = { maxOrders: REPORT_MAX_ORDERS };
 
-// Relatório de vendas por período — autenticado pelo painel.
+type Counted = { count: number; revenueCents: number };
+/** Visão do STAFF: contagens operacionais e ranking por QUANTIDADE; nenhum valor em reais (RN-R-06). */
+export function staffReportView(r: {
+  from: string; to: string; orderCount: number; customerCount: number; canceledCount: number; openCount: number;
+  byType: Record<string, Counted>; byPaymentMethod: Record<string, Counted>;
+  byDay: { date: string; orderCount: number }[]; topProducts: { productName: string; quantity: number }[]; byDeliverer: { delivererName: string; orderCount: number }[];
+}) {
+  const counts = (m: Record<string, Counted>) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, { count: v.count }]));
+  return {
+    from: r.from,
+    to: r.to,
+    orderCount: r.orderCount,
+    customerCount: r.customerCount,
+    canceledCount: r.canceledCount,
+    openCount: r.openCount,
+    byType: counts(r.byType),
+    byPaymentMethod: counts(r.byPaymentMethod),
+    byDay: r.byDay.map((d) => ({ date: d.date, orderCount: d.orderCount })),
+    topProducts: r.topProducts.map((p) => ({ productName: p.productName, quantity: p.quantity })),
+    byDeliverer: r.byDeliverer.map((d) => ({ delivererName: d.delivererName, orderCount: d.orderCount })),
+  };
+}
+
+
+const RANGE_REPLY = {
+  INVALID_DATE: { error: "datas inválidas", code: undefined },
+  FROM_AFTER_TO: { error: "A data inicial é depois da final.", code: "REPORT_RANGE_INVALID" },
+  PERIOD_TOO_LONG: { error: `Escolha um período de no máximo ${REPORT_MAX_WINDOW_DAYS} dias.`, code: "REPORT_WINDOW_TOO_LARGE", details: { maxDays: REPORT_MAX_WINDOW_DAYS } },
+} as const;
+
+// Relatórios do painel (B14): agregados no banco, no fuso da loja, com a definição única de venda (API-21).
 const reportRoutes: FastifyPluginAsync = async (app) => {
+  // Devolve o período válido ou já responde 400/422 e devolve null.
+  async function periodOrReply(storeId: string, query: { from?: unknown; to?: unknown }, reply: FastifyReply) {
+    if ((query.from !== undefined && typeof query.from !== "string") || (query.to !== undefined && typeof query.to !== "string")) {
+      void reply.code(400).send({ error: "datas inválidas" });
+      return null;
+    }
+    const range = resolveRange({ from: query.from as string | undefined, to: query.to as string | undefined });
+    if ("error" in range) {
+      void reply.code(400).send(RANGE_REPLY[range.error]);
+      return null;
+    }
+    const total = await prisma.order.count({ where: { storeId, awaitingPayment: false, createdAt: { gte: range.fromUtc, lt: range.toExclusiveUtc } } });
+    if (total > reportLimits.maxOrders) {
+      void reply.code(422).send({ error: "Há pedidos demais nesse período. Escolha um intervalo menor.", code: "REPORT_TOO_LARGE", details: { maxOrders: reportLimits.maxOrders } });
+      return null;
+    }
+    return range;
+  }
+
   app.get("/api/reports/summary", { preHandler: app.requirePanelAuth }, async (request, reply) => {
     const { storeId } = request.user;
-    const query = request.query as { from?: string; to?: string };
+    const range = await periodOrReply(storeId, request.query as { from?: unknown; to?: unknown }, reply);
+    if (!range) return reply;
+    const full = { ...(await buildReport(storeId, range)), ruleChangedAt: REPORT_RULE_CHANGED_AT };
+    // RN-R-06 / CA-R-15: dinheiro é do OWNER. O STAFF recebe só CONTAGENS (campos em reais AUSENTES, não zerados).
+    return request.user.role === "OWNER" ? full : staffReportView(full);
+  });
 
-    const from = query.from ? new Date(query.from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const to = query.to ? new Date(query.to) : new Date();
-    if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
-      return reply.code(400).send({ error: "datas inválidas" });
+  // CSV de cada tabela e do resumo (B14.2). Só o dono baixa (dado financeiro completo; SEC-16); toda exportação fica na auditoria.
+  app.get("/api/reports/export.csv", { preHandler: [app.requirePanelAuth, app.requireOwner], config: { rateLimit: { max: 20, timeWindow: "1 minute" } } }, async (request, reply) => {
+    const query = request.query as { from?: unknown; to?: unknown; table?: string };
+    const table = (query.table ?? "summary") as CsvTable;
+    if (!(CSV_TABLES as readonly string[]).includes(table)) {
+      return reply.code(400).send({ error: "Tabela inválida.", code: "INVALID_TABLE", tables: CSV_TABLES });
     }
-    // inclui o dia final inteiro
-    const toInclusive = new Date(to.getTime() + 24 * 60 * 60 * 1000);
-
-    const orders = await prisma.order.findMany({
-      where: {
-        storeId,
-        awaitingPayment: false,
-        status: { not: "CANCELADO" },
-        createdAt: { gte: from, lt: toInclusive },
-      },
-      include: { items: true, deliverer: true },
-    });
-
-    const orderCount = orders.length;
-    const revenueCents = orders.reduce((sum, o) => sum + o.totalCents, 0);
-    const discountCents = orders.reduce((sum, o) => sum + o.discountCents, 0);
-    const averageTicketCents = orderCount > 0 ? Math.round(revenueCents / orderCount) : 0;
-
-    const customerCount = new Set(
-      orders.map((o) => o.customerPhone ?? o.customerName).filter((value): value is string => Boolean(value)),
-    ).size;
-
-    const dayAgg = new Map<string, { date: string; orderCount: number; revenueCents: number }>();
-    for (const order of orders) {
-      const date = order.createdAt.toLocaleDateString("en-CA", { timeZone: STORE_TIMEZONE });
-      const entry = dayAgg.get(date) ?? { date, orderCount: 0, revenueCents: 0 };
-      entry.orderCount += 1;
-      entry.revenueCents += order.totalCents;
-      dayAgg.set(date, entry);
-    }
-    const byDay = [...dayAgg.values()].sort((a, b) => a.date.localeCompare(b.date));
-
-    const deliveryFeeCents = orders.reduce((sum, o) => sum + o.deliveryFeeCents, 0);
-    const tipCents = orders.reduce((sum, o) => sum + o.tipCents, 0);
-
-    const byPaymentMethod: Record<string, { count: number; revenueCents: number }> = {};
-    for (const order of orders) {
-      // Total zero (cupom cobriu tudo): atendido sem cobrança, em balde próprio (RN-CP-13); sem forma de pagamento e com total > 0 segue "não identificada".
-      const bucket = order.totalCents === 0 ? "SEM_COBRANCA" : (order.paymentMethod ?? "NAO_IDENTIFICADO");
-      byPaymentMethod[bucket] ??= { count: 0, revenueCents: 0 };
-      byPaymentMethod[bucket].count += 1;
-      byPaymentMethod[bucket].revenueCents += order.totalCents;
-    }
-
-    const byType: Record<string, { count: number; revenueCents: number }> = {};
-    for (const order of orders) {
-      byType[order.type] ??= { count: 0, revenueCents: 0 };
-      byType[order.type].count += 1;
-      byType[order.type].revenueCents += order.totalCents;
-    }
-
-    const productAgg = new Map<string, { productName: string; quantity: number; revenueCents: number }>();
-    for (const order of orders) {
-      for (const item of order.items) {
-        const key = item.productId ?? item.productName;
-        const entry = productAgg.get(key) ?? { productName: item.productName, quantity: 0, revenueCents: 0 };
-        entry.quantity += item.quantity;
-        entry.revenueCents += item.unitPriceCents * item.quantity;
-        productAgg.set(key, entry);
-      }
-    }
-    const topProducts = [...productAgg.values()].sort((a, b) => b.quantity - a.quantity).slice(0, 10);
-
-    const delivererAgg = new Map<string, { delivererName: string; orderCount: number; revenueCents: number }>();
-    for (const order of orders) {
-      if (!order.deliverer) continue;
-      const entry = delivererAgg.get(order.deliverer.id) ?? {
-        delivererName: order.deliverer.name,
-        orderCount: 0,
-        revenueCents: 0,
-      };
-      entry.orderCount += 1;
-      entry.revenueCents += order.totalCents;
-      delivererAgg.set(order.deliverer.id, entry);
-    }
-    const byDeliverer = [...delivererAgg.values()].sort((a, b) => b.orderCount - a.orderCount);
-
-    const cashSessions = await prisma.cashSession.findMany({
-      where: { storeId, openedAt: { gte: from, lt: toInclusive } },
-      include: { movements: true },
-    });
-    const cashSummary = cashSessions.reduce(
-      (acc, session) => {
-        acc.sessionCount += 1;
-        for (const movement of session.movements) {
-          if (movement.type === "SUPRIMENTO") acc.suprimentosCents += movement.amountCents;
-          else acc.sangriasCents += movement.amountCents;
-        }
-        return acc;
-      },
-      { sessionCount: 0, suprimentosCents: 0, sangriasCents: 0 },
-    );
-
-    return {
-      from: from.toISOString(),
-      to: to.toISOString(),
-      orderCount,
-      revenueCents,
-      discountCents,
-      averageTicketCents,
-      customerCount,
-      deliveryFeeCents,
-      tipCents,
-      byPaymentMethod,
-      byDay,
-      byType,
-      topProducts,
-      byDeliverer,
-      cashSummary,
-    };
+    const { storeId, userId } = request.user;
+    const range = await periodOrReply(storeId, query, reply);
+    if (!range) return reply;
+    const report = await buildReport(storeId, range);
+    logAudit({ storeId, userId, action: "report.export", targetType: "Store", targetId: storeId, metadata: { table, from: range.fromDate, to: range.toDate } });
+    return reply
+      .header("Content-Type", "text/csv; charset=utf-8")
+      .header("Content-Disposition", `attachment; filename="relatorio-${table}-${range.fromDate}-a-${range.toDate}.csv"`)
+      .header("Cache-Control", "no-store")
+      .send(toCsv(reportRows(report, table)));
   });
 };
 

@@ -181,8 +181,8 @@
   padding: 8px 12px;
   border: 1px solid #f59e0b;
   border-radius: 8px;
-  background: #fffbeb;
-  color: #92400e;
+  background: var(--warn-bg);
+  color: var(--warn);
   font-weight: 600;
 }
 
@@ -214,7 +214,7 @@
   padding: 0 14px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: #ffffff;
+  background: var(--surface);
   color: var(--ink);
   font-size: 14px;
   font-weight: 600;
@@ -224,11 +224,11 @@
 
 /* observação do cliente: destaque, texto inteiro (pode ser alergia) */
 .pedido-detalhe section.pedido-detalhe__warn {
-  background: #fffbeb;
+  background: var(--warn-bg);
 }
 
 .pedido-detalhe__warn h3 {
-  color: #92400e;
+  color: var(--warn);
 }
 
 .pedido-detalhe .pedido-detalhe__notes {
@@ -255,7 +255,7 @@
 
 .pedido-detalhe .pedido-detalhe__item-note {
   grid-column: 1 / -1;
-  color: #92400e;
+  color: var(--warn);
   font-size: 13px;
 }
 
@@ -291,8 +291,8 @@
 .pedido-detalhe .pedido-detalhe__change {
   padding: 8px 12px;
   border-radius: 8px;
-  background: #fef3c7;
-  color: #92400e;
+  background: var(--warn-bg);
+  color: var(--warn);
   font-weight: 700;
 }
 
@@ -323,3 +323,10 @@
     display: block;
   }
 }
+.pedido-refund { padding: 10px 14px; border-top: 1px solid var(--line); }
+.pedido-refund__form { display: grid; gap: 14px; padding: 18px; }
+.pedido-refund__form h2 { font-size: var(--ds-text-md); font-weight: 750; }
+.pedido-refund__form p { color: var(--ink-soft); font-size: var(--ds-text-sm); }
+.pedido-refund__check { display: flex; align-items: center; gap: 8px; min-height: var(--ds-control); font-size: var(--ds-text-sm); }
+.pedido-refund__check input { accent-color: var(--color-primary); }
+.pedido-refund__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }

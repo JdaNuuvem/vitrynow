@@ -1,25 +1,34 @@
 "use client";
 
-import { useState } from "react";
-import type { Category, Product, ProductInput } from "@/core/domain/catalog";
+import { useState, type ReactNode } from "react";
+import type { Category, Product, ProductAvailability, ProductInput } from "@/core/domain/catalog";
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import { categoryDeleteCopy, productDeleteCopy, productToInput } from "../deleteFlow";
 import { ProductForm } from "./ProductForm";
 import { ProductRow } from "./ProductRow";
+import { CatalogOrderButtons } from "./CatalogOrderButtons";
 
 type CategorySectionProps = {
   category: Category;
+  visibleProducts?: Product[];
   onUpdateIcon: (id: string, icon: string) => void;
   // Cada ação devolve a mensagem de erro da API, ou null se deu certo.
   onDeleteCategory: (id: string) => Promise<string | null>;
   onDeleteProduct: (id: string) => Promise<string | null>;
   onSaveProduct: (input: ProductInput, productId?: string) => Promise<string | null>;
+  onAvailability?: (id: string, value: ProductAvailability) => Promise<string | null>;
+  canDelete?: boolean;
+  actions?: ReactNode;
+  categories?: Pick<Category, "id" | "name">[];
+  onProductGroups?: (product: Product) => void;
+  onMoveProduct?: (id: string, direction: -1 | 1) => void;
+  ordering?: boolean;
 };
 
 type Pending = { kind: "product"; product: Product } | { kind: "category" } | null;
 
 // Uma categoria com seus produtos. Qual produto está aberto no formulário é estado só daqui.
-export function CategorySection({ category, onUpdateIcon, onDeleteCategory, onDeleteProduct, onSaveProduct }: CategorySectionProps) {
+export function CategorySection({ category, visibleProducts = category.products, onUpdateIcon, onDeleteCategory, onDeleteProduct, onSaveProduct, onAvailability, canDelete = true, actions, categories, onProductGroups, onMoveProduct, ordering = false }: CategorySectionProps) {
   const [editing, setEditing] = useState<Product | null>(null);
   const [adding, setAdding] = useState(false);
   const [pending, setPending] = useState<Pending>(null);
@@ -73,18 +82,25 @@ export function CategorySection({ category, onUpdateIcon, onDeleteCategory, onDe
           />
           {category.name}
         </h2>
-        <button type="button" className="catalogo__link catalogo__link--danger" onClick={() => setPending({ kind: "category" })}>
-          excluir categoria
-        </button>
+        <div className="catalogo-category__actions">
+          {actions}
+          {canDelete && <button type="button" className="catalogo__link catalogo__link--danger" onClick={() => setPending({ kind: "category" })}>
+            excluir categoria
+          </button>}
+        </div>
       </header>
 
       <div className="catalogo-category__products">
-        {category.products.map((product) => (
+        {visibleProducts.map((product, index) => (
           <ProductRow
             key={product.id}
             product={product}
             onEdit={() => setEditing(product)}
-            onDelete={() => setPending({ kind: "product", product })}
+            onAvailability={onAvailability}
+            onDelete={canDelete ? () => setPending({ kind: "product", product }) : undefined}
+            onGroups={onProductGroups ? () => onProductGroups(product) : undefined}
+            orderActions={onMoveProduct && <CatalogOrderButtons label={product.name} first={index === 0} last={index === visibleProducts.length - 1}
+              busy={ordering} onMove={(direction) => onMoveProduct(product.id, direction)} />}
           />
         ))}
         <button type="button" className="catalogo__link" onClick={() => setAdding(true)}>
@@ -93,7 +109,7 @@ export function CategorySection({ category, onUpdateIcon, onDeleteCategory, onDe
       </div>
 
       {editing && (
-        <ProductForm categoryId={category.id} initial={editing} onSave={onSaveProduct} onClose={() => setEditing(null)} />
+        <ProductForm categoryId={category.id} categories={categories} initial={editing} onSave={onSaveProduct} onClose={() => setEditing(null)} />
       )}
       {adding && <ProductForm categoryId={category.id} onSave={onSaveProduct} onClose={() => setAdding(false)} />}
 

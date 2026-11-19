@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 import type { Category } from "@/core/domain/storefront";
 import { scrollBehavior } from "@/lib/motion";
 import { SearchIcon } from "../icons";
+import { useBrokenImage } from "../hooks/useBrokenImage";
+import { Icon } from "@/shared/icons/Icon";
 
 export function CategorySectionHeading({ category }: { category: { name: string; icon: string | null } }) {
   return (
@@ -14,6 +16,15 @@ export function CategorySectionHeading({ category }: { category: { name: string;
 
 type StickyIdentity = { name: string; logoUrl: string | null; initials: string };
 
+function CategoryThumbnail({ category }: { category: Category }) {
+  const src = category.products.find((product) => product.imageUrl)?.imageUrl;
+  const image = useBrokenImage(src ?? null);
+  if (src && !image.failed) {
+    return <img ref={image.ref} src={src} className="loja__chip-photo" loading="lazy" width={24} height={24} alt="" onError={image.onError} />;
+  }
+  return category.icon ? <span className="loja__chip-icon" aria-hidden="true">{category.icon}</span> : null;
+}
+
 // Barra de categorias (spec 12 §2.1). Fica fixa no topo ao rolar; o chip da categoria que está na tela fica
 // destacado (scrollspy) e é trazido para dentro da linha. Em telas largas (≥ 800 px), quando a identidade sai de vista,
 // o próprio sticky vira UMA linha: logo + nome + chips + buscar. O scrollspy nunca move o foco.
@@ -23,6 +34,7 @@ export function CategoryChips({
   stuck,
   identity,
   onSelect,
+  onSelectAll,
   onOpenSearch,
 }: {
   categories: Category[];
@@ -31,6 +43,7 @@ export function CategoryChips({
   stuck: boolean;
   identity: StickyIdentity;
   onSelect: (id: string) => void;
+  onSelectAll?: () => void;
   onOpenSearch: () => void;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
@@ -55,6 +68,12 @@ export function CategoryChips({
         <span className="loja__stick-name">{identity.name}</span>
       </div>
       <div className="loja__chips" ref={rowRef}>
+        {onSelectAll && (
+          <button type="button" onClick={onSelectAll} aria-current={activeCategoryId === null ? "true" : undefined}
+            className={`loja__chip${activeCategoryId === null ? " loja__chip--active" : ""}`}>
+            <span className="loja__chip-body"><Icon name="products" size={22} />Tudo</span>
+          </button>
+        )}
         {categories.map((category) => (
           <button
             key={category.id}
@@ -64,11 +83,7 @@ export function CategoryChips({
             className={`loja__chip${activeCategoryId === category.id ? " loja__chip--active" : ""}`}
           >
             <span className="loja__chip-body">
-              {category.icon && (
-                <span className="loja__chip-icon" aria-hidden="true">
-                  {category.icon}
-                </span>
-              )}
+              <CategoryThumbnail category={category} />
               {category.name}
             </span>
           </button>

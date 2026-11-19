@@ -18,4 +18,5 @@ export type NewCouponInput = {
   discountValue: number;
   maxUses?: number;
   minOrderCents?: number;
+  expiresAt?: string;
 };

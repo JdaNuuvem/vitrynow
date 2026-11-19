@@ -7,10 +7,14 @@ export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001
 // nas páginas passar a funcionar sozinho.
 export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   try {
+    const bodylessMutation = init?.method && !["GET", "HEAD"].includes(init.method.toUpperCase()) && init.body == null;
+    const headers = init?.body instanceof FormData || bodylessMutation
+      ? init.headers
+      : { "Content-Type": "application/json", ...init?.headers };
     return await fetch(`${API_URL}${path}`, {
       ...init,
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...init?.headers },
+      headers,
     });
   } catch {
     // 503 (não um status real do servidor) só pra passar pelo `!response.ok` que toda

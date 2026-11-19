@@ -1,4 +1,5 @@
-FROM node:20-alpine AS build
+# Base FIXA por digest (INF-26): node 24.22.3 / alpine. Atualizar so de proposito (docs/RUNBOOK-infra.md, 'Atualizar a imagem base do Node').
+FROM node:24-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS build
 WORKDIR /repo
 RUN corepack enable
 # openssl TAMBÉM no build: com ele o Prisma baixa (na instalação) os engines do OpenSSL 3.0, os mesmos que a imagem final usa.
@@ -14,6 +15,13 @@ RUN node -e "const v=require('./package.json').packageManager.split('@')[1].spli
 # Build reproduzível: respeita o pnpm-lock.yaml (falha se package.json e lock divergirem). O --filter evita o erro do pnpm 12.8.1 "importer ausente" (esta imagem não copia
 # os package.json dos outros apps; o pnpm 12.21.0 deixava passar) e instala só o que o app precisa.
 RUN pnpm install --frozen-lockfile --filter "@meucardapio/api..."
+# SEC-34: o `bcrypt` nativo é COMPILADO DO FONTE aqui (decisão do Atlas). O pacote traz binários pré-compilados e o pnpm NEGA o script de instalação (`bcrypt: false` em
+# allowBuilds); este passo compila contra os cabeçalhos do Node da própria imagem (npm_config_nodedir: sem baixar nada), REMOVE o `prebuilds/` (para que só o binário
+# compilado aqui possa carregar) e FALHA o build se o binário não existir ou se o pacote não carregar. python3/make/g++ só nesta etapa: a imagem final não os tem.
+ENV npm_config_nodedir=/usr/local
+# node-gyp DIRETO, uma vez, dentro da pasta do pacote: `npm rebuild bcrypt` a partir de apps/api compilava o MESMO pacote duas vezes em paralelo no layout do pnpm
+# (EEXIST em build/node_gyp_bins e arquivos .d.raw corrompidos: medido em 17/11).
+RUN apk add --no-cache python3 make g++  && B="$(dirname "$(node -p "require.resolve('bcrypt/package.json', { paths: ['/repo/apps/api'] })")")"  && (cd "$B" && node /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild --nodedir=/usr/local)  && rm -rf "$B/prebuilds"  && test -f "$B/build/Release/bcrypt_lib.node" && test ! -e "$B/prebuilds"  && (cd /repo/apps/api && node -e "const b=require('bcrypt');if(!b.compareSync('x',b.hashSync('x',4)))process.exit(1);console.log('bcrypt compilado do fonte carregou: '+require('path').relative('/repo',require.resolve('bcrypt/package.json')))")
 COPY packages packages
 COPY apps/api apps/api
 # @meucardapio/db e @meucardapio/shared-types resolvem pra src/*.ts em dev (via tsx, que
@@ -25,7 +33,7 @@ RUN pnpm --filter @meucardapio/shared-types build
 RUN pnpm --filter @meucardapio/db build
 RUN pnpm --filter @meucardapio/api build
 
-FROM node:20-alpine
+FROM node:24-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5
 WORKDIR /repo
 RUN corepack enable
 # Sem isso, o Prisma não consegue detectar a versão do OpenSSL em runtime (comando
@@ -38,6 +46,8 @@ WORKDIR /repo/apps/api
 # Não roda como root: o código fica de root (somente leitura para o app). Única exceção: a pasta de
 # engines do Prisma, onde o `prisma migrate deploy` (serviço "migrate") verifica/grava o engine.
 RUN chown -R node:node /repo/node_modules/.pnpm/@prisma+engines*/node_modules/@prisma/engines
+# fotos em disco local (ADR-0017): o volume nomeado uploads_data herda este dono na 1ª criação; arquivos novos saem com modo 644 (o Caddy, outro usuário, só lê)
+RUN mkdir -p /uploads && chown node:node /uploads
 USER node
 EXPOSE 3001
 CMD ["node", "dist/server.js"]

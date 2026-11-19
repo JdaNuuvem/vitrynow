@@ -1,0 +1,50 @@
+# VitryNow · Referências finais do frontend
+
+Revisão de 18/11/2026. Para os primeiros pilotos, usar a dashboard clara do CloudPOS em 1194 × 834 e o cardápio claro do Ramenku em 390 × 844. O painel recebe a identidade terracota e creme da VitryNow e verde nos estados positivos. No cardápio, cada restaurante entra com sua cor, logo, capa, produtos e preços.
+
+Os IDs, tamanhos e camadas foram lidos nas cópias locais `CloudPos - Point of Sale UI KIT.fig` e `Ramenku.fig`. A prancha clara incorporada do CloudPOS (`23061:146889`) confirma as duas filas e a lateral operacional. A montagem do Ramenku (`1218:217891`) mostra capa, busca, categorias, cards, detalhe e carrinho. O Figma online confirmou as páginas claras e escuras do Ramenku. A cota de leitura limitou a conferência da versão online. A comparação com renders individuais dos frames integra o aceite dos pilotos.
+
+## CloudPOS · painel do restaurante
+
+O link enviado seleciona a instância `Pop Up Components` dentro do frame de criação de pedido `21211:26614`. Guardar esse link como referência desse fluxo. Para iniciar o painel, abrir a seção de dashboard `21385:54195` na página clara `2007:11055`. [Nó enviado `21258:35520`](https://www.figma.com/design/qXP8K5VUx9Ue95KQ7ySYjv/CloudPos---Point-of-Sale-UI-KIT?node-id=21258-35520) · [Dashboard preenchida `19013:3328`](https://www.figma.com/design/qXP8K5VUx9Ue95KQ7ySYjv/CloudPos---Point-of-Sale-UI-KIT?node-id=19013-3328) · [Dashboard vazia `21099:32043`](https://www.figma.com/design/qXP8K5VUx9Ue95KQ7ySYjv/CloudPos---Point-of-Sale-UI-KIT?node-id=21099-32043) · [Notificações expandidas `22966:86723`](https://www.figma.com/design/qXP8K5VUx9Ue95KQ7ySYjv/CloudPos---Point-of-Sale-UI-KIT?node-id=22966-86723)
+
+| Referência no CloudPOS | Destino no VitryNow e dados | Decisão para o piloto e verificação |
+| --- | --- | --- |
+| Dashboard preenchida, 1194 × 834. Cabeçalho horizontal `21855:78317` de 1194 × 92. Colunas de 864 e 282 px, separadas por 16 px | `/dashboard` · `DashboardShell`, `Topbar`, `InicioPage` | Reproduzir a ordem e proporção na largura de origem. Usar a navegação existente e suas permissões. No celular, manter a navegação inferior e colocar pedidos que exigem ação antes dos gráficos. Excluir as barras do sistema do tablet da interface web. |
+| Faixa `22002:80614` com quatro KPIs de 204 × 128 e raio 12. Rótulos de origem: Total Earning, In Progress, Ready to Served, Completed | `StatCard`, `RevenueCard`, `useInicioData` e serviços de pedidos/relatórios | Exibir valor dos pedidos elegíveis com período explícito. Para filas, usar rótulos coerentes com os estados efetivamente consultados. A lista filtrada de pedidos atuais exclui concluídos. Usar um KPI já disponível, como ticket médio, até existir contagem de concluídos para o período. O comparativo com ontem exige dados equivalentes. Conferir zero, falha e valores ocultos. |
+| Duas listas de 424 × 472 em `21855:78652`. Componentes de origem `23031:88546` (em andamento) e `23031:88565` (aguardando pagamento) | `CurrentOrdersCard`, gateway de pedidos, `/dashboard/pedidos` | Manter código, estado e ação permitida pelo backend. Usar o sinal de pagamento do pedido para a segunda lista. No celular, empilhar por prioridade. Comparar as filas com Pedidos e verificar retorno de foco. |
+| Coluna lateral com Create New Order `21855:78342`, mesas disponíveis `21855:79080` e estoque `21855:79133` | Ações de Pedidos e Catálogo, situação da loja e caixa conforme acesso | Aproveitar a composição para atalhos e dados operacionais reais. Estoque quantitativo, ocupação de mesas e abertura de comanda exigem contratos próprios. |
+| Vazio `21099:32043`, componente vetorial `21099:33142`; notificações `22966:86723` | Estados de cada card, avisos e controles do shell | Apresentar a fila vazia só após resposta bem-sucedida. Diferenciar carregamento, falha e informação desatualizada. Garantir acesso ao controle e ao texto pelo teclado. |
+| Avisos de sucesso, erro e atenção na família `22262:74899`, 480 × 98 | Avisos funcionais do painel. `PlanStatusBanner` depende da assinatura; `PromoCard` tem texto e ação | Aplicar o tratamento semântico ao evento correspondente. Reservar a comunicação comercial do painel para um espaço secundário. Uma arte em `PromoCard` exigirá um campo visual opcional. O frame preenchido não traz uma campanha fotográfica. |
+
+O kit usa Open Sans, com exemplos de 18 px semibold e 14 px regular, cards brancos, fundo `#F8FAFC`, títulos `#0F172A` e ação azul `#447DFC`. O piloto preserva a hierarquia e adapta as cores de ação e fundo à identidade VitryNow. A série temporal em `MonthChart`, o ranking e a comparação por período são extensões do produto sustentadas pelos dados reais. O frame preenchido privilegia as filas operacionais.
+
+## Ramenku · cardápio, banners e pedido
+
+A página clara é `1:3` e a escura é `14584:33316`. O piloto usa a clara. A capa identifica a loja, o banner destaca uma campanha e a foto do detalhe identifica o prato. No Ramenku, essas três áreas usam imagens diferentes. [Home Menu `16024:11488`](https://www.figma.com/design/PCa69ifTSUxaqn64frvQZ0/Ramenku?node-id=16024-11488) · [Home Banner `16262:16266`](https://www.figma.com/design/PCa69ifTSUxaqn64frvQZ0/Ramenku?node-id=16262-16266) · [Menu Detail `16091:14080`](https://www.figma.com/design/PCa69ifTSUxaqn64frvQZ0/Ramenku?node-id=16091-14080)
+
+| Referência no Ramenku | Destino no VitryNow e dados | Decisão para o piloto e verificação |
+| --- | --- | --- |
+| Home Menu `16024:11488`. Capa de 390 × 200, busca de 350 × 46 e categorias de 350 × 42 | `/loja/[slug]` · `StoreHeader`, busca de `LojaPage`, `CategoryNav` | Usar capa, nome, cor e disponibilidade da loja. Preservar busca e seleção com foco. Conferir com nome longo, loja pausada, imagem ausente e tela de 360 px. |
+| Grade “Popular Now” `16264:15993`, dois cards de 168 × 248 com intervalo de 14 px. Lista “All Items” `16264:15998`, linhas de 350 × 108 | `LojaPage`, `ProductListItem`, catálogo por categoria | Iniciar pela lista. Usar o tratamento em grade para uma seleção editorial identificada quando houver seleção real. Só rotular como “Mais pedidos” se houver ranking público com identidade de produto. Manter preço e disponibilidade legíveis nas duas composições. |
+| Categoria de ramen `16091:14411`, busca vazia `16171:26680`, detalhe `16091:14080` com foto de 390 × 390 | `CategoryNav`, busca e `ProductDetailScreen`, produto, preço em centavos, quantidade e adicionais | Conferir busca sem resultados, retorno para a categoria e item sem foto. No detalhe, garantir acesso a todas as opções e ao total antes de adicionar ao carrinho. |
+| Home Banner `16262:16266`. Card `16262:17730` de 350 × 188, padding de 24 px, superfície `#7D1F22`. Tigela recortada à direita com camada de 227 × 190, texto com 182 px de largura, CTA de 96 × 34 | `MenuBanner`, `banners.ts`, campanha opcional por slug, destino de produto ou categoria por ID | Manter fotografia, título, texto e botão separados. Ampliar a área de toque para pelo menos 44 px. Adaptar a cor e o conteúdo à campanha da loja. Sem campanha, liberar o espaço. Se a imagem falhar, preservar a mensagem. Se o alvo sair do catálogo, omitir o CTA. |
+| Carrinho flutuante de 350 × 58; carrinho vazio `16185:27345` e preenchido `16185:31533`; checkout `16185:31804` | Carrinho da loja, `CartDrawer`, `CheckoutDrawer` e seus totais | Preservar edição, quantidade, modalidades e taxas reais. Reservar espaço acima da área segura do aparelho e verificar abertura, Escape e retorno de foco. |
+| Cupom aplicado `16185:32428`, inválido `16222:33418`, confirmação `16257:13719` | Fluxo de cupom, pedido e `OrderResultScreen` | Aplicar os estados devolvidos pela API. Diferenciar pedido criado de PIX confirmado. Verificar cupom rejeitado, PIX pendente e confirmação efetiva. |
+
+**Arte da campanha.** O exemplo “Birthday Treat” fornece a composição para um destaque. A foto tem transparência. A chamada e a descrição usam Urbanist semibold 20 e regular 14 em branco. O CTA usa Urbanist medium 14. No VitryNow, a chamada pode encaminhar para um prato ou categoria do catálogo. A oferta de aniversário só faria sentido com uma promoção correspondente da loja. No desktop, manter texto e fotografia em lados distintos e conferir o recorte na largura real.
+
+| Uso | Camada no arquivo | Imagem incorporada | Aplicação |
+| --- | --- | --- | --- |
+| Capa da fachada | `16024:11491` | 1408 × 768 · `2cc910476903e1df87e732e0f8cd03987c245adf` | Substituição por `coverImageUrl` do restaurante. Manter enquadramento e leitura da busca. |
+| Tigela do banner | `16262:17733` | 1254 × 1254 · `a9d4978d43afd5b1992049faf37eaeca0ce288e7` | Usar a camada de recorte autorizada na campanha certa. Preservar transparência e ajustar ponto focal. O título `16262:17734`, o corpo `16262:17748` e o CTA `16262:17735` continuam elementos acessíveis. |
+| Foto do detalhe | `16091:14091` | 1024 × 1024 · `e05d71b1000b313f1cec16814cb80eeebc6e1d46` | Usar a foto real do produto. Preservar a proporção quadrada com fallback na ausência de imagem. |
+
+## Aceite dos dois pilotos
+
+1. Comparar a estrutura da loja a 390 × 844 com Home Menu, Home Banner e Menu Detail. Conferir a lista com e sem campanha, abrir o destino e concluir um pedido com os valores do catálogo.
+2. Comparar o painel a 1194 × 834 com Dashboard Filled e Empty. Conferir quatro indicadores com rótulo e fonte real, duas filas operacionais e ordem das ações. Usar períodos conhecidos para conferir os números.
+3. Repetir a 360 px, em tablet e em desktop largo. Verificar zoom de 200%, teclado, texto longo, contraste com a cor da loja, disponibilidade de foco e preferência por movimento reduzido.
+4. Conferir os recortes de capa, banner e produto e a legibilidade do CTA em português. Registrar desvios intencionais de marca, largura e conteúdo na comparação visual. Medir o peso da arte mobile contra a meta inicial de 200 KB.
+
+O desenvolvimento parte dos componentes existentes em `apps/web`. A pasta `Dashboard - Front` oferece apoio técnico. A execução completa, a exportação de assets para produção e a aprovação visual dos renders pertencem à etapa de implementação.

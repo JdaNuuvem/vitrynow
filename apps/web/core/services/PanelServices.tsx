@@ -13,12 +13,16 @@ import type { AuditGateway } from "../gateways/AuditGateway";
 import type { CatalogGateway } from "../gateways/CatalogGateway";
 import type { CouponsGateway } from "../gateways/CouponsGateway";
 import type { DeviceTokensGateway } from "../gateways/DeviceTokensGateway";
+import type { DeliveryZonesGateway } from "../gateways/DeliveryZonesGateway";
+import type { PrintQueueGateway } from "../gateways/PrintQueueGateway";
 import type { UsersGateway } from "../gateways/UsersGateway";
 import type { MfaGateway } from "../gateways/MfaGateway";
 import type { NoticesGateway } from "../gateways/NoticesGateway";
 import type { SubscriptionGateway } from "../gateways/SubscriptionGateway";
 
 export type PanelServices = {
+  deliveryZones: DeliveryZonesGateway;
+  printQueue: PrintQueueGateway;
   catalog: CatalogGateway;
   coupons: CouponsGateway;
   deviceTokens: DeviceTokensGateway;

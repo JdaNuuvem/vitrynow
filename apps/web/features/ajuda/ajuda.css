@@ -13,7 +13,7 @@
   padding: 8px;
   border: 0.5px solid rgba(0, 0, 0, 0.08);
   border-radius: 100px;
-  background: #ffffff;
+  background: var(--surface);
   box-shadow: var(--shadow-float);
   color: var(--ink);
   cursor: pointer;
@@ -102,7 +102,7 @@
 }
 
 .help-widget__muted {
-  color: #888888;
+  color: var(--ink-soft);
   font-size: 14px;
   line-height: 20px;
   text-align: center;
@@ -147,7 +147,7 @@
   border: none;
   border-radius: 8px;
   background: var(--color-primary);
-  color: #ffffff;
+  color: var(--on-primary);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -178,7 +178,7 @@
   padding: 0 4px;
   border-radius: 8px;
   background: var(--color-primary);
-  color: #ffffff;
+  color: var(--on-primary);
   font-size: 11px;
   font-weight: 600;
   line-height: 16px;
@@ -204,7 +204,7 @@
 .help-notices__item {
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: #ffffff;
+  background: var(--surface);
 }
 
 .help-notices__item.is-unread {

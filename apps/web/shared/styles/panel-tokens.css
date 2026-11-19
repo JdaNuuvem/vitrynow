@@ -1,55 +1,33 @@
-:root {
-  --color-primary: #e4002b;
-}
-
-:root,
-.panel-root {
-  --color-primary-ten: color-mix(in srgb, var(--color-primary) 10%, white);
-  --color-primary-twenty-five: color-mix(in srgb, var(--color-primary) 25%, white);
-  --color-primary-fifty: color-mix(in srgb, var(--color-primary) 50%, white);
-}
-
-:root {
-  --ink: #4d4d4d;
-  --ink-soft: #6e6e6e;
-  --line: #dddddd;
-  --surface: #fcfcfc;
-  --surface-soft: #f5f5f5;
-  --info-bg: #ebf5ff;
-  --info-ink: #0962ba;
-  --ok: #25a65b;
-  --ok-bg: #e1f5e9;
-  --warn: #f16b24;
-  --warn-bg: #fff2eb;
-  --danger: #b00020;
-  --danger-bg: #fff0f2;
-
-  --transition: 0.2s;
-  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --shadow-float: 0 16px 48px rgba(0, 0, 0, 0.05), 0 10px 28px rgba(0, 0, 0, 0.038), 0 6px 15px rgba(0, 0, 0, 0.03),
-    0 3px 8px rgba(0, 0, 0, 0.025), 0 1px 4px rgba(0, 0, 0, 0.02), 0 0 2px rgba(0, 0, 0, 0.012);
-}
-
 .panel-root,
-.panel-root button,
-.panel-root input,
-.panel-root textarea {
-  font-family: "Inter", sans-serif;
+.panel-root :is(button, input, textarea, select) {
+  font-family: var(--ds-font-body);
 }
 
-.panel-root p,
-.panel-root h1,
-.panel-root h2,
-.panel-root h3,
-.panel-root h4,
-.panel-root h5,
-.panel-root h6,
-.panel-root ul {
+.panel-root :is(p, h1, h2, h3, h4, h5, h6, ul) {
   margin: 0;
   padding: 0;
 }
 
-.panel-root a {
+.panel-root a:not(.ds-button) {
   color: inherit;
   text-decoration: none;
+}
+
+.panel-root--dashboard {
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-root--dashboard :where(a, button, input, textarea, select, summary):focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+
+@media (min-width: 801px) {
+  .panel-root--dashboard .shell-content > :is(.auditoria, .catalogo, .conta, .controlecaixa, .cupons, .entregadores, .equipe, .impressoras, .pedidos) {
+    width: 100%;
+    max-width: var(--ds-page-width);
+    min-height: calc(100vh - 70px);
+    margin-inline: auto;
+    padding-inline: var(--ds-page-gutter);
+  }
 }

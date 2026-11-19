@@ -6,8 +6,6 @@ import { prisma } from "@meucardapio/db";
 import { makeApp, registerStore, resetDb } from "../helpers";
 import { activateSubscription } from "../../src/lib/subscription";
 
-const bug = process.env.QA_STRICT ? it : it.fails;
-
 describe("QA catálogo: exclusão", () => {
   let app: ReturnType<typeof makeApp>;
   beforeEach(async () => { app = makeApp(); await app.ready(); });
@@ -27,14 +25,14 @@ describe("QA catálogo: exclusão", () => {
     return { owner: cookie!, staff: (login.headers["set-cookie"] as string).split(";")[0], store, categoryId, productId };
   }
 
-  bug("D34 (RN do catálogo) STAFF NÃO exclui produto: 403 e o produto continua existindo", async () => {
+  it("D34 (RN do catálogo) STAFF NÃO exclui produto: 403 e o produto continua existindo", async () => {
     const l = await lojaComStaff();
     const res = await app.inject({ method: "POST", url: `/api/catalog/products/${l.productId}/delete`, headers: { cookie: l.staff } });
     expect(res.statusCode).toBe(403);
     expect(await prisma.product.count({ where: { id: l.productId } })).toBe(1);
   });
 
-  bug("D35 STAFF NÃO exclui categoria: 403 e a categoria continua existindo", async () => {
+  it("D35 STAFF NÃO exclui categoria: 403 e a categoria continua existindo", async () => {
     const l = await lojaComStaff();
     await prisma.product.delete({ where: { id: l.productId } }); // categoria sem produto: a única barreira que sobra é o papel
     const res = await app.inject({ method: "POST", url: `/api/catalog/categories/${l.categoryId}/delete`, headers: { cookie: l.staff } });
@@ -42,7 +40,7 @@ describe("QA catálogo: exclusão", () => {
     expect(await prisma.category.count({ where: { id: l.categoryId } })).toBe(1);
   });
 
-  bug("D36 produto que está em PEDIDO EM ABERTO não pode ser excluído (409): fica 'ocultar'", async () => {
+  it("D36 produto que está em PEDIDO EM ABERTO não pode ser excluído (409): fica 'ocultar'", async () => {
     const l = await lojaComStaff();
     const pedido = await app.inject({ method: "POST", url: `/stores/${l.store.slug}/orders`, payload: { type: "BALCAO", paymentMethod: "DINHEIRO", items: [{ productId: l.productId, quantity: 1 }] } });
     expect(pedido.statusCode).toBe(201);

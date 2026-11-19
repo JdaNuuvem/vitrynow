@@ -78,6 +78,9 @@ services:
       TRUST_PROXY_CIDR: ${CADDY_IP:-172.29.250.10}/32   # derivado do IP fixo do Caddy: não há como divergir
       SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
       SESSION_ABSOLUTE_DAYS: ${SESSION_ABSOLUTE_DAYS:-14}
+      # SEC-34: a faixa de hash (hashLane) dimensiona as vagas em voo por min(UV_THREADPOOL_SIZE / 2, núcleos − 1). O padrão do Node é 4; fica EXPLÍCITO aqui para o
+      # dimensionamento não depender do padrão e aparecer no `compose config`. Subir só junto com mais núcleos (cada hash de senha ocupa 1 thread por ~45 ms).
+      UV_THREADPOOL_SIZE: ${UV_THREADPOOL_SIZE:-4}
       # Segredo de serviço (SEC-24), o MESMO do web. Rotação sem queda: ponha o novo em API_INTERNAL_SECRET e o antigo em
       # API_INTERNAL_SECRET_PREVIOUS (a API aceita os dois), suba api e web, e depois esvazie o PREVIOUS.
       API_INTERNAL_SECRET: ${API_INTERNAL_SECRET:?defina API_INTERNAL_SECRET no .env (32+ caracteres; openssl rand -hex 32)}
@@ -94,13 +97,30 @@ services:
       MP_CLIENT_ID: ${MP_CLIENT_ID:-}
       MP_CLIENT_SECRET: ${MP_CLIENT_SECRET:-}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-}
+      # Revalidação do cardápio sob demanda (API-58): a API chama o web PELA REDE INTERNA (nunca pelo Caddy) com este segredo. Sem as DUAS variáveis a API não
+      # revalida e o cardápio só atualiza pelo ISR (até 30 s). O mesmo segredo vale no web (abaixo); vazio = desligado.
+      WEB_INTERNAL_URL: http://web:3000
+      REVALIDATE_SECRET: ${REVALIDATE_SECRET:-}
       MP_ACCESS_TOKEN: ${MP_ACCESS_TOKEN:-}
       MP_WEBHOOK_SECRET: ${MP_WEBHOOK_SECRET:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAIL_FROM: ${EMAIL_FROM:-MeuCardapio <onboarding@resend.dev>}
-      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       TRIAL_DAYS: ${TRIAL_DAYS:-7}
-      MFA_ENFORCED: ${MFA_ENFORCED:-false}
+      # SEC-13: em produção a API NÃO sobe com MFA_ENFORCED diferente de "true" (guarda de partida em lib/mfaBoot.ts). Padrão SEGURO: true.
+      MFA_ENFORCED: ${MFA_ENFORCED:-true}
+      # Fotos do cardápio (API-18, ADR-0017, decisão do Claudio 18/11): em DISCO LOCAL do servidor (volume uploads_data), sem S3/R2. A pasta é FIXA em /uploads
+      # (é onde o volume está montado); o Caddy serve esse volume somente leitura em /media. Com STORAGE_DRIVER=s3 valem as variáveis STORAGE_S3_* abaixo
+      # (vazias de propósito: quem valida é o check-env.sh --prod, que o deploy.sh usa).
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      STORAGE_LOCAL_DIR: /uploads
+      STORAGE_S3_ENDPOINT: ${STORAGE_S3_ENDPOINT:-}
+      STORAGE_S3_BUCKET: ${STORAGE_S3_BUCKET:-}
+      STORAGE_S3_ACCESS_KEY_ID: ${STORAGE_S3_ACCESS_KEY_ID:-}
+      STORAGE_S3_SECRET_ACCESS_KEY: ${STORAGE_S3_SECRET_ACCESS_KEY:-}
+      STORAGE_S3_REGION: ${STORAGE_S3_REGION:-us-east-1}
+      STORAGE_PUBLIC_BASE_URL: ${STORAGE_PUBLIC_BASE_URL:-${WEB_ORIGIN}/media}
+    volumes:
+      - uploads_data:/uploads   # fotos (leitura e escrita só aqui)
     expose:
       - "3001"
     cap_drop: [ALL]
@@ -129,6 +149,7 @@ services:
       # Chamadas servidor-a-servidor do cardápio (SSR/ISR) vão direto à API pela rede interna: sem isto o padrão do código é
       # http://localhost:3001, que dentro deste container NÃO é a API (o cardápio cairia no plano B do navegador sem avisar).
       API_INTERNAL_URL: http://api:3001
+      REVALIDATE_SECRET: ${REVALIDATE_SECRET:-}   # a rota /api/revalidate do web só abre com o MESMO segredo da API; vazio = fechada
       # Segredo de serviço (SEC-24): só em tempo de EXECUÇÃO e só no servidor. Nunca NEXT_PUBLIC_*, nunca ARG de build,
       # nunca no código. A API só confia no IP repassado pelo web quando este segredo confere.
       API_INTERNAL_SECRET: ${API_INTERNAL_SECRET:?defina API_INTERNAL_SECRET no .env (32+ caracteres; openssl rand -hex 32)}
@@ -177,6 +198,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+      - uploads_data:/srv/uploads:ro   # fotos servidas em /media, SOMENTE LEITURA (o proxy não escreve nem executa nada)
     # Teto de memória (ST-49/ST-50). Medido: 6 a 7 KB por IP distinto na janela. Decisão do Atlas (17/11): 768 MB, porque com 512 MB
     # o Caddy chegou a ~450 MB sob rotatividade alta de IPs (o cenário do ataque) e a folga era pequena. É um TETO (custo só de RAM
     # se for usado). O smoke exige que o teto sustente >= 60 mil IPs a 80%. Acima disso (ataque distribuído) o Caddy é morto e volta
@@ -208,10 +230,12 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
       PGDATABASE: meucardapio
       BACKUP_DIR: /backups
+      UPLOADS_DIR: /uploads
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
       KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
     volumes:
       - ./backups:/backups
+      - uploads_data:/uploads:ro   # fotos entram no backup (backup-uploads.sh), leitura apenas
       - ../scripts/backup:/scripts:ro
     entrypoint: ["/bin/sh", "/scripts/backup-loop.sh"]
     healthcheck:
@@ -240,3 +264,4 @@ volumes:
   postgres_data:
   caddy_data:
   caddy_config:
+  uploads_data:   # fotos do cardápio (ADR-0017): persistente; entra no backup; NUNCA use `down -v` em produção

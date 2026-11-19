@@ -8,6 +8,14 @@ const PURPOSE_LABELS: Record<MfaPurpose, string> = {
   refund: "o estorno do pagamento",
   change_password: "a troca de senha",
   delete_user: "a remoção do usuário",
+  connect_payment: "a conexão da conta Mercado Pago",
+  disconnect_payment: "a desconexão da conta Mercado Pago",
+  device_token_create: "a criação da chave de impressora",
+  device_token_revoke: "a revogação da chave de impressora",
+  cancel_subscription: "o cancelamento da assinatura",
+  invite_owner: "o convite de um novo dono",
+  anonymize_customer: "a anonimização de dados do cliente",
+  export_customer: "a exportação de dados do cliente",
 };
 
 type SecurityConfirmModalProps = {

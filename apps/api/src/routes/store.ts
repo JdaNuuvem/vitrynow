@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { storeAvailabilitySchema, updateStoreSettingsSchema } from "@meucardapio/shared-types";
 import { logAudit } from "../lib/audit";
-import { bannerStateOf, getStoreSubscription, resolveSubscription } from "../lib/subscription";
+import { bannerStateOf, getSubscriptionView } from "../lib/subscription";
 
 // Conta/personalização da loja (nome, logo, cor, domínio) — autenticado pelo painel.
 const storeRoutes: FastifyPluginAsync = async (app) => {
@@ -26,6 +26,7 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
         deliveryEnabled: true,
         pickupEnabled: true,
         acceptingOrders: true,
+        hideSoldOutProducts: true,
         deliveryFeeCents: true,
       },
     });
@@ -36,7 +37,7 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
   // Estado do período de teste/assinatura no formato do banner do painel; o detalhe completo
   // (plano, recursos, vencimento) fica em GET /api/store/subscription.
   app.get("/api/store/plan", { preHandler: app.requirePanelAuth }, async (request) => {
-    const view = resolveSubscription(await getStoreSubscription(request.user.storeId));
+    const view = await getSubscriptionView(request.user.storeId);
     return { plan: { trialEndsAt: view.trialEndsAt, daysLeft: view.daysLeft, state: bannerStateOf(view) } };
   });
 
@@ -61,6 +62,7 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
 
     const { logoUrl, coverImageUrl, primaryColor, customDomain, address, whatsapp, openingHours, ...rest } = parsed.data;
+    // SEC-14 (ST-18): o domínio é ÚNICO no banco; quem decide é o índice (sem "consultar e depois gravar"), então duas lojas simultâneas não passam as duas.
     const store = await prisma.store.update({
       where: { id: storeId },
       data: {
@@ -89,10 +91,17 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
         deliveryEnabled: true,
         pickupEnabled: true,
         acceptingOrders: true,
+        hideSoldOutProducts: true,
         deliveryFeeCents: true,
       },
+    }).catch((error: unknown) => {
+      const known = error as { code?: string; meta?: { target?: string[] | string } };
+      const target = Array.isArray(known.meta?.target) ? known.meta.target.join(",") : String(known.meta?.target ?? "");
+      if (known.code === "P2002" && target.includes("customDomain")) return null;
+      throw error;
     });
-    logAudit({ storeId, userId: request.user.userId, action: "store.settings_update", targetType: "Store", targetId: storeId, metadata: parsed.data });
+    if (!store) return reply.code(409).send({ error: "este domínio já está em uso por outra loja", code: "CUSTOM_DOMAIN_TAKEN" });
+    logAudit({ storeId, userId: request.user.userId, action: "store.settings_update", targetType: "Store", targetId: storeId, metadata: { fields: Object.keys(parsed.data) } }); // só QUAIS campos mudaram, nunca os valores (endereço, telefone, textos; ADR-0014 §3.4)
     return { store };
   });
 };

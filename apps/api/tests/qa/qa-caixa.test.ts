@@ -71,7 +71,8 @@ describe("QA caixa (API)", () => {
     const cookie = await loja();
     expect((await app.inject({ method: "POST", url: "/api/cashier/close", headers: { cookie }, payload: { closingBalanceCents: 10000 } })).statusCode).toBe(200);
     const again = await app.inject({ method: "POST", url: "/api/cashier/close", headers: { cookie }, payload: { closingBalanceCents: 10000 } });
-    expect([404, 409]).toContain(again.statusCode);
+    expect(again.statusCode).toBe(409);
+    expect(JSON.parse(again.body).code).toBe("CASH_ALREADY_CLOSED");
     const afterClose = await mover(cookie, "SUPRIMENTO", 500);
     expect(afterClose.statusCode).toBe(409);
     expect(JSON.parse(afterClose.body).code).toBe("CASH_REQUIRED");

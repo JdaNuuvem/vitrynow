@@ -4,7 +4,8 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [react()],
-  resolve: { alias: { "@": path.resolve(__dirname, ".") } },
+  // `server-only` é resolvido pelo próprio Next no build; no vitest vira módulo vazio
+  resolve: { alias: { "@": path.resolve(__dirname, "."), "server-only": path.resolve(__dirname, "tests/server-only-stub.ts") } },
   test: {
     environment: "jsdom",
     globals: true,

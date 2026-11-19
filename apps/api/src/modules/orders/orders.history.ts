@@ -2,6 +2,7 @@ import { Prisma, type prisma as prismaClient } from "@meucardapio/db";
 import { HISTORY_PERIODS, HISTORY_STATUS_FILTERS } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
 import { parseLocalDate, safeTimeZone, startOfStoreDay } from "../../lib/storeTime";
+import { MAX_REFUND_AUTO_ATTEMPTS } from "../../lib/refundPolicy";
 import { maskPhone, recentWindowCutoff } from "./orders.view";
 import { utc } from "../../lib/sqlTime";
 import type { Role } from "../../lib/orderStateMachine";
@@ -117,6 +118,8 @@ export type HistoryRow = {
   customerName: string | null;
   customerPhone: string | null;
   hasPhone: boolean;
+  /** LGPD: o dado pessoal deste pedido foi removido a pedido do titular. */
+  anonymized: boolean;
   type: string;
   totalCents: number;
   status: string;
@@ -125,6 +128,8 @@ export type HistoryRow = {
   paymentMethod: string | null;
   paymentStatus: string | null;
   refundPending: boolean;
+  refundAbandoned: boolean;
+  refundStuck: boolean;
   notPrinted: boolean;
 };
 
@@ -141,7 +146,7 @@ export async function searchOrderHistory(
   const status = query.status ?? "ALL";
   if (!HISTORY_STATUS_FILTERS.includes(status)) throw bad("FILTER_INVALID", "Filtro de status inválido.");
   // "Em aberto" NÃO tem janela (API-72): é a lista de TUDO que está aberto na loja, inclusive o pedido esquecido há meses, que é
-  // justamente o que o aviso do kanban manda resolver. Período, from e to são ignorados (e não validados) nesse filtro.
+  // justamente o que o aviso do kanban manda resolver. `period`, `from` e `to` são IGNORADOS nesse filtro (os valores de `from`/`to` nem são lidos). Só a FORMA dos parâmetros é validada na rota: `period` fora do enum (ex. `banana`) segue dando 400 FILTER_INVALID, para um erro do cliente aparecer.
   const period = status === "ABERTO" ? null : resolvePeriod(query, now, tz);
   const search = parseSearch(query.q, role);
   if (opts.skipPhone && search) search.phone = null; // cota do telefone esgotada: só código e nome (o serviço decide)
@@ -157,7 +162,7 @@ export async function searchOrderHistory(
   if (status === "PAGAMENTO_EXPIRADO") where.push(Prisma.sql`p."status"::text = 'EXPIRADO'`);
   if (query.type) where.push(Prisma.sql`o."type"::text = ${query.type}`);
   if (query.paymentMethod) where.push(Prisma.sql`o."paymentMethod"::text = ${query.paymentMethod}`);
-  if (query.refundPending) where.push(Prisma.sql`p."status"::text = 'ESTORNO_PENDENTE'`);
+  if (query.refundPending) where.push(Prisma.sql`p."status"::text = 'ESTORNO_PENDENTE' AND p."refundAbandonedAt" IS NULL`);
 
   if (search) {
     const any: Prisma.Sql[] = [];
@@ -199,7 +204,7 @@ export async function searchOrderHistory(
     where: { id: { in: pageIds }, storeId },
     select: {
       id: true, code: true, createdAt: true, customerName: true, customerPhone: true, type: true, totalCents: true, status: true,
-      awaitingPayment: true, paymentMethod: true, printedAt: true, payment: { select: { status: true } },
+      awaitingPayment: true, paymentMethod: true, printedAt: true, anonymizedAt: true, payment: { select: { status: true, refundAbandonedAt: true, refundAttempts: true } },
     },
   });
   const byId = new Map(found.map((o) => [o.id, o]));
@@ -218,13 +223,16 @@ export async function searchOrderHistory(
       customerName: o.customerName,
       customerPhone: maskPhone(o.customerPhone), // lista: SEMPRE mascarado, qualquer papel; sem endereço
       hasPhone: !!o.customerPhone,
+      anonymized: o.anonymizedAt !== null,
       type: o.type,
       totalCents: o.totalCents,
       status: o.status,
       display,
       paymentMethod: o.paymentMethod,
       paymentStatus,
-      refundPending: paymentStatus === "ESTORNO_PENDENTE",
+      refundPending: paymentStatus === "ESTORNO_PENDENTE" && !o.payment?.refundAbandonedAt,
+      refundAbandoned: !!o.payment?.refundAbandonedAt, // marca "Estorno não concluído" (RN-ABD-04)
+      refundStuck: paymentStatus === "ESTORNO_PENDENTE" && !o.payment?.refundAbandonedAt && (o.payment?.refundAttempts ?? 0) >= MAX_REFUND_AUTO_ATTEMPTS,
       notPrinted: o.printedAt === null && !o.awaitingPayment && o.status !== "CANCELADO",
     };
   });

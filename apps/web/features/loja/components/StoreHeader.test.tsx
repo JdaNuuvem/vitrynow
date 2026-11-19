@@ -23,6 +23,7 @@ describe("capa (spec 09 §2.1)", () => {
   it("sem capa vira o bloco liso e baixo, sem imagem nem ícone", () => {
     const { container } = setup({ coverImageUrl: null });
     expect(container.querySelector(".loja__cover--empty")).toBeInTheDocument();
+    expect(container.querySelector(".loja__cover--compact")).toBeInTheDocument();
     expect(container.querySelector(".loja__cover img")).not.toBeInTheDocument();
     expect(container.querySelector(".loja__cover")?.textContent).toBe("");
   });
@@ -31,6 +32,7 @@ describe("capa (spec 09 §2.1)", () => {
     const { container } = setup();
     fireEvent.error(container.querySelector(".loja__cover img") as HTMLImageElement);
     expect(container.querySelector(".loja__cover--empty")).toBeInTheDocument();
+    expect(container.querySelector(".loja__cover--compact")).not.toBeInTheDocument();
     expect(container.querySelector(".loja__cover img")).not.toBeInTheDocument();
   });
 });
@@ -63,7 +65,7 @@ describe("horário e status (spec 12 §2.5)", () => {
     expect(screen.getByText("Seg a sex, 18h às 23h")).toBeVisible();
   });
 
-  it("recebendo pedidos: diz só o que o servidor sabe, nunca 'aberto agora' nem hora de fechar (B5 pendente)", () => {
+  it("sem horário estruturado avisa que recebe pedidos, sem inventar hora de fechamento", () => {
     setup();
     expect(screen.getByText("Recebendo pedidos")).toBeInTheDocument();
     expect(screen.queryByText(/aberto agora|fecha às|fechado agora/i)).not.toBeInTheDocument();
@@ -75,6 +77,26 @@ describe("horário e status (spec 12 §2.5)", () => {
     expect(screen.getByText("Fechado agora")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Esta loja não está recebendo pedidos agora.");
     expect(screen.queryByText("Recebendo pedidos")).not.toBeInTheDocument();
+  });
+
+  it("apresenta a pausa informada pela API mesmo com o interruptor ligado", () => {
+    setup({ accepting: false, hours: { status: "PAUSADO", reason: "PAUSED", nextOpenAt: "2026-11-18T18:00:00Z", closesAt: null, message: "Voltamos em 15 min" } });
+    expect(screen.getByText("Pedidos pausados")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Voltamos em 15 min");
+  });
+
+  it("usa o horário da loja e mostra prazo de preparo somente para modalidade habilitada", () => {
+    setup({ accepting: true, hours: { status: "ABERTO", reason: null, nextOpenAt: null, closesAt: "2026-11-18T23:00:00Z", message: "Aberto até 20:00" },
+      deliveryEnabled: false, prepMinutes: { delivery: 40, pickup: 15 } });
+    expect(screen.getByText("Aberto até 20:00")).toBeVisible();
+    expect(screen.getByText("Retirada: 15 min de preparo")).toBeVisible();
+    expect(screen.queryByText(/40 min/)).not.toBeInTheDocument();
+  });
+
+  it("preserva o bloqueio geral sem exibir a mensagem do horário", () => {
+    setup({ acceptingOrders: false, accepting: false, hours: { status: "PAUSADO", reason: "PAUSED", nextOpenAt: null, closesAt: null, message: "Voltamos em 15 min" } });
+    expect(screen.getByRole("status")).toHaveTextContent("Esta loja não está recebendo pedidos agora.");
+    expect(screen.queryByText("Voltamos em 15 min")).not.toBeInTheDocument();
   });
 
   it("sem horário cadastrado não há 'Ver horários'", () => {

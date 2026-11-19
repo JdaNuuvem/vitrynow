@@ -1,58 +1,44 @@
+import { isSoldOutNow } from "../lib/soldOut";
 import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { createOrderSchema } from "@meucardapio/shared-types";
+import { applyFreeShipping } from "../lib/deliveryZones";
 import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
 import { publishToStore } from "../realtime/hub";
-import { createPixPayment } from "../lib/mercadopago";
+import { gatewayForStore } from "../modules/storePayments/gateway";
+import { PixUnavailableError } from "../modules/storePayments/storePayments.service";
 import { orderService } from "../modules/orders/orders.module";
 import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { customerMessageFor, messageActorFor, moneyLineFor } from "../lib/cancelMessages";
-import { DomainError } from "../shared/errors";
+import { DomainError, useDomainErrors } from "../shared/errors";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
+import { buildMenuView } from "../lib/menuView";
+import { limited, tooMany } from "../lib/slidingLimit";
+import { CAPTCHA_HEADER, captchaVerifier } from "../lib/captcha";
+import { clientIpOf } from "../lib/clientIp";
+import { clientKey } from "../lib/clientKey";
 import { newOrderToken, orderTokenMatches, ORDER_TOKEN_HEADER } from "../lib/orderToken";
+import { assertOrderMoneyFits, buildOrderLines, optionCopiesCreate } from "../lib/orderItems";
 
 const COUPON_EXHAUSTED_MESSAGE = "Esse cupom acabou.";
 class CouponExhaustedError extends Error {}
 
 // Rotas públicas do cardápio (sem autenticação) — equivalente ao /online/{slug} do original.
+// NG-08: tetos do pedido público (por loja e por telefone); ver o comentário no uso.
+export const PUBLIC_ORDERS_PER_STORE_PER_MINUTE = 60;
+export const MAX_PENDING_PER_PHONE = 3;
+export const CAPTCHA_AT_PENDING = 2; // com captcha ligado, a partir do 2º pedido pendente do telefone
+const PENDING_WINDOW_MS = 30 * 60 * 1000;
+
 const storefrontRoutes: FastifyPluginAsync = async (app) => {
+  useDomainErrors(app);
   app.get("/stores/:slug/menu", async (request, reply) => {
     const { slug } = request.params as { slug: string };
     const store = await prisma.store.findUnique({ where: { slug } });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });
 
-    const categories = await prisma.category.findMany({
-      where: { storeId: store.id },
-      orderBy: { position: "asc" },
-      include: {
-        products: {
-          // SEC-11: nunca confiar só na categoria — o produto precisa ser DESTA loja.
-          where: { active: true, storeId: store.id },
-          orderBy: { position: "asc" },
-          include: { additionals: true },
-        },
-      },
-    });
-
-    return {
-      store: {
-        name: store.name,
-        slug: store.slug,
-        logoUrl: store.logoUrl,
-        coverImageUrl: store.coverImageUrl,
-        primaryColor: store.primaryColor,
-        address: store.address,
-        whatsapp: store.whatsapp,
-        openingHours: store.openingHours,
-        minOrderCents: store.minOrderCents,
-        deliveryEnabled: store.deliveryEnabled,
-        pickupEnabled: store.pickupEnabled,
-        acceptingOrders: store.acceptingOrders,
-        deliveryFeeCents: store.deliveryFeeCents,
-      },
-      categories,
-    };
+    return buildMenuView(store);
   });
 
   app.post(
@@ -62,6 +48,9 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     const { slug } = request.params as { slug: string };
     const store = await prisma.store.findUnique({ where: { slug } });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });
+    if (store.platformSuspendedAt) {
+      return reply.code(409).send({ error: "A loja não está aceitando pedidos no momento.", code: "STORE_SUSPENDED" });
+    }
     if (!store.acceptingOrders) {
       return reply.code(409).send({ error: "A loja não está aceitando pedidos no momento.", code: "STORE_CLOSED" });
     }
@@ -69,6 +58,25 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     const parsed = createOrderSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     const input = parsed.data;
+
+    // NG-08 (B19): anti-abuso do pedido público. Cada pedido pode imprimir um tíquete (papel físico) assim que chega, então o limite por IP (acima) não basta:
+    // quem troca de IP (rede móvel, VPN) inundaria a cozinha. Dois tetos a mais, ANTES de qualquer escrita: (1) por LOJA, somando todos os IPs; (2) por TELEFONE,
+    // pedidos ainda PENDENTES (não aceitos) na última meia hora. Cliente real raramente tem 3 pedidos não aceitos de uma vez. A recusa é o 429 padrão (sem dizer qual teto).
+    if (limited(`public-order-store:${store.id}`, PUBLIC_ORDERS_PER_STORE_PER_MINUTE)) return tooMany(reply);
+    if (input.customerPhone) {
+      const pendingOfPhone = await prisma.order.count({
+        where: { storeId: store.id, customerPhone: input.customerPhone, status: "PENDENTE", source: "CLIENTE", createdAt: { gte: new Date(Date.now() - PENDING_WINDOW_MS) } },
+      });
+      if (pendingOfPhone >= MAX_PENDING_PER_PHONE) return tooMany(reply);
+      // Captcha SÓ com risco (NG-08): o 2º pedido pendente do mesmo telefone já pede a prova; cliente normal nunca vê. Provedor desligado (`off`) = nada muda.
+      const captcha = captchaVerifier();
+      if (captcha.mode !== "off" && pendingOfPhone >= CAPTCHA_AT_PENDING) {
+        const header = request.headers[CAPTCHA_HEADER];
+        const token = typeof header === "string" && header.length <= 2000 ? header : undefined;
+        const ok = await captcha.verify(token, clientKey(clientIpOf(request))).catch(() => false); // erro do provedor = recusa (fail-closed)
+        if (!ok) return reply.code(403).send({ error: "Confirme que você não é um robô para continuar.", code: "CAPTCHA_REQUIRED" });
+      }
+    }
 
     // Mesa só entra por QR/comanda (API-22). Esta rota genérica não tem mesa: recusa até lá (API-60).
     // MESA não depende de pickupEnabled/deliveryEnabled (loja só de salão é válida).
@@ -96,12 +104,13 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       where: { storeId: store.id, id: { in: input.items.map((i) => i.productId) } },
       include: { additionals: true },
     });
-    const productById = new Map(products.map((p) => [p.id, p]));
     if (products.length !== new Set(input.items.map((i) => i.productId)).size) {
-      return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja" });
+      return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja", code: "PRODUCT_NOT_FOUND" });
     }
     // Produto pausado some do cardápio e não pode ser pedido por chamada direta (B08).
-    const unavailable = products.filter((p) => !p.active);
+    // API-17: esgotado hoje também é recusado (RN-B11-04), mesmo se escondido ou enviado direto à API.
+    const orderNow = new Date();
+    const unavailable = products.filter((p) => !p.active || isSoldOutNow(p, orderNow));
     if (unavailable.length > 0) {
       // Mesmo código/forma para B11, QR de mesa e pedido manual (contrato B3 §8, item 3).
       return reply.code(400).send({
@@ -111,30 +120,10 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    let itemsData;
-    try {
-      itemsData = input.items.map((item) => {
-        const product = productById.get(item.productId)!;
-        const additionalsByProduct = new Map(product.additionals.map((a) => [a.id, a]));
-        const chosenAdditionals = (item.additionalIds ?? []).map((id) => {
-          const additional = additionalsByProduct.get(id);
-          if (!additional) throw new Error(`adicional ${id} não pertence ao produto ${product.id}`);
-          return additional;
-        });
-        const additionalsCents = chosenAdditionals.reduce((sum, a) => sum + a.priceCents, 0);
-        return {
-          productId: item.productId,
-          productName: product.name,
-          quantity: item.quantity,
-          unitPriceCents: product.priceCents,
-          notes: item.notes,
-          lineTotalCents: (product.priceCents + additionalsCents) * item.quantity,
-          additionals: chosenAdditionals,
-        };
-      });
-    } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : "pedido inválido" });
-    }
+    // API-15: UMA regra de preço/opções para vitrine, mesa e balcão (`lib/orderItems.ts`): preço só do servidor, cópia imutável, mesma resposta para opção alheia/inexistente.
+    const built = await buildOrderLines(store.id, products, input.items);
+    if (!built.ok) return reply.code(built.status).send(built.body);
+    const itemsData = built.lines;
 
     const subtotalCents = itemsData.reduce((sum, item) => sum + item.lineTotalCents, 0);
 
@@ -167,9 +156,39 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       discountCents = Math.min(discountCents, subtotalCents);
     }
 
-    const deliveryFeeCents = input.type === "DELIVERY" ? store.deliveryFeeCents : 0;
+    // API-16 (B9): taxa por bairro, recalculada AQUI (o cliente só informa o bairro e a taxa que viu). Retirada nunca tem taxa.
+    let deliveryFeeCents = 0;
+    let zoneSnapshot: { name: string; etaMin: number | null; etaMax: number | null } | null = null;
+    if (input.type === "DELIVERY") {
+      const zoneCount = await prisma.deliveryZone.count({ where: { storeId: store.id } });
+      let baseFee = store.deliveryFeeCents; // sem bairros cadastrados: taxa única, como sempre (CA-B9-09)
+      let zoneFreeFrom: number | null = null;
+      if (zoneCount > 0) {
+        const activeZones = () => prisma.deliveryZone.findMany({ where: { storeId: store.id, active: true }, orderBy: { name: "asc" }, select: { id: true, name: true, feeCents: true } });
+        if (input.neighborhoodId) {
+          const zone = await prisma.deliveryZone.findFirst({ where: { id: input.neighborhoodId, storeId: store.id } });
+          if (!zone) return reply.code(400).send({ error: "Bairro não atendido por esta loja.", code: "NEIGHBORHOOD_NOT_FOUND" });
+          if (!zone.active) {
+            // bairro desativado enquanto o cliente montava o pedido: recusa com a lista atual, carrinho mantido
+            return reply.code(400).send({ error: "Este bairro não está mais disponível para entrega.", code: "NEIGHBORHOOD_UNAVAILABLE", details: { zones: await activeZones() } });
+          }
+          baseFee = zone.feeCents;
+          zoneFreeFrom = zone.freeFromCents;
+          zoneSnapshot = { name: zone.name, etaMin: zone.etaMinMinutes, etaMax: zone.etaMaxMinutes };
+        } else if (store.deliveryOutsideMode !== "DEFAULT_FEE") {
+          return reply.code(400).send({ error: "Escolha o bairro da entrega.", code: "NEIGHBORHOOD_REQUIRED", details: { zones: await activeZones() } });
+        }
+      }
+      // Frete grátis sobre o subtotal LÍQUIDO (itens menos desconto), RN-B9-05.
+      deliveryFeeCents = applyFreeShipping(baseFee, subtotalCents - discountCents, zoneFreeFrom, store.freeShippingFromCents);
+    }
     const tipCents = input.tipCents ?? 0;
     const totalCents = subtotalCents - discountCents + deliveryFeeCents + tipCents;
+    assertOrderMoneyFits(totalCents);
+    // RN-B9-03: a taxa mudou desde que o cliente viu (ou é outra): 409 com o novo valor; a tela pede confirmação.
+    if (input.expectedDeliveryFeeCents !== undefined && input.expectedDeliveryFeeCents !== deliveryFeeCents) {
+      return reply.code(409).send({ error: "A taxa de entrega mudou. Confira o novo total.", code: "DELIVERY_FEE_CHANGED", details: { deliveryFeeCents, totalCents } });
+    }
 
     // Total ZERO (cupom cobriu todos os itens e não há taxa nem gorjeta): pedido normal, SEM cobrança. A forma de pagamento
     // informada (inclusive PIX e "troco para") é IGNORADA, não existe PIX de R$ 0,00 e o provedor nunca é chamado (RN-CP-10/11).
@@ -217,6 +236,9 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         subtotalCents,
         discountCents,
         deliveryFeeCents,
+        deliveryZoneName: zoneSnapshot?.name,
+        deliveryEtaMinMinutes: zoneSnapshot?.etaMin,
+        deliveryEtaMaxMinutes: zoneSnapshot?.etaMax,
         tipCents,
         totalCents,
         paymentMethod,
@@ -238,6 +260,10 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
             additionals: {
               create: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })),
             },
+            // Cópia da escolha no pedido (RN-B8-07): mudar o cardápio depois não altera pedido antigo. Na MESMA transação do pedido.
+            ...(item.optionCopies.length > 0
+              ? { options: { create: item.optionCopies.map((o) => ({ groupName: o.groupName, name: o.name, priceCents: o.priceCents, quantity: o.quantity, priceMode: o.priceMode })) } }
+              : {}),
           })),
         },
       },
@@ -254,12 +280,14 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     if (!usePix) {
       publishToStore(store.id, { type: "order.created", orderId: order.id });
       if (ticketQueued) publishToStore(store.id, { type: "print.available" });
-      return reply.code(201).send({ orderId: order.id, code: order.code, token: accessToken.token });
+      return reply.code(201).send({ orderId: order.id, code: order.code, token: accessToken.token, totalCents, discountCents });
     }
 
     const payment = await prisma.payment.findUniqueOrThrow({ where: { orderId: order.id } });
     try {
-      const pix = await createPixPayment({
+      // PIX POR LOJA (ADR-0001, API-07): a cobrança sai na conta do Mercado Pago DA LOJA, nunca na da plataforma. O cliente não vê "reconecte".
+      const gateway = await gatewayForStore(store.id);
+      const pix = await gateway.createPixPayment({
         orderId: order.id,
         amountCents: totalCents,
         description: `Pedido #${order.code} — ${store.name}`,
@@ -269,6 +297,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       await prisma.payment.update({
         where: { id: payment.id },
         data: {
+          paymentAccountId: gateway.accountId,
           providerPaymentId: pix.providerPaymentId,
           pixQrCode: pix.pixQrCode,
           pixQrCodeBase64: pix.pixQrCodeBase64,
@@ -279,13 +308,18 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         orderId: order.id,
         code: order.code,
         token: accessToken.token,
+        totalCents,
+        discountCents,
         payment: { pixQrCode: pix.pixQrCode, pixQrCodeBase64: pix.pixQrCodeBase64, expiresAt: pix.expiresAt },
       });
     } catch (error) {
+      // Conta desconectada entre a conferência do portão e a cobrança: o PIX simplesmente não existe (409), sem pedido solto.
+      const unavailable = error instanceof PixUnavailableError;
       app.log.error({ err: error }, "falha ao gerar o pagamento PIX do pedido");
       // O pedido NÃO é apagado (auditoria): vira CANCELADO com motivo e o cupom volta pelo fluxo de cancelamento.
       // Se o provedor chegou a criar a cobrança, o webhook/conciliação a encontra pela referência e estorna.
       await orderService.cancelBySystem(store.id, order.id, "PAGAMENTO_NAO_APROVADO", "SYSTEM").catch((cancelError) => app.log.error({ err: cancelError }, "falha ao cancelar o pedido após erro no PIX"));
+      if (unavailable) return reply.code(409).send({ error: "O PIX não está disponível nesta loja no momento.", code: "PIX_UNAVAILABLE" });
       return reply.code(502).send({ error: "não foi possível gerar o pagamento PIX, tente novamente" });
     }
     },
@@ -326,6 +360,36 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
             customerMessage: customerMessageFor(cancelRow.reasonCode, messageActorFor(cancelRow.source)),
             moneyLine: moneyLineFor(order.payment, cancelRow.reasonCode),
           }
+        : null,
+    };
+  });
+
+  // API-19 — link público de ACOMPANHAMENTO do pedido (B13a). Sem login: quem tem o token do pedido (cabeçalho `x-order-token`, nunca na URL)
+  // vê onde o pedido está. Resposta SÓ com o que o cliente já sabe e precisa: código, tipo, etapa atual, horários das etapas, nome da loja e,
+  // se cancelado, a frase fixa e a linha do dinheiro. NUNCA telefone, endereço, e-mail, observações, ids internos nem dado de pagamento do provedor.
+  // Sem token certo: o MESMO 404 de pedido inexistente (não revela que o pedido existe). Não indexável, sem Referer, sem cache.
+  app.get("/stores/:slug/orders/:orderId/tracking", { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } }, async (request, reply) => {
+    reply.header("Cache-Control", "no-store").header("X-Robots-Tag", "noindex, nofollow").header("Referrer-Policy", "no-referrer");
+    const { slug, orderId } = request.params as { slug: string; orderId: string };
+    const store = await prisma.store.findUnique({ where: { slug }, select: { id: true, name: true } });
+    const order = store
+      ? await prisma.order.findFirst({ where: { id: orderId, storeId: store.id }, include: { payment: { select: { status: true, amountCents: true, refundAbandonedAt: true } } } })
+      : null;
+    if (!store || !order || !orderTokenMatches(request.headers[ORDER_TOKEN_HEADER], order.publicTokenHash)) {
+      return reply.code(404).send({ error: "pedido não encontrado" });
+    }
+    const history = await prisma.orderStatusHistory.findMany({
+      where: { orderId: order.id, kind: { in: ["ADVANCE", "CANCEL"] } },
+      orderBy: { seq: "asc" },
+      select: { status: true, createdAt: true, kind: true, reasonCode: true, source: true },
+    });
+    const cancelRow = order.status === "CANCELADO" ? [...history].reverse().find((h) => h.kind === "CANCEL") : undefined;
+    return {
+      store: { name: store.name },
+      order: { code: order.code, type: order.type, status: order.status, createdAt: order.createdAt.toISOString(), awaitingPayment: order.awaitingPayment },
+      timeline: history.map((h) => ({ status: h.status, at: h.createdAt.toISOString() })),
+      cancelReason: cancelRow
+        ? { customerMessage: customerMessageFor(cancelRow.reasonCode, messageActorFor(cancelRow.source)), moneyLine: moneyLineFor(order.payment, cancelRow.reasonCode) }
         : null,
     };
   });

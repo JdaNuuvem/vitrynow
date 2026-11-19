@@ -27,11 +27,13 @@ export function Sheet({
   title,
   onClose,
   tall = false,
+  purchase = false,
   children,
 }: {
   title: string;
   onClose: () => void;
   tall?: boolean;
+  purchase?: boolean;
   children: ReactNode;
 }) {
   const titleId = useId();
@@ -130,7 +132,7 @@ export function Sheet({
         aria-labelledby={titleId}
         tabIndex={-1}
         onKeyDown={onKeyDown}
-        className={`loja__sheet-panel${tall ? " loja__sheet-panel--tall" : ""}`}
+        className={`loja__sheet-panel${tall ? " loja__sheet-panel--tall" : ""}${purchase ? " loja__sheet-panel--purchase" : ""}`}
       >
         <div className="loja__sheet-head">
           <h2 id={titleId} className="loja__sheet-title">
