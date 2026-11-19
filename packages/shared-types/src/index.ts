@@ -770,3 +770,23 @@ export const campaignContentSchema = z
 export type CampaignContent = z.infer<typeof campaignContentSchema>;
 export const campaignRevisionSchema = z.object({ revision: z.number().int().nonnegative() }).strict();
 export const campaignSaveSchema = z.object({ revision: z.number().int().nonnegative(), draft: campaignContentSchema }).strict();
+// ---- DADOS (i1): dicionário de métricas. Cada indicador é definido UMA vez (API); o web só renderiza o que esta rota devolve. ----
+export const metricPlanSchema = z.enum(["BASICO", "PRO", "DEPOIS"]);
+export const metricStateSchema = z.enum(["EXISTE", "NOVO", "PARCIAL"]);
+export const metricDefinitionSchema = z.object({
+  id: z.string().regex(/^M\d{2}$/),
+  name: z.string().min(1), // rótulo para o dono (glossário único, RN-DAD-07)
+  definition: z.string().min(1), // fórmula/regra única
+  notMeaning: z.string().min(1), // o que o número NÃO significa
+  incompleteWhen: z.array(z.string()), // motivos de `completeness` (RN-DAD-04), vazio = nunca incompleto
+  timezone: z.literal("STORE"), // sempre o fuso da LOJA (Store.timezone)
+  plan: metricPlanSchema,
+  state: metricStateSchema,
+});
+export const metricDictionarySchema = z.object({
+  metrics: z.array(metricDefinitionSchema),
+  /** campo da resposta de /api/reports/summary → id da métrica que o define */
+  summaryFields: z.record(z.string(), z.string().regex(/^M\d{2}$/)),
+});
+export type MetricDefinition = z.infer<typeof metricDefinitionSchema>;
+export type MetricDictionary = z.infer<typeof metricDictionarySchema>;

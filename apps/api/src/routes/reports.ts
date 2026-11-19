@@ -6,6 +6,7 @@ import { CSV_TABLES, MAX_REPORT_DAYS, buildReport, reportRows, resolveRange, toC
 import { REPORT_RULE_CHANGED_AT } from "../lib/saleLines";
 import { previousPeriod } from "../lib/reportPeriod";
 import { buildComparison } from "../lib/reportComparison";
+import { metricDictionary } from "../lib/metricDictionary";
 
 // SEC-16 — janela máxima e teto de pedidos por consulta; passou disso, 400/422 com a instrução de reduzir o período (nunca resposta parcial silenciosa).
 // A agregação agora é no banco (API-20), mas o teto continua: ele limita também o CSV. O resumo só traz agregados e nomes de produto/entregador:
@@ -65,6 +66,11 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
     }
     return range;
   }
+
+  // i1: dicionário de métricas (M01..M27). OWNER e STAFF leem (é só texto de definição, nenhum dado da loja); o web só renderiza.
+  app.get("/api/reports/dictionary", { preHandler: app.requirePanelAuth }, async (_request, reply) => {
+    return reply.header("Cache-Control", "private, max-age=300").send(metricDictionary());
+  });
 
   app.get("/api/reports/summary", { preHandler: app.requirePanelAuth }, async (request, reply) => {
     const { storeId } = request.user;
