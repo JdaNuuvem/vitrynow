@@ -60,7 +60,8 @@ export type Report = {
   byPaymentMethod: Record<string, Bucket>;
   byDay: { date: string; orderCount: number; revenueCents: number }[];
   byType: Record<string, Bucket>;
-  topProducts: { productName: string; quantity: number; revenueCents: number }[];
+  // Produto por PESO (PD, RN-PD-22): `quantity` conta PEDIDOS (1 por linha, nunca gramas como unidades) e `weightGrams` soma o peso vendido (kg = gramas ÷ 1.000, 3 casas no CSV).
+  topProducts: { productName: string; quantity: number; revenueCents: number; weightGrams: number }[];
   byDeliverer: { delivererName: string; orderCount: number; revenueCents: number }[];
   cashSummary: { sessionCount: number; suprimentosCents: number; sangriasCents: number };
   canceledCount: number;
@@ -110,9 +111,9 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
       SELECT o."type"::text AS "bucket", count(*) AS "count", sum(o."totalCents" - o."tipCents")::bigint AS "revenue"
       FROM "Order" o WHERE ${window} AND ${sale} GROUP BY 1 ORDER BY 1`),
     // Receita do produto INCLUI as opções (CA-B14-04): (preço unitário + soma das opções da linha) x quantidade.
-    prisma.$queryRaw<{ key: string; name: string; quantity: bigint; revenue: bigint }[]>(Prisma.sql`
+    prisma.$queryRaw<{ key: string; name: string; quantity: bigint; revenue: bigint; grams: bigint }[]>(Prisma.sql`
       SELECT coalesce(i."productId", i."productName") AS "key", max(i."productName") AS "name", sum(i."quantity") AS "quantity",
-             sum((i."unitPriceCents" + coalesce(a."extra", 0)) * i."quantity")::bigint AS "revenue"
+             sum((i."unitPriceCents" + coalesce(a."extra", 0)) * i."quantity")::bigint AS "revenue", coalesce(sum(i."weightGrams"), 0)::bigint AS "grams"
       FROM "OrderItem" i
       JOIN "Order" o ON o."id" = i."orderId"
       LEFT JOIN LATERAL (SELECT sum(x."priceCents") AS "extra" FROM "OrderItemAdditional" x WHERE x."orderItemId" = i."id") a ON true
@@ -133,9 +134,9 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
     prisma.$queryRaw<{ count: bigint; revenue: bigint }[]>(Prisma.sql`SELECT count(*) AS "count", coalesce(sum(r."totalCents"), 0)::bigint AS "revenue" FROM "Receipt" r WHERE ${rWindow}`),
     prisma.$queryRaw<{ date: string; count: bigint; revenue: bigint }[]>(Prisma.sql`SELECT ${rDay} AS "date", count(*) AS "count", sum(r."totalCents")::bigint AS "revenue" FROM "Receipt" r WHERE ${rWindow} GROUP BY 1`),
     prisma.$queryRaw<{ bucket: string; count: bigint; revenue: bigint }[]>(Prisma.sql`SELECT p."method"::text AS "bucket", count(*) AS "count", sum(p."amountCents")::bigint AS "revenue" FROM "ReceiptPayment" p JOIN "Receipt" r ON r."id" = p."receiptId" WHERE ${rWindow} GROUP BY 1`),
-    prisma.$queryRaw<{ key: string; name: string; quantity: bigint; revenue: bigint }[]>(Prisma.sql`
+    prisma.$queryRaw<{ key: string; name: string; quantity: bigint; revenue: bigint; grams: bigint }[]>(Prisma.sql`
       SELECT coalesce(i."productId", i."productName") AS "key", max(i."productName") AS "name", sum(i."quantity") AS "quantity",
-             sum((i."unitPriceCents" + coalesce(a."extra", 0)) * i."quantity")::bigint AS "revenue"
+             sum((i."unitPriceCents" + coalesce(a."extra", 0)) * i."quantity")::bigint AS "revenue", coalesce(sum(i."weightGrams"), 0)::bigint AS "grams"
       FROM "OrderItem" i JOIN "Order" o ON o."id" = i."orderId" JOIN "Receipt" r ON r."id" = o."receiptId"
       LEFT JOIN LATERAL (SELECT sum(x."priceCents") AS "extra" FROM "OrderItemAdditional" x WHERE x."orderItemId" = i."id") a ON true
       WHERE ${rWindow} AND o."status" <> 'CANCELADO' GROUP BY 1`),
@@ -161,11 +162,12 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
     e.revenueCents += n(r.revenue);
     dayMap.set(r.date, e);
   }
-  const productMap = new Map<string, { productName: string; quantity: number; revenueCents: number }>();
+  const productMap = new Map<string, { productName: string; quantity: number; revenueCents: number; weightGrams: number }>();
   for (const r of [...products, ...rProducts]) {
-    const e = productMap.get(r.key) ?? { productName: r.name, quantity: 0, revenueCents: 0 };
+    const e = productMap.get(r.key) ?? { productName: r.name, quantity: 0, revenueCents: 0, weightGrams: 0 };
     e.quantity += n(r.quantity);
     e.revenueCents += n(r.revenue);
+    e.weightGrams += n(r.grams);
     productMap.set(r.key, e);
   }
   const toBuckets = (rows: { bucket: string; count: bigint; revenue: bigint }[]) =>
@@ -200,6 +202,9 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
 
 export const CSV_TABLES = ["summary", "byDay", "byPaymentMethod", "byType", "topProducts", "byDeliverer"] as const;
 export type CsvTable = (typeof CSV_TABLES)[number];
+
+// Peso vendido em kg com 3 casas e vírgula decimal (1250 g => "1,250"); vazio quando o produto não é vendido por peso.
+export const kgText = (grams: number) => (grams > 0 ? `${Math.floor(grams / 1000)},${String(grams % 1000).padStart(3, "0")}` : "");
 
 export const reais = (cents: number) => `${cents < 0 ? "-" : ""}${Math.floor(Math.abs(cents) / 100)},${String(Math.abs(cents) % 100).padStart(2, "0")}`;
 
@@ -241,7 +246,7 @@ export function reportRows(report: Report, table: CsvTable): (string | number)[]
     case "byType":
       return [["Tipo", "Vendas", "Faturamento (R$)"], ...Object.entries(report.byType).map(([k, v]) => [TYPE_LABEL[k] ?? k, v.count, reais(v.revenueCents)])];
     case "topProducts":
-      return [["Produto", "Quantidade", "Receita com opções (R$)"], ...report.topProducts.map((r) => [r.productName, r.quantity, reais(r.revenueCents)])];
+      return [["Produto", "Quantidade", "Receita com opções (R$)", "Peso vendido (kg)"], ...report.topProducts.map((r) => [r.productName, r.quantity, reais(r.revenueCents), kgText(r.weightGrams)])];
     case "byDeliverer":
       return [["Entregador", "Entregas", "Valor dos pedidos (R$)"], ...report.byDeliverer.map((r) => [r.delivererName, r.orderCount, reais(r.revenueCents)])];
   }
