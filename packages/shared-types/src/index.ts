@@ -631,6 +631,9 @@ export const busyRequestSchema = z.object({
   extraMinutes: z.union([z.literal(10), z.literal(20), z.literal(30)]).optional(),
 });
 export type BusyRequest = z.infer<typeof busyRequestSchema>;
+// Motivo de a loja não receber pedido agora (`hours.reason` e `store.reason` do cardápio público): o web lê pelo enum, não por texto.
+export const storeClosedReasonSchema = z.enum(["SWITCHED_OFF", "PAUSED", "CLOSED_TODAY", "OUTSIDE_HOURS", "BUSY"]);
+export type StoreClosedReason = z.infer<typeof storeClosedReasonSchema>;
 
 // ---- Planos e assinatura ----
 
