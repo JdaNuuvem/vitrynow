@@ -1,6 +1,7 @@
 import { Prisma, type prisma as prismaClient } from "@meucardapio/db";
 import { HISTORY_PERIODS, HISTORY_STATUS_FILTERS } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
+import { resolveReportPeriod } from "../../lib/reportPeriod";
 import { parseLocalDate, safeTimeZone, startOfStoreDay } from "../../lib/storeTime";
 import { MAX_REFUND_AUTO_ATTEMPTS } from "../../lib/refundPolicy";
 import { maskPhone, recentWindowCutoff } from "./orders.view";
@@ -42,32 +43,18 @@ const bad = (code: string, message: string) => new CodedError(400, code, message
 
 /** Período [início, fim) em UTC, calculado no fuso da loja. Padrão: últimos 7 dias (RN-HP-02). */
 export function resolvePeriod(query: Pick<HistoryQuery, "period" | "from" | "to">, now: Date, timeZone: string): { start: Date; end: Date } {
-  const tomorrow = startOfStoreDay(now, timeZone, 1);
-  switch (query.period ?? "7d") {
-    case "today":
-      return { start: startOfStoreDay(now, timeZone, 0), end: tomorrow };
-    case "yesterday":
-      return { start: startOfStoreDay(now, timeZone, -1), end: startOfStoreDay(now, timeZone, 0) };
-    case "7d":
-      return { start: startOfStoreDay(now, timeZone, -6), end: tomorrow };
-    case "30d":
-      return { start: startOfStoreDay(now, timeZone, -29), end: tomorrow };
-    case "custom": {
-      if (!query.from || !query.to) throw bad("PERIOD_INVALID", "Informe a data inicial e a final.");
-      const start = parseLocalDate(query.from, timeZone);
-      const lastDay = parseLocalDate(query.to, timeZone);
-      if (!start || !lastDay) throw bad("PERIOD_INVALID", "Data inválida.");
-      // fim inclusivo: o dia final entra inteiro
-      const [y, m, d] = query.to.split("-").map(Number);
-      const next = new Date(Date.UTC(y, m - 1, d + 1));
-      const end = parseLocalDate(`${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}-${String(next.getUTCDate()).padStart(2, "0")}`, timeZone)!;
-      if (end <= start) throw bad("PERIOD_INVALID", "A data final não pode ser anterior à inicial.");
-      if ((end.getTime() - start.getTime()) / 86_400_000 > HISTORY_MAX_DAYS + 0.05) throw bad("PERIOD_TOO_LONG", `O período máximo é de ${HISTORY_MAX_DAYS} dias.`);
-      return { start, end };
-    }
+  // UMA função de período para relatório, "hoje", caixa e histórico (lib/reportPeriod.ts, DADOS-1/i2): o fuso é o da loja.
+  const period = query.period ?? "7d";
+  if (period === "custom" && (!query.from || !query.to)) throw bad("PERIOD_INVALID", "Informe a data inicial e a final.");
+  const r = resolveReportPeriod(period === "custom" ? { from: query.from, to: query.to } : { preset: period }, now, timeZone);
+  if ("error" in r) {
+    if (r.error === "FROM_AFTER_TO") throw bad("PERIOD_INVALID", "A data final não pode ser anterior à inicial.");
+    if (r.error === "PERIOD_TOO_LONG") throw bad("PERIOD_TOO_LONG", `O período máximo é de ${HISTORY_MAX_DAYS} dias.`);
+    throw bad("PERIOD_INVALID", "Data inválida.");
   }
+  if (r.days > HISTORY_MAX_DAYS) throw bad("PERIOD_TOO_LONG", `O período máximo é de ${HISTORY_MAX_DAYS} dias.`);
+  return { start: r.fromUtc, end: r.toExclusiveUtc };
 }
-
 // Remove acento e caixa no SQL e no termo: "Conceição" = "conceicao". (Sem a extensão `unaccent`, que nem todo banco libera.)
 const ACCENT_FROM = "áàâãäåéèêëíìîïóòôõöúùûüçñýÿÁÀÂÃÄÅÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑÝ";
 const ACCENT_TO = "aaaaaaeeeeiiiiooooouuuucnyyAAAAAAEEEEIIIIOOOOOUUUUCNY";

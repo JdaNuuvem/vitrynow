@@ -4,6 +4,8 @@ import { logAudit } from "../lib/audit";
 import { storeTimeZone } from "../lib/storeTz";
 import { CSV_TABLES, MAX_REPORT_DAYS, buildReport, reportRows, resolveRange, toCsv, type CsvTable } from "../lib/reports";
 import { REPORT_RULE_CHANGED_AT } from "../lib/saleLines";
+import { previousPeriod } from "../lib/reportPeriod";
+import { buildComparison } from "../lib/reportComparison";
 
 // SEC-16 — janela máxima e teto de pedidos por consulta; passou disso, 400/422 com a instrução de reduzir o período (nunca resposta parcial silenciosa).
 // A agregação agora é no banco (API-20), mas o teto continua: ele limita também o CSV. O resumo só traz agregados e nomes de produto/entregador:
@@ -46,12 +48,12 @@ const RANGE_REPLY = {
 // Relatórios do painel (B14): agregados no banco, no fuso da loja, com a definição única de venda (API-21).
 const reportRoutes: FastifyPluginAsync = async (app) => {
   // Devolve o período válido ou já responde 400/422 e devolve null.
-  async function periodOrReply(storeId: string, query: { from?: unknown; to?: unknown }, reply: FastifyReply) {
-    if ((query.from !== undefined && typeof query.from !== "string") || (query.to !== undefined && typeof query.to !== "string")) {
+  async function periodOrReply(storeId: string, query: { from?: unknown; to?: unknown; preset?: unknown }, reply: FastifyReply) {
+    if ((query.from !== undefined && typeof query.from !== "string") || (query.to !== undefined && typeof query.to !== "string") || (query.preset !== undefined && typeof query.preset !== "string")) {
       void reply.code(400).send({ error: "datas inválidas" });
       return null;
     }
-    const range = resolveRange({ from: query.from as string | undefined, to: query.to as string | undefined }, new Date(), await storeTimeZone(storeId));
+    const range = resolveRange({ preset: query.preset as string | undefined, from: query.from as string | undefined, to: query.to as string | undefined }, new Date(), await storeTimeZone(storeId));
     if ("error" in range) {
       void reply.code(400).send(RANGE_REPLY[range.error]);
       return null;
@@ -68,9 +70,15 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
     const { storeId } = request.user;
     const range = await periodOrReply(storeId, request.query as { from?: unknown; to?: unknown }, reply);
     if (!range) return reply;
-    const full = { ...(await buildReport(storeId, range)), ruleChangedAt: REPORT_RULE_CHANGED_AT };
+    const current = await buildReport(storeId, range);
+    const full = { ...current, ruleChangedAt: REPORT_RULE_CHANGED_AT };
     // RN-R-06 / CA-R-15: dinheiro é do OWNER. O STAFF recebe só CONTAGENS (campos em reais AUSENTES, não zerados).
-    return request.user.role === "OWNER" ? full : staffReportView(full);
+    const view = request.user.role === "OWNER" ? full : { ...staffReportView(full), partial: current.partial };
+    // i3 (M13): `?compare=prev` liga o comparativo com o período anterior de MESMO tamanho (hoje: mesmo dia da semana, até a mesma hora).
+    if ((request.query as { compare?: unknown }).compare !== "prev") return view;
+    const prevRange = previousPeriod(range, new Date());
+    const comparison = buildComparison(current, await buildReport(storeId, prevRange), prevRange, request.user.role === "OWNER" ? "OWNER" : "STAFF");
+    return { ...view, comparison };
   });
 
   // CSV de cada tabela e do resumo (B14.2). Só o dono baixa (dado financeiro completo; SEC-16); toda exportação fica na auditoria.

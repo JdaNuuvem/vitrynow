@@ -1,46 +1,18 @@
 import { Prisma, prisma } from "@meucardapio/db";
 import { SALE_STATUSES } from "./saleLines";
-import { DEFAULT_STORE_TIMEZONE, localMidnightUtc, parseLocalDate } from "./storeTime";
 import { utc } from "./sqlTime";
 
 // API-20 (B14): relatórios agregados NO BANCO, no fuso da loja, com a definição única de venda (API-21, lib/saleLines):
 // venda = CONFIRMADO..CONCLUIDO e fora de "aguardando pagamento"; faturamento = total - gorjeta; PENDENTE = "em aberto"; CANCELADO à parte.
 // Nada de carregar pedidos na memória: o período máximo (366 dias) agrega no Postgres.
 
-export const MAX_REPORT_DAYS = 366;
-export const DEFAULT_REPORT_DAYS = 30;
+import { MAX_REPORT_DAYS, DEFAULT_REPORT_DAYS, resolveReportPeriod, type ReportPeriod, type RangeError } from "./reportPeriod";
 
-export type ReportRange = { fromDate: string; toDate: string; fromUtc: Date; toExclusiveUtc: Date; timeZone: string };
-export type RangeError = "INVALID_DATE" | "FROM_AFTER_TO" | "PERIOD_TOO_LONG";
-
-const DAY = 24 * 60 * 60 * 1000;
-const dateOf = (instant: Date, timeZone: string) => instant.toLocaleDateString("en-CA", { timeZone });
-
-// "AAAA-MM-DD" vale como está (dia da LOJA, inclusivo). Um instante ISO (formato antigo do painel) vira o dia da loja desse instante.
-function toLocalDate(value: string, timeZone: string): string | null {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return parseLocalDate(value, timeZone) ? value : null;
-  const instant = new Date(value);
-  return Number.isNaN(instant.getTime()) ? null : dateOf(instant, timeZone);
-}
-
-// Período padrão: os últimos 30 dias, de hoje para trás (datas inclusivas no fuso da loja).
-const utcDay = (date: string) => {
-  const [y, m, d] = date.split("-").map(Number);
-  return Date.UTC(y, m - 1, d);
-};
-const shiftDate = (date: string, days: number) => new Date(utcDay(date) + days * DAY).toISOString().slice(0, 10);
-
-export function resolveRange(query: { from?: string; to?: string }, now: Date = new Date(), timeZone: string = DEFAULT_STORE_TIMEZONE): ReportRange | { error: RangeError } {
-  const toDate = query.to ? toLocalDate(query.to, timeZone) : dateOf(now, timeZone);
-  if (!toDate) return { error: "INVALID_DATE" };
-  const fromDate = query.from ? toLocalDate(query.from, timeZone) : shiftDate(toDate, -(DEFAULT_REPORT_DAYS - 1));
-  if (!fromDate) return { error: "INVALID_DATE" };
-  if (fromDate > toDate) return { error: "FROM_AFTER_TO" };
-  if ((utcDay(toDate) - utcDay(fromDate)) / DAY + 1 > MAX_REPORT_DAYS) return { error: "PERIOD_TOO_LONG" };
-  const fromUtc = parseLocalDate(fromDate, timeZone)!;
-  const [y, m, d] = shiftDate(toDate, 1).split("-").map(Number);
-  return { fromDate, toDate, fromUtc, toExclusiveUtc: localMidnightUtc(y, m, d, timeZone), timeZone };
-}
+// O período vive em lib/reportPeriod.ts (UMA função, fuso da loja). Aqui só os apelidos que o resto do código já importa.
+export { MAX_REPORT_DAYS, DEFAULT_REPORT_DAYS };
+export type ReportRange = ReportPeriod;
+export type { RangeError };
+export const resolveRange = (query: { preset?: string; from?: string; to?: string }, now: Date = new Date(), timeZone?: string | null): ReportRange | { error: RangeError } => resolveReportPeriod(query, now, timeZone);
 
 export type Bucket = { count: number; revenueCents: number };
 export type Report = {
@@ -49,6 +21,7 @@ export type Report = {
   fromDate: string;
   toDate: string;
   timeZone: string;
+  partial: boolean;
   orderCount: number;
   revenueCents: number;
   discountCents: number;
@@ -175,6 +148,7 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
     fromDate: range.fromDate,
     toDate: range.toDate,
     timeZone: range.timeZone,
+    partial: range.partial,
     orderCount,
     revenueCents,
     discountCents: n(t.discount),
