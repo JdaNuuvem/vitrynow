@@ -25,8 +25,9 @@ describe("fuso da loja: lista fechada", () => {
 
 describe("POST /api/store/settings com fuso", () => {
   let app: ReturnType<typeof makeApp>;
-  beforeEach(async () => { await resetDb(); app = makeApp(); await app.ready(); });
-  afterEach(async () => { await app.close(); });
+  // Mesmo padrão dos outros arquivos: limpa DEPOIS (o próximo arquivo reaproveita os e-mails de teste do helper).
+  beforeEach(async () => { app = makeApp(); await app.ready(); });
+  afterEach(async () => { await app.close(); await resetDb(); });
 
   it("fora da lista: 400 TIMEZONE_INVALID e nada muda; da lista: grava e audita antes/depois", async () => {
     const owner = await registerStore(app);
