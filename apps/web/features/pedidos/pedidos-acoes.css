@@ -21,7 +21,7 @@
   gap: 8px;
   margin: 0 0 12px;
   padding: 10px 12px;
-  border: 1px solid #b45309;
+  border: 1px solid var(--warn-line);
   border-radius: 8px;
   background: var(--warn-bg);
   color: var(--warn); /* 6,8:1 sobre o fundo */
@@ -191,7 +191,7 @@
   color: var(--ink);
 }
 .pedidos-card__menu-danger {
-  border: 1px solid #fca5a5;
+  border: 1px solid var(--danger-line);
   background: var(--surface);
   color: var(--danger);
 }
@@ -292,7 +292,7 @@
   align-items: flex-start;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px solid #b45309; /* contraste de borda ≥ 3:1 sobre o fundo; texto #92400e sobre #fffbeb = 6,8:1 */
+  border: 1px solid var(--warn-line); /* contraste de borda ≥ 3:1 sobre o fundo; texto #92400e sobre #fffbeb = 6,8:1 */
   border-radius: 8px;
   background: var(--warn-bg);
   color: var(--warn);

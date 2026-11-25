@@ -1,9 +1,9 @@
 .inicio {
-  --inicio-accent: var(--color-primary, #b7472a);
-  --inicio-soft: var(--color-primary-ten, #fbede7);
-  --inicio-text: var(--ink, #212920);
-  --inicio-muted: var(--ink-soft, #5f675f);
-  --inicio-line: var(--line, #dcded6);
+  --inicio-accent: var(--color-primary);
+  --inicio-soft: var(--color-primary-ten);
+  --inicio-text: var(--ink);
+  --inicio-muted: var(--ink-soft);
+  --inicio-line: var(--line);
   --inicio-tint: var(--surface-soft);
   container-type: inline-size;
   box-sizing: border-box;
@@ -11,7 +11,7 @@
   max-width: 1536px;
   margin-inline: auto;
   padding: clamp(16px, 2.2vw, 32px);
-  background: var(--panel-canvas, #f6f5f1);
+  background: var(--panel-canvas);
   color: var(--inicio-text);
   font-family: inherit;
 }

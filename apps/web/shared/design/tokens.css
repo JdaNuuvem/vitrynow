@@ -18,6 +18,8 @@
   --warn-bg: #fff0dd;
   --danger: #ac2336;
   --danger-bg: #fff0f1;
+  --warn-line: #b45309; /* D8: borda de aviso (era hex solto em 4 lugares) */
+  --danger-line: #fca5a5; /* D8: borda de erro (era hex solto em 3 lugares) */
   --on-danger: #fff;
   --info-ink: #28558f;
   --info-bg: #ebf3ff;
@@ -70,6 +72,8 @@
   --warn-bg: #423423;
   --danger: #ffa4b0;
   --danger-bg: #482d35;
+  --warn-line: #a8743a;
+  --danger-line: #a3737c;
   --on-danger: #301d22;
   --info-ink: #a7c9fb;
   --info-bg: #25384d;

@@ -179,7 +179,7 @@
   justify-content: space-between;
   gap: 8px;
   padding: 8px 12px;
-  border: 1px solid #f59e0b;
+  border: 1px solid var(--warn-line);
   border-radius: 8px;
   background: var(--warn-bg);
   color: var(--warn);
@@ -338,5 +338,5 @@
 .pedido-extra__note textarea { box-sizing: border-box; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; resize: vertical; }
 .pedido-extra__note .pedido-extra__row { justify-content: flex-end; }
 .pedido-extra__muted { color: var(--ink-soft); font-size: .8125rem; margin-inline-end: auto; }
-.pedido-extra__ok { color: var(--success, #067647); font-size: .875rem; font-weight: 600; }
-.pedido-extra__error { color: var(--danger, #b42318); font-size: .875rem; font-weight: 600; }
+.pedido-extra__ok { color: var(--ok); font-size: .875rem; font-weight: 600; }
+.pedido-extra__error { color: var(--danger); font-size: .875rem; font-weight: 600; }

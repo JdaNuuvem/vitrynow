@@ -1,14 +1,20 @@
 # Para o frontend (apps/web) — leia ao receber esta atualização
 
-**Para:** o agente/dev que cuida do `apps/web` (telas do sócio). **De:** o lado backend/infra. **Data:** 24/11/2026.
+**Para:** o agente/dev que cuida do `apps/web` (telas do sócio). **De:** o lado backend/infra. **Atualizado:** 25/11/2026.
 
-**Regra combinada:** o backend **não altera** telas, CSS, componentes nem o cliente HTTP que já existem no `apps/web`; só cria telas que ainda não existiam. Tudo abaixo é **proposta**: nada daqui foi aplicado no web (o que chegou a ser aplicado foi desfeito; o web está como estava, 149 hex, testes iguais). Decida e aplique o que fizer sentido.
+**Regra combinada:** o backend não altera o que já existe no `apps/web`, EXCETO quando o dono do produto autoriza. Em 25/11 ele autorizou: sanitização dos campos (§3b), 3 telas corrigidas (§3b) e as cores do §1 — **tudo isso JÁ ESTÁ APLICADO no main**; revise e ajuste o visual se quiser.
 
-Ordem sugerida: §1.1 (bug real, 15 min) → §2 (quando os textos forem aprovados) → §1.2–1.4 → §3.
+## O QUE FICOU PARA VOCÊ (resumo)
+1. **Tela nova: importação de produtos por planilha** (§3c) — a API está pronta no main.
+2. **Ligar o catálogo de erros** (§2) — quando os textos forem aprovados (`docs/textos-de-erro-para-revisar.md`).
+3. **z-index e breakpoints** (§3) — não levantado ainda.
+4. **Revisar o que foi aplicado nas suas telas**: §1 (cores), §3b (máscaras/limites e 3 telas).
+5. Opcional: conferir se as telas criadas pelo backend antes da regra (estoque/lucro, mesas, pedidos agendados, relatórios avançados) seguem o seu padrão.
 
 ---
 
-## 1. Cores (SSOT D8)
+## 1. Cores (SSOT D8) — APLICADO em 25/11/2026
+Tudo da §1.1 à §1.4 abaixo foi aplicado como descrito: tokens fantasmas trocados (`--success/--warning/--accent` → `--ok/--warn/--color-primary`), 27 reservas mortas removidas, tokens novos `--warn-line`/`--danger-line` (claro = cor de antes; escuro = proposta), hex das regras trocados por token, SVG do onboarding via `style`. Hex no web: 149 → 96 (só paletas). Guarda: `shared/design/no-loose-colors.test.ts` (teto de hex por arquivo, todo `var(--x)` existe, todo token de cor claro tem versão escura). Mudança visual no tema claro só onde a tabela diz "cor muda". Texto original mantido abaixo como referência.
 
 ### 1.1 BUG: 3 tokens que NÃO existem (cor fixa, sem tema escuro) — recomendado corrigir
 `--success`, `--warning` e `--accent` não estão em `shared/design/tokens.css` (nem em `panel-tokens.css`). Todo `var(--success, #067647)` cai **sempre** na reserva: a cor não segue o tema e, no **modo escuro**, fica o verde/laranja/vermelho do tema claro.

@@ -88,7 +88,7 @@
 
 .pedidos-card__refund {
   padding: 4px;
-  border: 1px solid #fca5a5;
+  border: 1px solid var(--danger-line);
   border-radius: 6px;
   background: none;
   color: var(--danger);
