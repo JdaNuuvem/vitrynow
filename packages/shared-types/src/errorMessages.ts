@@ -258,6 +258,7 @@ export const errorMessages = {
   TABLE_LABEL_TAKEN: e("Já existe uma mesa com esse nome.", "painel"),
   TARGET_REQUIRED: e("Informe o telefone ou o código do pedido.", "painel"),
   TEXT_TOO_LONG: e("O texto passou do limite de caracteres.", "loja", "painel"),
+  TIMEZONE_INVALID: e("Fuso horário inválido. Escolha um da lista.", "painel"),
   TOO_MANY_OPTIONS: e("O grupo passou do limite de opções.", "painel"),
   TOO_MANY_PIXELS: e("A resolução da imagem é grande demais.", "painel"),
   TOTAL_CHANGED: e("A conta da mesa mudou. Confira o novo total.", "painel"),

@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
-import { storeAvailabilitySchema, updateStoreSettingsSchema } from "@meucardapio/shared-types";
+import { isStoreTimezone, storeAvailabilitySchema, updateStoreSettingsSchema } from "@meucardapio/shared-types";
 import { logAudit } from "../lib/audit";
 import { storeHoursService } from "../modules/storeHours/storeHours.module";
 import { parseStoredSchedule } from "../modules/storeHours/storeHours.domain";
@@ -67,8 +67,13 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/api/store/settings", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request, reply) => {
     const { storeId } = request.user;
+    // SSOT D1: fuso fora da lista fechada tem código próprio (o painel mostra a frase do catálogo de erros).
+    const asked = (request.body as { timezone?: unknown } | null)?.timezone;
+    if (asked !== undefined && !isStoreTimezone(asked)) return reply.code(400).send({ error: "Fuso horário inválido. Escolha um da lista.", code: "TIMEZONE_INVALID" });
     const parsed = updateStoreSettingsSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    // O fuso muda só o "dia" daqui para a frente (relatório, hoje, cupom, esgotado); pedidos gravados ficam em UTC. Auditoria guarda antes/depois.
+    const timezoneBefore = parsed.data.timezone ? (await prisma.store.findUnique({ where: { id: storeId }, select: { timezone: true } }))?.timezone : undefined;
 
     const { logoUrl, coverImageUrl, primaryColor, customDomain, address, whatsapp, openingHours: openingHoursInput, ...rest } = parsed.data;
     // `openingHours` (texto livre) só vale para loja SEM grade. Com grade ele é derivado: a escrita é IGNORADA (o painel atual segue salvando o resto sem erro) e a resposta avisa.
@@ -119,7 +124,7 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
       throw error;
     });
     if (!store) return reply.code(409).send({ error: "este domínio já está em uso por outra loja", code: "CUSTOM_DOMAIN_TAKEN" });
-    logAudit({ storeId, userId: request.user.userId, action: "store.settings_update", targetType: "Store", targetId: storeId, metadata: { fields: Object.keys(parsed.data).filter((key) => !(hasGrid && key === "openingHours")) } }); // só QUAIS campos mudaram, nunca os valores (endereço, telefone, textos; ADR-0014 §3.4)
+    logAudit({ storeId, userId: request.user.userId, action: "store.settings_update", targetType: "Store", targetId: storeId, metadata: { fields: Object.keys(parsed.data).filter((key) => !(hasGrid && key === "openingHours")), ...(parsed.data.timezone && timezoneBefore !== parsed.data.timezone ? { timezone: { from: timezoneBefore ?? null, to: parsed.data.timezone } } : {}) } }); // só QUAIS campos mudaram, nunca os valores (endereço, telefone, textos; ADR-0014 §3.4)
     return {
       store: await withDerivedHours(storeId, store),
       ...(ignoredHours ? { warnings: [{ code: "OPENING_HOURS_DERIVED", message: "O horário vem da grade de funcionamento; o texto livre foi ignorado. Edite em Horário de funcionamento." }] } : {}),

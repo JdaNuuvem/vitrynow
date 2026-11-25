@@ -3,6 +3,7 @@
 // Adicionar um campo publico = editar esta lista de proposito (e o teste `public-dto.test.ts`, que trava o conjunto exato de chaves).
 import type { GroupRow } from "../modules/optionGroups/optionGroups.domain";
 import type { Category, Product, ProductAdditional, Store } from "@meucardapio/db";
+import { safeTimeZone } from "./storeTime";
 
 export const PUBLIC_STORE_KEYS = ["name", "slug", "logoUrl", "coverImageUrl", "primaryColor", "address", "whatsapp", "openingHours", "minOrderCents", "deliveryEnabled", "pickupEnabled", "acceptingOrders", "deliveryFeeCents", "hideSoldOutProducts", "timezone"] as const;
 // Campanha publicada (CONTRATO-CAMPANHA): `action` so existe quando o destino ainda existe.
@@ -33,7 +34,7 @@ export const publicStore = (s: Store) => ({
   acceptingOrders: s.acceptingOrders && !s.platformSuspendedAt, // API-25: loja suspensa pela plataforma nao recebe pedido (cardapio publico)
   deliveryFeeCents: s.deliveryFeeCents,
   hideSoldOutProducts: s.hideSoldOutProducts, // API-17
-  timezone: s.timezone,
+  timezone: safeTimeZone(s.timezone), // fuso inválido gravado no passado não chega cru ao cardápio: cai no padrão
 });
 
 export const publicAdditional = (a: ProductAdditional) => ({ id: a.id, name: a.name, priceCents: a.priceCents });

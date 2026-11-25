@@ -17,7 +17,7 @@ export const phoneSchema = z
 export const orderTypeSchema = z.enum(["MESA", "DELIVERY", "BALCAO"]);
 
 // ---- Status do pedido e papeis do painel (SSOT D3/D4): listas em ./constants (sem zod, o web importa direto) ----
-import { ORDER_STATUSES, PANEL_ROLES } from "./constants";
+import { ORDER_STATUSES, PANEL_ROLES, STORE_TIMEZONES } from "./constants";
 export * from "./constants";
 export * from "./quote"; // SSOT D5: cotação do pedido (servidor decide, vitrine prevê)
 export const panelRoleSchema = z.enum(PANEL_ROLES);
@@ -558,7 +558,7 @@ export const updateStoreSettingsSchema = z.object({
   pickupEnabled: z.boolean().optional(),
   hideSoldOutProducts: z.boolean().optional(),
   deliveryFeeCents: z.number().int().nonnegative().max(10_000_000).optional(),
-  timezone: z.string().min(1).max(64).optional(),
+  timezone: z.enum(STORE_TIMEZONES).optional(), // SSOT D1: lista fechada; fora dela a rota responde TIMEZONE_INVALID
 });
 export type UpdateStoreSettingsInput = z.infer<typeof updateStoreSettingsSchema>;
 
