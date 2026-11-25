@@ -1,3 +1,4 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import fp from "fastify-plugin";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "@meucardapio/db";
@@ -62,7 +63,7 @@ function panelGate(policy: PanelPolicy, mutating: boolean) {
       const { phase, access } = await getRequestEntitlements(request, request.user.storeId);
       if (phase === "SUSPENDED") {
         if (policy === "billing") return undefined;
-        if (policy === "export" && request.user.role === "OWNER") return undefined;
+        if (policy === "export" && request.user.role === panelRoleSchema.enum.OWNER) return undefined;
         return blockSuspended(reply);
       }
       if (phase === "READ_ONLY" && mutating) {
@@ -93,10 +94,16 @@ const publicOrderGate = async (request: FastifyRequest, reply: FastifyReply) => 
   const { access } = await getEntitlements(store.id);
   // RN-B5-01: a assinatura (Consulta/Suspensão) vence todos os outros motivos.
   if (!access.publicOrders) return reply.code(409).send({ error: INACTIVE_MESSAGE, code: "SUBSCRIPTION_INACTIVE" });
+  // API-40: pedido AGENDADO não depende de a loja estar aberta agora; a rota confere o horário escolhido na grade (e o plano).
+  const body = request.body as { scheduledFor?: unknown } | undefined;
+  // Só na rota do cardápio: no QR da mesa o campo não existe e não pode furar o horário.
+  if (request.routeOptions.url === "/stores/:slug/orders" && typeof body?.scheduledFor === "string") return undefined;
   const hours = await storeHoursService.publicStatus(slug);
   if (hours && hours.status.status !== "ABERTO") {
     const { reason, nextOpenAt, message } = hours.status;
-    return reply.code(409).send({ error: message, code: "STORE_CLOSED", details: { reason, nextOpenAt } });
+    // g1: modo ocupado tem código próprio (RN-OCU-03): não se confunde com loja fechada.
+    const code = reason === "BUSY" ? "STORE_BUSY" : "STORE_CLOSED";
+    return reply.code(409).send({ error: message, code, details: { reason, nextOpenAt } });
   }
   return undefined;
 };
@@ -133,7 +140,7 @@ const publicMenuSerializer = async (request: FastifyRequest, _reply: FastifyRepl
       // (sem grade, continua o texto legado; é a única hora em que existe dois valores, e o legado já era o único).
       const hoursFields = derived ? { openNow: derived.openNow, nextOpensAt: derived.nextOpensAt, hoursText: derived.hoursText } : { openNow: null, nextOpensAt: null, hoursText: null };
       const openingHours = derived && derived.openNow !== null ? derived.hoursText : body.store.openingHours;
-      return { ...body, store: { ...body.store, openingHours, ...hoursFields, acceptingOrders: switchedOn, accepting, hours: hours ?? null, ...(prepMinutes ? { prepMinutes } : {}) } };
+      return { ...body, store: { ...body.store, openingHours, ...hoursFields, acceptingOrders: switchedOn, accepting, busyUntil: state.hours?.busyUntil ?? null, reason: hours?.reason ?? null, hours: hours ?? null, ...(prepMinutes ? { prepMinutes } : {}) } };
     }
   }
   return payload;

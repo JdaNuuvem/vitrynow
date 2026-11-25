@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
+import type { PanelRole } from "@meucardapio/shared-types";
 import { createCouponSchema, updateCouponSchema } from "@meucardapio/shared-types";
 import { useDomainErrors } from "../../shared/errors";
 import type { CouponsService } from "./coupons.service";
@@ -24,7 +25,7 @@ export function buildCouponRoutes(service: CouponsService): FastifyPluginAsync {
   return async (app) => {
     useDomainErrors(app);
     const auth = { preHandler: app.requirePanelAuth };
-    const actorOf = (request: { user: { storeId: string; userId: string; role: "OWNER" | "STAFF" } }) => ({
+    const actorOf = (request: { user: { storeId: string; userId: string; role: PanelRole } }) => ({
       storeId: request.user.storeId,
       userId: request.user.userId,
       role: request.user.role,

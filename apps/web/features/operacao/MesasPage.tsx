@@ -10,11 +10,12 @@ import { formatCents } from "@/shared/format/money";
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import { PageHeading, StatusBadge } from "@/shared/design/components";
 import { operationRequest } from "./storeOperations";
+import { buildReceiveBody, closeTotals, parseMoney, remainingCents, type PaymentPart } from "./tableClose";
 import { TableQr } from "./TableQr";
 import "./operacao.css";
 
 type Table = { id: string; label: string; active: boolean; position: number; qrPath: string; free: boolean; pendingOrders: number; accountOrders: number; accountCents: number };
-type Settings = { qrOrderingEnabled: boolean; qrOrdersNeedApproval: boolean };
+type Settings = { qrOrderingEnabled: boolean; qrOrdersNeedApproval: boolean; serviceFeePercent?: number };
 type Confirmation = { kind: "approval" } | { kind: "rotate"; table: Table };
 type Tables = { tables: Table[]; settings: Settings };
 type Account = {
@@ -37,8 +38,13 @@ export function MesasPage() {
   const [tableId, setTableId] = useState<string | null>(null);
   const [label, setLabel] = useState("");
   const [rename, setRename] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("DINHEIRO");
-  const [change, setChange] = useState("");
+  // Fechamento: 1 forma = pagamento único; 2 a 10 = conta dividida (PRO). Taxa de serviço opcional e desconto em R$ (todos os planos).
+  const partSeq = useRef(0);
+  const newPart = (method: PaymentMethod = "DINHEIRO"): PaymentPart => ({ key: ++partSeq.current, method, amount: "", changeFor: "" });
+  const [parts, setParts] = useState<PaymentPart[]>(() => [newPart()]);
+  const [includeFee, setIncludeFee] = useState(true);
+  const [discount, setDiscount] = useState("");
+  const [feeInput, setFeeInput] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [printedQr, setPrintedQr] = useState<{ label: string; href: string } | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
@@ -93,10 +99,12 @@ export function MesasPage() {
     setBusy(true);
     setError("");
     setNotice("");
-    const result = await operationRequest<{ receipt?: { changeDueCents?: number | null } }>(path, method, body);
+    const result = await operationRequest<{ receipt?: { totalCents?: number; changeDueCents?: number | null; payments?: { changeDueCents: number | null }[] } }>(path, method, body);
     if (result.ok) {
-      const due = result.data?.receipt?.changeDueCents;
-      setNotice(due == null ? message : `${message} Troco de ${formatCents(due)}.`);
+      const receipt = result.data?.receipt;
+      const due = (receipt?.payments ?? []).reduce((sum, p) => sum + (p.changeDueCents ?? 0), 0) || receipt?.changeDueCents || 0;
+      const total = receipt?.totalCents !== undefined ? ` Total ${formatCents(receipt.totalCents)}.` : "";
+      setNotice(`${message}${total}${due > 0 ? ` Troco de ${formatCents(due)}.` : ""}`);
       await reload();
       if (path.endsWith("/receive")) await loadAccount();
     } else {
@@ -125,7 +133,7 @@ export function MesasPage() {
     setAccount(null);
     setTableId(table.id);
     setRename(table.label);
-    setChange("");
+    resetClose();
     setError("");
     setNotice("");
   }
@@ -140,15 +148,46 @@ export function MesasPage() {
     }
   }
 
+  function resetClose() {
+    setParts([newPart()]);
+    setDiscount("");
+    setIncludeFee(true);
+  }
+
+  const feePercent = data?.settings.serviceFeePercent ?? 0;
+  const feeOn = includeFee && feePercent > 0;
+  const discountCents = parseMoney(discount) ?? 0;
+  const totals = account ? closeTotals(account.totalCents, feePercent, feeOn, discountCents) : null;
+  const toInput = (cents: number) => (cents / 100).toFixed(2).replace(".", ",");
+
+  function updatePart(key: number, patch: Partial<PaymentPart>) {
+    setParts(current => current.map(part => (part.key === key ? { ...part, ...patch } : part)));
+  }
+
+  // Ao dividir, a 1ª parte recebe o total e cada nova o que faltar: o atendente só ajusta os valores.
+  function addPart(totalCents: number) {
+    setParts(current => {
+      if (current.length === 1) return [{ ...current[0], amount: toInput(totalCents) }, newPart("PIX")];
+      const rest = remainingCents(totalCents, current);
+      return [...current, { ...newPart("PIX"), amount: rest > 0 ? toInput(rest) : "" }];
+    });
+  }
+
+  function removePart(key: number) {
+    setParts(current => {
+      const left = current.filter(part => part.key !== key);
+      return left.length === 1 ? [{ ...left[0], amount: "" }] : left; // voltou a pagamento único
+    });
+  }
+
   function receive() {
     if (!accountPath || !account || account.table.id !== tableId) return;
-    const changeForCents = paymentMethod === "DINHEIRO" && change ? Math.round(Number(change.replace(",", ".")) * 100) : undefined;
-    if (changeForCents !== undefined && (!Number.isSafeInteger(changeForCents) || changeForCents < account.totalCents)) {
-      setError("Informe um valor para troco que cubra o total da mesa.");
+    const built = buildReceiveBody({ subtotalCents: account.totalCents, serviceFeePercent: feePercent, includeFee: feeOn, discount, parts });
+    if (!built.ok) {
+      setError(built.error);
       return;
     }
-    const body = { paymentMethod, changeForCents, expectedTotalCents: account.totalCents };
-    void mutate(`${accountPath}/receive`, "POST", body, "Pagamento registrado.").then(ok => { if (ok) setChange(""); });
+    void mutate(`${accountPath}/receive`, "POST", built.body, "Pagamento registrado.").then(ok => { if (ok) resetClose(); });
   }
 
   return <main className="operacao">
@@ -190,6 +229,16 @@ export function MesasPage() {
             if (!needsApproval) confirm({ kind: "approval" });
             else void mutate("/api/store/qr-settings", "POST", { qrOrdersNeedApproval: true }, "Configuração salva.");
           }} /> Exigir aceite da equipe</label>
+          <form className="operacao__row" onSubmit={event => {
+            event.preventDefault();
+            const percent = Number(feeInput);
+            if (feeInput === null || feeInput.trim() === "" || !Number.isInteger(percent) || percent < 0 || percent > 30) { setError("A taxa de serviço vai de 0 a 30%."); return; }
+            void mutate("/api/store/qr-settings", "POST", { serviceFeePercent: percent }, "Taxa de serviço salva.").then(ok => { if (ok) setFeeInput(null); });
+          }}>
+            <label>Taxa de serviço sugerida (%)<input type="number" min={0} max={30} step={1} value={feeInput ?? String(feePercent)} disabled={busy} onChange={event => setFeeInput(event.target.value)} /></label>
+            <button type="submit" disabled={busy || feeInput === null || feeInput === String(feePercent)}>Salvar</button>
+          </form>
+          <p className="operacao__muted">Vem marcada no fechamento da mesa e pode ser tirada em cada conta. 0 = a loja não cobra.</p>
         </section>}
         {selected && accountPath && <section className="operacao__card">
           <div className="operacao__row operacao__row--spread"><h2>{selected.label}</h2><button type="button" disabled={busy} onClick={loadAccount}>Atualizar conta</button></div>
@@ -212,12 +261,40 @@ export function MesasPage() {
             <h2>Conta da mesa</h2>
             {account.pendingOrders > 0 && <p className="operacao__muted">Aceite ou recuse os {account.pendingOrders} pedido(s) pendente(s) antes de receber.</p>}
             {account.orders.length ? <ul className="operacao__list">{account.orders.map(order => <li key={order.id} className="operacao__row operacao__row--spread"><span>Pedido {order.code} · {statusLabel(order.status)}</span><strong>{formatCents(order.totalCents)}</strong></li>)}</ul> : <p className="operacao__muted">Nenhum pedido em aberto.</p>}
-            <strong>Total {formatCents(account.totalCents)}</strong>
-            {account.totalCents > 0 && <form className="operacao__stack" onSubmit={event => { event.preventDefault(); receive(); }}>
-              <label>Forma de pagamento<select value={paymentMethod} onChange={event => setPaymentMethod(event.target.value as PaymentMethod)}>{PAYMENT_METHODS.map(method => <option value={method.value} key={method.value}>{method.label}</option>)}</select></label>
-              {paymentMethod === "DINHEIRO" && <label>Troco para (opcional)<input inputMode="decimal" placeholder="0,00" pattern="[0-9]+([,.][0-9]{1,2})?" value={change} onChange={event => setChange(event.target.value)} /></label>}
-              <button className="operacao__primary" type="submit" disabled={busy || account.pendingOrders > 0}>Receber {formatCents(account.totalCents)}</button>
-            </form>}
+            {account.totalCents > 0 && totals ? <form className="operacao__stack" onSubmit={event => { event.preventDefault(); receive(); }}>
+              <dl className="operacao__summary">
+                <div><dt>Consumo</dt><dd>{formatCents(account.totalCents)}</dd></div>
+                {feePercent > 0 && <div>
+                  <dt><label className="operacao__check"><input type="checkbox" checked={includeFee} disabled={busy} onChange={event => setIncludeFee(event.target.checked)} /> Taxa de serviço ({feePercent}%)</label></dt>
+                  <dd>{feeOn ? formatCents(totals.serviceFeeCents) : "—"}</dd>
+                </div>}
+                <div>
+                  <dt><label>Desconto (R$)<input inputMode="decimal" placeholder="0,00" value={discount} disabled={busy} onChange={event => setDiscount(event.target.value)} /></label></dt>
+                  <dd>{discountCents > 0 ? `− ${formatCents(discountCents)}` : "—"}</dd>
+                </div>
+                <div className="operacao__summary-total"><dt>Total a receber</dt><dd>{formatCents(totals.totalCents)}</dd></div>
+              </dl>
+              {parts.map((part, index) => <fieldset key={part.key} className="operacao__payment">
+                <legend>{parts.length > 1 ? `Pagamento ${index + 1}` : "Pagamento"}</legend>
+                <div className="operacao__row">
+                  <label>Forma<select value={part.method} disabled={busy} onChange={event => updatePart(part.key, { method: event.target.value as PaymentMethod, changeFor: "" })}>
+                    {PAYMENT_METHODS.map(method => <option value={method.value} key={method.value}>{method.label}</option>)}
+                  </select></label>
+                  {parts.length > 1 && <label>Valor (R$)<input inputMode="decimal" placeholder="0,00" required value={part.amount} disabled={busy} onChange={event => updatePart(part.key, { amount: event.target.value })} /></label>}
+                  {part.method === "DINHEIRO" && <label>Troco para (opcional)<input inputMode="decimal" placeholder="0,00" value={part.changeFor} disabled={busy} onChange={event => updatePart(part.key, { changeFor: event.target.value })} /></label>}
+                  {parts.length > 1 && <button type="button" disabled={busy} onClick={() => removePart(part.key)}>Remover</button>}
+                </div>
+              </fieldset>)}
+              <div className="operacao__row operacao__row--spread">
+                <button type="button" disabled={busy || parts.length >= 10} onClick={() => addPart(totals.totalCents)}>{parts.length > 1 ? "Adicionar forma" : "Dividir a conta"}</button>
+                {parts.length > 1 && (() => {
+                  const rest = remainingCents(totals.totalCents, parts);
+                  return <span className={rest === 0 ? "operacao__muted" : "operacao__warning"} role="status">{rest === 0 ? "Divisão fechada" : rest > 0 ? `Faltam ${formatCents(rest)}` : `Sobram ${formatCents(-rest)}`}</span>;
+                })()}
+              </div>
+              {parts.length > 1 && <p className="operacao__muted">Dividir a conta é do plano PRO. Dinheiro em qualquer parte exige o caixa aberto.</p>}
+              <button className="operacao__primary" type="submit" disabled={busy || account.pendingOrders > 0 || totals.totalCents <= 0 || (parts.length > 1 && remainingCents(totals.totalCents, parts) !== 0)}>Receber {formatCents(totals.totalCents)}</button>
+            </form> : <strong>Total {formatCents(account.totalCents)}</strong>}
           </> : <p role="status">Carregando conta…</p>}
         </section>}
       </div>

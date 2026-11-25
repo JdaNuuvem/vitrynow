@@ -62,13 +62,14 @@ export function ProductForm({ categoryId, initial, categories, onSave, onClose }
         <h2 id="product-form-title">{initial ? "Editar produto" : "Novo produto"}</h2>
 
         <div className="catalogo-form__row">
-          <input placeholder="Nome" value={draft.name} onChange={(event) => patch({ name: event.target.value })} />
+          <input placeholder="Nome" maxLength={80} value={draft.name} onChange={(event) => patch({ name: event.target.value })} />
           <div className="catalogo-form__price">
             <MoneyInput name="product-price" value={draft.price} onChange={(price) => patch({ price })} />
           </div>
         </div>
         <input
           placeholder="Descrição (opcional)"
+          maxLength={300}
           value={draft.description}
           onChange={(event) => patch({ description: event.target.value })}
         />
@@ -98,6 +99,8 @@ export function ProductForm({ categoryId, initial, categories, onSave, onClose }
             <input
               ref={imageRef}
               placeholder="https://"
+              maxLength={500}
+              inputMode="url"
               aria-label="URL da foto do produto (opcional)"
               aria-invalid={imageError && !imageFile ? true : undefined}
               aria-describedby={imageError ? imageErrorId : undefined}

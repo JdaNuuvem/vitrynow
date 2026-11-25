@@ -20,6 +20,7 @@ export function AdditionalsEditor({
         <div key={index} className="catalogo-additionals__row">
           <input
             placeholder="Nome do adicional"
+            maxLength={60}
             value={additional.name}
             onChange={(event) => update(index, { name: event.target.value })}
           />

@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import { panelRoleSchema, type PanelRole } from "@meucardapio/shared-types";
 import { prisma } from "@meucardapio/db";
 import { printAckSchema, setPrintModeSchema } from "@meucardapio/shared-types";
 import { prismaAuditLogger } from "../../shared/audit";
@@ -40,7 +41,7 @@ const printJobRoutes: FastifyPluginAsync = async (app) => {
   // Quem não é OWNER recebe 403 e a TENTATIVA fica registrada (print.mode_change_denied); passando de 10 por minuto por usuário,
   // 429 sem gravar mais nada. A rota NUNCA se abre ao STAFF: a resposta é 403 ou 429, nunca o efeito.
   const ownerOrRecordDenied = async (request: FastifyRequest, reply: FastifyReply) => {
-    if (request.user.role === "OWNER") return;
+    if (request.user.role === panelRoleSchema.enum.OWNER) return;
     if (limited(`denied:${request.user.userId}`, 10)) return tooMany(reply);
     await printModeService.recordDenied(request.user, (request.body as { mode?: unknown } | null)?.mode);
     return reply.code(403).send({ error: "ação restrita ao dono da loja" });
@@ -53,7 +54,7 @@ const printJobRoutes: FastifyPluginAsync = async (app) => {
   });
 
   const panel = { preHandler: app.requirePanelAuth };
-  const actorOf = (request: { user: { storeId: string; userId: string; role: "OWNER" | "STAFF" } }) => ({ storeId: request.user.storeId, userId: request.user.userId, role: request.user.role });
+  const actorOf = (request: { user: { storeId: string; userId: string; role: PanelRole } }) => ({ storeId: request.user.storeId, userId: request.user.userId, role: request.user.role });
 
   app.post("/api/orders/:id/reprint", panel, async (request, reply) => {
     const { id } = request.params as { id: string };

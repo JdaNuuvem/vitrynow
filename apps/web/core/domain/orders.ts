@@ -2,8 +2,10 @@ export type OrderType = "MESA" | "DELIVERY" | "BALCAO";
 
 // Lista como valor de execução: os testes percorrem o enum inteiro para garantir que nenhum pedido
 // some do quadro (contrato B3 §10). SAIU_PARA_ENTREGA entra com a API-02 (contrato B3 §7 item 8).
-export const ORDER_STATUSES = ["PENDENTE", "CONFIRMADO", "EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA", "CONCLUIDO", "CANCELADO"] as const;
-export type OrderStatus = (typeof ORDER_STATUSES)[number];
+// SSOT D3: a lista vem de shared-types (a mesma da API); aqui só reexporta.
+export { ORDER_STATUSES, FINAL_ORDER_STATUSES } from "@meucardapio/shared-types/constants";
+export type { OrderStatus } from "@meucardapio/shared-types/constants";
+import type { OrderStatus } from "@meucardapio/shared-types/constants";
 
 export type OrderItem = { id: string; quantity: number; productName: string };
 
@@ -72,3 +74,18 @@ export type Order = {
 };
 
 export type Deliverer = { id: string; name: string; phone: string | null; active: boolean };
+
+// API-40: pedido agendado ainda retido (GET /api/orders/scheduled). Aceitar/cancelar usa as rotas normais do pedido.
+export type ScheduledOrder = {
+  id: string;
+  code: string;
+  type: OrderType;
+  status: OrderStatus;
+  scheduledFor: string;
+  customerName: string | null;
+  totalCents: number;
+  paymentMethod: string | null;
+  paidAt: string | null;
+  createdAt: string;
+  items: { productName: string; quantity: number }[];
+};

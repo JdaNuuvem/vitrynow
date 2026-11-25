@@ -4,6 +4,7 @@ import { useId, useRef, useState } from "react";
 import type { Deliverer } from "@/core/domain/orders";
 import { Button, StateMessage } from "@/shared/design/components";
 import { Modal } from "@/shared/ui/Modal";
+import { maskPhoneInput, PHONE_INPUT_PROPS } from "@/shared/format/phone";
 
 export function NewDelivererForm({ initial, save, onClose }: {
   initial?: Deliverer;
@@ -36,7 +37,7 @@ export function NewDelivererForm({ initial, save, onClose }: {
     <form className="entregadores__form" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
       <h2 id={title}>{initial ? "Editar entregador" : "Novo entregador"}</h2>
       <label>Nome<input required maxLength={80} value={name} disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
-      <label>Telefone (opcional)<input type="tel" autoComplete="tel" value={phone} maxLength={20} disabled={busy} onChange={(event) => setPhone(event.target.value)} /></label>
+      <label>Telefone (opcional)<input {...PHONE_INPUT_PROPS} autoComplete="tel" value={phone} disabled={busy} onChange={(event) => setPhone(maskPhoneInput(event.target.value))} /></label>
       {initial?.phone && <p className="entregadores__hint">Em branco, o telefone atual é mantido.</p>}
       {error && <StateMessage tone="danger" title="Entregador não salvo">{error}</StateMessage>}
       <div className="entregadores__actions">

@@ -165,8 +165,12 @@ export class PaymentService {
             data: { awaitingPayment: false, paidAt: new Date() }, // o dinheiro (PIX) foi RECEBIDO agora (RN-CX-01)
           });
           if (moved.count !== 1) return null;
+          // API-40: agendado ainda retido fica pago mas fora da cozinha; o job schedule.release anuncia e imprime no horário.
+          const { held } = await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { held: true } });
+          if (held) return { deferred: true as const };
           return { queued: await enqueueOrderTicket(tx, { id: order.id, storeId: order.storeId }) };
         });
+        if (announced && "deferred" in announced) return { applied: mapped };
         if (announced) {
           this.publish(order.storeId, { type: "order.created", orderId: order.id });
           if (announced.queued) this.publish(order.storeId, { type: "print.available" });

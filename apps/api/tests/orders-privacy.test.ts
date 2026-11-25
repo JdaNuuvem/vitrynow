@@ -2,6 +2,7 @@
 // A varredura procura no JSON inteiro o que nunca pode sair, e as regras de papel e idade do detalhe.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore } from "./helpers";
 import { activateSubscription } from "../src/lib/subscription";
 import { contactAccessFor, maskPhone, RECENT_WINDOW_MS } from "../src/modules/orders/orders.view";
 import { login, makeApp, registerStore, resetDb } from "./helpers";
@@ -94,7 +95,7 @@ describe("API-54a — lista, ações e detalhe", () => {
     const id = await delivery(ctx, { paymentMethod: "DINHEIRO" });
     await prisma.order.update({ where: { id }, data: { paymentMethod: "PIX", awaitingPayment: false } });
     await prisma.payment.create({
-      data: { orderId: id, amountCents: 1000, status: "APROVADO", expiresAt: new Date(Date.now() + 60_000), ...SEGREDOS, refundContext: SEGREDOS.refundContext },
+      data: { orderId: id, storeId: await orderStore(id), amountCents: 1000, status: "APROVADO", expiresAt: new Date(Date.now() + 60_000), ...SEGREDOS, refundContext: SEGREDOS.refundContext },
     });
     return id;
   }

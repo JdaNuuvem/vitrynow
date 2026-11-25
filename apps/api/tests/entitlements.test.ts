@@ -124,7 +124,7 @@ describe("recursos e limites do plano", () => {
   });
 
   it("planFeatures ignora chave desconhecida e recurso ainda não entregue (RN-B10-08)", () => {
-    expect(planFeatures({ features: ["multi_user", "scheduled_orders", "whatsapp_auto", "inventado"] })).toEqual(["multi_user"]);
+    expect(planFeatures({ features: ["multi_user", "scheduled_orders", "whatsapp_auto", "inventado"] })).toEqual(["multi_user", "scheduled_orders"]); // whatsapp_auto ainda não entregue
     expect(planFeatures(null)).toEqual([]);
   });
 
@@ -198,7 +198,7 @@ describe("limite de impressoras e aviso de interesse (integração)", () => {
     expect(body.subscription).toMatchObject({
       state: "trial",
       phase: "TRIAL",
-      features: [],
+      features: ["table_qr"], // QR de mesa já entregue faz parte do BASICO; equipe (multi_user) continua fora
       limits: { maxUsers: 1, maxPrinters: 1 },
       readOnlyEndsAt: null,
       access: { publicOrders: true, panelWrite: true },

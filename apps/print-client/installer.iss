@@ -1,33 +1,41 @@
-; Instalador do print-client (MeuCardapio - placeholder de marca) via Inno Setup 6.
-; Compilar: .\tools\build-installer.ps1  (compila o EXE, roda o instalador e confere identidade e hashes)
-; Gera bin\Installer\MeuCardapio-PrintClient-Setup.exe
+; Instalador do Vitry Impressão (print-client) via Inno Setup 6.
+; Compilar: .\tools\build-installer.ps1  (compila o EXE, assina se houver certificado, roda o instalador e confere identidade e hashes)
+; Gera bin\Installer\Vitry-Impressao-Setup.exe
 ;
-; Nome/marca final: decisao do Claudio (CL-05). Troque AppName/AppPublisher/icone so quando ela sair.
-; Nada aqui vem de um servico de terceiro: tools\scan-identity.ps1 confere isso no EXE, no instalador e no codigo.
-; Assinatura de codigo (Authenticode) so com build final e aval do Claudio (gasto): PC-13.
+; Marca "Vitry" (CL-05). O que NÃO muda com a marca, para a atualização reconhecer quem já tem o antigo "MeuCardapio - Impressão":
+;   AppId (abaixo), AppMutex (= Services\SingleInstance.cs) e a pasta de dados %LOCALAPPDATA%\MeuCardapioPrintClient.
+; Nada aqui vem de um serviço de terceiro: tools\scan-identity.ps1 confere isso no EXE, no instalador e no código.
+; Assinatura de código (Authenticode, PC-13): tools\sign-code.ps1, chamado pelo build-installer.ps1 quando há certificado.
 
 #define AppVersion "1.0.0"
-#define AppExeName "MeuCardapio - Impressao.exe"
+#define AppExeName "Vitry Impressao.exe"
+#define AppTitle "Vitry Impressão"
+#define OldExeName "MeuCardapio - Impressao.exe"
+#define OldTitle "MeuCardapio - Impressão"
 
 [Setup]
 AppId={{E1F8B6A0-7C2D-4B3E-9A1F-0C2D4E6F8A9B}
-AppName=MeuCardapio - Impressão
+AppName={#AppTitle}
 AppVersion={#AppVersion}
-AppPublisher=MeuCardapio
+AppPublisher=Vitry
 VersionInfoVersion={#AppVersion}.0
-VersionInfoDescription=Instalador do MeuCardapio - Impressão
-VersionInfoProductName=MeuCardapio - Impressão
-DefaultDirName={autopf}\MeuCardapio\PrintClient
-DefaultGroupName=MeuCardapio
-OutputBaseFilename=MeuCardapio-PrintClient-Setup
+VersionInfoDescription=Instalador do {#AppTitle}
+VersionInfoProductName={#AppTitle}
+VersionInfoCompany=Vitry
+; Instalação nova vai para Vitry\Impressao; quem já tem o antigo continua na MESMA pasta (UsePreviousAppDir, pelo AppId).
+DefaultDirName={autopf}\Vitry\Impressao
+UsePreviousAppDir=yes
+DefaultGroupName=Vitry
+OutputBaseFilename=Vitry-Impressao-Setup
 OutputDir=bin\Installer
 Compression=lzma
 SolidCompression=yes
 SetupIconFile=Resources\icon.ico
 UninstallDisplayIcon={app}\{#AppExeName}
+UninstallDisplayName={#AppTitle}
 PrivilegesRequired=lowest
 ; Mesmo mutex do aplicativo (Services\SingleInstance.cs): o instalador pede para fechar o app aberto antes de
-; atualizar e nao sobrescreve um EXE em uso. Nao reabre sozinho (a cozinha escolhe a hora).
+; atualizar e não sobrescreve um EXE em uso. Não reabre sozinho (a cozinha escolhe a hora).
 AppMutex=Global\MeuCardapioPrintClient-7C2D4B3E
 CloseApplications=yes
 RestartApplications=no
@@ -35,19 +43,28 @@ RestartApplications=no
 [Languages]
 Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
 
+[InstallDelete]
+; Atualização a partir do nome antigo: remove o EXE e os atalhos com o nome antigo (senão o atalho de inicialização
+; antigo abriria um EXE que não existe mais, ou dois atalhos no menu Iniciar).
+Type: files; Name: "{app}\{#OldExeName}"
+Type: files; Name: "{userstartup}\{#OldTitle}.lnk"
+Type: files; Name: "{userprograms}\MeuCardapio\{#OldTitle}.lnk"
+Type: files; Name: "{userprograms}\MeuCardapio\Desinstalar {#OldTitle}.lnk"
+Type: dirifempty; Name: "{userprograms}\MeuCardapio"
+
 [Files]
-Source: "bin\Release\MeuCardapio - Impressao.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "bin\Release\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "bin\Release\*.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 ; Dados do lojista (settings.json com a chave protegida, printed.json, logs) ficam em %LOCALAPPDATA%\MeuCardapioPrintClient
-; e NAO sao apagados pela desinstalacao nem pela atualizacao.
+; e NÃO são apagados pela desinstalação nem pela atualização.
 
 [Tasks]
 Name: "autostart"; Description: "Iniciar automaticamente com o Windows"; GroupDescription: "Opções adicionais:"; Flags: checkedonce
 
 [Icons]
-Name: "{group}\MeuCardapio - Impressão"; Filename: "{app}\{#AppExeName}"
-Name: "{group}\Desinstalar MeuCardapio - Impressão"; Filename: "{uninstallexe}"
-Name: "{userstartup}\MeuCardapio - Impressão"; Filename: "{app}\{#AppExeName}"; Parameters: "/autostart"; Tasks: autostart
+Name: "{group}\{#AppTitle}"; Filename: "{app}\{#AppExeName}"
+Name: "{group}\Desinstalar {#AppTitle}"; Filename: "{uninstallexe}"
+Name: "{userstartup}\{#AppTitle}"; Filename: "{app}\{#AppExeName}"; Parameters: "/autostart"; Tasks: autostart
 
 [Run]
-Filename: "{app}\{#AppExeName}"; Description: "Abrir o MeuCardapio - Impressão agora"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExeName}"; Description: "Abrir o {#AppTitle} agora"; Flags: nowait postinstall skipifsilent

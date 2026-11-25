@@ -43,7 +43,7 @@ export function useEquipe() {
       const result = await usersGateway.inviteStaff(email, password);
       if (!result.ok) {
         // Plano sem "multi_user": em vez de erro seco, oferece a assinatura.
-        if (result.code === FEATURE_LOCKED_CODE) openUpgrade();
+        if (result.code === FEATURE_LOCKED_CODE) openUpgrade("multi_user");
         else setError(result.error);
         return false;
       }

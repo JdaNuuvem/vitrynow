@@ -6,6 +6,7 @@ import type { AuthGateway } from "@/core/gateways/AuthGateway";
 import { AuthServicesProvider } from "@/core/services/AuthServices";
 import { PASSWORD_TOO_SHORT_MESSAGE } from "@/shared/auth/passwordPolicy";
 import { ResetPasswordPage } from "./ResetPasswordPage";
+import { LEGACY_QUERY_ACCEPTED_UNTIL } from "./resetToken";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
@@ -51,10 +52,16 @@ describe("ResetPasswordPage: token no fragmento (ST-56 / NG-17)", () => {
   });
 
   it("aceita a query legada (e-mails já enviados) e a apaga da barra", async () => {
-    setup("/reset-senha?token=segredo-da-query");
-    expect(window.location.search).toBe("");
-    expect(window.location.href).not.toContain("segredo-da-query");
-    expect(await field()).toBeInTheDocument();
+    // a query legada só vale até LEGACY_QUERY_ACCEPTED_UNTIL (19/11/2026): o teste fixa o relógio dentro da transição
+    const now = vi.spyOn(Date, "now").mockReturnValue(LEGACY_QUERY_ACCEPTED_UNTIL - 60_000);
+    try {
+      setup("/reset-senha?token=segredo-da-query");
+      expect(window.location.search).toBe("");
+      expect(window.location.href).not.toContain("segredo-da-query");
+      expect(await field()).toBeInTheDocument();
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("com fragmento e query, vale o fragmento e os dois somem da barra", async () => {

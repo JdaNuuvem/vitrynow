@@ -1,6 +1,7 @@
 // API-61 — "Encerrar sem estorno" (RN-ABD-01..06, CA-ABD-01..07): OWNER, só com estorno preso, auditoria na mesma transação, idempotente.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore } from "./helpers";
 import { MAX_REFUND_AUTO_ATTEMPTS } from "../src/modules/orders/orders.service";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
@@ -40,6 +41,7 @@ describe("API-61 — encerrar estorno preso sem devolver por aqui", () => {
     const payment = await prisma.payment.create({
       data: {
         orderId,
+        storeId: await orderStore(orderId),
         providerPaymentId: `mp-${orderId}`,
         amountCents: 4500,
         status: "ESTORNO_PENDENTE",

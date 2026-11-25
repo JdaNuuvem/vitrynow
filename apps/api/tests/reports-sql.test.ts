@@ -1,6 +1,7 @@
 // API-20 (B14): relatórios agregados em SQL no fuso da loja + CSV. CA-B14-01..07 (a parte de API).
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore, productStore } from "./helpers";
 import { csvCell, reais, resolveRange, toCsv } from "../src/lib/reports";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
@@ -191,7 +192,7 @@ describe("relatórios (rotas)", () => {
     const { cookie, storeId } = await setup("rel-g", "RG1");
     const user = await prisma.user.findFirstOrThrow({ where: { storeId } });
     const s = await prisma.cashSession.create({ data: { storeId, openedByUserId: user.id, openedAt: new Date("2026-11-10T12:00:00Z") } });
-    await prisma.cashMovement.createMany({ data: [{ cashSessionId: s.id, type: "SUPRIMENTO", amountCents: 5000 }, { cashSessionId: s.id, type: "SANGRIA", amountCents: 1200 }] });
+    await prisma.cashMovement.createMany({ data: [{ cashSessionId: s.id, storeId: s.storeId, type: "SUPRIMENTO", amountCents: 5000 }, { cashSessionId: s.id, storeId: s.storeId, type: "SANGRIA", amountCents: 1200 }] });
     const r = await summary(cookie, "from=2026-11-10&to=2026-11-10");
     expect(r.cashSummary).toEqual({ sessionCount: 1, suprimentosCents: 5000, sangriasCents: 1200 });
     expect((await summary(cookie, "from=2026-11-11&to=2026-11-11")).cashSummary.sessionCount).toBe(0);

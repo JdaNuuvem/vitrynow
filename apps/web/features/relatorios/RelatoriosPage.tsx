@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { formatCents } from "@/shared/format/money";
+import { formatCents, moneyOrHidden } from "@/shared/format/money";
 import { TYPE_LABELS } from "@/core/domain/orderLabels";
 import { useCurrentRole } from "@/core/session/useCurrentRole";
 import { MonthChart } from "@/features/inicio/components/MonthChart";
@@ -14,8 +14,11 @@ import { DateRangeFilter } from "./components/DateRangeFilter";
 import { ReportSection } from "./components/ReportSection";
 import { SummaryCards } from "./components/SummaryCards";
 import { useRelatorios } from "./hooks/useRelatorios";
+import { AdvancedReports } from "./components/AdvancedReports";
 import { toDateInput, toReportRange } from "./dateRange";
 import "./relatorios.css";
+import { useStoreTimezone } from "@/features/shell/useStoreTimezone";
+import { formatInStoreTimezone } from "@/shared/format/storeTime";
 
 const CSV_TABLES = {
   summary: "Resumo",
@@ -33,23 +36,24 @@ export function RelatoriosPage() {
   const { summary, range, setRange, reload, loading, error, updatedAt } = useRelatorios();
   const { hidden, toggle } = useHiddenValues();
   const role = useCurrentRole();
+  const timeZone = useStoreTimezone();
   const [table, setTable] = useState<keyof typeof CSV_TABLES>("summary");
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
   const financial = role === "OWNER" && typeof summary?.revenueCents === "number";
-  const money = (cents: number) => hidden ? "Oculto" : formatCents(cents);
+  const money = (cents: number) => moneyOrHidden(cents, hidden);
   const withAmount = (label: string, cents?: number) => financial && cents !== undefined ? label + " · " + money(cents) : label;
   const now = Date.now();
-  const today = toDateInput(new Date(now));
+  const today = toDateInput(new Date(now), timeZone);
   const periods = [1, 7, 30].map((days) => ({
     days,
-    from: toDateInput(new Date(now - (days - 1) * 86_400_000)),
+    from: toDateInput(new Date(now - (days - 1) * 86_400_000), timeZone),
     to: today,
   }));
 
   async function exportCsv() {
     if (exporting || role !== "OWNER") return;
-    const { from, to } = toReportRange(range);
+    const { from, to } = toReportRange(range, timeZone);
     if (!Number.isFinite(+from) || !Number.isFinite(+to) || from > to) return;
     setExporting(true);
     setExportError("");
@@ -101,7 +105,7 @@ export function RelatoriosPage() {
       </Panel>
       {exportError && <StateMessage title="Exportação indisponível" tone="danger">{exportError}</StateMessage>}
       {error && <p className="relatorios__notice" role="alert">{error} {summary && updatedAt && (
-        <>Exibindo os dados de {updatedAt.toLocaleTimeString("pt-BR")}.</>
+        <>Exibindo os dados de {formatInStoreTimezone(updatedAt, timeZone, { timeStyle: "medium" })}.</>
       )}</p>}
       {!summary && loading && <StateMessage title="Carregando relatório" busy />}
 
@@ -163,6 +167,7 @@ export function RelatoriosPage() {
               ]}
             />}
           </div>
+          {financial && <AdvancedReports range={range} hidden={hidden} />}
         </>
       )}
     </main>

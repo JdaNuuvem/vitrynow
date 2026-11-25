@@ -4,11 +4,13 @@
 import type { GroupRow } from "../modules/optionGroups/optionGroups.domain";
 import type { Category, Product, ProductAdditional, Store } from "@meucardapio/db";
 
-export const PUBLIC_STORE_KEYS = ["name", "slug", "logoUrl", "coverImageUrl", "primaryColor", "address", "whatsapp", "openingHours", "minOrderCents", "deliveryEnabled", "pickupEnabled", "acceptingOrders", "deliveryFeeCents", "hideSoldOutProducts"] as const;
+export const PUBLIC_STORE_KEYS = ["name", "slug", "logoUrl", "coverImageUrl", "primaryColor", "address", "whatsapp", "openingHours", "minOrderCents", "deliveryEnabled", "pickupEnabled", "acceptingOrders", "deliveryFeeCents", "hideSoldOutProducts", "timezone"] as const;
 // Campanha publicada (CONTRATO-CAMPANHA): `action` so existe quando o destino ainda existe.
 export const PUBLIC_CAMPAIGN_KEYS = ["id", "title", "description", "imageUrl", "imageLayout", "imagePosition"] as const;
 // Horário DERIVADO da grade (PR-01, SSOT D2): acrescentados pelo portão público do cardápio (subscriptionGate), não pelo `publicStore`.
 export const PUBLIC_STORE_HOURS_KEYS = ["openNow", "nextOpensAt", "hoursText"] as const;
+// Modo ocupado (g1): `busyUntil` (ISO|null) e `reason` (motivo fechado de `hours.reason`; null quando aberta). `accepting` já existe: NÃO há `acceptingNow`. `busyStartedAt`/`busyExtraMinutes` não vazam.
+export const PUBLIC_STORE_BUSY_KEYS = ["busyUntil", "reason"] as const;
 export const PUBLIC_CATEGORY_KEYS = ["id", "name", "icon", "products"] as const;
 export const PUBLIC_PRODUCT_KEYS = ["id", "name", "description", "imageUrl", "priceCents", "featured", "soldOut", "additionals", "optionGroups", "unavailable", "unavailableByOptions", "fromPriceCents", "tags", "promoCents", "promoEndsAt", "saleUnit", "minGrams", "stepGrams", "maxGrams", "portionGrams", "serves", "isSingleDish", "sellAlone"] as const;
 export const PUBLIC_ADDITIONAL_KEYS = ["id", "name", "priceCents"] as const;
@@ -31,6 +33,7 @@ export const publicStore = (s: Store) => ({
   acceptingOrders: s.acceptingOrders && !s.platformSuspendedAt, // API-25: loja suspensa pela plataforma nao recebe pedido (cardapio publico)
   deliveryFeeCents: s.deliveryFeeCents,
   hideSoldOutProducts: s.hideSoldOutProducts, // API-17
+  timezone: s.timezone,
 });
 
 export const publicAdditional = (a: ProductAdditional) => ({ id: a.id, name: a.name, priceCents: a.priceCents });

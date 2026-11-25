@@ -20,13 +20,14 @@ export function LoginPage() {
       <form onSubmit={handleSubmit} className="auth__form">
         <label className="auth__field">
           E-mail
-          <input className="auth__input" type="email" autoComplete="username" required placeholder="E-mail" value={email} onChange={(e) => setEmail(e.target.value)} />
+          <input className="auth__input" type="email" maxLength={200} autoComplete="username" required placeholder="E-mail" value={email} onChange={(e) => setEmail(e.target.value)} />
         </label>
         <label className="auth__field">
           Senha
           <input
             className="auth__input"
             type="password"
+            maxLength={200}
             autoComplete="current-password"
             required
             placeholder="Senha"

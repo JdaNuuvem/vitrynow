@@ -9,9 +9,11 @@ const nextConfig = {
   // e isso quebra `next build` local no Windows sem Modo de Desenvolvedor/Administrador.
   output: process.env.NEXT_OUTPUT_STANDALONE ? "standalone" : undefined,
   poweredByHeader: false,
+  // SSOT D3/D4: status e papéis vêm de @meucardapio/shared-types/constants (pacote do monorepo, em TypeScript no dev).
+  transpilePackages: ["@meucardapio/shared-types"],
   async headers() {
     const dev = process.env.NODE_ENV !== "production";
-    const common = securityHeaders({ apiUrl: process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001", dev });
+    const common = securityHeaders({ apiUrl: process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001", dev, turnstile: Boolean(process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim()) });
     const privateLink = common.map((header) =>
       header.key === "Referrer-Policy" ? { ...header, value: "no-referrer" } : header,
     );

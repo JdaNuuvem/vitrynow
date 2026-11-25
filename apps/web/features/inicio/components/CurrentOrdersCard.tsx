@@ -4,8 +4,8 @@ import type { PendingPixList } from "@/core/gateways/OrdersGateway";
 import { formatWhen, statusChip, typeLabel } from "@/features/pedidos/historico/historyFormat";
 import { Icon, type IconName } from "@/shared/icons/Icon";
 import { Shine } from "@/shared/ui/Shine";
-import { formatCents } from "@/shared/format/money";
-import { STORE_TIMEZONE } from "../services/salesDefinition";
+import { formatCents, moneyOrHidden } from "@/shared/format/money";
+import { useStoreTimezone } from "@/features/shell/useStoreTimezone";
 
 const PIX_HREF = "/dashboard/pedidos/pix";
 const OPEN_HREF = "/dashboard/pedidos/historico?status=ABERTO";
@@ -20,13 +20,14 @@ const typeIcons: Record<string, IconName> = { MESA: "mesa", BALCAO: "pickup", DE
 
 export function CurrentOrdersCard(props: QueueProps) {
   const { waiting, data, title, error, hidden } = props;
+  const timeZone = useStoreTimezone();
   const total = waiting ? data?.count : data?.total;
   const rows = waiting ? data?.orders.slice(0, 4).map((row) => ({
     ...row,
     href: `${PIX_HREF}#pix-${encodeURIComponent(row.id)}`,
     typeLabel: "Pix",
     icon: "payments" as const,
-    when: formatWhen(row.createdAt, STORE_TIMEZONE),
+    when: formatWhen(row.createdAt, timeZone),
     status: "Aguardando pagamento",
     tone: "pending",
   })) : data?.rows.map((row) => ({
@@ -65,7 +66,7 @@ export function CurrentOrdersCard(props: QueueProps) {
             </div>
             <div className={`inicio-order__bottom inicio-order__bottom--${row.tone}`}>
               <span><Icon name={row.tone === "ready" ? "check" : "clock"} size={14} />{row.status}</span>
-              <strong>{hidden ? "••••" : formatCents(row.totalCents)}<Icon name="chevronRight" size={14} /></strong>
+              <strong>{moneyOrHidden(row.totalCents, hidden)}<Icon name="chevronRight" size={14} /></strong>
             </div>
           </Link>
         ))}

@@ -330,3 +330,13 @@
 .pedido-refund__check { display: flex; align-items: center; gap: 8px; min-height: var(--ds-control); font-size: var(--ds-text-sm); }
 .pedido-refund__check input { accent-color: var(--color-primary); }
 .pedido-refund__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+
+/* Ações extras do detalhe: reimprimir, observação interna, encerrar estorno travado */
+.pedido-extra { display: grid; gap: 12px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.pedido-extra__row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.pedido-extra__note { display: grid; gap: 8px; }
+.pedido-extra__note textarea { box-sizing: border-box; width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; resize: vertical; }
+.pedido-extra__note .pedido-extra__row { justify-content: flex-end; }
+.pedido-extra__muted { color: var(--ink-soft); font-size: .8125rem; margin-inline-end: auto; }
+.pedido-extra__ok { color: var(--success, #067647); font-size: .875rem; font-weight: 600; }
+.pedido-extra__error { color: var(--danger, #b42318); font-size: .875rem; font-weight: 600; }

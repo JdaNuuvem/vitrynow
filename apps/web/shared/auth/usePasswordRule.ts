@@ -18,5 +18,7 @@ export function usePasswordRule(value: string, serverRejected = false) {
       setTouched(true);
       return !tooShort;
     },
+    /** Chame depois de um envio que deu certo e limpou o campo: o campo vazio não deve virar erro. */
+    reset: () => setTouched(false),
   };
 }

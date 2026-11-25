@@ -1,6 +1,7 @@
 // API-06 — jobs `payment.expire` (PIX vencido ⇒ cancelBySystem) e `refund.retry` (estorno pendente, até o teto de tentativas).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore } from "../helpers";
 import { paymentExpireJob, PIX_EXPIRATION_MINUTES } from "../../src/jobs/paymentExpire";
 import { refundRetryJob } from "../../src/jobs/refundRetry";
 import { registeredJobs } from "../../src/jobs/registry";
@@ -49,7 +50,7 @@ describe("API-06 — jobs de PIX", () => {
     const orderId = json(res).orderId as string;
     await prisma.order.update({ where: { id: orderId }, data: { paymentMethod: "PIX", awaitingPayment: (extra.status ?? "PENDENTE") === "PENDENTE" } });
     const payment = await prisma.payment.create({
-      data: { orderId, providerPaymentId: `mp-${orderId}`, amountCents: 1000, status: extra.status ?? "PENDENTE", createdAt: min(idadeMin), expiresAt: extra.expiresAt ?? null },
+      data: { orderId, storeId: await orderStore(orderId), providerPaymentId: `mp-${orderId}`, amountCents: 1000, status: extra.status ?? "PENDENTE", createdAt: min(idadeMin), expiresAt: extra.expiresAt ?? null },
     });
     return { orderId, paymentId: payment.id };
   }

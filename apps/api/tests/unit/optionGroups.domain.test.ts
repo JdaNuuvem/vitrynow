@@ -33,8 +33,8 @@ describe("resolveLine — preço (RN-B8-03)", () => {
     expect(r).toMatchObject({ ok: true, unitPriceCents: 6800, baseCents: 6000, extrasCents: 800 });
     if (r.ok) {
       expect(r.copies).toEqual([
-        { groupName: "Tamanho", name: "G", priceCents: 6000, quantity: 1, priceMode: "BASE" },
-        { groupName: "Borda", name: "Catupiry", priceCents: 800, quantity: 1, priceMode: "SUM" },
+        { groupName: "Tamanho", name: "G", priceCents: 6000, quantity: 1, priceMode: "BASE", optionId: "g" }, // optionId: a ficha técnica da opção dá baixa no estoque
+        { groupName: "Borda", name: "Catupiry", priceCents: 800, quantity: 1, priceMode: "SUM", optionId: "catupiry" },
       ]);
     }
   });

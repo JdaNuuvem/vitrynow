@@ -26,7 +26,7 @@ export function NewCategoryForm({ onCreate }: { onCreate: (name: string, icon: s
         onChange={(event) => setIcon(event.target.value)}
         maxLength={4}
       />
-      <input placeholder="Nova categoria" value={name} onChange={(event) => setName(event.target.value)} />
+      <input placeholder="Nova categoria" maxLength={50} value={name} onChange={(event) => setName(event.target.value)} />
       <button type="button" className="catalogo__btn catalogo__btn--primary" onClick={submit}>
         Adicionar categoria
       </button>

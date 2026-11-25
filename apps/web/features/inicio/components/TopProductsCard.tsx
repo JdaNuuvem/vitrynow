@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { ReportTopProduct } from "@/core/domain/reports";
-import { formatCents } from "@/shared/format/money";
+import { formatCents, moneyOrHidden } from "@/shared/format/money";
 
 export function TopProductsCard({ products, hidden, reportsHref }: { products: ReportTopProduct[]; hidden: boolean; reportsHref: string }) {
   return (
@@ -10,7 +10,7 @@ export function TopProductsCard({ products, hidden, reportsHref }: { products: R
       <ol className="inicio-top__list">{products.map((product, index) => (
         <li key={`${index}-${product.productName}`}>
           <span>{index + 1}</span><strong>{product.productName}</strong><small>{product.quantity} un.</small>
-          {product.revenueCents !== undefined && <b>{hidden ? "••••" : formatCents(product.revenueCents)}</b>}
+          {product.revenueCents !== undefined && <b>{moneyOrHidden(product.revenueCents, hidden)}</b>}
         </li>
       ))}</ol>
     </section>

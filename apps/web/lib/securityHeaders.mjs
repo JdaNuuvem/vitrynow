@@ -21,17 +21,23 @@ function wsOrigin(httpOrigin) {
   return httpOrigin ? httpOrigin.replace(/^http/, "ws") : null;
 }
 
-export function buildCsp({ apiUrl, dev = false } = {}) {
+// Captcha do pedido público (NG-08): o widget do Cloudflare Turnstile carrega script e iframe de UMA origem fixa.
+// Só entra na política quando a loja tem a chave do site configurada no build (sem chave, nada muda).
+export const TURNSTILE_ORIGIN = "https://challenges.cloudflare.com";
+
+export function buildCsp({ apiUrl, dev = false, turnstile = false } = {}) {
   const api = origin(apiUrl);
-  const connect = ["'self'", api, wsOrigin(api)].filter(Boolean);
+  const captcha = turnstile ? [TURNSTILE_ORIGIN] : [];
+  const connect = ["'self'", api, wsOrigin(api), ...captcha].filter(Boolean);
   const directives = {
     "default-src": ["'self'"],
-    "script-src": ["'self'", "'unsafe-inline'", ...(dev ? ["'unsafe-eval'"] : [])],
+    "script-src": ["'self'", "'unsafe-inline'", ...(dev ? ["'unsafe-eval'"] : []), ...captcha],
     "style-src": ["'self'", "'unsafe-inline'"],
     "img-src": ["'self'", "data:", "blob:", "https:"],
     "font-src": ["'self'", "data:"],
     "connect-src": dev ? [...connect, "ws://localhost:*", "http://localhost:*"] : connect,
     "media-src": ["'self'"],
+    ...(turnstile ? { "frame-src": [TURNSTILE_ORIGIN] } : {}),
     "object-src": ["'none'"],
     "base-uri": ["'self'"],
     "form-action": ["'self'"],
@@ -43,9 +49,9 @@ export function buildCsp({ apiUrl, dev = false } = {}) {
     .join("; ");
 }
 
-export function securityHeaders({ apiUrl, dev = false } = {}) {
+export function securityHeaders({ apiUrl, dev = false, turnstile = false } = {}) {
   const headers = [
-    { key: "Content-Security-Policy", value: buildCsp({ apiUrl, dev }) },
+    { key: "Content-Security-Policy", value: buildCsp({ apiUrl, dev, turnstile }) },
     { key: "X-Content-Type-Options", value: "nosniff" },
     { key: "X-Frame-Options", value: "DENY" },
     { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },

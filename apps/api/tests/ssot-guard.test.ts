@@ -35,18 +35,10 @@ function catraca(nome: string, re: RegExp, teto: Record<string, number>) {
 }
 
 describe("catraca de fonte única (nenhuma cópia nova)", () => {
-  // HORÁRIO/FUSO: na API só `DEFAULT_STORE_TIMEZONE` (lib/storeTime.ts) e `Store.timezone`; a do front é features/inicio/services/salesDefinition.ts. Ver D-02.
+  // HORÁRIO/FUSO (SSOT D1, fechado): na API só `DEFAULT_STORE_TIMEZONE` (lib/storeTime.ts); no web só shared/format/storeTime.ts
+  // (formatInStoreTimezone + useStoreTimezone). Todo o resto recebe `Store.timezone`.
   catraca("fuso 'America/Sao_Paulo' escrito à mão", /["'`]America\/Sao_Paulo["'`]/g, {
-    "apps/web/features/auditoria/AuditoriaPage.tsx": 1,
-    "apps/web/features/auditoria/components/LogRow.tsx": 1,
-    "apps/web/features/cupons/components/CouponRow.tsx": 1,
-    "apps/web/features/cupons/couponForm.ts": 1,
-    "apps/web/features/inicio/services/salesDefinition.ts": 1,
-    "apps/web/features/pedidos/detail/OrderDetailView.tsx": 1,
-    "apps/web/features/planos/components/PixCheckoutModal.tsx": 1,
-    "apps/web/features/plataforma/PlatformUi.tsx": 1,
-    "apps/web/features/privacidade/PrivacyPage.tsx": 1,
-    "apps/web/features/relatorios/dateRange.ts": 1,
+    "apps/web/shared/format/storeTime.ts": 1, // DEFAULT_STORE_TIMEZONE: a ÚNICA no web (PR-05)
     "apps/api/src/lib/storeTime.ts": 1 // DEFAULT_STORE_TIMEZONE: a ÚNICA na API (PR-04)
   });
   // DINHEIRO: formatador de moeda definido à mão
@@ -54,12 +46,13 @@ describe("catraca de fonte única (nenhuma cópia nova)", () => {
     "apps/api/src/lib/cancelMessages.ts": 1,
     "apps/web/shared/format/money.ts": 1
   });
+  // COTAÇÃO (SSOT D5, fechado): frete grátis e total do pedido só em shared-types/quote (servidor e prévia do checkout).
+  catraca("regra de frete grátis ou soma do total reescrita", /threshold\s*\)?\s*\?\s*0\b|>=\s*threshold\s*\?|subtotalCents\s*\+\s*\w*[dD]eliveryFee\w*\s*\+\s*\w*[tT]ip/g, {});
   // STATUS: lista de status do pedido como valor de execução
   catraca("lista de status do pedido redefinida", /\[\s*["']PENDENTE["']\s*,\s*["']CONFIRMADO["']/g, {
     "apps/api/src/modules/orders/orders.history.ts": 1,
-    "apps/api/src/routes/tables.ts": 1,
-    "apps/web/core/domain/orders.ts": 1,
-    "apps/web/features/pedidos/kanban.ts": 1
+    "apps/api/src/routes/tables.ts": 1
+    // web: a lista vem de @meucardapio/shared-types/constants (SSOT D3); kanban.ts e orders.ts não a redefinem mais
   });
   // ERRO: texto de 429 solto (o único lugar é RATE_LIMITED_BODY/tooMany)
   catraca("texto de 'Muitas tentativas' escrito à mão", /["'`]Muitas tentativas/g, {

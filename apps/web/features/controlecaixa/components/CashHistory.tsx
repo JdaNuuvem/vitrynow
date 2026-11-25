@@ -8,8 +8,9 @@ import { Modal } from "@/shared/ui/Modal";
 import { formatCents } from "@/shared/format/money";
 import { closeReasons } from "@/features/caixa/cashReasons";
 import { MovementsList } from "./MovementsList";
+import { activeStoreTimezone, formatInStoreTimezone } from "@/shared/format/storeTime";
 
-const date = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
+const date = { format: (value: Date | number) => formatInStoreTimezone(value, activeStoreTimezone(), { dateStyle: "short", timeStyle: "short" }) };
 const integer = new Intl.NumberFormat("pt-BR");
 
 function historicalCents(value: number | string | null | undefined) {

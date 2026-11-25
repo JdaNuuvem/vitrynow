@@ -6,6 +6,7 @@ import { Button, StateMessage } from "@/shared/design/components";
 import { MoneyInput } from "@/shared/ui/MoneyInput";
 import { Modal } from "@/shared/ui/Modal";
 import { couponDraft, toNewCouponInput, type CouponDraft } from "../couponForm";
+import { useStoreTimezone } from "@/features/shell/useStoreTimezone";
 
 export function NewCouponForm({ onCreate, initial, restricted = false, onClose }: {
   onCreate: (input: NewCouponInput) => Promise<string | null>;
@@ -14,7 +15,8 @@ export function NewCouponForm({ onCreate, initial, restricted = false, onClose }
   onClose: () => void;
 }) {
   const titleId = useId();
-  const original = couponDraft(initial);
+  const timeZone = useStoreTimezone();
+  const original = couponDraft(initial, timeZone);
   const [draft, setDraft] = useState<CouponDraft>(original);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

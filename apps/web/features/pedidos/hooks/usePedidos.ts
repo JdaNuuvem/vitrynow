@@ -11,6 +11,7 @@ import { buildCancelBody, type CancelDraft } from "../cancelReasons";
 import { hiddenOpenCount } from "../hiddenOpen";
 import { explainOrderError } from "../orderErrors";
 import type { CardAction } from "../orderActions";
+import { orderLabel } from "@/shared/format/orderCode";
 
 export type LoadState = "loading" | "ready" | "error";
 
@@ -81,7 +82,7 @@ export function usePedidos() {
       setBusyId(null);
       if (!result.ok) return setNotice(fail(result));
       await reload();
-      setUndoOffer(result.data.order.canUndo ? { orderId: order.id, text: `Pedido #${order.code} · ${statusLabel(action.to)}` } : null);
+      setUndoOffer(result.data.order.canUndo ? { orderId: order.id, text: `${orderLabel(order.code)} · ${statusLabel(action.to)}` } : null);
     },
     [ordersGateway, reload, fail],
   );

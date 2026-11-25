@@ -58,10 +58,13 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/store/settings": "blocked",
   "POST /api/store/availability": "blocked",
   "POST /api/store/hours": "blocked",
+  "POST /api/store/hours/suggest": "allowed", // PR-03/a2: só SUGERE (não grava nada)
   "POST /api/store/prep-times": "blocked",
   "PUT /api/store/menu-campaign": "blocked", // campanha do cardapio: rascunho, publicar e retirar sao configuracao (nada na Consulta)
   "POST /api/store/menu-campaign/publish": "blocked",
   "POST /api/store/menu-campaign/unpublish": "blocked",
+  "POST /api/store/busy": "blocked", // g1: Consulta/Suspensão já não recebem pedido (CA-OCU-06)
+  "DELETE /api/store/busy": "blocked",
   "POST /api/store/status": "blocked", // pausar/fechar por hoje: na Consulta já não há pedido novo para pausar
   "POST /api/users": "blocked",
   "POST /api/users/:id/delete": "blocked",
@@ -109,6 +112,14 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/auth/verify-email/resend": "billing", // API-26: conta, tambem liberado na Suspensao
   "POST /api/onboarding/steps/:step": "blocked", // API-26: cadastro guiado
   // — Lote 2 (Atlas): rotas das branches integradas; classes conservadoras, a revisar com cada dono (Nightingale/Leonardo) —
+  // Estoque e lucro: lançar e configurar é escrita comum (Consulta bloqueia); a baixa da venda vai junto do pedido.
+  "POST /api/stock/ingredients": "blocked",
+  "PATCH /api/stock/ingredients/:id": "blocked",
+  "POST /api/stock/ingredients/:id/purchase": "blocked",
+  "POST /api/stock/ingredients/:id/loss": "blocked",
+  "POST /api/stock/ingredients/:id/count": "blocked",
+  "PUT /api/stock/products/:id/recipe": "blocked",
+  "PUT /api/stock/options/:id/recipe": "blocked",
   "POST /api/tables": "blocked", // API-22: cadastro de mesa
   "PATCH /api/tables/:id": "blocked",
   "POST /api/tables/:id/regenerate-qr": "blocked",

@@ -106,6 +106,10 @@ services:
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAIL_FROM: ${EMAIL_FROM:-MeuCardapio <onboarding@resend.dev>}
       TRIAL_DAYS: ${TRIAL_DAYS:-7}
+      # Captcha do pedido público (NG-08): off | turnstile. Com turnstile a API recusa subir sem TURNSTILE_SECRET_KEY;
+      # o web precisa de NEXT_PUBLIC_TURNSTILE_SITE_KEY no build. Só é cobrado de quem já tem 2 pedidos pendentes.
+      CAPTCHA_MODE: ${CAPTCHA_MODE:-off}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
       # SEC-13: em produção a API NÃO sobe com MFA_ENFORCED diferente de "true" (guarda de partida em lib/mfaBoot.ts). Padrão SEGURO: true.
       MFA_ENFORCED: ${MFA_ENFORCED:-true}
       # Fotos do cardápio (API-18, ADR-0017, decisão do Claudio 18/11): em DISCO LOCAL do servidor (volume uploads_data), sem S3/R2. A pasta é FIXA em /uploads
@@ -138,6 +142,9 @@ services:
       dockerfile: apps/web/Dockerfile
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?defina NEXT_PUBLIC_API_URL no .env (fixado no build da imagem web)}
+        # Também fixados no build: chave PÚBLICA do captcha e a tela de campanha (vazio = desligado).
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
+        NEXT_PUBLIC_MENU_CAMPAIGN_ENABLED: ${NEXT_PUBLIC_MENU_CAMPAIGN_ENABLED:-}
     image: meucardapio-web:${APP_VERSION:-local}
     restart: unless-stopped
     logging: *default-logging
@@ -211,8 +218,8 @@ services:
       retries: 5
 
   # Backup lógico do Postgres, verificado a cada execução (scripts/backup/backup.sh): dump vazio ou
-  # sem as tabelas é recusado e o healthcheck acusa. Guarda ./backups (host). ATENÇÃO: isto ainda
-  # está NO MESMO servidor — a cópia externa (off-site) precisa de um destino definido pelo Claudio.
+  # sem as tabelas é recusado e o healthcheck acusa. Guarda ./backups (host), NO MESMO servidor; a cópia
+  # externa cifrada é o serviço backup-offsite abaixo (perfil "offsite").
   # Prova de restauração: scripts/backup/restore-verify.sh.
   postgres-backup:
     networks: [data]
@@ -245,6 +252,47 @@ services:
       start_period: 5m
       retries: 1
 
+  # Cópia OFF-SITE cifrada (CL-12): só sobe com o perfil "offsite" (COMPOSE_PROFILES=offsite no .env). Lê ./backups
+  # SOMENTE LEITURA (o que o postgres-backup já verificou), cifra no cliente (rclone crypt) e envia para um bucket S3
+  # compatível fora deste servidor. Fica na rede de borda (precisa de internet) e NÃO alcança o banco.
+  # Restaurar: scripts/backup/offsite-restore.sh (RUNBOOK-infra §5c). Regras do .env: check-env.sh.
+  backup-offsite:
+    profiles: [offsite]
+    image: rclone/rclone:1.68.2
+    restart: unless-stopped
+    logging: *default-logging
+    cap_drop: [ALL]
+    cap_add: [DAC_READ_SEARCH]   # só LER ./backups (pasta 700 do usuário postgres, uid 70); sem escrita lá (montagem :ro)
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - postgres-backup
+    environment:
+      BACKUP_DIR: /backups
+      STATE_DIR: /state
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      OFFSITE_S3_PROVIDER: ${OFFSITE_S3_PROVIDER:-Other}
+      OFFSITE_S3_ENDPOINT: ${OFFSITE_S3_ENDPOINT:-}
+      OFFSITE_S3_REGION: ${OFFSITE_S3_REGION:-auto}
+      OFFSITE_S3_BUCKET: ${OFFSITE_S3_BUCKET:-}
+      OFFSITE_S3_ACCESS_KEY_ID: ${OFFSITE_S3_ACCESS_KEY_ID:-}
+      OFFSITE_S3_SECRET_ACCESS_KEY: ${OFFSITE_S3_SECRET_ACCESS_KEY:-}
+      OFFSITE_PREFIX: ${OFFSITE_PREFIX:-vitry}
+      OFFSITE_CRYPT_PASSWORD: ${OFFSITE_CRYPT_PASSWORD:-}
+      OFFSITE_CRYPT_SALT: ${OFFSITE_CRYPT_SALT:-}
+      OFFSITE_KEEP_DAYS: ${OFFSITE_KEEP_DAYS:-30}
+    volumes:
+      - ./backups:/backups:ro
+      - offsite_state:/state
+      - ../scripts/backup:/scripts:ro
+    entrypoint: ["/bin/sh", "/scripts/offsite-loop.sh"]
+    healthcheck:
+      test: ["CMD", "/bin/sh", "/scripts/offsite-healthcheck.sh"]
+      interval: 10m
+      timeout: 10s
+      start_period: 30m
+      retries: 1
+
 networks:
   # data: só Postgres, migrate, backup e API. internal: true = sem saída à internet nem acesso do Caddy/web ao banco.
   data:
@@ -264,4 +312,5 @@ volumes:
   postgres_data:
   caddy_data:
   caddy_config:
+  offsite_state:  # marcador OFFSITE_LAST_OK da cópia externa
   uploads_data:   # fotos do cardápio (ADR-0017): persistente; entra no backup; NUNCA use `down -v` em produção

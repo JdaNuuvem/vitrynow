@@ -19,6 +19,7 @@ const SAMPLES: WsServerMessage[] = [
   { type: "cashier.difference_over_tolerance", sessionId: "s" },
   { type: "device.alert", code: "MODE_UNCONFIRMED" },
   { type: "table.alert", tableId: "t", kind: "CALL_WAITER" },
+  { type: "stock.low", ingredientId: "i", kind: "LOW" },
   { type: "ping" },
 ];
 

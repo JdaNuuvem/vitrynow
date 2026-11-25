@@ -6,6 +6,7 @@ import { Button, PageHeading, StateMessage } from "@/shared/design/components";
 import { Icon, type IconName } from "@/shared/icons/Icon";
 import { campaignEnabled } from "./campanha/campaignGateways";
 import { ChangePasswordCard } from "./components/ChangePasswordCard";
+import { SessionsCard } from "./components/SessionsCard";
 import { StoreSettingsCard } from "./components/StoreSettingsCard";
 import { useConta } from "./hooks/useConta";
 import "./conta.css";
@@ -51,6 +52,7 @@ export function ContaPage() {
       <div className="conta__grid">
         <StoreSettingsCard key={store.id} store={store} onSave={save} editable={role === "OWNER"} canEditCatalogPolicy={role === "OWNER"} />
         <ChangePasswordCard onChangePassword={changePassword} />
+        <SessionsCard />
       </div>
     </main>
   );

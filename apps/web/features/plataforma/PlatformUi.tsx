@@ -1,8 +1,10 @@
 import type { ReactNode } from "react";
 import { Button, PageHeading, Pagination, StateMessage, StatusBadge } from "@/shared/design/components";
 import type { PlatformSubscription } from "./platformApi";
+import { DEFAULT_STORE_TIMEZONE } from "@/shared/format/storeTime";
 
-const dateTime = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Sao_Paulo" });
+// Back-office da plataforma: lista várias lojas, sem uma "loja aberta"; mostra no fuso padrão da operação.
+const dateTime = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: DEFAULT_STORE_TIMEZONE });
 const PLATFORM_PHASE: Record<PlatformSubscription["phase"], string> = {
   TRIAL: "Em teste", ACTIVE: "Ativo", READ_ONLY: "Em consulta", SUSPENDED: "Suspenso",
 };

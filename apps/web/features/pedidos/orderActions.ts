@@ -124,10 +124,10 @@ export function deriveCardActions(order: Order): CardActions {
 }
 
 // Rótulo do botão de confirmar da folha de cancelamento: repete o efeito e o valor, nunca "Tem certeza?".
-export function confirmCancelLabel(order: Order, formatMoney: (cents: number) => string): string {
+export function confirmCancelLabel(order: Order, moneyOrHidden: (cents: number) => string): string {
   const refund = (order.allowedTransitions ?? []).some((t) => t.kind === "CANCEL" && t.requires?.refund);
   if (refund) {
-    return `${order.status === "PENDENTE" ? "Recusar e estornar" : "Cancelar e estornar"} ${formatMoney(order.totalCents)}`;
+    return `${order.status === "PENDENTE" ? "Recusar e estornar" : "Cancelar e estornar"} ${moneyOrHidden(order.totalCents)}`;
   }
   return order.status === "PENDENTE" ? "Recusar pedido" : "Cancelar pedido";
 }

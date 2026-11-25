@@ -1,5 +1,5 @@
 import type { ReportSummary } from "@/core/domain/reports";
-import { formatCents } from "@/shared/format/money";
+import { formatCents, moneyOrHidden } from "@/shared/format/money";
 
 function StatCard({ label, value }: { label: string; value: string | number }) {
   return (
@@ -11,7 +11,7 @@ function StatCard({ label, value }: { label: string; value: string | number }) {
 }
 
 export function SummaryCards({ summary, financial, hidden }: { summary: ReportSummary; financial: boolean; hidden: boolean }) {
-  const money = (cents: number) => hidden ? "Oculto" : formatCents(cents);
+  const money = (cents: number) => moneyOrHidden(cents, hidden);
   return (
     <div className="relatorios__cards">
       <StatCard label="Pedidos" value={summary.orderCount} />

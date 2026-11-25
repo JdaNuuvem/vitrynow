@@ -13,11 +13,12 @@ import { MovementModal } from "./components/MovementModal";
 import { OpenCashModal } from "./components/OpenCashModal";
 import { useCashier } from "./hooks/useCashier";
 import "./caixa.css";
+import { activeStoreTimezone, formatInStoreTimezone } from "@/shared/format/storeTime";
 
 type ActiveModal = "open" | "close" | "summary" | "config" | null;
 
 function openedAtLabel(iso: string): string {
-  return `Aberto às ${new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
+  return `Aberto às ${formatInStoreTimezone(iso, activeStoreTimezone(), { hour: "2-digit", minute: "2-digit" })}`;
 }
 
 export function CaixaWidget({ reportsHref }: { reportsHref: string }) {

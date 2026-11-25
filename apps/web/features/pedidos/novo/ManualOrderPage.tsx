@@ -7,6 +7,7 @@ import { useCurrentRole } from "@/core/session/useCurrentRole";
 import { usePanelServices } from "@/core/services/PanelServices";
 import { useStore, useStoreActions, useStoreCatalog } from "@/features/shell/StoreProvider";
 import { formatCents } from "@/shared/format/money";
+import { maskPhoneInput, PHONE_INPUT_PROPS } from "@/shared/format/phone";
 import { Icon } from "@/shared/icons/Icon";
 import { choiceLabels, lineChoicesValid, orderNeedsUpdatedCatalog } from "@/features/loja/productOptions";
 import { ManualCatalog, ManualItemDialog } from "./ManualCatalog";
@@ -40,8 +41,8 @@ function OrderFields({ fields, set, owner }: {
       </select></label>
     </div>
     <label>Nome do cliente<input autoComplete="off" maxLength={150} value={fields.customerName} onChange={e => set("customerName", e.target.value)} placeholder="Opcional" /></label>
-    <label>Telefone{delivery && " (obrigatório)"}<input type="tel" autoComplete="off" minLength={8} maxLength={20}
-      pattern={String.raw`[0-9\+\(\)\s\-]+`} required={delivery} value={fields.customerPhone} onChange={e => set("customerPhone", e.target.value)} /></label>
+    <label>Telefone{delivery && " (obrigatório)"}<input {...PHONE_INPUT_PROPS} autoComplete="off"
+      required={delivery} value={fields.customerPhone} onChange={e => set("customerPhone", maskPhoneInput(e.target.value))} /></label>
     {delivery && <label>Endereço de entrega<textarea required maxLength={500} value={fields.address} onChange={e => set("address", e.target.value)} /></label>}
     <details><summary>Observações e descontos</summary>
       <div className="manual-fields">

@@ -1,6 +1,7 @@
 // API-52 (LGPD, ADR-0014 §3.1; spec do Leonardo RN-PV-01..10, CA-PV-01..05 e 11): anonimizar cliente SEM destruir o financeiro.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore, productStore } from "./helpers";
 import { sendMfaCodeEmail } from "../src/lib/email";
 import { ServerBusyError } from "../src/shared/errors";
 import { bcryptPasswordHasher } from "../src/shared/passwordHasher";
@@ -68,7 +69,7 @@ describe("privacidade: anonimizar cliente", { timeout: 60_000 }, () => {
         items: { create: [{ productName: "Pizza", quantity: 1, unitPriceCents: data.total ?? 2500, notes: "sem cebola para a Maria" }] },
       },
     });
-    await prisma.orderStatusHistory.create({ data: { orderId: order.id, status: data.status ?? "CONCLUIDO", createdAt: new Date(createdAt.getTime() + 600_000) } });
+    await prisma.orderStatusHistory.create({ data: { orderId: order.id, storeId: await orderStore(order.id), status: data.status ?? "CONCLUIDO", createdAt: new Date(createdAt.getTime() + 600_000) } });
     return order.id;
   }
 
@@ -357,10 +358,10 @@ describe("privacidade: anonimizar cliente", { timeout: 60_000 }, () => {
 
     // o PIX expirou e o pedido foi cancelado: `awaitingPayment` continua TRUE (só vira falso quando o pagamento é aprovado) e NÃO pode travar
     await prisma.order.update({ where: { id: pix }, data: { status: "CANCELADO" } });
-    await prisma.payment.create({ data: { orderId: pix, amountCents: 2500, status: "EXPIRADO" } });
+    await prisma.payment.create({ data: { orderId: pix, storeId: await orderStore(pix), amountCents: 2500, status: "EXPIRADO" } });
     expect((await prisma.order.findUniqueOrThrow({ where: { id: pix } })).awaitingPayment).toBe(true);
 
-    await prisma.payment.create({ data: { orderId: cancelado, amountCents: 2500, status: "ESTORNO_PENDENTE" } });
+    await prisma.payment.create({ data: { orderId: cancelado, storeId: await orderStore(cancelado), amountCents: 2500, status: "ESTORNO_PENDENTE" } });
     const estorno = await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 2 });
     expect(estorno.statusCode).toBe(409);
     expect(json(estorno).orders).toEqual([expect.objectContaining({ reason: "REFUND_PENDING" })]); // só o estorno bloqueia; o PIX expirado não
@@ -383,7 +384,7 @@ describe("privacidade: anonimizar cliente", { timeout: 60_000 }, () => {
   it("OrderStatusHistory.reasonText (texto livre da equipe) sai; `reasonCode` FICA, então o relatório de cancelamentos não muda; e só o texto basta para o pedido ter o que anonimizar", async () => {
     const ctx = await setup();
     const id = await mk(ctx.storeId, { status: "CANCELADO" });
-    await prisma.orderStatusHistory.create({ data: { orderId: id, status: "CANCELADO", kind: "CANCEL", reasonCode: "ITEM_EM_FALTA", reasonText: "o João Pereira (11955554444) pediu para cancelar" } });
+    await prisma.orderStatusHistory.create({ data: { orderId: id, storeId: await orderStore(id), status: "CANCELADO", kind: "CANCEL", reasonCode: "ITEM_EM_FALTA", reasonText: "o João Pereira (11955554444) pediu para cancelar" } });
     const ctas = async () => (await prisma.orderStatusHistory.findMany({ where: { orderId: id, reasonCode: { not: null } } })).map((h) => h.reasonCode);
     expect(await ctas()).toEqual(["ITEM_EM_FALTA"]);
     expect((await run(ctx.owner, { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1 })).statusCode).toBe(200);
@@ -398,7 +399,7 @@ describe("privacidade: anonimizar cliente", { timeout: 60_000 }, () => {
     await prisma.order.update({ where: { id: soTexto }, data: { address: null, notes: null, internalNote: null } });
     await prisma.orderItem.updateMany({ where: { orderId: soTexto }, data: { notes: null } });
     const codigo = (await prisma.order.findUniqueOrThrow({ where: { id: soTexto } })).code;
-    await prisma.orderStatusHistory.create({ data: { orderId: soTexto, status: "CANCELADO", kind: "CANCEL", reasonCode: "OUTRO", reasonText: "falou com a Dona Maria" } });
+    await prisma.orderStatusHistory.create({ data: { orderId: soTexto, storeId: await orderStore(soTexto), status: "CANCELADO", kind: "CANCEL", reasonCode: "OUTRO", reasonText: "falou com a Dona Maria" } });
     expect(json(await preview(ctx.owner, { orderCode: codigo })).orders).toBe(1);
     expect(json(await run(ctx.owner, { orderCode: codigo, reason: "HOLDER_REQUEST", expectedOrders: 1 }))).toEqual({ anonymized: 1, nothingToRemove: false });
   });

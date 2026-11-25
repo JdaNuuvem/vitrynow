@@ -5,6 +5,7 @@ import { formatCents } from "@/shared/format/money";
 import { Icon } from "@/shared/icons/Icon";
 import { Modal } from "@/shared/ui/Modal";
 import { PAYMENT_LABELS } from "../paymentLabels";
+import { activeStoreTimezone, formatInStoreTimezone } from "@/shared/format/storeTime";
 
 export type SummaryTab = "resumo" | "historico";
 
@@ -20,7 +21,7 @@ type CashSummaryModalProps = {
 const PAYMENT_ORDER: PaymentBucket[] = ["DINHEIRO", "PIX", "CREDITO", "DEBITO", "VR", "VA", "NAO_IDENTIFICADO"];
 
 function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return formatInStoreTimezone(iso, activeStoreTimezone(), { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 function Line({ label, value, bold }: { label: string; value: string; bold?: boolean }) {

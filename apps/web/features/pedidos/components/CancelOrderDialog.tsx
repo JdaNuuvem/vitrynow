@@ -7,6 +7,7 @@ import { Modal } from "@/shared/ui/Modal";
 import { CANCEL_REASONS, customerPhraseFor, validateCancel, type CancelDraft } from "../cancelReasons";
 import { confirmCancelLabel, isRefundPending, kitchenNotWarned } from "../orderActions";
 import type { CancelOutcome } from "../hooks/usePedidos";
+import { orderHash } from "@/shared/format/orderCode";
 
 // Texto validado pelo Ogilvy (17/11): primeiro o fato, depois o que fazer.
 export const KITCHEN_NOT_WARNED_MESSAGE = "Este pedido já foi impresso e a impressora não avisa o cancelamento. Avise a cozinha.";
@@ -34,7 +35,7 @@ export function CancelOrderDialog({ order, refund, onConfirm, onRetryRefund, onC
 
   const refusing = order.status === "PENDENTE";
   const verb = refusing ? "Recusar" : "Cancelar";
-  const title = refundPending ? `Estorno do pedido #${order.code}` : refund ? `${verb} e estornar #${order.code}` : `${verb} pedido #${order.code}`;
+  const title = refundPending ? `Estorno do pedido ${orderHash(order.code)}` : refund ? `${verb} e estornar ${orderHash(order.code)}` : `${verb} pedido ${orderHash(order.code)}`;
   const validation = validateCancel(draft);
   const phrase = customerPhraseFor(draft.code);
   const confirmLabel = busy ? (refund ? "Estornando…" : refusing ? "Recusando…" : "Cancelando…") : confirmCancelLabel(order, formatCents);

@@ -6,6 +6,8 @@ import { Button } from "@/shared/design/components";
 import { formatCents } from "@/shared/format/money";
 import { Icon } from "@/shared/icons/Icon";
 import { Modal } from "@/shared/ui/Modal";
+import { useStoreTimezone } from "@/features/shell/useStoreTimezone";
+import { formatInStoreTimezone } from "@/shared/format/storeTime";
 
 type PixCheckoutModalProps = {
   payment: PixCheckout | null;
@@ -20,6 +22,7 @@ const FAILURE_MESSAGES: Partial<Record<CheckoutStatus, string>> = {
 };
 
 export function PixCheckoutModal({ payment, status, onClose, onRetry }: PixCheckoutModalProps) {
+  const timeZone = useStoreTimezone();
   const [clipboard, setClipboard] = useState<{ paymentId: string; copied: boolean } | null>(null);
   const codeInput = useRef<HTMLInputElement>(null);
   const copied = clipboard?.paymentId === payment?.id && clipboard?.copied;
@@ -69,7 +72,7 @@ export function PixCheckoutModal({ payment, status, onClose, onRetry }: PixCheck
               )}
               {clipboard?.paymentId === payment.id && <p role="status">{copied ? "Código Pix copiado." : "O código está selecionado e pode ser copiado manualmente."}</p>}
               {payment.expiresAt && Number.isFinite(Date.parse(payment.expiresAt)) && <p className="pix-checkout__waiting">
-                Válido até {new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Sao_Paulo" }).format(new Date(payment.expiresAt))} (horário de Brasília).
+                Válido até {formatInStoreTimezone(payment.expiresAt, timeZone)} (horário da loja).
               </p>}
               <p className="pix-checkout__waiting" role="status">
                 <span className="pix-checkout__spinner" aria-hidden="true" />

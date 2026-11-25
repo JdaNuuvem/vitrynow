@@ -58,9 +58,9 @@ export function categoryDeleteCopy(category: Category): DeleteCopy {
   if (count > 0) {
     return {
       title: `Não dá para excluir ${category.name}`,
-      // O servidor conta TODOS os produtos, inclusive os ocultos, e hoje não há como mover produto de categoria
-      // na tela: a única saída que funciona é excluir os produtos. "Mover para…" entra na página 3.
-      message: `Esta categoria ainda tem ${count} ${count === 1 ? "produto" : "produtos"}, mesmo os ocultos. Exclua ${count === 1 ? "o produto" : "os produtos"} antes de excluir a categoria.`,
+      // O servidor conta TODOS os produtos, inclusive os ocultos. Saídas: "Mover produtos" (na própria categoria, leva todos
+      // para outra no fim da lista) ou excluir os produtos.
+      message: `Esta categoria ainda tem ${count} ${count === 1 ? "produto" : "produtos"}, mesmo os ocultos. Use "Mover produtos" para levá-${count === 1 ? "lo" : "los"} a outra categoria, ou exclua ${count === 1 ? "o produto" : "os produtos"} antes de excluir a categoria.`,
       confirmLabel: "Entendi",
       confirmTone: "primary",
       alternativeLabel: null,

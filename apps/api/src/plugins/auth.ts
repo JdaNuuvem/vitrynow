@@ -1,4 +1,5 @@
 import fp from "fastify-plugin";
+import { panelRoleSchema, type PanelRole } from "@meucardapio/shared-types";
 import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from "fastify";
 import fastifyJwt from "@fastify/jwt";
 import fastifyCookie from "@fastify/cookie";
@@ -22,7 +23,7 @@ export interface PanelJwtPayload {
 export interface PanelUser {
   userId: string;
   storeId: string;
-  role: "OWNER" | "STAFF";
+  role: PanelRole;
   sid?: string;
 }
 
@@ -116,7 +117,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
   // Ações sensíveis da conta (configurações, chaves de impressora, equipe) — exige OWNER.
   // Encadear depois de requirePanelAuth: `{ preHandler: [app.requirePanelAuth, app.requireOwner] }`.
   app.decorate("requireOwner", async (request: FastifyRequest, reply: FastifyReply) => {
-    if (request.user.role !== "OWNER") {
+    if (request.user.role !== panelRoleSchema.enum.OWNER) {
       return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
     }
   });

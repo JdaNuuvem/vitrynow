@@ -9,6 +9,7 @@
 #   1. serviços: rodando, saudáveis (se têm healthcheck) e sem reinício (RestartCount > 0 = crash loop ou queda)
 #   2. /health da API por dentro da rede
 #   3. último backup verificado (LAST_OK) com menos de 26 h
+#   3c. cópia off-site cifrada (perfil offsite) conferida há menos de 28 h; perfil desligado = ALERTA (exceto DEPLOY_ENV=staging)
 #   3b. fotos em disco local (ADR-0017): uso do disco onde está o volume /uploads (> 80% = ALERTA) e quantas fotos há
 #   4. logs da API na janela: [hashlane] SERVER_BUSY (fila de hash cheia), [*_floor_exceeded] por TAXA (> 1% dos pedidos da rota, mínimo 3 casos; Sun Tzu),
 #      [estorno] (erro de estorno), [audit] falha (auditoria que não gravou), respostas 5xx por taxa (> 1% das respostas, mínimo 5)
@@ -30,7 +31,9 @@ alerta() { echo "  [ALERTA] $*"; ALERTAS=$((ALERTAS+1)); }
 conta()  { local n; n="$(printf '%s\n' "$1" | grep -c -- "$2" || true)"; printf '%s' "${n:-0}"; }   # linhas de $1 que casam $2
 
 echo "== serviços"
-for svc in postgres api web caddy postgres-backup; do
+PERFIS="${COMPOSE_PROFILES:-}"; [ -z "$PERFIS" ] && [ -f "$ENVF" ] && PERFIS="$(grep -E '^COMPOSE_PROFILES=' "$ENVF" | tail -1 | cut -d= -f2- | tr -d "\"'\r ")"
+SERVICOS="postgres api web caddy postgres-backup"; [[ ",$PERFIS," == *",offsite,"* ]] && SERVICOS="$SERVICOS backup-offsite"
+for svc in $SERVICOS; do
   cid="$("${DC[@]}" ps -a -q "$svc" 2>/dev/null | head -1)"
   if [ -z "$cid" ]; then alerta "$svc: container não existe"; continue; fi
   est="$(docker inspect -f '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}|{{.RestartCount}}' "$cid" 2>/dev/null)"
@@ -51,6 +54,18 @@ if [[ "$ultimo" =~ ^[0-9]+$ ]]; then
   idade=$(( $(date -u +%s) - ultimo ))
   if [ "$idade" -le 93600 ]; then ok "último backup verificado há $(( idade / 3600 )) h"; else alerta "último backup verificado há $(( idade / 3600 )) h (limite 26 h)"; fi
 else alerta "nenhum backup verificado encontrado (LAST_OK ausente ou ilegível)"; fi
+# 3c. cópia OFF-SITE (perfil "offsite"): só é cobrada quando o perfil está ligado no .env (COMPOSE_PROFILES contém offsite)
+if [[ ",$PERFIS," == *",offsite,"* ]]; then
+  ext="$("${DC[@]}" exec -T backup-offsite cat /state/OFFSITE_LAST_OK 2>/dev/null | cut -d' ' -f1 | tr -d '\r\n')"
+  if [[ "$ext" =~ ^[0-9]+$ ]]; then
+    idade=$(( $(date -u +%s) - ext ))
+    if [ "$idade" -le 100800 ]; then ok "última cópia off-site conferida há $(( idade / 3600 )) h"; else alerta "última cópia off-site conferida há $(( idade / 3600 )) h (limite 28 h): veja docker compose logs backup-offsite"; fi
+  else alerta "nenhuma cópia off-site conferida (OFFSITE_LAST_OK ausente): veja docker compose logs backup-offsite"; fi
+elif [ "${DEPLOY_ENV:-$( [ -f "$ENVF" ] && grep -E '^DEPLOY_ENV=' "$ENVF" | tail -1 | cut -d= -f2- | tr -d "\"'\r " )}" = staging ]; then
+  ok "staging: sem cópia off-site (dados de teste)"
+else
+  alerta "cópia off-site DESLIGADA: o backup só existe neste servidor (ligue o perfil offsite; RUNBOOK-infra §5c)"
+fi
 
 echo "== fotos (disco local, ADR-0017)"
 uso="$("${DC[@]}" exec -T api df -P /uploads 2>/dev/null | tail -1 | awk '{print $5}' | tr -d '%\r\n')"

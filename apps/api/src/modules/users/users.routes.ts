@@ -1,3 +1,4 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import { clientIpOf } from "../../lib/clientIp";
 import type { FastifyPluginAsync } from "fastify";
 import { changePasswordSchema, createStaffUserSchema } from "@meucardapio/shared-types";
@@ -35,7 +36,7 @@ export function buildUserRoutes(service: UsersService): FastifyPluginAsync {
         const parsed = createStaffUserSchema.safeParse(request.body);
         if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
         // SEC-13: criar outro DONO é a ação de controle de acesso mais forte (o novo dono apaga e estorna): exige o código de uso único. STAFF não.
-        if (parsed.data.role === "OWNER" && !(await mfaProofAccepted(request, "invite_owner"))) {
+        if (parsed.data.role === panelRoleSchema.enum.OWNER && !(await mfaProofAccepted(request, "invite_owner"))) {
           return reply.code(403).send({ error: "Confirmação de segurança necessária.", code: "MFA_REQUIRED", purpose: "invite_owner" });
         }
         const user = await service.invite(request.user.storeId, parsed.data, clientKey(clientIpOf(request)));

@@ -1,6 +1,8 @@
 import type { CartLine, DeliveryType, PaymentMethod, PlaceOrderInput, Product } from "@/core/domain/storefront";
 import { digitsToCents } from "@/shared/format/money";
+import { isValidBrPhone } from "@/shared/format/phone";
 import { choiceLabels } from "./productOptions";
+import { quoteOrder } from "@meucardapio/shared-types/quote";
 
 export type CheckoutForm = {
   deliveryType: DeliveryType;
@@ -14,6 +16,8 @@ export type CheckoutForm = {
   // Texto mascarado do campo "Troco para" (ex.: "50,00"); só vale com DINHEIRO.
   changeFor: string;
   tipCents: number;
+  /** API-40: instante ISO escolhido em "Agendar"; ausente = pedido para agora. */
+  scheduledFor?: string;
 };
 
 export const PAYMENT_OPTIONS: { value: PaymentMethod; label: string }[] = [
@@ -54,20 +58,20 @@ export type CheckoutTotals = {
   totalCents: number;
 };
 
-// Mesma conta do servidor, menos o cupom (que só ele conhece): taxa de entrega só em DELIVERY.
+// SSOT D5: a MESMA função de cotação do servidor (shared-types/quote), menos o cupom (que só ele conhece):
+// taxa de entrega só em DELIVERY. O servidor recalcula e, se divergir, responde 409 com o valor certo.
 export function checkoutTotals(input: {
   subtotalCents: number;
   deliveryType: DeliveryType;
   deliveryFeeCents: number;
   tipCents: number;
 }): CheckoutTotals {
-  const deliveryFeeCents = input.deliveryType === "DELIVERY" ? input.deliveryFeeCents : 0;
-  return {
-    subtotalCents: input.subtotalCents,
-    deliveryFeeCents,
+  const quote = quoteOrder({
+    lineTotalsCents: [input.subtotalCents],
+    delivery: input.deliveryType === "DELIVERY" ? { baseFeeCents: input.deliveryFeeCents } : null,
     tipCents: input.tipCents,
-    totalCents: input.subtotalCents + deliveryFeeCents + input.tipCents,
-  };
+  });
+  return { subtotalCents: quote.subtotalCents, deliveryFeeCents: quote.deliveryFeeCents, tipCents: quote.tipCents, totalCents: quote.totalCents };
 }
 
 export function changeForCents(form: CheckoutForm): number | undefined {
@@ -95,6 +99,7 @@ export function toPlaceOrderInput(form: CheckoutForm, cart: PlaceOrderInput["car
     paymentMethod: form.paymentMethod,
     changeForCents: changeForCents(form),
     tipCents: form.tipCents > 0 ? form.tipCents : undefined,
+    ...(form.scheduledFor ? { scheduledFor: form.scheduledFor } : {}),
     cart,
   };
 }
@@ -110,15 +115,20 @@ export const NAME_REQUIRED_MESSAGE = "Informe seu nome.";
 export const PHONE_INVALID_MESSAGE = "Informe um telefone com DDD.";
 export const ADDRESS_REQUIRED_MESSAGE = "Informe o endereço de entrega.";
 
-// Servidor: nome 1–150 caracteres; telefone 8–20 com só dígitos, +, (, ), espaço e hífen; endereço
-// obrigatório para entrega (a página já exigia). Mais rígido que isso aqui seria inventar regra.
+// Limites do servidor (createOrderSchema): nome 1–80, endereço até 280, cupom até 50. Telefone: a regra única do
+// Brasil (DDD + 10/11 dígitos, `isValidBrPhone`, a mesma do `phoneSchema` da API).
+export const CHECKOUT_LIMITS = { customerName: 80, address: 280, couponCode: 50 } as const;
+export const NAME_TOO_LONG_MESSAGE = `Use no máximo ${CHECKOUT_LIMITS.customerName} caracteres.`;
+export const ADDRESS_TOO_LONG_MESSAGE = `Use no máximo ${CHECKOUT_LIMITS.address} caracteres.`;
 export function validateCheckout(form: CheckoutForm, totalCents: number): CheckoutErrors {
   const errors: CheckoutErrors = {};
   const name = form.customerName.trim();
-  if (name.length === 0 || name.length > 150) errors.customerName = NAME_REQUIRED_MESSAGE;
-  const phone = form.customerPhone.trim();
-  if (phone.length < 8 || phone.length > 20 || !/^[0-9+()\s-]+$/.test(phone)) errors.customerPhone = PHONE_INVALID_MESSAGE;
-  if (form.deliveryType === "DELIVERY" && form.address.trim().length === 0) errors.address = ADDRESS_REQUIRED_MESSAGE;
+  if (name.length === 0) errors.customerName = NAME_REQUIRED_MESSAGE;
+  else if (Array.from(name).length > CHECKOUT_LIMITS.customerName) errors.customerName = NAME_TOO_LONG_MESSAGE;
+  if (!isValidBrPhone(form.customerPhone)) errors.customerPhone = PHONE_INVALID_MESSAGE;
+  const address = form.address.trim();
+  if (form.deliveryType === "DELIVERY" && address.length === 0) errors.address = ADDRESS_REQUIRED_MESSAGE;
+  else if (form.deliveryType === "DELIVERY" && Array.from(address).length > CHECKOUT_LIMITS.address) errors.address = ADDRESS_TOO_LONG_MESSAGE;
   const change = validateChange(form, totalCents);
   if (change) errors.changeFor = change;
   return errors;

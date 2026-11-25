@@ -18,6 +18,7 @@ import { HttpUsersGateway } from "../gateways/http/HttpUsersGateway";
 import { HttpMfaGateway } from "../gateways/http/HttpMfaGateway";
 import { HttpNoticesGateway } from "../gateways/http/HttpNoticesGateway";
 import { HttpSubscriptionGateway } from "../gateways/http/HttpSubscriptionGateway";
+import { HttpStockGateway } from "../gateways/http/HttpStockGateway";
 import type { PanelServices } from "./PanelServices";
 
 export function createHttpPanelServices(http: HttpClient = new FetchHttpClient()): PanelServices {
@@ -41,5 +42,6 @@ export function createHttpPanelServices(http: HttpClient = new FetchHttpClient()
     subscription: new HttpSubscriptionGateway(http),
     notices: new HttpNoticesGateway(http),
     mfa: new HttpMfaGateway(http),
+    stock: new HttpStockGateway(http),
   };
 }
