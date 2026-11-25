@@ -222,7 +222,8 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     const receipt = await prisma.$transaction(async (tx) => {
       // Trava os pedidos da mesa: cancelar e receber ao mesmo tempo se enfileiram (o cancelamento só vale com receiptId nulo).
-      await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "storeId" = ${storeId} AND "tableId" = ${id} AND "receiptId" IS NULL FOR UPDATE`;
+      // ORDER BY "id": duas transações que travam VÁRIAS linhas têm de travá-las na MESMA ordem, senão o plano da consulta (que muda sob carga) as cruza e dá deadlock (500).
+      await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "storeId" = ${storeId} AND "tableId" = ${id} AND "receiptId" IS NULL ORDER BY "id" FOR UPDATE`;
       // CA-MB-13: pedido PENDENTE bloqueia; aceitar ou recusar antes.
       const pending = await tx.order.count({ where: { storeId, tableId: id, receiptId: null, status: "PENDENTE" } });
       if (pending > 0) throw new CodedError(409, "PENDING_ORDERS", "Aceite ou recuse os pedidos pendentes da mesa antes de receber.", { details: { pendingOrders: pending } });

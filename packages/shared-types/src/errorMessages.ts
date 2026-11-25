@@ -130,6 +130,7 @@ export const errorMessages = {
   VALIDATION_ERROR: e("Dados inválidos. Confira os campos.", "loja", "painel"),
   VERIFY_RESEND_LIMITED: e("Aguarde para reenviar a verificação.", "painel", "email"),
   VERIFY_TOKEN_INVALID: e("Link de verificação inválido ou expirado.", "painel", "email"),
+  WRITE_CONFLICT: e("A operação conflitou com outra feita ao mesmo tempo. Atualize e tente de novo.", "loja", "painel"),
   WEIGHT_OUT_OF_RANGE: e("Peso fora do intervalo permitido.", "loja"),
   WEIGHT_STEP_INVALID: e("Peso fora do passo permitido.", "loja"),
   ZONE_DUPLICATE: e("Zona de entrega duplicada.", "painel"),
