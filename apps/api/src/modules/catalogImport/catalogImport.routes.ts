@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
-import { IMPORT_MAX_BYTES, importConfirmSchema, importPreviewInputSchema, importTemplateQuerySchema } from "@meucardapio/shared-types";
+import { IMPORT_MAX_BYTES, panelRoleSchema, importConfirmSchema, importPreviewInputSchema, importTemplateQuerySchema } from "@meucardapio/shared-types";
 import { useDomainErrors } from "../../shared/errors";
 import type { CatalogImportService } from "./catalogImport.service";
 
@@ -11,7 +11,7 @@ export function buildCatalogImportRoutes(service: CatalogImportService): Fastify
       preHandler: [
         app.requirePanelAuth,
         async (request: FastifyRequest, reply: FastifyReply) => {
-          if (request.user.role !== "OWNER") return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
+          if (request.user.role !== panelRoleSchema.enum.OWNER) return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
         },
       ],
     };

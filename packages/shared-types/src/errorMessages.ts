@@ -26,6 +26,17 @@ export const errorMessages = {
   // Estoque e lucro
   INGREDIENT_LIMIT_REACHED: e("A loja atingiu o máximo de insumos.", "painel"),
   INGREDIENT_NAME_TAKEN: e("Já existe um insumo com esse nome.", "painel"),
+  // Importação assistida de produtos (IMP-1, PR #154): erros da rota e AVISOS por linha da prévia.
+  FORMULA_AS_TEXT: e("Uma célula parecia fórmula e foi guardada como texto.", "painel"),
+  HTML_AS_TEXT: e("Uma célula tinha código HTML e foi guardada como texto.", "painel"),
+  IMPORT_BATCH_CHANGED: e("A importação mudou. Veja a prévia de novo.", "painel"),
+  IMPORT_FORMAT_INVALID: e("Não reconhecemos este arquivo. Use CSV ou JSON.", "painel"),
+  IMPORT_HAS_PENDING_ROWS: e("Há linhas para revisar. Corrija a planilha ou publique só as válidas.", "painel"),
+  IMPORT_NOT_PENDING: e("Esta importação já foi finalizada.", "painel"),
+  IMPORT_RATE_LIMITED: e("Limite de 3 importações por hora. Tente de novo mais tarde.", "painel"),
+  ROW_IGNORED_NO_NAME: e("Linha sem nome de produto: foi ignorada.", "painel"),
+  TOO_MANY_ROWS: e("A planilha tem mais de 500 linhas. Divida em duas.", "painel"),
+  UNKNOWN_FIELD: e("Coluna não reconhecida: foi ignorada.", "painel"),
   INGREDIENT_NOT_FOUND: e("Insumo não encontrado.", "painel"),
   CASH_ALREADY_OPEN: e("Já existe um caixa aberto.", "painel"),
   CASH_COUNTED_REQUIRED: e("Informe o valor contado no caixa.", "painel"),
