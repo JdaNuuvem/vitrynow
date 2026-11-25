@@ -38,7 +38,7 @@ export function ChangePasswordCard({
     <div className="conta__card conta__card--spaced">
       <h2>{CHANGE_PASSWORD_CARD_TITLE}</h2>
       {/* "Senha atual" não tem regra de tamanho: contas antigas podem ter senha curta */}
-      <Field type="password" placeholder="Senha atual" value={currentPassword} onChange={setCurrentPassword} />
+      <Field type="password" maxLength={200} placeholder="Senha atual" value={currentPassword} onChange={setCurrentPassword} />
       <PasswordField
         label="Nova senha"
         value={newPassword}

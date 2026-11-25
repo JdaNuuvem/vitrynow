@@ -23,6 +23,7 @@ export const ConfirmEmailField = forwardRef<
         id={inputId}
         className="auth__input"
         type="email"
+        maxLength={200}
         inputMode="email"
         autoComplete="username"
         autoCapitalize="none"

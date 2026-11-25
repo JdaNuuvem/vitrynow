@@ -1,4 +1,4 @@
-import { panelRoleSchema } from "@meucardapio/shared-types";
+import { panelRoleSchema, sanitizeText, charLength, textTooLongMessage, TEXT_TOO_LONG_CODE } from "@meucardapio/shared-types";
 import { type Prisma, type prisma as prismaClient, type Order, type OrderStatus, type Payment } from "@meucardapio/db";
 import type { WsServerMessage } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
@@ -36,6 +36,7 @@ type Tx = Prisma.TransactionClient;
 // Kanban (RN-KB-01): pedidos em andamento; teto de segurança para não devolver a loja inteira se algo ficar preso.
 const OPEN_STATUSES: OrderStatus[] = [...OPEN_ORDER_STATUSES];
 export const INTERNAL_NOTE_MAX = 500;
+export const CANCEL_REASON_TEXT_MAX = 500; // texto do motivo "OUTRO" (a tela já limita em 500)
 
 export type PanelActor = { storeId: string; userId: string; role: Role };
 // Sem campo editável ao cliente (GRW-15): o texto que o cliente vê é derivado de (código, ator) em lib/cancelMessages.
@@ -357,7 +358,10 @@ export class OrderService {
   validateReason(reason: CancelReason | undefined): CancelReason {
     if (!reason?.code) throw err(400, "REASON_REQUIRED", "Informe o motivo do cancelamento.");
     if (!(HUMAN_REASON_CODES as readonly string[]).includes(reason.code)) throw err(400, "REASON_INVALID", "Motivo de cancelamento inválido.");
-    const text = reason.text?.trim();
+    // Texto livre do motivo: o corpo não passa por zod, então aqui confere tipo, limpa (controles/invisíveis) e limita.
+    if (reason.text != null && typeof reason.text !== "string") throw err(400, "REASON_INVALID", "Motivo de cancelamento inválido.");
+    const text = reason.text ? sanitizeText(reason.text, { multiline: true }) : undefined;
+    if (text && charLength(text) > CANCEL_REASON_TEXT_MAX) throw err(400, TEXT_TOO_LONG_CODE, textTooLongMessage(CANCEL_REASON_TEXT_MAX));
     if (reason.code === "OUTRO" && !text) throw err(400, "REASON_REQUIRED", "Descreva o motivo do cancelamento.");
     // `customerMessage` enviado pelo painel é IGNORADO de propósito: o cliente só vê a frase fixa do motivo.
     return { code: reason.code, text: text || undefined };

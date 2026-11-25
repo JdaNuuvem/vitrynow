@@ -86,6 +86,27 @@ O levantamento foi interrompido antes de começar (o web é do sócio). O que o 
 
 ---
 
+## 3b. APLICADO no web (25/11/2026, com autorização): máscaras e limites dos campos
+Exceção à regra acima, pedida pelo dono do produto depois de um telefone de 20 dígitos passar no Novo pedido. **Já está no código**; revise se quiser outro visual.
+
+- **Telefone (regra única, SSOT D9):** `@meucardapio/shared-types/phone` → `isValidBrPhone`, `maskPhoneInput`, `PHONE_INVALID_MESSAGE` (reexportados em `shared/format/phone.ts` com `PHONE_INPUT_PROPS`). Válido = DDD + 10/11 dígitos (celular com 9), DDI 55 opcional. A API usa a MESMA regra no `phoneSchema`.
+  - Máscara `(11) 98765-4321` em: Novo pedido (`ManualOrderPage.tsx`), checkout da loja (`CheckoutDrawer.tsx`), entregador (`NewDelivererForm.tsx`).
+  - WhatsApp da loja (`StoreSettingsCard.tsx`): só dígitos, até 15 (o servidor exige DDI, sem máscara).
+- **Checkout da loja:** `checkoutForm.ts` → `CHECKOUT_LIMITS` (nome 80, endereço 280, cupom 50 = `createOrderSchema`). Antes o cliente aceitava nome até 150 e o servidor recusava acima de 80. Mensagens novas `NAME_TOO_LONG_MESSAGE` / `ADDRESS_TOO_LONG_MESSAGE`.
+- **maxLength igual ao servidor:** produto (nome 80, descrição 300, link 500), adicional 60, categoria 50, dados da loja (nome 150, endereço 300, horário 200), e-mails 200, senhas 200 (`PasswordField`, `SingleFieldForm`, login), código na Privacidade 20 (era 21).
+- `Field.tsx` (conta) ganhou as props `maxLength` e `inputMode`.
+- `MoneyInput`: para de aceitar dígitos acima de 10 (R$ 99.999.999,99).
+- Testes atualizados: `checkoutForm.test.ts` (regra nova do telefone e do nome) e `CheckoutDrawer.test.tsx` (máscara e maxLength).
+
+**API (mesmo pacote):** textos do pedido do painel, da mesa, de grupos/opções, bairro, chave de impressora e insumo agora passam pelo `textField` (limpa controles invisíveis); cupom do pedido sem espaços nas pontas; `maxUses` ≤ 1.000.000; ids do item ≤ 100; motivo de cancelamento "OUTRO" limpo e com teto de 500 (antes sem limite).
+
+**Achados da rodada de testes por tela (ainda NÃO corrigidos):**
+1. `features/planos/planPresentation.ts`: `FEATURE_LABELS` só traduz `multi_user`; a tela Planos mostra `table_qr · tab_service · scheduled_orders · advanced_reports` crus.
+2. Pagamentos vista por FUNCIONÁRIO mostra "Não foi possível carregar a conta" + "Consultar novamente" (é falta de permissão, as outras telas dizem "Peça ao dono").
+3. Equipe: logo depois de adicionar um funcionário com sucesso aparece "A senha precisa ter pelo menos 10 caracteres" (o campo limpo dispara a validação).
+
+---
+
 ## 4. Mudanças do backend desde a última sincronização (para saber o que a API já oferece)
 - **Tíquete v4** (`printableOrderSchema`): `round`, `requestedBy`, `customerRemoved` — impressos pelo print-client; nada a fazer no web.
 - **Catálogo de erros** (§2) e `docs/textos-de-erro-para-revisar.md`.

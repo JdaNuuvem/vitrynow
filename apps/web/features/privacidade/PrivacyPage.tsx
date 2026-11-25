@@ -78,7 +78,7 @@ export function PrivacyPage() {
             <option value="phone">Telefone</option><option value="orderCode">Código do pedido</option>
           </select></label>
           <label className="platform-field">{kind === "phone" ? "Telefone do cliente" : "Código do pedido"}
-            <input type={kind === "phone" ? "tel" : "text"} value={term} maxLength={kind === "phone" ? 30 : 21}
+            <input type={kind === "phone" ? "tel" : "text"} value={term} maxLength={kind === "phone" ? 30 : 20}
               autoComplete="off" required disabled={busy} onChange={(event) => { setTerm(event.target.value); clearResult(false); }} />
           </label>
           <Button type="submit" variant="primary" busy={busy}>{busy ? "Consultando…" : "Consultar pedidos"}</Button>

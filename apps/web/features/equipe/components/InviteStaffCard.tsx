@@ -37,7 +37,7 @@ export function InviteStaffCard({
   return (
     <form className="equipe-card" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
       <fieldset disabled={busy}>
-        <label>E-mail<input type="email" required autoComplete="off" placeholder="nome@exemplo.com" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+        <label>E-mail<input type="email" maxLength={200} required autoComplete="off" placeholder="nome@exemplo.com" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
         <PasswordField label="Senha do funcionário" value={password} onChange={setPassword} help={PASSWORD_HELP_STAFF} error={rule.error} onBlur={rule.onBlur} />
         {error && !serverRejectedLength && <p className="equipe__error" role="alert">{error}</p>}
       </fieldset>

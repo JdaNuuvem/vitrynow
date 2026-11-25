@@ -1,5 +1,6 @@
 import type { CartLine, DeliveryType, PaymentMethod, PlaceOrderInput, Product } from "@/core/domain/storefront";
 import { digitsToCents } from "@/shared/format/money";
+import { isValidBrPhone } from "@/shared/format/phone";
 import { choiceLabels } from "./productOptions";
 import { quoteOrder } from "@meucardapio/shared-types/quote";
 
@@ -114,15 +115,20 @@ export const NAME_REQUIRED_MESSAGE = "Informe seu nome.";
 export const PHONE_INVALID_MESSAGE = "Informe um telefone com DDD.";
 export const ADDRESS_REQUIRED_MESSAGE = "Informe o endereço de entrega.";
 
-// Servidor: nome 1–150 caracteres; telefone 8–20 com só dígitos, +, (, ), espaço e hífen; endereço
-// obrigatório para entrega (a página já exigia). Mais rígido que isso aqui seria inventar regra.
+// Limites do servidor (createOrderSchema): nome 1–80, endereço até 280, cupom até 50. Telefone: a regra única do
+// Brasil (DDD + 10/11 dígitos, `isValidBrPhone`, a mesma do `phoneSchema` da API).
+export const CHECKOUT_LIMITS = { customerName: 80, address: 280, couponCode: 50 } as const;
+export const NAME_TOO_LONG_MESSAGE = `Use no máximo ${CHECKOUT_LIMITS.customerName} caracteres.`;
+export const ADDRESS_TOO_LONG_MESSAGE = `Use no máximo ${CHECKOUT_LIMITS.address} caracteres.`;
 export function validateCheckout(form: CheckoutForm, totalCents: number): CheckoutErrors {
   const errors: CheckoutErrors = {};
   const name = form.customerName.trim();
-  if (name.length === 0 || name.length > 150) errors.customerName = NAME_REQUIRED_MESSAGE;
-  const phone = form.customerPhone.trim();
-  if (phone.length < 8 || phone.length > 20 || !/^[0-9+()\s-]+$/.test(phone)) errors.customerPhone = PHONE_INVALID_MESSAGE;
-  if (form.deliveryType === "DELIVERY" && form.address.trim().length === 0) errors.address = ADDRESS_REQUIRED_MESSAGE;
+  if (name.length === 0) errors.customerName = NAME_REQUIRED_MESSAGE;
+  else if (Array.from(name).length > CHECKOUT_LIMITS.customerName) errors.customerName = NAME_TOO_LONG_MESSAGE;
+  if (!isValidBrPhone(form.customerPhone)) errors.customerPhone = PHONE_INVALID_MESSAGE;
+  const address = form.address.trim();
+  if (form.deliveryType === "DELIVERY" && address.length === 0) errors.address = ADDRESS_REQUIRED_MESSAGE;
+  else if (form.deliveryType === "DELIVERY" && Array.from(address).length > CHECKOUT_LIMITS.address) errors.address = ADDRESS_TOO_LONG_MESSAGE;
   const change = validateChange(form, totalCents);
   if (change) errors.changeFor = change;
   return errors;

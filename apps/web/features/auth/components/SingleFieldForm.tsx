@@ -38,6 +38,7 @@ export function SingleFieldForm({
           autoComplete={type === "email" ? "username" : "new-password"}
           required
           minLength={minLength}
+          maxLength={200} /* teto do servidor para e-mail e senha */
           placeholder={placeholder}
           value={value}
           onChange={(e) => onChange(e.target.value)}
