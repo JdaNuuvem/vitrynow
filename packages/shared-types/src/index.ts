@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { textField } from "./text";
 export * from "./text";
+export * from "./importProducts";
 
 import { PHONE_INVALID_MESSAGE, PHONE_MAX_INPUT, isValidBrPhone } from "./phone";
 export * from "./phone";

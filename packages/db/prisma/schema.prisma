@@ -149,6 +149,7 @@ model Store {
   updatedAt    DateTime @updatedAt
 
   users        User[]
+  importBatches ImportBatch[]
   deviceTokens DeviceToken[]
   categories   Category[]
   products     Product[]
@@ -1306,4 +1307,26 @@ model MenuCampaign {
   draft     Json?
   published Json?
   updatedAt DateTime @updatedAt
+}
+
+enum ImportBatchStatus {
+  PREVIEW
+  CONFIRMED
+  DISCARDED
+}
+
+// IMP-1: importação assistida de produtos. O rascunho (já validado e sanitizado) fica aqui até o dono confirmar; só então vira produto, pelo serviço de catálogo.
+model ImportBatch {
+  id          String            @id @default(cuid())
+  storeId     String
+  store       Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  userId      String?
+  status      ImportBatchStatus @default(PREVIEW)
+  contentHash String
+  draft       Json
+  result      Json?
+  createdAt   DateTime          @default(now())
+  finishedAt  DateTime?
+
+  @@index([storeId, createdAt])
 }

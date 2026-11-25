@@ -107,6 +107,16 @@ Exceção à regra acima, pedida pelo dono do produto depois de um telefone de 2
 
 ---
 
+## 3c. Tela NOVA a fazer: importação de produtos por planilha (API pronta, PR #154)
+Só OWNER; escrita bloqueada em loja só-leitura/suspensa. Sem tela no web ainda. Rotas:
+- `GET /api/catalog/import/template?format=csv|json` (modelo) e `GET /api/catalog/import/guide` (instruções)
+- `POST /api/catalog/import/preview` (até 2 MB, até 500 linhas) → lote com linhas OK / REVISAR e avisos por linha
+- `GET /api/catalog/import/:batchId`, `POST /:batchId/confirm` (publica as válidas), `POST /:batchId/discard`
+- Códigos e frases no catálogo único (`@meucardapio/shared-types/errors`): `IMPORT_*`, `TOO_MANY_ROWS`, e os avisos `UNKNOWN_FIELD`, `FORMULA_AS_TEXT`, `HTML_AS_TEXT`, `ROW_IGNORED_NO_NAME`.
+Sugestão: botão "Importar planilha" no Catálogo → enviar arquivo → prévia (linhas OK/revisar) → publicar.
+
+---
+
 ## 4. Mudanças do backend desde a última sincronização (para saber o que a API já oferece)
 - **Tíquete v4** (`printableOrderSchema`): `round`, `requestedBy`, `customerRemoved` — impressos pelo print-client; nada a fazer no web.
 - **Catálogo de erros** (§2) e `docs/textos-de-erro-para-revisar.md`.
