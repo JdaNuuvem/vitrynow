@@ -323,7 +323,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
     const { id } = request.params as { id: string };
     const { days, reason } = parsed.data;
     const outcome = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "Subscription" WHERE "storeId" = ${id} FOR UPDATE`;
+      await tx.$queryRaw`SELECT id FROM "Subscription" WHERE "storeId" = ${id} ORDER BY id FOR UPDATE`; // storeId é único (1 linha); ORDER BY satisfaz a varredura de ordem de travas
       const subscription = await tx.subscription.findUnique({ where: { storeId: id } });
       if (!subscription) return { error: 404 as const };
       if (subscription.status !== "TRIAL") return { error: 409 as const };

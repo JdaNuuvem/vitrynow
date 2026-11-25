@@ -21,6 +21,7 @@ import deviceAlertRoutes from "./modules/deviceAlerts/deviceAlerts.module";
 import deviceTokenRoutes from "./modules/deviceTokens/deviceTokens.module";
 import realtimeRoutes from "./routes/realtime";
 import catalogRoutes from "./modules/catalog/catalog.module";
+import catalogImportRoutes from "./modules/catalogImport/catalogImport.module";
 import mediaRoutes from "./modules/media/media.module";
 import cashierRoutes from "./routes/cashier";
 import couponRoutes from "./modules/coupons/coupons.module";
@@ -43,6 +44,7 @@ import onboardingRoutes from "./routes/onboarding";
 import { clientKey } from "./lib/clientKey";
 import { captchaMode } from "./lib/captcha";
 import { isPrismaError, loggerOptions, redactLogUrl } from "./lib/logging";
+import { sendServerBusy } from "./shared/errors";
 import { ORDER_TOKEN_HEADER } from "./lib/orderToken";
 import { currentKey } from "./lib/paymentCrypto";
 import { assertPaymentsBootConfig } from "./modules/storePayments/oauth";
@@ -95,6 +97,15 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   // limite de taxa) seguem o tratamento padrão do Fastify. Os tratadores de DomainError dos módulos delegam para cá com `reply.send(error)`.
   app.setErrorHandler((error, request, reply) => {
     const status = (error as { statusCode?: number }).statusCode;
+    // Erros TRANSITÓRIOS do banco viram resposta determinística (nunca um 500 mudo), logada com o código do Prisma:
+    //  - P2034 (conflito de escrita/deadlock entre duas operações simultâneas): 409, a pessoa atualiza e tenta de novo (nada foi gravado);
+    //  - P2024 (fila de conexões esgotada) e P2028 (a transação não abriu ou estourou o prazo): 503 SERVER_BUSY com Retry-After (o servidor está carregado).
+    const prismaCode = isPrismaError(error) ? (error as { code?: unknown }).code : undefined;
+    if (prismaCode === "P2034" || prismaCode === "P2024" || prismaCode === "P2028") {
+      request.log.warn({ req: request, err: error, prismaCode }, "erro transitório do banco");
+      if (prismaCode === "P2034") return reply.code(409).send({ error: "A operação conflitou com outra feita ao mesmo tempo. Atualize e tente de novo.", code: "WRITE_CONFLICT" });
+      return sendServerBusy(reply);
+    }
     if (isPrismaError(error) || status === undefined || status >= 500) {
       const code = status !== undefined && status >= 500 ? status : 500;
       request.log.error({ req: request, err: error }, "erro interno não tratado"); // `req` = método, MODELO da rota e query redigida
@@ -160,6 +171,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(deviceTokenRoutes);
   app.register(realtimeRoutes);
   app.register(catalogRoutes);
+  app.register(catalogImportRoutes);
   app.register(mediaRoutes);
   app.register(optionGroupRoutes);
   app.register(cashierRoutes);
