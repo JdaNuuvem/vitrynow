@@ -11,9 +11,10 @@ import { ageText, orderAgeMinutes } from "../orderAge";
 import { OrderActions } from "../components/OrderActions";
 import { paymentBadges } from "../components/OrderCard";
 import { actorText, canContact, mapsHref, paymentView, telHref, valueRows, whatsappHref } from "./detailFormat";
+import { useStoreTimezone } from "@/features/shell/useStoreTimezone";
+import { formatInStoreTimezone } from "@/shared/format/storeTime";
 
-const STORE_TIMEZONE = "America/Sao_Paulo";
-const timeOf = (iso: string) => new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: STORE_TIMEZONE });
+const timeOfIn = (timeZone: string) => (iso: string) => formatInStoreTimezone(iso, timeZone, { hour: "2-digit", minute: "2-digit" });
 const reasonLabel = (code: string | null) => CANCEL_REASONS.find((reason) => reason.code === code)?.label ?? null;
 
 export type DetailHandlers = {
@@ -39,6 +40,7 @@ type Props = {
 // Conteúdo do detalhe (spec 11 §3), na ordem fixa: cliente, entrega, observação, itens, valores, pagamento, entregador,
 // impressão, cancelamento. O servidor decide o que cada papel recebe; aqui só se mostra o que chegou.
 export function OrderDetailView({ order, deliverers, nowMs, busy, canRetryRefund, onRetryContact, retryingContact = false, ...handlers }: Props) {
+  const timeOf = timeOfIn(useStoreTimezone());
   const [copied, setCopied] = useState(false);
   const [contactLoaded, setContactLoaded] = useState(false);
   const retryButton = useRef<HTMLButtonElement>(null);

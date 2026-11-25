@@ -117,3 +117,8 @@
 }
 .pix-queue li > div { flex: 1 1 230px; }
 .pix-queue small { color: var(--ink-soft); }
+
+/* API-40: agenda de pedidos agendados, agrupada por dia (no fuso da loja). */
+.pedidos__scheduled-day { display: grid; gap: 10px; margin-block: 18px; }
+.pedidos__scheduled-day h2 { font-size: 1.0625rem; font-weight: 700; }
+.pedidos__muted { color: var(--ink-soft); font-weight: 500; font-size: .875rem; }

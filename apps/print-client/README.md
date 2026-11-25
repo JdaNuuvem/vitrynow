@@ -24,7 +24,7 @@ conferida. Biblioteca (Newtonsoft.Json) ficam em `libs\` com hashes em
 `libs\SHA256SUMS` (conferidos a cada build). **Nada depende de `reconstruction/`.**
 
 ```powershell
-.\build.ps1                          # Release -> bin\Release\MeuCardapio - Impressao.exe (+ SHA256)
+.\build.ps1                          # Release -> bin\Release\Vitry Impressao.exe (+ SHA256)
 .\build.ps1 -RoslynDir <pasta>       # offline: pasta que contenha tasks\net472\csc.exe
 ```
 
@@ -126,8 +126,7 @@ Publicar um release (**só o Claudio**, na máquina dele; a chave privada fica f
 .\tools\verify-release.ps1 -ReleaseDir .\bin\release-1.1.0                  # roda o MESMO código de decisão do app; exit 0 = o app aceitaria
 ```
 
-Limites conhecidos: a assinatura do instalador pelo Windows (Authenticode/SmartScreen) é outra camada (PC-09, só com build final e
-aval do Claudio); a chave privada não é cifrada pelo script (proteja o arquivo conforme o guia); o app não pergunta antes de instalar
+Limites conhecidos: a assinatura do instalador pelo Windows (Authenticode/SmartScreen) é outra camada (ver "Assinatura de código" abaixo); a chave privada não é cifrada pelo script (proteja o arquivo conforme o guia); o app não pergunta antes de instalar
 (instalação fora do expediente/confirmação fica como melhoria).
 
 ## Instalador (Inno Setup)
@@ -138,8 +137,37 @@ com o Windows (`/autostart`) e desinstalador. Requer o [Inno Setup 6](https://jr
 
 ```powershell
 .\build.ps1                                                        # gera bin\Release\...exe
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" .\installer.iss   # gera bin\Installer\MeuCardapio-PrintClient-Setup.exe
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" .\installer.iss   # gera bin\Installer\Vitry-Impressao-Setup.exe
 ```
+
+### Marca Vitry e atualização a partir do nome antigo
+
+O app aparece como **Vitry Impressão** (`Services\Brand.cs` é a fonte única do que o lojista lê); o EXE é `Vitry Impressao.exe` e o instalador
+`Vitry-Impressao-Setup.exe`. Para quem já tem o antigo "MeuCardapio - Impressão" a atualização é transparente: o instalador mantém o **AppId** e o
+**mutex**, instala na **mesma pasta** e apaga o EXE e os atalhos com o nome antigo (`[InstallDelete]`). **Não mudam** (o autoteste trava):
+a pasta de dados `%LOCALAPPDATA%\MeuCardapioPrintClient` e a entropia do DPAPI. Mudar qualquer um faria as lojas perderem a chave de
+impressora salva e o histórico de impressão (reimpressão em dobro).
+
+### Assinatura de código (Authenticode, PC-13)
+
+Sem assinatura o Windows/SmartScreen mostra "editor desconhecido" e muitos lojistas desistem da instalação. O `tools\build-installer.ps1`
+assina o EXE e o instalador **sozinho** quando encontra um certificado (`tools\sign-code.ps1`: SHA-256 + carimbo de tempo RFC 3161, confere
+depois de assinar). Em release publicada use `-RequireSignature` (falha sem certificado).
+
+| Variável | Uso |
+|---|---|
+| `VITRY_SIGN_THUMBPRINT` | certificado no repositório do Windows: **token USB EV ou HSM na nuvem** (a chave nunca sai do dispositivo) |
+| `VITRY_SIGN_PFX` + `VITRY_SIGN_PFX_PASSWORD` | arquivo `.pfx` (certificado OV). Nunca no repositório; senha só em variável de ambiente |
+| `VITRY_SIGN_TIMESTAMP` | servidor de carimbo (padrão DigiCert); `none` só em teste local |
+
+**Qual certificado comprar** (decisão e gasto do Claudio): desde 2023 os certificados de assinatura de código (OV e EV) só são emitidos em
+**token físico ou HSM na nuvem**. Opções: **Azure Trusted Signing** (mais barato, por assinatura mensal; exige empresa com 3+ anos ou
+validação de identidade), **OV** (Sectigo/Certum, ~US$ 200–400/ano; o SmartScreen ganha confiança com o tempo/downloads) ou **EV**
+(~US$ 400–700/ano; confiança imediata no SmartScreen). O certificado sai em nome do **CNPJ** da empresa: é esse nome que o Windows mostra como editor.
+
+**Provado (24/11):** com certificado de teste autoassinado (removido depois): assinatura aplicada e conferida no EXE; EXE adulterado em 1 byte
+=> `HashMismatch`; carimbo de tempo real do DigiCert aplicado. **Não provado:** instalador assinado (Inno Setup não instalado na máquina de
+desenvolvimento) e status `Valid` (só com certificado comprado).
 
 ### Ao desinstalar ou trocar de computador
 
@@ -149,7 +177,7 @@ limite de impressoras do plano. Depois cole a chave nova em "Configurar chave...
 
 ### Guia de instalação para um lojista novo
 
-1. Baixe e rode `MeuCardapio-PrintClient-Setup.exe` no PC do balcão/cozinha.
+1. Baixe e rode `Vitry-Impressao-Setup.exe` no PC do balcão/cozinha.
 2. Marque "Iniciar automaticamente com o Windows" (vem marcado por padrão) se o PC ficar sempre ligado.
 3. Na primeira abertura, cole a URL da API (ex. `https://api.sualoja.com`) e a "chave de impressora"
    gerada no painel (Conta → ainda não tem tela dedicada; gerar via `POST /api/device-tokens`

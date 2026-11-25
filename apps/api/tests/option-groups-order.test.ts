@@ -3,6 +3,7 @@
 // real segue o caminho legado dos adicionais com o preço idêntico ao de antes (CA-B8-06).
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore, productStore } from "./helpers";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
 describe("pedido com grupos de opções (API-15 parte 2)", () => {
@@ -153,7 +154,7 @@ describe("pedido com grupos de opções (API-15 parte 2)", () => {
     const res = await pedido(l, [{ productId: pizza, quantity: 1, options: [{ optionId: t.options[0].id }], additionalIds: ["x"] }]);
     expect(res.statusCode).toBe(400);
     expect(json(res).code).toBe("ADDITIONAL_NOT_FOUND");
-    const adicional = await prisma.productAdditional.create({ data: { productId: pizza, name: "Ovo", priceCents: 300 } });
+    const adicional = await prisma.productAdditional.create({ data: { productId: pizza, storeId: await productStore(pizza), name: "Ovo", priceCents: 300 } });
     const dobro = await pedido(l, [{ productId: pizza, quantity: 1, options: [{ optionId: t.options[0].id }, { optionId: adicional.id }], additionalIds: [adicional.id] }]);
     expect(dobro.statusCode).toBe(400);
     expect(json(dobro).code).toBe("OPTIONS_AMBIGUOUS");
@@ -162,7 +163,7 @@ describe("pedido com grupos de opções (API-15 parte 2)", () => {
   it("CA-B8-06: produto SÓ com adicionais antigos segue o caminho legado com o MESMO preço (e aceita `options` pelos mesmos ids)", async () => {
     const l = await loja();
     const produto = await l.product("Lanche", 2000);
-    const adicional = await prisma.productAdditional.create({ data: { productId: produto, name: "Queijo", priceCents: 350 } });
+    const adicional = await prisma.productAdditional.create({ data: { productId: produto, storeId: await productStore(produto), name: "Queijo", priceCents: 350 } });
     const legado = await pedido(l, [{ productId: produto, quantity: 2, additionalIds: [adicional.id] }]);
     expect(legado.statusCode, legado.body).toBe(201);
     const pedidoLegado = await prisma.order.findUniqueOrThrow({ where: { id: json(legado).orderId }, include: { items: { include: { additionals: true, options: true } } } });
@@ -174,7 +175,7 @@ describe("pedido com grupos de opções (API-15 parte 2)", () => {
   it("produto ANTIGO (com o espelho LEGACY_ADDITIONALS da migração): `additionalIds` segue o caminho legado (sem cópia de opção, mesmo preço); `options` com os MESMOS ids dá o mesmo preço", async () => {
     const l = await loja();
     const produto = await l.product("Lanche antigo", 2000);
-    const adicional = await prisma.productAdditional.create({ data: { productId: produto, name: "Queijo", priceCents: 350 } });
+    const adicional = await prisma.productAdditional.create({ data: { productId: produto, storeId: await productStore(produto), name: "Queijo", priceCents: 350 } });
     // o que a migração 350000 faz: um grupo LEGACY_ADDITIONALS por produto, com as opções de MESMO id dos adicionais
     await prisma.optionGroup.create({
       data: { id: `og_leg_${produto}`, storeId: l.storeId, name: "Adicionais", minSelect: 0, maxSelect: null, maxPerOption: 1, priceMode: "SUM", source: "LEGACY_ADDITIONALS", options: { create: [{ id: adicional.id, name: "Queijo", priceCents: 350, position: 0 }] } },

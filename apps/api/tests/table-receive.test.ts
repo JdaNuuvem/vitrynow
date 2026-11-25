@@ -164,13 +164,80 @@ describe("API-24 — receber a mesa", () => {
     expect(await prisma.receiptPayment.count()).toBe(1);
   });
 
-  it("entrada inválida: corpo estrito (sem taxa/desconto/divisão no BASICO), forma ausente, troco fora do dinheiro", async () => {
+  it("entrada inválida: corpo estrito (taxa só pelo percentual da loja), forma ausente ou dupla, troco fora do dinheiro", async () => {
     const l = await loja();
     await pedidoAceito(l, l.p40);
-    for (const body of [{}, { paymentMethod: "PIX", serviceFeeCents: 500 }, { paymentMethod: "PIX", discountCents: 100 }, { paymentMethod: "PIX", payments: [] }, { paymentMethod: "BITCOIN" }]) {
+    for (const body of [
+      {},
+      { paymentMethod: "PIX", serviceFeeCents: 500 }, // a taxa nunca vem em centavos do cliente
+      { paymentMethod: "PIX", discountCents: -1 },
+      { paymentMethod: "PIX", payments: [{ method: "PIX", amountCents: 2000 }, { method: "DEBITO", amountCents: 2000 }] }, // as duas formas ao mesmo tempo
+      { payments: [{ method: "PIX", amountCents: 4000 }] }, // dividir exige 2 ou mais partes
+      { payments: [{ method: "PIX", amountCents: 2000 }, { method: "DINHEIRO", amountCents: 2000 }], changeForCents: 5000 }, // troco vai na parte
+      { paymentMethod: "BITCOIN" },
+    ]) {
       expect((await receber(l, body)).statusCode, JSON.stringify(body)).toBe(400);
     }
     expect(json(await receber(l, { paymentMethod: "PIX", changeForCents: 5000 })).code).toBe("CHANGE_ONLY_CASH");
+    expect(await prisma.receipt.count()).toBe(0);
+  });
+
+  it("TAXA DE SERVIÇO e DESCONTO (todos os planos): 10% padrão opcional; desconto em R$; total = conta + taxa - desconto; relatório separa", async () => {
+    const l = await loja();
+    await pedidoAceito(l, l.p40);
+    await pedidoAceito(l, l.p25); // conta 65,00
+    const r = await receber(l, { paymentMethod: "PIX", expectedTotalCents: 6500, includeServiceFee: true, discountCents: 150 }, l.owner);
+    expect(r.statusCode, r.body).toBe(201);
+    expect(json(r).receipt).toMatchObject({ subtotalCents: 6500, serviceFeeCents: 650, discountCents: 150, totalCents: 7000, method: "PIX" });
+    const receipt = await prisma.receipt.findFirstOrThrow({ include: { payments: true } });
+    expect([receipt.subtotalCents, receipt.serviceFeeCents, receipt.discountCents, receipt.totalCents, receipt.payments[0].amountCents]).toEqual([6500, 650, 150, 7000, 7000]);
+    const rel = await relatorio(l);
+    expect([rel.revenueCents, rel.serviceFeeCents, rel.discountCents]).toEqual([7000, 650, 150]);
+  });
+
+  it("taxa: percentual configurável pela loja (0 = não cobra); desconto do STAFF limitado ao percentual da loja; desconto não zera a conta", async () => {
+    const l = await loja();
+    const cfg = await app.inject({ method: "POST", url: "/api/store/qr-settings", headers: { cookie: l.owner }, payload: { serviceFeePercent: 0 } });
+    expect([cfg.statusCode, json(cfg).settings.serviceFeePercent]).toEqual([200, 0]);
+    await pedidoAceito(l, l.p40); // conta 40,00
+    expect(json(await receber(l, { paymentMethod: "PIX", includeServiceFee: true })).code).toBe("SERVICE_FEE_DISABLED");
+    expect((await app.inject({ method: "POST", url: "/api/store/qr-settings", headers: { cookie: l.owner }, payload: { serviceFeePercent: 31 } })).statusCode).toBe(400);
+    await app.inject({ method: "POST", url: "/api/store/qr-settings", headers: { cookie: l.owner }, payload: { serviceFeePercent: 12 } });
+    // limite padrão do STAFF: 10% (de 40,00 = 4,00)
+    const acima = await receber(l, { paymentMethod: "PIX", discountCents: 401 });
+    expect([acima.statusCode, json(acima).code]).toEqual([403, "DISCOUNT_ABOVE_LIMIT"]);
+    expect([(await receber(l, { paymentMethod: "PIX", discountCents: 4000 }, l.owner)).statusCode]).toEqual([400]); // DISCOUNT_TOO_HIGH
+    expect(await prisma.receipt.count()).toBe(0);
+    const ok = await receber(l, { paymentMethod: "PIX", includeServiceFee: true, discountCents: 400 });
+    expect(json(ok).receipt).toMatchObject({ subtotalCents: 4000, serviceFeeCents: 480, discountCents: 400, totalCents: 4080 });
+  });
+
+  it("DIVIDIR A CONTA (PRO, tab_service): partes somam o total; dinheiro exige caixa e troco por parte; soma errada é 400; caixa conta só o dinheiro", async () => {
+    const l = await loja();
+    await pedidoAceito(l, l.p40);
+    await pedidoAceito(l, l.p25); // conta 65,00 + 10% = 71,50
+    const partes = [{ method: "PIX", amountCents: 4000 }, { method: "DINHEIRO", amountCents: 3150, changeForCents: 5000 }];
+    expect(json(await receber(l, { payments: partes, includeServiceFee: true })).code).toBe("CASH_REQUIRED");
+    await abrirCaixa(l, 10000);
+    const errada = await receber(l, { payments: [{ method: "PIX", amountCents: 4000 }, { method: "DEBITO", amountCents: 3000 }], includeServiceFee: true });
+    expect([errada.statusCode, json(errada).code, json(errada).details]).toEqual([400, "PAYMENTS_MISMATCH", { totalCents: 7150, paidCents: 7000 }]);
+    const ok = await receber(l, { payments: partes, includeServiceFee: true });
+    expect(ok.statusCode, ok.body).toBe(201);
+    expect(json(ok).receipt.payments).toEqual([
+      { method: "PIX", amountCents: 4000, changeForCents: null, changeDueCents: null },
+      { method: "DINHEIRO", amountCents: 3150, changeForCents: 5000, changeDueCents: 1850 },
+    ]);
+    expect(await prisma.receiptPayment.count()).toBe(2);
+    expect((await caixa(l)).expectedBalanceCents).toBe(13150); // abertura + só a parte em dinheiro
+    const rel = await relatorio(l);
+    expect([rel.orderCount, rel.revenueCents, rel.byPaymentMethod.PIX, rel.byPaymentMethod.DINHEIRO]).toEqual([1, 7150, { count: 1, revenueCents: 4000 }, { count: 1, revenueCents: 3150 }]);
+  });
+
+  it("DIVIDIR A CONTA fora do PRO: 402 FEATURE_LOCKED e nada gravado; uma forma só continua livre", async () => {
+    const { cookie } = await registerStore(app, { plan: "BASICO" });
+    const mesa = json(await app.inject({ method: "POST", url: "/api/tables", headers: { cookie: cookie! }, payload: { label: "1" } })).table as { id: string };
+    const r = await app.inject({ method: "POST", url: `/api/tables/${mesa.id}/receive`, headers: { cookie: cookie! }, payload: { payments: [{ method: "PIX", amountCents: 100 }, { method: "DEBITO", amountCents: 100 }] } });
+    expect([r.statusCode, json(r).code, json(r).feature]).toEqual([402, "FEATURE_LOCKED", "tab_service"]);
     expect(await prisma.receipt.count()).toBe(0);
   });
 

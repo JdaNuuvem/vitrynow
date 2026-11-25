@@ -19,7 +19,14 @@ type Hours = {
   closedUntil: string | null;
   status: { status: "ABERTO" | "PAUSADO" | "FECHADO"; message: string };
   prepMinutes: { delivery: number | null; pickup: number | null };
+  // Modo ocupado (g1): ativo até `busyUntil`; o cliente vê o tempo de preparo + `busyExtraMinutes`.
+  busyUntil?: string | null;
+  busyExtraMinutes?: number | null;
 };
+type Suggestion = { schedule: StoreScheduleInput | null; complete: boolean; doubts: { text: string; reason: string }[]; summary: string | null };
+const BUSY_MINUTES = [15, 30, 60, 120] as const;
+const BUSY_EXTRA = [10, 20, 30] as const;
+const clock = (iso: string, timeZone: string) => new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone });
 
 const WEEKDAYS = ["Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"];
 const NEW_INTERVAL = { start: "09:00", end: "18:00" };
@@ -49,6 +56,9 @@ export function HorariosPage() {
   const [confirmingClose, setConfirmingClose] = useState(false);
   const [closeError, setCloseError] = useState<string | null>(null);
   const inFlight = useRef(false);
+  const [busyExtra, setBusyExtra] = useState<(typeof BUSY_EXTRA)[number]>(20);
+  const [suggestText, setSuggestText] = useState("");
+  const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
 
   const load = useCallback(async () => {
     setError("");
@@ -98,6 +108,48 @@ export function HorariosPage() {
 
   const saveStatus = (action: StoreStatusAction) => save("status", action, "Atendimento atualizado.");
 
+  // Modo ocupado: liga por um tempo (o servidor encerra sozinho) ou encerra antes da hora.
+  async function setBusyMode(minutes: (typeof BUSY_MINUTES)[number] | null) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = minutes === null
+        ? await operationRequest<{ hours: Hours }>("/api/store/busy", "DELETE")
+        : await operationRequest<{ hours: Hours }>("/api/store/busy", "POST", { minutes, extraMinutes: busyExtra });
+      if (!result.ok) return setError(result.error);
+      setHours(result.data.hours);
+      setNotice(minutes === null ? "Modo ocupado encerrado." : "Modo ocupado ligado.");
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  }
+
+  // Sugestão de grade a partir de texto livre (ou do texto antigo da loja). Só preenche a tela: nada é salvo sem "Salvar horários".
+  async function suggest() {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    setError("");
+    setSuggestion(null);
+    try {
+      const result = await operationRequest<{ suggestion: Suggestion }>("/api/store/hours/suggest", "POST", suggestText.trim() ? { text: suggestText.trim() } : {});
+      if (!result.ok) return setError(result.error);
+      setSuggestion(result.data.suggestion);
+      if (result.data.suggestion.schedule) {
+        setSchedule(result.data.suggestion.schedule);
+        setScheduled(true);
+      }
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  }
+  const busyActive = Boolean(hours?.busyUntil);
+
   return <main className="operacao horarios">
     <PageHeading title="Horários e preparo" description="Defina quando o cardápio recebe pedidos e o tempo estimado de preparo.">
       <Link className="ds-button ds-button--quiet" href="/dashboard/conta">Voltar a Minha loja</Link>
@@ -109,6 +161,17 @@ export function HorariosPage() {
         <h2>Horário semanal</h2>
         <fieldset className="horarios__fields" disabled={busy}>
         <label className="operacao__check"><input type="checkbox" checked={scheduled} onChange={event => setScheduled(event.target.checked)} /> Usar horários automáticos</label>
+        <details className="operacao__group">
+          <summary>Preencher a partir de um texto</summary>
+          <label>Escreva os horários como você divulga (vazio = usa o texto antigo da loja)
+            <textarea rows={2} maxLength={500} value={suggestText} placeholder="Ex.: seg a sex 11h às 15h e 18h às 23h; sáb 18h às 00h" onChange={event => setSuggestText(event.target.value)} />
+          </label>
+          <div><button type="button" onClick={() => void suggest()}>Sugerir horários</button></div>
+          {suggestion && <div role="status" className="operacao__muted">
+            {suggestion.schedule ? <>Grade preenchida{suggestion.summary ? `: ${suggestion.summary}` : ""}. Confira e clique em <strong>Salvar horários</strong>.</> : "Não consegui entender os horários. Preencha a grade abaixo."}
+            {suggestion.doubts.length > 0 && <ul>{suggestion.doubts.map((doubt, index) => <li key={index}>“{doubt.text}”: {doubt.reason}</li>)}</ul>}
+          </div>}
+        </details>
         {scheduled && <>
           <small>Fuso da loja {hours.timezone}. Dia sem intervalo fica fechado.</small>
           {WEEKDAYS.map((day, index) => <fieldset className="operacao__group" key={day}>
@@ -144,6 +207,19 @@ export function HorariosPage() {
             <button type="button" disabled={busy || !!hours.closedUntil} onClick={() => { setCloseError(null); setConfirmingClose(true); }}>Fechar por hoje</button>
             {(hours.pausedUntil || hours.closedUntil) && <button type="button" className="operacao__primary" disabled={busy} onClick={() => saveStatus({ action: "RESUME" })}>Encerrar pausa</button>}
           </div>
+          <h3>Modo ocupado</h3>
+          {busyActive && hours.busyUntil ? <div className="operacao__row operacao__row--spread">
+            <span role="status"><StatusBadge tone="warning">Ocupado até {clock(hours.busyUntil, hours.timezone)}</StatusBadge>{hours.busyExtraMinutes ? ` · o cliente vê +${hours.busyExtraMinutes} min no preparo` : ""}</span>
+            <button type="button" className="operacao__primary" disabled={busy} onClick={() => void setBusyMode(null)}>Encerrar modo ocupado</button>
+          </div> : <>
+            <p className="operacao__muted">Cozinha cheia? Continue recebendo pedidos e avise ao cliente um tempo de preparo maior.</p>
+            <label>Tempo a mais no preparo<select value={busyExtra} disabled={busy} onChange={event => setBusyExtra(Number(event.target.value) as (typeof BUSY_EXTRA)[number])}>
+              {BUSY_EXTRA.map(extra => <option key={extra} value={extra}>+{extra} min</option>)}
+            </select></label>
+            <div className="operacao__row">
+              {BUSY_MINUTES.map(minutes => <button type="button" key={minutes} disabled={busy} onClick={() => void setBusyMode(minutes)}>Ocupado por {minutes < 60 ? `${minutes} min` : `${minutes / 60} h`}</button>)}
+            </div>
+          </>}
         </section>
         {role === "OWNER" && <form className="operacao__card" onSubmit={event => { event.preventDefault(); void save("prep-times", prep, "Previsões salvas."); }}>
           <h2>Tempo de preparo</h2>

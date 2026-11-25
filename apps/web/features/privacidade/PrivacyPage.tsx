@@ -6,11 +6,14 @@ import type { HttpResult } from "@/core/http/HttpClient";
 import { Button, PageHeading, Panel, StateMessage } from "@/shared/design/components";
 import { PrivacyConfirmation, type PrivacyAction } from "./PrivacyConfirmation";
 import { privacyApi, type PrivacyPreview, type PrivacyReauth, type PrivacyTarget } from "./privacyApi";
+import { useStoreTimezone } from "@/features/shell/useStoreTimezone";
+import { formatInStoreTimezone } from "@/shared/format/storeTime";
 
-const DATE = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeZone: "America/Sao_Paulo" });
 type Lookup = { target: PrivacyTarget; preview: PrivacyPreview };
 
 export function PrivacyPage() {
+  const timeZone = useStoreTimezone();
+  const DATE = { format: (date: Date) => formatInStoreTimezone(date, timeZone, { dateStyle: "short" }) };
   const [access, setAccess] = useState<HttpResult<{ reauth: PrivacyReauth }> | null>(null);
   const [revision, setRevision] = useState(0);
   const [kind, setKind] = useState<"phone" | "orderCode">("phone");

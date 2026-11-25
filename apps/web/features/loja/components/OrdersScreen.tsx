@@ -4,6 +4,7 @@ import { PIX_PAID_REASSURANCE, TRACKING_UNAVAILABLE_MESSAGE } from "../hooks/use
 import type { PlacedOrder } from "../hooks/useOrderHistory";
 import { storeChatLink } from "./OrderResultScreen";
 import { OrderTrackingPanel } from "./OrderTrackingPanel";
+import { formatInStoreTimezone } from "@/shared/format/storeTime";
 
 // Pedidos feitos nesta sessão podem ser consultados. Depois de recarregar, sobra o comprovante local.
 export function OrdersScreen({
@@ -12,7 +13,9 @@ export function OrdersScreen({
   whatsapp = null,
   pendingPix = null,
   trackingFor,
+  timeZone,
 }: {
+  timeZone?: string; // SSOT D1: fuso da loja
   orders: PlacedOrder[];
   storeName: string;
   whatsapp?: string | null;
@@ -34,8 +37,8 @@ export function OrdersScreen({
               <div key={order.code + order.placedAt} className="loja__order-row">
                 <div>
                   <div className="loja__order-code">Pedido #{order.code}</div>
-                  <div className="loja__order-date">{new Date(order.placedAt).toLocaleString("pt-BR")}</div>
-                  {read ? <OrderTrackingPanel read={read} /> : <p className="loja__order-note">{TRACKING_UNAVAILABLE_MESSAGE}</p>}
+                  <div className="loja__order-date">{formatInStoreTimezone(order.placedAt, timeZone)}</div>
+                  {read ? <OrderTrackingPanel read={read} timeZone={timeZone} /> : <p className="loja__order-note">{TRACKING_UNAVAILABLE_MESSAGE}</p>}
                   {!read && pixStillValid && <p className="loja__order-note">{PIX_PAID_REASSURANCE}</p>}
                   {chatLink && (
                     <a href={chatLink} target="_blank" rel="noreferrer" className="loja__empty-menu-link">

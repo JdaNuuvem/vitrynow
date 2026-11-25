@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo } from "react";
-import { formatCents } from "@/shared/format/money";
+import { formatCents, moneyOrHidden } from "@/shared/format/money";
 import { PlanStatusBanner } from "@/features/planos/PlanStatusBanner";
 import { useStore } from "@/features/shell/StoreProvider";
 import { Shine } from "@/shared/ui/Shine";
@@ -17,39 +17,42 @@ import { TopProductsCard } from "./components/TopProductsCard";
 import { useHiddenValues } from "./hooks/useHiddenValues";
 import { useInicioData } from "./hooks/useInicioData";
 import { buildMonthSeries, buildPeriodMetrics, monthRange, weekRange } from "./services/inicioMetrics";
-import { STORE_TIMEZONE } from "./services/salesDefinition";
 import { visiblePromoCards } from "./promoCards";
 import "./inicio.css";
+import { useStoreTimezone } from "@/features/shell/useStoreTimezone";
+import { formatInStoreTimezone } from "@/shared/format/storeTime";
+import { activeStoreTimezone } from "@/shared/format/storeTime";
 
 type Update = { error: string | null; updatedAt: Date | null; retry: () => void };
 function UpdateNotice({ label, source }: { label: string; source: Update }) {
   if (!source.error) return null;
   return (
     <div className="inicio-notice" role="status">
-      <span><strong>{label}.</strong> {source.error}{source.updatedAt && ` Última atualização às ${source.updatedAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}.`}</span>
+      <span><strong>{label}.</strong> {source.error}{source.updatedAt && ` Última atualização às ${formatInStoreTimezone(source.updatedAt, activeStoreTimezone(), { hour: "2-digit", minute: "2-digit" })}.`}</span>
       <button type="button" onClick={source.retry}>Tentar novamente</button>
     </div>
   );
 }
 
-const calendar = new Intl.DateTimeFormat("pt-BR", { timeZone: STORE_TIMEZONE, day: "numeric", month: "short", year: "numeric" });
-const dateRange = new Intl.DateTimeFormat("pt-BR", { timeZone: STORE_TIMEZONE, day: "numeric", month: "short" });
 function valueText(cents: number | undefined, hidden: boolean) {
   if (cents === undefined) return "—";
-  return hidden ? "R$ ••••" : formatCents(cents);
+  return moneyOrHidden(cents, hidden);
 }
 
 export function InicioPage() {
   const { month, week, open, waiting, legacyOrders } = useInicioData();
   const { hidden, toggle } = useHiddenValues();
   const store = useStore();
+  const timeZone = useStoreTimezone();
+  const calendar = { format: (date: Date) => formatInStoreTimezone(date, timeZone, { day: "numeric", month: "short", year: "numeric" }) };
+  const dateRange = { format: (date: Date) => formatInStoreTimezone(date, timeZone, { day: "numeric", month: "short" }) };
   const completeOrders = legacyOrders.data && !legacyOrders.error && !legacyOrders.data.openCapped && !legacyOrders.data.openHidden
     ? legacyOrders.data.orders : null;
   const monthly = useMemo(() => month.data && month.updatedAt
-    ? buildPeriodMetrics(month.data, monthRange(month.updatedAt), completeOrders) : null, [month.data, month.updatedAt, completeOrders]);
+    ? buildPeriodMetrics(month.data, monthRange(month.updatedAt, timeZone), completeOrders, timeZone) : null, [month.data, month.updatedAt, completeOrders, timeZone]);
   const weekly = useMemo(() => week.data && week.updatedAt
-    ? buildPeriodMetrics(week.data, weekRange(week.updatedAt), completeOrders) : null, [week.data, week.updatedAt, completeOrders]);
-  const series = useMemo(() => monthly && month.updatedAt ? buildMonthSeries(monthly.byDay, month.updatedAt) : [], [monthly, month.updatedAt]);
+    ? buildPeriodMetrics(week.data, weekRange(week.updatedAt, timeZone), completeOrders, timeZone) : null, [week.data, week.updatedAt, completeOrders, timeZone]);
+  const series = useMemo(() => monthly && month.updatedAt ? buildMonthSeries(monthly.byDay, month.updatedAt, timeZone) : [], [monthly, month.updatedAt, timeZone]);
   const hasMoney = monthly?.revenueCents !== undefined;
   const hideOrderValues = hidden || !hasMoney;
   const monthMissing = month.error ? "—" : null;

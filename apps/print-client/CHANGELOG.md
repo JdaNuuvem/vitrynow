@@ -5,6 +5,11 @@ O hash do EXE de cada release sai em `tools\build-installer.ps1` e entra no mani
 
 ## 1.0.0 (em desenvolvimento, ainda sem release)
 
+- Marca **Vitry**: o app aparece como "Vitry Impressão" (janela, bandeja, avisos); EXE `Vitry Impressao.exe`, instalador `Vitry-Impressao-Setup.exe`.
+  Atualização a partir do nome antigo mantém pasta, chave de impressora e histórico (AppId, mutex, pasta de dados e entropia DPAPI inalterados).
+- Assinatura de código Authenticode automática no build do instalador quando há certificado (`tools\sign-code.ps1`).
+- Tíquete v4: rodada e quem pediu nos pedidos de mesa; "Dados do cliente removidos" (LGPD).
+
 - Impressão sem duplicidade (polling + WebSocket no mesmo portão, ack gravado no disco antes de avisar a API, recuo em falha, watchdog).
 - **Uma instância por computador** (o instalador também respeita: pede para fechar o app antes de atualizar).
 - Chave de impressora protegida pelo Windows (DPAPI); chave recusada pausa a impressão e volta sozinha quando a API aceitar.
@@ -26,4 +31,4 @@ O hash do EXE de cada release sai em `tools\build-installer.ps1` e entra no mani
 - Sons de alerta gerados pelo app.
 - Build reprodutível sem dependência do `reconstruction/`; instalador Inno Setup sem identidade do terceiro (`tools\scan-identity.ps1`).
 
-Pendências de distribuição: nome/marca final (CL-05), assinatura de código do instalador (PC-13, gasto), servidor de downloads e chaves de release (Claudio).
+Pendências de distribuição: comprar o certificado de assinatura de código (ver README, Assinatura), servidor de downloads e chaves de release (Claudio).

@@ -1,4 +1,6 @@
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
+import { panelRoleSchema, type PanelRole } from "@meucardapio/shared-types";
+import { formatCents } from "@meucardapio/shared-types";
 import { Prisma, prisma } from "@meucardapio/db";
 import { closeCashSessionSchema, createCashMovementSchema, openCashSessionSchema, setCashStaffLimitSchema } from "@meucardapio/shared-types";
 import { toRow as auditRow, type AuditInput } from "../lib/audit";
@@ -77,8 +79,8 @@ async function auditInTx(tx: Db, entry: AuditInput): Promise<void> {
 // Caixa FECHADO (histórico e resumo): o OWNER vê tudo (esperado, contado, diferença, motivo); o STAFF recebe SÓ abertura, fechamento, horários e
 // papel de quem fechou, SEM mascaramento parcial (RN-CX-22, CA-CX-27): nada de esperado, contado, diferença, motivo, observações nem retrato.
 // (O STAFF que acabou de fechar vê o resultado na resposta do PRÓPRIO fechamento, que usa `ownClosedView`.)
-const closedSessionView = (s: Prisma.CashSessionGetPayload<object>, role: "OWNER" | "STAFF") => {
-  if (role === "OWNER") return withoutInternals(s);
+const closedSessionView = (s: Prisma.CashSessionGetPayload<object>, role: PanelRole) => {
+  if (role === panelRoleSchema.enum.OWNER) return withoutInternals(s);
   return { id: s.id, openedAt: s.openedAt, closedAt: s.closedAt, openingBalanceCents: s.openingBalanceCents, closedByRole: s.closedByRole };
 };
 const ownClosedView = (s: Prisma.CashSessionGetPayload<object>) => withoutInternals(s);
@@ -97,7 +99,7 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
       include: { movements: { orderBy: { createdAt: "desc" } } },
     });
     const store = await prisma.store.findUnique({ where: { id: storeId }, select: { cashStaffWithdrawalLimitCents: true } });
-    const rules = { toleranceCents: CASH_TOLERANCE_CENTS, staffWithdrawalLimitCents: role === "OWNER" ? (store?.cashStaffWithdrawalLimitCents ?? 0) : undefined };
+    const rules = { toleranceCents: CASH_TOLERANCE_CENTS, staffWithdrawalLimitCents: role === panelRoleSchema.enum.OWNER ? (store?.cashStaffWithdrawalLimitCents ?? 0) : undefined };
     if (!session) return { session: null, ruleChangeNotice: null, ...rules };
 
     const summary = await summarizeSession(prisma, storeId, session);
@@ -140,7 +142,7 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
     if (!session) return reply; // `findOwnedOrNotFound` já enviou o 404
     // Caixa FECHADO: o OWNER recebe o retrato CONGELADO no fechamento (não recalcula; pedidos cancelados depois não mudam o histórico,
     // RN-CX-15); o STAFF recebe só abertura, fechamento, horários e papel, sem resumo nem movimentações (CA-CX-27).
-    if (session.closedAt && role !== "OWNER") return { session: closedSessionView(session, role), summary: null };
+    if (session.closedAt && role !== panelRoleSchema.enum.OWNER) return { session: closedSessionView(session, role), summary: null };
     const summary = session.closedAt && session.summarySnapshot ? session.summarySnapshot : await summarizeSession(prisma, storeId, session);
     const view = session.closedAt ? { ...closedSessionView(session, role), movements: session.movements.map(movementView) } : sessionView(session);
     return { session: view, summary };
@@ -238,7 +240,7 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
     // CA-CX-28: o STAFF fechou com diferença ACIMA da tolerância (exato R$ 5,00 não conta) ⇒ o painel do dono é avisado SÓ com o id do caixa
     // (regra do canal da loja: sem valor, papel nem texto; o dono busca o detalhe na tela do caixa fechado, que é só dele) e SÓ às
     // conexões de OWNER: STAFF e impressoras nem recebem o sinal.
-    if (role === "STAFF" && Math.abs(result.differenceCents) > CASH_TOLERANCE_CENTS) {
+    if (role === panelRoleSchema.enum.STAFF && Math.abs(result.differenceCents) > CASH_TOLERANCE_CENTS) {
       publishToOwners(storeId, { type: "cashier.difference_over_tolerance", sessionId: result.updated.id });
     }
     // Quem acabou de fechar recebe o RESULTADO na resposta do próprio fechamento (Sobrou/Faltou/Fechou certo), mesmo sendo STAFF.
@@ -281,11 +283,11 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
           }
         }
         if (type === "SANGRIA") {
-          if (role !== "OWNER") {
+          if (role !== panelRoleSchema.enum.OWNER) {
             // Limite ÚNICO do dono, aplicado à SOMA das sangrias do STAFF neste caixa (turno) incluindo a que chega, dentro da trava da linha do
             // caixa: um lançamento maior que o limite já é recusado; a sangria do OWNER não conta; um caixa novo recomeça a soma (RN-CX-09).
             const store = await tx.store.findUniqueOrThrow({ where: { id: storeId }, select: { cashStaffWithdrawalLimitCents: true } });
-            const used = await tx.cashMovement.aggregate({ where: { cashSessionId: open.id, type: "SANGRIA", createdByRole: "STAFF" }, _sum: { amountCents: true } });
+            const used = await tx.cashMovement.aggregate({ where: { cashSessionId: open.id, type: "SANGRIA", createdByRole: panelRoleSchema.enum.STAFF }, _sum: { amountCents: true } });
             if ((used._sum.amountCents ?? 0) + amountCents > store.cashStaffWithdrawalLimitCents) {
               throw new CodedError(403, "CASH_WITHDRAWAL_NEEDS_OWNER", "Peça ao dono para autorizar essa sangria.");
             }
@@ -293,13 +295,13 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
           const session = await tx.cashSession.findUniqueOrThrow({ where: { id: open.id }, include: { movements: true } });
           const summary = await summarizeSession(tx, storeId, session);
           if (amountCents > summary.expectedCents) {
-            throw new CodedError(409, "CASH_WITHDRAWAL_EXCEEDS_BALANCE", `A sangria passa do dinheiro em caixa (R$ ${(summary.expectedCents / 100).toFixed(2).replace(".", ",")}).`, {
+            throw new CodedError(409, "CASH_WITHDRAWAL_EXCEEDS_BALANCE", `A sangria passa do dinheiro em caixa (${formatCents(summary.expectedCents)}).`, {
               balanceCents: summary.expectedCents,
             });
           }
         }
         const created = await tx.cashMovement.create({
-          data: { cashSessionId: open.id, type, amountCents, notes: parsed.data.notes ?? null, reason, reasonText, createdByUserId: userId, createdByRole: role, idempotencyKey },
+          data: { cashSessionId: open.id, storeId, type, amountCents, notes: parsed.data.notes ?? null, reason, reasonText, createdByUserId: userId, createdByRole: role, idempotencyKey },
         });
         // Auditoria: tipo, valor e o CÓDIGO do motivo; o texto livre do `OUTRO` NÃO vai para o log. Dentro da transação (R2).
         await auditInTx(tx, { storeId, userId, action: "cashier.movement", targetType: "CashMovement", targetId: created.id, metadata: { type, amountCents, reason, role } });

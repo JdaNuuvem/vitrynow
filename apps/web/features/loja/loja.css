@@ -2074,3 +2074,12 @@
   margin-right: 0.5rem;
   accent-color: var(--loja-ink);
 }
+
+/* API-40: "Agora / Agendar" e o seletor de dia e horário (no fuso da loja). NG-08: espaço do captcha Turnstile. */
+.loja__choices { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.loja__choices label { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+.loja__schedule { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-top: 8px; }
+.loja__schedule label { display: grid; gap: 4px; font-weight: 600; }
+.loja__schedule select { min-height: 44px; }
+.loja__schedule .loja__hint, .loja__schedule .loja__error-text { grid-column: 1 / -1; }
+.loja__captcha { min-height: 65px; margin-top: 8px; }

@@ -31,8 +31,8 @@ namespace MeuCardapio.PrintClient
                     Logger.Info("Segunda instância recusada: o aplicativo já está aberto");
                     // Iniciado pelo Windows (/autostart) sai calado; aberto pelo usuário avisa onde está.
                     if (Array.IndexOf(args, "/autostart") < 0)
-                        MessageBox.Show("O MeuCardapio - Impressão já está aberto neste computador (procure o ícone perto do relógio, na bandeja do Windows).",
-                            "MeuCardapio - Impressão", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        MessageBox.Show("O " + Brand.AppTitle + " já está aberto neste computador (procure o ícone perto do relógio, na bandeja do Windows).",
+                            Brand.AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
                 Run(args);

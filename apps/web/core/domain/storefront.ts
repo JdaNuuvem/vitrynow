@@ -69,6 +69,9 @@ export type StoreInfo = {
   deliveryFeeCents: number;
   payment?: { pixAvailable: boolean };
   campaign?: MenuBannerConfig | null;
+  // API-40: a loja aceita pedido agendado (a vitrine mostra "Agendar"). Fuso da loja: datas e horários do agendamento.
+  scheduling?: boolean;
+  timezone?: string;
 };
 
 export type MenuBannerTarget = { kind: "category" | "product"; id: string };
@@ -135,6 +138,8 @@ export type PlaceOrderInput = {
   // Só com DINHEIRO: valor da nota que o cliente vai entregar (precisa cobrir o total).
   changeForCents?: number;
   tipCents?: number;
+  /** API-40: instante ISO do agendamento (só quando o cliente agendou). */
+  scheduledFor?: string;
   cart: (CartLine & { expectedUnitPriceCents?: number })[];
 };
 

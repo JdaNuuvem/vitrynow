@@ -1,3 +1,4 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import type { FastifyPluginAsync } from "fastify";
 import { nanoid } from "nanoid";
 import { prisma } from "@meucardapio/db";
@@ -69,7 +70,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
           name: storeName,
           slug,
           code,
-          users: { create: { email, passwordHash, role: "OWNER" } },
+          users: { create: { email, passwordHash, role: panelRoleSchema.enum.OWNER } },
           subscription: { create: { trialEndsAt: newTrialEndsAt() } },
         },
         include: { users: true },

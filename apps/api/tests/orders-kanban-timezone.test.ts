@@ -2,6 +2,7 @@
 // não podem deslocar. Mesmo método do `sql-timezone.test.ts`: conexões recriadas, São Paulo e Tóquio, com controle positivo do fuso da sessão.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore, productStore } from "./helpers";
 import { startOfStoreDay } from "../src/lib/storeTime";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
@@ -51,7 +52,7 @@ describe.each(ZONES)("kanban com o banco em %s", (zone) => {
     const order = await prisma.order.create({
       data: { storeId, code: `T${String(seq).padStart(5, "0")}`, type: "BALCAO", status, customerName: "Cliente", totalCents: 1500, awaitingPayment: false, createdAt, updatedAt: createdAt },
     });
-    await prisma.orderStatusHistory.create({ data: { orderId: order.id, status, createdAt: closedAt } });
+    await prisma.orderStatusHistory.create({ data: { orderId: order.id, storeId: await orderStore(order.id), status, createdAt: closedAt } });
     return order.id;
   }
 

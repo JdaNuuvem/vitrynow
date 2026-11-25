@@ -2,6 +2,7 @@ import type { CashMovement } from "@/core/domain/cashier";
 import { formatCents } from "@/shared/format/money";
 import { Panel, StateMessage } from "@/shared/design/components";
 import { movementReasonLabel } from "@/features/caixa/cashReasons";
+import { activeStoreTimezone, formatInStoreTimezone } from "@/shared/format/storeTime";
 
 export function MovementsList({ movements }: { movements: CashMovement[] }) {
   return (
@@ -14,7 +15,7 @@ export function MovementsList({ movements }: { movements: CashMovement[] }) {
             {movementReasonLabel(movement.type, movement.reason)}
             {(movement.reasonText || movement.notes) && <small>{movement.reasonText || movement.notes}</small>}
             <small>
-              {new Date(movement.createdAt).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}
+              {formatInStoreTimezone(movement.createdAt, activeStoreTimezone(), { dateStyle: "short", timeStyle: "short" })}
               {movement.createdByRole && " · " + (movement.createdByRole === "OWNER" ? "Dono" : "Funcionário")}
             </small>
           </span>

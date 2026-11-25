@@ -1,6 +1,6 @@
 import type { HttpClient, RequestOptions } from "../../http/HttpClient";
 import type { CancelBody, CancelResult, DeliverersGateway, OrdersGateway, OrdersListResponse, PaymentCheck, PendingPixList } from "../OrdersGateway";
-import type { Deliverer, Order, OrderStatus } from "../../domain/orders";
+import type { Deliverer, Order, OrderStatus, ScheduledOrder } from "../../domain/orders";
 import type { HistoryQuery, HistoryResponse } from "../../domain/orderHistory";
 import type { OrderDetail } from "../../domain/orderDetail";
 import type { ManualOrderInput, ManualOrderResult } from "../../domain/manualOrder";
@@ -14,6 +14,10 @@ export class HttpOrdersGateway implements OrdersGateway {
 
   list() {
     return this.http.get<OrdersListResponse>("/api/orders");
+  }
+
+  scheduled() {
+    return this.http.get<{ orders: ScheduledOrder[] }>("/api/orders/scheduled");
   }
 
   awaitingPayments() {

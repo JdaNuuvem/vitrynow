@@ -20,18 +20,19 @@ export type InicioMetrics = {
   monthSeries: DayPoint[];
 };
 
-export function monthRange(now: Date): ReportRange {
-  const today = toDateInput(now);
-  return toReportRange({ from: today.slice(0, 8) + "01", to: today });
+// SSOT D1: períodos e séries no calendário da LOJA (`timeZone`; sem ele, o fuso padrão).
+export function monthRange(now: Date, timeZone?: string): ReportRange {
+  const today = toDateInput(now, timeZone);
+  return toReportRange({ from: today.slice(0, 8) + "01", to: today }, timeZone);
 }
 
-export function weekRange(now: Date): ReportRange {
-  return toReportRange({ from: toDateInput(new Date(now.getTime() - 6 * 86_400_000)), to: toDateInput(now) });
+export function weekRange(now: Date, timeZone?: string): ReportRange {
+  return toReportRange({ from: toDateInput(new Date(now.getTime() - 6 * 86_400_000), timeZone), to: toDateInput(now, timeZone) }, timeZone);
 }
 
-export function buildMonthSeries(byDay: ReportDay[], now: Date): DayPoint[] {
-  // The API groups by the São Paulo calendar, independently of the operator's device.
-  const today = toDateInput(now);
+export function buildMonthSeries(byDay: ReportDay[], now: Date, timeZone?: string): DayPoint[] {
+  // A API agrupa pelo calendário da LOJA, independente do aparelho de quem olha.
+  const today = toDateInput(now, timeZone);
   const points = new Map<string, DayPoint>(byDay.map((entry) => [entry.date, { ...entry, revenueCents: entry.revenueCents ?? null }]));
   for (let day = 1; day <= Number(today.slice(8)); day += 1) {
     const date = today.slice(0, 8) + String(day).padStart(2, "0");
@@ -40,11 +41,11 @@ export function buildMonthSeries(byDay: ReportDay[], now: Date): DayPoint[] {
   return [...points.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
-export function buildPeriodMetrics(summary: ReportSummary, range: ReportRange, orders: Order[] | null) {
+export function buildPeriodMetrics(summary: ReportSummary, range: ReportRange, orders: Order[] | null, timeZone?: string) {
   const current = summary.openCount !== undefined || summary.ruleChangedAt !== undefined;
   const awaiting = !current && orders ? awaitingInRange(orders, range) : null;
   const legacy = !current && summary.revenueCents !== undefined
-    ? applySaleDefinition({ ...summary, revenueCents: summary.revenueCents }, awaiting)
+    ? applySaleDefinition({ ...summary, revenueCents: summary.revenueCents }, awaiting, timeZone)
     : undefined;
   const countOf = (type: string) => Math.max(0, (summary.byType[type]?.count ?? 0) - (legacy && awaiting ? awaiting.filter((order) => order.type === type).length : 0));
   return {
@@ -60,14 +61,14 @@ export function buildPeriodMetrics(summary: ReportSummary, range: ReportRange, o
   };
 }
 
-export function buildInicioMetrics(month: ReportSummary, week: ReportSummary, now: Date, orders: Order[] | null = null): InicioMetrics {
-  const monthSales = buildPeriodMetrics(month, monthRange(now), orders);
-  const weekSales = buildPeriodMetrics(week, weekRange(now), orders);
+export function buildInicioMetrics(month: ReportSummary, week: ReportSummary, now: Date, orders: Order[] | null = null, timeZone?: string): InicioMetrics {
+  const monthSales = buildPeriodMetrics(month, monthRange(now, timeZone), orders, timeZone);
+  const weekSales = buildPeriodMetrics(week, weekRange(now, timeZone), orders, timeZone);
   return {
     ...monthSales,
     customerCount: month.customerCount,
     week: { orderCount: weekSales.orderCount, revenueCents: weekSales.revenueCents },
     topProducts: month.topProducts,
-    monthSeries: buildMonthSeries(monthSales.byDay, now),
+    monthSeries: buildMonthSeries(monthSales.byDay, now, timeZone),
   };
 }

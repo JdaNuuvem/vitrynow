@@ -9,15 +9,17 @@ import type { OrderSummary } from "../checkoutForm";
 import { PIX_EXPIRED_MESSAGE, PIX_PAID_REASSURANCE, PIX_RESUMED_MESSAGE, TRACKING_UNAVAILABLE_MESSAGE } from "../hooks/useOrderFlow";
 import { Sheet } from "./Sheet";
 import { useBrokenImage } from "../hooks/useBrokenImage";
+import { orderLabel, orderHash } from "@/shared/format/orderCode";
+import { whatsappHref } from "@/shared/format/phone";
+import { formatInStoreTimezone } from "@/shared/format/storeTime";
 
 // Conversa com a loja no WhatsApp, só com o código do pedido na mensagem (sem token nem dado do cliente). Sem número
 // cadastrado devolve null e a tela mostra só o texto.
 export function storeChatLink(whatsapp: string | null | undefined, code: string): string | null {
-  const digits = (whatsapp ?? "").replace(/\D/g, "");
-  return digits ? `https://wa.me/${digits}?text=${encodeURIComponent(`Pedido #${code}`)}` : null;
+  return whatsappHref(whatsapp, orderLabel(code)); // SSOT D9: com o DDI 55 quando a loja cadastrou sem ele
 }
 
-const formatClock = (ms: number) => new Date(ms).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+const formatClockIn = (timeZone?: string) => (ms: number) => formatInStoreTimezone(ms, timeZone, { hour: "2-digit", minute: "2-digit" });
 
 function Receipt({ summary }: { summary: OrderSummary }) {
   return (
@@ -57,7 +59,9 @@ export function OrderResultScreen({
   readTracking,
   onCancel,
   onBack,
+  timeZone,
 }: {
+  timeZone?: string; // SSOT D1: fuso da loja (cardápio público)
   code: string;
   cancelled: boolean;
   pixData: PixPayment | null;
@@ -80,6 +84,7 @@ export function OrderResultScreen({
   onCancel: () => void | Promise<void>;
   onBack: () => void;
 }) {
+  const formatClock = formatClockIn(timeZone);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -160,7 +165,7 @@ export function OrderResultScreen({
         <span className="loja__result-symbol"><Icon name="orders" size={32} /></span>
         {storeName && <p className="loja__result-store">{storeName}</p>}
         <h1 ref={headingRef} tabIndex={-1} className="loja__result-title">
-          {`Pedido #${code}`}
+          {`${orderLabel(code)}`}
         </h1>
         <p role="status" className="loja__result-text">
           {PIX_EXPIRED_MESSAGE}
@@ -197,19 +202,19 @@ export function OrderResultScreen({
   const awaitingPix = Boolean(pixData) && !paymentConfirmed;
   const resumedValid = resume === "valid" && awaitingPix;
   const watchingPix = awaitingPix && !trackingUnavailable;
-  const title = paymentConfirmed ? "Pagamento confirmado" : resumedValid ? `Pedido #${code} enviado` : awaitingPix ? `Pedido #${code}` : "Pedido enviado";
+  const title = paymentConfirmed ? "Pagamento confirmado" : resumedValid ? `${orderLabel(code)} enviado` : awaitingPix ? `${orderLabel(code)}` : "Pedido enviado";
 
   if (awaitingPix && pixData) {
     const copyPhrase = wide || !pixData.pixQrCode ? "Escaneie o QR Code ou copie o código para pagar via PIX:" : "Copie o código e pague no app do seu banco.";
     const qrImage = pixData.pixQrCodeBase64 ? (
       // eslint-disable-next-line @next/next/no-img-element -- QR em data: URL, não há otimização possível
-      <img src={`data:image/png;base64,${pixData.pixQrCodeBase64}`} alt={`QR Code do PIX do pedido #${code}`} className="loja__qr" />
+      <img src={`data:image/png;base64,${pixData.pixQrCodeBase64}`} alt={`QR Code do PIX do pedido ${orderHash(code)}`} className="loja__qr" />
     ) : null;
     return (
       <main className="loja__result">
         {storeName && <p className="loja__result-store">{storeName}</p>}
         <h1 ref={headingRef} tabIndex={-1} className="loja__result-title">
-          {resumedValid ? `Pedido #${code} enviado` : `Pedido #${code}`}
+          {resumedValid ? `${orderLabel(code)} enviado` : `${orderLabel(code)}`}
         </h1>
         {totalCents !== null && <p className="loja__result-total">Total a pagar: {formatCents(totalCents)}</p>}
         {resumedValid && pixExpiresAt !== null && <p className="loja__result-hint">Vale até {formatClock(pixExpiresAt)}</p>}
@@ -264,7 +269,7 @@ export function OrderResultScreen({
         )}
 
         {summary && <Receipt summary={summary} />}
-        {readTracking && !trackingUnavailable && <OrderTrackingPanel read={readTracking} />}
+        {readTracking && !trackingUnavailable && <OrderTrackingPanel read={readTracking} timeZone={timeZone} />}
 
         {/* com PIX para pagar o primário é "Copiar código PIX"; voltar é secundário (contorno) */}
         <button type="button" onClick={onBack} className="loja__cta loja__cta--outline">
@@ -318,7 +323,7 @@ export function OrderResultScreen({
 
       {summary && <Receipt summary={summary} />}
 
-      {readTracking && !trackingUnavailable && <OrderTrackingPanel read={readTracking} chatLink={chatLink} />}
+      {readTracking && !trackingUnavailable && <OrderTrackingPanel read={readTracking} chatLink={chatLink} timeZone={timeZone} />}
       <button type="button" onClick={onBack} className="loja__cta">
         Voltar ao cardápio
       </button>

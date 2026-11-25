@@ -179,14 +179,14 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
     }, 0);
   }
 
-  async function submitOrder(form: CheckoutForm, totals: CheckoutTotals) {
+  async function submitOrder(form: CheckoutForm, totals: CheckoutTotals, captchaToken?: string) {
     if (unavailableInCart) {
       setCheckoutOpen(false);
       setCartOpen(true);
       return;
     }
     const summary = buildOrderSummary(form, cart.cart, productsById, totals.totalCents);
-    const placed = await order.submit(form, quoteCart(cart.cart, productsById), totals.totalCents, summary);
+    const placed = await order.submit(form, quoteCart(cart.cart, productsById), totals.totalCents, summary, captchaToken);
     if (!placed) return;
     cart.clear();
     setCheckoutOpen(false);
@@ -219,13 +219,17 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
     // Destaque do chip (regras em activeCategoryId): leitura da rolagem, o chip tocado no fim e a última categoria no fim.
     const activeCategoryId = activeCategory({ ids: visibleCategories.map((category) => category.id), spy: spyId ? spyId.replace("categoria-", "") : null, pinned: pinnedId, atEnd });
     const identity = { name: store.name, logoUrl: store.logoUrl, initials: storeInitials(store.name) };
-    const closed = !isStoreAcceptingOrders(store);
+    const closedNow = !isStoreAcceptingOrders(store);
+    // API-40: loja fechada AGORA que aceita agendamento continua montando o carrinho; o checkout só deixa agendar.
+    // Interruptor da loja desligado ou assinatura inativa bloqueiam tudo (o agendamento também é recusado pela API).
+    const canSchedule = store.scheduling === true && store.acceptingOrders && store.accepting !== false;
+    const closed = closedNow && !canSchedule;
 
     if (order.placed) {
       const receipt = history.orders[0];
       const readTracking = order.placed.resume === "none" && receipt?.code === order.placed.code ? order.trackingFor(receipt) : undefined;
       return (
-        <OrderResultScreen
+        <OrderResultScreen timeZone={store.timezone}
           readTracking={readTracking}
           code={order.placed.code}
           cancelled={order.placed.cancelled}
@@ -275,7 +279,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
       <main className="loja__page">
         {tab === "pedidos" ? (
           <div className="loja__column">
-            <OrdersScreen orders={history.orders} storeName={store.name} whatsapp={store.whatsapp} pendingPix={order.pendingPix} trackingFor={order.trackingFor} />
+            <OrdersScreen timeZone={store.timezone} orders={history.orders} storeName={store.name} whatsapp={store.whatsapp} pendingPix={order.pendingPix} trackingFor={order.trackingFor} />
           </div>
         ) : (
           <>
@@ -441,7 +445,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
             gateway={storefront}
             pixAvailable={store.payment?.pixAvailable}
             subtotalCents={cart.totalCents}
-            closed={closed}
+            closed={closedNow}
             submitting={order.submitting || (order.errorCode === "ITEM_PRICE_CHANGED" && menuLoading)}
             error={order.error}
             errorCode={order.errorCode}

@@ -15,6 +15,8 @@ export const PANEL_ROUTES: readonly PanelRoute[] = [
   { id: "pedidos", label: "Pedidos", tooltip: "Pedidos", href: "/dashboard/pedidos", icon: "orders", keywords: ["kanban", "vendas", "pedido", "cozinha"] },
   { id: "mesas", label: "Mesas e QR", tooltip: "Gerenciar mesas e códigos QR", href: "/dashboard/mesas", icon: "mesa", keywords: ["salão", "qr code", "atendimento à mesa"] },
   { id: "catalogo", label: "Produtos", tooltip: "Produtos", href: "/dashboard/catalogo", icon: "products", keywords: ["cardápio", "categoria", "preço", "item", "adicionais"] },
+  { id: "estoque", label: "Estoque", tooltip: "Insumos, fichas técnicas, compras e perdas", href: "/dashboard/estoque", icon: "stock", keywords: ["insumo", "ficha técnica", "compra", "perda", "desperdício", "estragado", "contagem", "carne"] },
+  { id: "lucro", label: "Lucro e margens", tooltip: "Lucro real, CMV e margem por prato", href: "/dashboard/lucro", icon: "profit", keywords: ["lucro", "cmv", "margem", "custo", "dre", "prejuízo"] },
   { id: "relatorios", label: "Relatórios", tooltip: "Relatórios", href: "/dashboard/relatorios", icon: "reports", keywords: ["vendas", "faturamento", "ticket médio", "mais vendidos"] },
   { id: "caixa", label: "Caixa", tooltip: "Controle de caixa", href: "/dashboard/caixa", icon: "wallet", keywords: ["abrir caixa", "fechar caixa", "sangria", "suprimento"] },
   { id: "cupons", label: "Cupons", tooltip: "Cupons", href: "/dashboard/cupons", icon: "coupons", keywords: ["desconto", "promoção", "código"] },

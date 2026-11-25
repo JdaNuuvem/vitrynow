@@ -1,6 +1,8 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import { type Prisma, type prisma as prismaClient, type Order, type OrderStatus, type Payment } from "@meucardapio/db";
 import type { WsServerMessage } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
+import { createOrder, type CreateOrderCommand } from "./orders.create";
 import type { AuditLogger } from "../../shared/audit";
 import { gatewayOfPayment } from "../storePayments/gateway";
 import { ORDER_TX_OPTIONS } from "../../lib/order-code";
@@ -26,6 +28,7 @@ import { authorizeContactView } from "./contactAccess";
 import { assertPhoneSearchRate, HISTORY_STAFF_FULL_PHONE_DIGITS, OPEN_ORDER_STATUSES, parseSearch, recordPhoneRefusal, searchOrderHistory, type HistoryQuery } from "./orders.history";
 import { closedTodayIds, KANBAN_OLD_OPEN_CAP, KANBAN_TODAY_OPEN_HARD_CAP } from "./orders.kanban";
 import { safeTimeZone, startOfStoreDay } from "../../lib/storeTime";
+import { deductStockForOrder, reverseStockForOrder, type StockAlert } from "../../lib/stock";
 
 type Db = typeof prismaClient;
 type Tx = Prisma.TransactionClient;
@@ -96,6 +99,11 @@ export class OrderService {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
+  // D12: única porta de criação de pedido (vitrine, mesa, balcão).
+  create(command: CreateOrderCommand) {
+    return createOrder(this.db, this.publish, command);
+  }
+
   // Toda transação do pedido usa as mesmas opções (espera e duração folgadas): a fila por lock conta no relógio da
   // transação e, com o padrão de 5 s, estourava sob carga virando 500 em fluxo de dinheiro.
   private runTx<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
@@ -114,7 +122,7 @@ export class OrderService {
     const now = this.now();
     const todayStart = startOfStoreDay(now, timezone, 0);
     const include = { items: true, deliverer: true, payment: true, statusHistory: { orderBy: { seq: "desc" as const }, take: 3 } };
-    const openWhere = { storeId: actor.storeId, awaitingPayment: false, status: { in: OPEN_STATUSES } };
+    const openWhere = { storeId: actor.storeId, awaitingPayment: false, held: false, status: { in: OPEN_STATUSES } }; // agendado retido fica fora até a liberação (API-40)
 
     const [older, today] = await Promise.all([
       query.cursor ? [] : this.db.order.findMany({ where: { ...openWhere, createdAt: { lt: todayStart } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], include, take: KANBAN_OLD_OPEN_CAP }),
@@ -158,7 +166,7 @@ export class OrderService {
     // não gravar, não responde: falha fechada como o contato completo). Nunca os dígitos, só o tamanho do termo.
     const search = parseSearch(query.q, actor.role);
     let skipPhone = false;
-    if (search?.phone && actor.role !== "OWNER") {
+    if (search?.phone && actor.role !== panelRoleSchema.enum.OWNER) {
       try {
         assertPhoneSearchRate(actor.userId, this.now().getTime());
       } catch (error) {
@@ -254,7 +262,7 @@ export class OrderService {
           customerMessage: customerMessageFor(cancelRow.reasonCode, messageActorFor(cancelRow.source as "PANEL" | "CUSTOMER" | "SYSTEM" | "WEBHOOK")),
           moneyLine: moneyLineFor(order.payment, cancelRow.reasonCode),
           at: cancelRow.createdAt.toISOString(),
-          by: cancelRow.source === "CUSTOMER" ? "CUSTOMER" : cancelRow.source === "PANEL" ? (roles.get(cancelRow.userId ?? "") ?? "OWNER") : "SYSTEM",
+          by: cancelRow.source === "CUSTOMER" ? "CUSTOMER" : cancelRow.source === "PANEL" ? (roles.get(cancelRow.userId ?? "") ?? panelRoleSchema.enum.OWNER) : "SYSTEM",
         },
       },
       opts,
@@ -268,7 +276,7 @@ export class OrderService {
       return { canUndo: false, until: null };
     }
     if (order.payment?.status === "ESTORNO_PENDENTE") return { canUndo: false, until: null };
-    if (role === "OWNER") return { canUndo: true, until: null };
+    if (role === panelRoleSchema.enum.OWNER) return { canUndo: true, until: null };
     const deadline = new Date(last.createdAt.getTime() + UNDO_WINDOW_MS);
     const open = this.now() <= deadline;
     return { canUndo: open, until: open ? deadline : null };
@@ -279,7 +287,7 @@ export class OrderService {
     const [last, prev] = history;
     if (!last || !prev || FINAL_STATUSES.includes(order.status) || last.kind !== "ADVANCE" || last.status !== order.status) return [];
     if (order.payment?.status === "ESTORNO_PENDENTE") return [{ to: prev.status, kind: "UNDO", reason: "REFUND_PENDING" }];
-    if (role !== "OWNER" && this.now().getTime() - last.createdAt.getTime() > UNDO_WINDOW_MS) {
+    if (role !== panelRoleSchema.enum.OWNER && this.now().getTime() - last.createdAt.getTime() > UNDO_WINDOW_MS) {
       return [{ to: prev.status, kind: "UNDO", reason: "UNDO_WINDOW_EXPIRED" }];
     }
     return [];
@@ -291,6 +299,7 @@ export class OrderService {
     if (order.payment?.status === "ESTORNO_PENDENTE") throw err(409, "REFUND_PENDING", "Há um estorno em andamento neste pedido.");
     if (!isAdvanceAllowed(order, to)) throw err(409, "INVALID_TRANSITION", "Esta mudança de status não é permitida.");
 
+    let stockAlerts: StockAlert[] = [];
     await this.runTx(async (tx) => {
       const moved = await tx.order.updateMany({
         where: { id: order.id, storeId: actor.storeId, status: order.status, refundLockedAt: null },
@@ -298,9 +307,12 @@ export class OrderService {
         data: { status: to, ...(to === "CONCLUIDO" && order.paymentMethod === "DINHEIRO" && !order.paidAt && order.totalCents > 0 ? { paidAt: this.now() } : {}) },
       });
       if (moved.count !== 1) throw STATE_CHANGED();
-      await tx.orderStatusHistory.create({ data: { orderId: order.id, status: to, userId: actor.userId, source: "PANEL", kind: "ADVANCE" } });
+      await tx.orderStatusHistory.create({ data: { orderId: order.id, storeId: actor.storeId, status: to, userId: actor.userId, source: "PANEL", kind: "ADVANCE" } });
+      // ESTOQUE: aceitar (sair de PENDENTE) dá baixa da ficha técnica na mesma transação.
+      if (order.status === "PENDENTE") stockAlerts = (await deductStockForOrder(tx, { id: order.id, storeId: actor.storeId }, this.now()))?.alerts ?? [];
     });
     this.publish(actor.storeId, { type: "order.updated", orderId: order.id });
+    for (const alert of stockAlerts) this.publish(actor.storeId, { type: "stock.low", ...alert });
     return this.get(actor, order.id);
   }
 
@@ -316,7 +328,7 @@ export class OrderService {
 
     const [last, prev] = order.statusHistory;
     if (!last || !prev || last.kind !== "ADVANCE" || last.status !== order.status) throw err(409, "NOTHING_TO_UNDO", "Não há ação para desfazer.");
-    if (actor.role !== "OWNER" && this.now().getTime() - last.createdAt.getTime() > UNDO_WINDOW_MS) {
+    if (actor.role !== panelRoleSchema.enum.OWNER && this.now().getTime() - last.createdAt.getTime() > UNDO_WINDOW_MS) {
       throw err(409, "UNDO_WINDOW_EXPIRED", "O prazo para desfazer acabou.");
     }
 
@@ -326,7 +338,9 @@ export class OrderService {
         data: { status: prev.status },
       });
       if (moved.count !== 1) throw STATE_CHANGED();
-      await tx.orderStatusHistory.create({ data: { orderId: order.id, status: prev.status, userId: actor.userId, source: "PANEL", kind: "UNDO" } });
+      await tx.orderStatusHistory.create({ data: { orderId: order.id, storeId: actor.storeId, status: prev.status, userId: actor.userId, source: "PANEL", kind: "UNDO" } });
+      // ESTOQUE: desfazer o aceite devolve a baixa (o próximo aceite baixa de novo).
+      if (prev.status === "PENDENTE") await reverseStockForOrder(tx, { id: order.id, storeId: actor.storeId }, this.now());
     });
     this.publish(actor.storeId, { type: "order.updated", orderId: order.id });
     this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "order.undo", targetType: "Order", targetId: order.id, metadata: { from: order.status, to: prev.status } });
@@ -364,7 +378,7 @@ export class OrderService {
     if (FINAL_STATUSES.includes(order.status)) throw err(409, "INVALID_TRANSITION", "Este pedido já foi finalizado ou cancelado.");
     if (order.payment?.status === "ESTORNO_PENDENTE") throw err(409, "REFUND_PENDING", "Há um estorno em andamento neste pedido.");
     if (await this.closedCashSessionOf(order)) {
-      if (actor.role !== "OWNER") throw err(403, "CASH_CLOSED_OWNER_ONLY", "Esse pedido é de um caixa já fechado. Só o dono pode cancelar.");
+      if (actor.role !== panelRoleSchema.enum.OWNER) throw err(403, "CASH_CLOSED_OWNER_ONLY", "Esse pedido é de um caixa já fechado. Só o dono pode cancelar.");
       if (!acknowledgeClosedCash) throw err(409, "CASH_CLOSED_ACK_REQUIRED", "Confirme que entende que isso afeta o caixa já fechado.");
       return this.cancelClosedCashOrder(actor, order, valid);
     }
@@ -376,7 +390,7 @@ export class OrderService {
   // Cancela pedido de caixa JÁ FECHADO: cria a DEVOLUCAO no caixa ATUAL (o fechado não muda: RN-B3-07). Sem caixa aberto => 409 CASH_REQUIRED.
   // Uma transação: loja -> pedido -> caixa aberto. `Order.cashRefundMovementId` é único (idempotência). Auditoria na mesma transação.
   private async cancelClosedCashOrder(actor: PanelActor, order: OrderWithPayment, reason: CancelReason) {
-    const origin: CancelOrigin = { source: "PANEL", userId: actor.userId, actor: "OWNER", reason };
+    const origin: CancelOrigin = { source: "PANEL", userId: actor.userId, actor: panelRoleSchema.enum.OWNER, reason };
     const sink = { noticeQueued: false };
     const result = await this.runTx(async (tx) => {
       await lockPrintMode(tx, actor.storeId);
@@ -389,7 +403,7 @@ export class OrderService {
       if (!open[0]) throw err(409, "CASH_REQUIRED", "Abra o caixa para registrar a devolução.");
       if (!(await this.applyCancel(tx, order, origin, { expected: locked.status, noMoney: true, sink }))) throw STATE_CHANGED();
       const movement = await tx.cashMovement.create({
-        data: { cashSessionId: open[0].id, type: "DEVOLUCAO", amountCents: order.totalCents, reason: "DEVOLUCAO_CLIENTE", createdByUserId: actor.userId, createdByRole: "OWNER" },
+        data: { cashSessionId: open[0].id, storeId: actor.storeId, type: "DEVOLUCAO", amountCents: order.totalCents, reason: "DEVOLUCAO_CLIENTE", createdByUserId: actor.userId, createdByRole: panelRoleSchema.enum.OWNER },
       });
       await tx.order.update({ where: { id: order.id }, data: { cashRefundMovementId: movement.id } });
       await tx.auditLog.create({
@@ -498,9 +512,12 @@ export class OrderService {
       data: { status: "CANCELADO", canceledAt: now, delivererId: null },
     });
     if (moved.count !== 1) return false;
+    // ESTOQUE: pedido aceito e cancelado devolve os insumos (não é perda: o que estragou se lança à parte, como SPOILAGE/WASTE).
+    await reverseStockForOrder(tx, { id: order.id, storeId: order.storeId }, now);
     await tx.orderStatusHistory.create({
       data: {
         orderId: order.id,
+        storeId: order.storeId,
         status: "CANCELADO",
         userId: origin.userId,
         source: origin.source,
@@ -711,7 +728,7 @@ export class OrderService {
 
   async retryRefund(actor: PanelActor, orderId: string) {
     const order = await this.load(actor.storeId, orderId);
-    if (actor.role !== "OWNER") throw err(403, "FORBIDDEN_ROLE", "Só o dono da loja pode estornar.");
+    if (actor.role !== panelRoleSchema.enum.OWNER) throw err(403, "FORBIDDEN_ROLE", "Só o dono da loja pode estornar.");
     if (order.payment?.status !== "ESTORNO_PENDENTE") throw err(409, "NOT_REFUND_PENDING", "Este pedido não tem estorno pendente.");
     const refund = await this.attemptRefund(order.payment.id);
     return { order: await this.get(actor, orderId), refund };
@@ -719,7 +736,7 @@ export class OrderService {
 
   // API-69 (RN-REF-02/04): lista e contagem de "Estornos presos", SÓ do OWNER. Preso = estorno pendente, acima do teto automático e não encerrado.
   async listStuckRefunds(actor: PanelActor) {
-    if (actor.role !== "OWNER") throw err(403, "FORBIDDEN_ROLE", "Peça ao dono.");
+    if (actor.role !== panelRoleSchema.enum.OWNER) throw err(403, "FORBIDDEN_ROLE", "Peça ao dono.");
     const rows = await this.db.order.findMany({
       where: { storeId: actor.storeId, payment: { is: { status: "ESTORNO_PENDENTE", refundAttempts: { gte: MAX_REFUND_AUTO_ATTEMPTS }, refundAbandonedAt: null } } },
       select: { id: true, code: true, createdAt: true, totalCents: true, payment: { select: { amountCents: true } } },
@@ -733,13 +750,13 @@ export class OrderService {
   // marca o pagamento como encerrado SEM virar REEMBOLSADO (o dinheiro continua como recebido). Auditoria na MESMA transação.
   // Ordem de locks: loja -> pedido -> pagamento. Sem chamada ao provedor. Idempotente (2ª chamada = 200 sem novo registro).
   async abandonRefund(actor: PanelActor, orderId: string, code: AbandonCode, note?: string) {
-    if (actor.role !== "OWNER") throw err(403, "FORBIDDEN_ROLE", "Só o dono da loja pode encerrar o estorno.");
+    if (actor.role !== panelRoleSchema.enum.OWNER) throw err(403, "FORBIDDEN_ROLE", "Só o dono da loja pode encerrar o estorno.");
     const first = await this.load(actor.storeId, orderId);
     if (!first.payment || (first.payment.status !== "ESTORNO_PENDENTE")) throw err(409, "NOT_REFUND_PENDING", "Este pedido não tem estorno pendente.");
     if (!first.payment.refundAbandonedAt && refundAutoRetryable(first.payment)) {
       throw err(409, "REFUND_STILL_POSSIBLE", "O estorno ainda pode ser concluído. Tente de novo.");
     }
-    const origin: CancelOrigin = { source: "PANEL", userId: actor.userId, actor: "OWNER", reason: { code: "ESTORNO_NAO_CONCLUIDO", text: note } };
+    const origin: CancelOrigin = { source: "PANEL", userId: actor.userId, actor: panelRoleSchema.enum.OWNER, reason: { code: "ESTORNO_NAO_CONCLUIDO", text: note } };
     const sink = { noticeQueued: false };
     const done = await this.runTx(async (tx) => {
       await lockPrintMode(tx, actor.storeId);
@@ -779,9 +796,9 @@ export class OrderService {
   // (marcado como manual) e o pedido é cancelado. O provedor NÃO é chamado. Só OWNER (+MFA na rota), motivo por código, auditoria na mesma
   // transação. Ordem de locks: loja -> pedido -> pagamento. Idempotente: repetir devolve 200 sem novo registro.
   async registerManualRefund(actor: PanelActor, orderId: string, code: ManualRefundCode) {
-    if (actor.role !== "OWNER") throw err(403, "FORBIDDEN_ROLE", "Só o dono da loja pode registrar o estorno.");
+    if (actor.role !== panelRoleSchema.enum.OWNER) throw err(403, "FORBIDDEN_ROLE", "Só o dono da loja pode registrar o estorno.");
     const first = await this.load(actor.storeId, orderId);
-    const origin: CancelOrigin = { source: "PANEL", userId: actor.userId, actor: "OWNER", reason: { code: "ESTORNO_MANUAL" } };
+    const origin: CancelOrigin = { source: "PANEL", userId: actor.userId, actor: panelRoleSchema.enum.OWNER, reason: { code: "ESTORNO_MANUAL" } };
     const sink = { noticeQueued: false };
     const done = await this.runTx(async (tx) => {
       await lockPrintMode(tx, actor.storeId);

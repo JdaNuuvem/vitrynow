@@ -1,7 +1,8 @@
-import type { Order, OrderStatus } from "@/core/domain/orders";
+import { ORDER_STATUSES, type Order, type OrderStatus } from "@/core/domain/orders";
 
 // Colunas do quadro, na ordem da tela. SAIU_PARA_ENTREGA tem coluna própria (contrato B3 §10).
-export const KANBAN_COLUMNS: readonly OrderStatus[] = ["PENDENTE", "CONFIRMADO", "EM_PREPARO", "PRONTO", "SAIU_PARA_ENTREGA", "CONCLUIDO"];
+// SSOT D3: a ordem de vida do pedido vem da lista única; só CANCELADO fica fora do quadro.
+export const KANBAN_COLUMNS: readonly OrderStatus[] = ORDER_STATUSES.filter((status) => status !== "CANCELADO");
 
 // Status que SAEM do quadro de propósito: pedido cancelado vai para histórico/busca, não para o kanban.
 // É a única exceção à regra "nenhum pedido some"; qualquer outro valor cai em "Outros".

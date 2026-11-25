@@ -33,6 +33,8 @@ namespace MeuCardapio.PrintClient.Printing
             var table = S(order.TableLabel);
             if (type == "MESA" && table.Length > 0) label = table.StartsWith("MESA", StringComparison.OrdinalIgnoreCase) ? table.ToUpperInvariant() : "MESA " + table.ToUpperInvariant();
             doc.Text(label, TicketAlign.Center, bold: true, scale: 1.3f);
+            if (type == "MESA" && order.Round.HasValue && order.Round.Value > 0) doc.Text("RODADA " + order.Round.Value, TicketAlign.Center, bold: true);
+            if (type == "MESA" && !string.IsNullOrWhiteSpace(order.RequestedBy)) doc.Text("Pedido por: " + S(order.RequestedBy), TicketAlign.Center);
             if (order.ReprintCount.HasValue && order.ReprintCount.Value > 0)
             {
                 doc.Text("2ª VIA (" + order.ReprintCount.Value + ")", TicketAlign.Center, bold: true);
@@ -45,6 +47,7 @@ namespace MeuCardapio.PrintClient.Printing
 
             // 2) cliente
             bool anyCustomer = false;
+            if (order.CustomerRemoved == true) { doc.Text("Dados do cliente removidos"); anyCustomer = true; }
             if (!string.IsNullOrWhiteSpace(order.CustomerName)) { doc.Text("Cliente: " + S(order.CustomerName)); CutWarning(doc, order.CustomerName, "nome do cliente cortado"); anyCustomer = true; }
             if (!string.IsNullOrWhiteSpace(order.CustomerPhone)) { doc.Text("Telefone: " + S(order.CustomerPhone)); anyCustomer = true; }
             if (!string.IsNullOrWhiteSpace(order.Address)) { doc.Text("Endereço: " + S(order.Address)); CutWarning(doc, order.Address, "endereço cortado"); anyCustomer = true; }

@@ -1,5 +1,7 @@
 export type StoreSettings = {
   id: string;
+  /** SSOT D1: fuso IANA da loja (ex.: America/Manaus). Toda data do painel usa este, nunca o do aparelho. */
+  timezone?: string;
   name: string;
   slug: string;
   code: string;

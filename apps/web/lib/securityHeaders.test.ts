@@ -51,6 +51,16 @@ describe("CSP do web (NG-07)", () => {
     expect(directive(csp, "script-src")).not.toContain("*");
     expect(directive(csp, "connect-src")).not.toContain("*");
   });
+
+  it("captcha Turnstile: sem chave nada muda; com chave, SÓ a origem da Cloudflare entra em script, iframe e conexão", () => {
+    expect(directive(csp, "frame-src")).toBe("");
+    expect(csp).not.toContain("challenges.cloudflare.com");
+    const withCaptcha: string = buildCsp({ apiUrl: API, turnstile: true });
+    expect(directive(withCaptcha, "script-src")).toBe("script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com");
+    expect(directive(withCaptcha, "frame-src")).toBe("frame-src https://challenges.cloudflare.com");
+    expect(directive(withCaptcha, "connect-src")).toBe("connect-src 'self' https://pedidos.exemplo.com.br wss://pedidos.exemplo.com.br https://challenges.cloudflare.com");
+    expect(directive(withCaptcha, "frame-ancestors")).toBe("frame-ancestors 'none'"); // o painel continua não embutível
+  });
 });
 
 describe("cabeçalhos de segurança do web (NG-07)", () => {

@@ -1,4 +1,5 @@
 import type { WebSocket } from "ws";
+import { panelRoleSchema, type PanelRole } from "@meucardapio/shared-types";
 import { DEVICE_ALERT_MONEY_CODES, WS_AUDIENCE, type WsServerMessage } from "@meucardapio/shared-types";
 
 // Pub/sub em memória: um canal por loja. Usado tanto pelo painel (kanban em tempo
@@ -80,7 +81,7 @@ export function disconnectUser(userId: string): void {
 // print-client entra como DEVICE. O papel é OBRIGATÓRIO ao se inscrever e o padrão é FECHADO: só `OWNER` recebe mensagem de dono; papel
 // ausente ou desconhecido, STAFF e DEVICE nunca recebem. Não existe rota que troque o papel de um usuário; se alguém criar uma, ela TEM de
 // chamar `disconnectUser` (o socket aberto guarda o papel de quando conectou).
-export type SocketRole = "OWNER" | "STAFF" | "DEVICE";
+export type SocketRole = PanelRole | "DEVICE";
 const socketRoles = new WeakMap<WebSocket, SocketRole>();
 
 // Mensagens que só o OWNER pode receber (RN-CX-22): sinalizam dado que o STAFF não vê. A restrição vive AQUI, por tipo, e não em quem publica:
@@ -114,11 +115,11 @@ function deliver(storeId: string, message: WsServerMessage, ownersOnly: boolean)
   const payload = JSON.stringify(message);
   for (const socket of set) {
     const role = socketRoles.get(socket);
-    if (ownersOnly && role !== "OWNER") continue;
+    if (ownersOnly && role !== panelRoleSchema.enum.OWNER) continue;
     // API-47: a audiência é do TIPO da mensagem, não de quem publica. A impressora só recebe o que o tipo declara para `device`.
     // LISTA DE PERMISSÃO (fail-closed): DEVICE só recebe tipo que declara `device`/`both`; tipo fora do mapa não chega a ninguém além do painel.
     const audience = WS_AUDIENCE[message.type] as string | undefined;
-    if (role === "DEVICE" ? audience !== "device" && audience !== "both" : role !== "OWNER" && role !== "STAFF") continue; // papel ausente/desconhecido: nada
+    if (role === "DEVICE" ? audience !== "device" && audience !== "both" : role !== panelRoleSchema.enum.OWNER && role !== panelRoleSchema.enum.STAFF) continue; // papel ausente/desconhecido: nada
     if (socket.readyState === socket.OPEN) socket.send(payload);
   }
 }
@@ -136,7 +137,7 @@ export function publishToPanel(storeId: string, message: WsServerMessage): void 
   const payload = JSON.stringify(message);
   for (const socket of set) {
     const role = socketRoles.get(socket);
-    if (role !== "OWNER" && !(role === "STAFF" && !ownersOnly)) continue;
+    if (role !== panelRoleSchema.enum.OWNER && !(role === panelRoleSchema.enum.STAFF && !ownersOnly)) continue;
     const audience = WS_AUDIENCE[message.type] as string | undefined;
     if (audience !== "panel" && audience !== "both") continue; // permissão explícita; tipo fora do mapa não sai por aqui
     if (socket.readyState === socket.OPEN) socket.send(payload);

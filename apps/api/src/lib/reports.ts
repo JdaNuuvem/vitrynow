@@ -52,6 +52,7 @@ export type Report = {
   orderCount: number;
   revenueCents: number;
   discountCents: number;
+  serviceFeeCents: number;
   averageTicketCents: number;
   customerCount: number;
   deliveryFeeCents: number;
@@ -130,7 +131,10 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
       FROM "CashSession" s LEFT JOIN "CashMovement" m ON m."cashSessionId" = s."id"
       WHERE s."storeId" = ${storeId} AND s."openedAt" >= ${utc(range.fromUtc)} AND s."openedAt" < ${utc(range.toExclusiveUtc)}`),
     // API-24 (RN-MB-04): cada recebimento de mesa é UMA venda, reconhecida em receivedAt.
-    prisma.$queryRaw<{ count: bigint; revenue: bigint }[]>(Prisma.sql`SELECT count(*) AS "count", coalesce(sum(r."totalCents"), 0)::bigint AS "revenue" FROM "Receipt" r WHERE ${rWindow}`),
+    prisma.$queryRaw<{ count: bigint; revenue: bigint; discount: bigint; serviceFee: bigint }[]>(Prisma.sql`
+      SELECT count(*) AS "count", coalesce(sum(r."totalCents"), 0)::bigint AS "revenue",
+             coalesce(sum(r."discountCents"), 0)::bigint AS "discount", coalesce(sum(r."serviceFeeCents"), 0)::bigint AS "serviceFee"
+      FROM "Receipt" r WHERE ${rWindow}`),
     prisma.$queryRaw<{ date: string; count: bigint; revenue: bigint }[]>(Prisma.sql`SELECT ${rDay} AS "date", count(*) AS "count", sum(r."totalCents")::bigint AS "revenue" FROM "Receipt" r WHERE ${rWindow} GROUP BY 1`),
     prisma.$queryRaw<{ bucket: string; count: bigint; revenue: bigint }[]>(Prisma.sql`SELECT p."method"::text AS "bucket", count(*) AS "count", sum(p."amountCents")::bigint AS "revenue" FROM "ReceiptPayment" p JOIN "Receipt" r ON r."id" = p."receiptId" WHERE ${rWindow} GROUP BY 1`),
     prisma.$queryRaw<{ key: string; name: string; quantity: bigint; revenue: bigint; grams: bigint }[]>(Prisma.sql`
@@ -179,7 +183,8 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
     timeZone: range.timeZone,
     orderCount,
     revenueCents,
-    discountCents: n(t.discount),
+    discountCents: n(t.discount) + n(rTotal[0].discount), // desconto dos pedidos + desconto dado no fechamento da mesa
+    serviceFeeCents: n(rTotal[0].serviceFee), // taxa de serviço das mesas (já incluída na receita)
     averageTicketCents: orderCount > 0 ? Math.round(revenueCents / orderCount) : 0,
     customerCount: n(t.customers),
     deliveryFeeCents: n(t.fee),

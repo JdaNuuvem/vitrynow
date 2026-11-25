@@ -44,12 +44,12 @@ export async function closedTodayIds(
       FROM "OrderStatusHistory" h
       JOIN "Order" o ON o."id" = h."orderId"
       WHERE h."status" IN (${FINAL_SQL}) AND h."createdAt" >= ${utc(todayStart)}
-        AND o."storeId" = ${storeId} AND o."awaitingPayment" = false AND o."status" IN (${FINAL_SQL})
+        AND o."storeId" = ${storeId} AND o."awaitingPayment" = false AND o."held" = false AND o."status" IN (${FINAL_SQL})
       GROUP BY o."id"
       UNION ALL
       SELECT o."id", o."createdAt" AS "closedAt"
       FROM "Order" o
-      WHERE o."storeId" = ${storeId} AND o."awaitingPayment" = false AND o."status" IN (${FINAL_SQL}) AND o."createdAt" >= ${utc(todayStart)}
+      WHERE o."storeId" = ${storeId} AND o."awaitingPayment" = false AND o."held" = false AND o."status" IN (${FINAL_SQL}) AND o."createdAt" >= ${utc(todayStart)}
         AND NOT EXISTS (SELECT 1 FROM "OrderStatusHistory" h WHERE h."orderId" = o."id" AND h."status" IN (${FINAL_SQL}))
     ) closed
     ${keyset}

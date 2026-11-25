@@ -2,6 +2,7 @@
 // Mercado Pago é SEMPRE mockado.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore, productStore } from "./helpers";
 import { activateSubscription } from "../src/lib/subscription";
 import { login, makeApp, registerStore, resetDb, orderTokenHeader, useMockedProvider } from "./helpers";
 import { subscribe } from "../src/realtime/hub";
@@ -73,7 +74,7 @@ describe("API-02 — estados do pedido", { timeout: 60_000 }, () => {
   async function paidOrder(ctx: Ctx, extra: Record<string, unknown> = {}) {
     const orderId = await newOrder(ctx, extra);
     await prisma.order.update({ where: { id: orderId }, data: { paymentMethod: "PIX", awaitingPayment: false } });
-    await prisma.payment.create({ data: { orderId, providerPaymentId: `mp-${orderId}`, amountCents: 1000, status: "APROVADO" } });
+    await prisma.payment.create({ data: { orderId, storeId: await orderStore(orderId), providerPaymentId: `mp-${orderId}`, amountCents: 1000, status: "APROVADO" } });
     return orderId;
   }
 
@@ -257,7 +258,7 @@ describe("API-02 — estados do pedido", { timeout: 60_000 }, () => {
   it("cancelar pedido com cobrança PIX ainda aberta cancela a cobrança no provedor", async () => {
     const ctx = await setup();
     const id = await newOrder(ctx);
-    await prisma.payment.create({ data: { orderId: id, providerPaymentId: "mp-aberto", amountCents: 1000, status: "PENDENTE" } });
+    await prisma.payment.create({ data: { orderId: id, storeId: await orderStore(id), providerPaymentId: "mp-aberto", amountCents: 1000, status: "PENDENTE" } });
     expect((await cancel(ctx.cookie, id, { code: "CLIENTE_DESISTIU" })).statusCode).toBe(200);
     expect(cancelPayment).toHaveBeenCalledWith("mp-aberto");
     expect((await prisma.payment.findUnique({ where: { orderId: id } }))?.status).toBe("CANCELADO");
@@ -267,7 +268,7 @@ describe("API-02 — estados do pedido", { timeout: 60_000 }, () => {
     const ctx = await setup();
     cancelPayment.mockRejectedValueOnce(new Error("MP fora do ar"));
     const id = await newOrder(ctx);
-    await prisma.payment.create({ data: { orderId: id, providerPaymentId: "mp-aberto2", amountCents: 1000, status: "PENDENTE" } });
+    await prisma.payment.create({ data: { orderId: id, storeId: await orderStore(id), providerPaymentId: "mp-aberto2", amountCents: 1000, status: "PENDENTE" } });
     expect((await cancel(ctx.cookie, id, { code: "CLIENTE_DESISTIU" })).statusCode).toBe(200);
     expect((await prisma.order.findUnique({ where: { id } }))?.status).toBe("CANCELADO");
   });

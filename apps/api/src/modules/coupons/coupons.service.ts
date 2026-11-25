@@ -1,11 +1,12 @@
 import type { CreateCouponInput, UpdateCouponInput } from "@meucardapio/shared-types";
+import { panelRoleSchema, type PanelRole } from "@meucardapio/shared-types";
 import type { Actor, AuditLogger } from "../../shared/audit";
 import { CodedError, NotFoundError } from "../../shared/errors";
 import { endOfStoreDay, isBeforeToday } from "../../lib/storeDay";
 import { storeTimeZone } from "../../lib/storeTz";
 import type { CouponsRepository } from "./coupons.repository";
 
-type CouponActor = Actor & { role: "OWNER" | "STAFF" };
+type CouponActor = Actor & { role: PanelRole };
 
 // Cupom caro é comida de graça sem controle: o STAFF só cria/edita cupom DENTRO do teto (até 50% ou R$ 50,00) e sempre COM limite
 // de usos; acima disso, e para excluir qualquer cupom, só o dono. O teto fica aqui, num lugar só (Atlas/Nightingale, 17/11).
@@ -16,11 +17,11 @@ type CouponShape = { discountType: string; discountValue: number; maxUses?: numb
 const withinStaffCap = (c: CouponShape) =>
   !!c.maxUses && c.maxUses <= STAFF_MAX_USES && (c.discountType === "PERCENT" ? c.discountValue <= STAFF_MAX_PERCENT : c.discountValue <= STAFF_MAX_FIXED_CENTS);
 function ownerOnly(actor: CouponActor) {
-  if (actor.role !== "OWNER") throw new CodedError(403, "FORBIDDEN_ROLE", "Só o dono pode fazer isso.");
+  if (actor.role !== panelRoleSchema.enum.OWNER) throw new CodedError(403, "FORBIDDEN_ROLE", "Só o dono pode fazer isso.");
 }
 // STAFF: o cupom FINAL e o que já existe (na edição) precisam caber no teto; senão 403.
 function assertStaffCap(actor: CouponActor, ...shapes: CouponShape[]) {
-  if (actor.role === "OWNER") return;
+  if (actor.role === panelRoleSchema.enum.OWNER) return;
   if (!shapes.every(withinStaffCap)) throw new CodedError(403, "FORBIDDEN_ROLE", "Acima do seu limite. Peça ao dono.");
 }
 
@@ -78,7 +79,7 @@ export class CouponsService {
     // Parar um cupom perigoso reduz risco: o STAFF pode DESATIVAR qualquer cupom, mas só isso (`{ active: false }` sozinho).
     // Reativar, ou desativar junto com outra mudança, segue a regra do teto.
     const onlyDeactivate = Object.keys(input).length === 1 && input.active === false;
-    if (onlyDeactivate && actor.role === "STAFF") {
+    if (onlyDeactivate && actor.role === panelRoleSchema.enum.STAFF) {
       const stopped = await this.repo.update(id, { active: false });
       this.auditChange(actor, "coupon.update", stopped);
       return stopped;

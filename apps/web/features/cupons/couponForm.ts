@@ -1,5 +1,6 @@
 import type { Coupon, DiscountType, NewCouponInput } from "@/core/domain/coupons";
 import { digitsToCents, maskMoneyInput } from "@/shared/format/money";
+import { storeDateInput } from "@/shared/format/storeTime";
 
 export type CouponDraft = {
   code: string;
@@ -15,7 +16,7 @@ export function emptyCouponDraft(): CouponDraft {
   return { code: "", discountType: "PERCENT", percentValue: "10", fixedValue: "", maxUses: "", minOrder: "", expiresAt: "" };
 }
 
-export function couponDraft(coupon?: Coupon): CouponDraft {
+export function couponDraft(coupon?: Coupon, timeZone?: string): CouponDraft {
   if (!coupon) return emptyCouponDraft();
   const expiry = coupon.expiresAt ? new Date(coupon.expiresAt) : null;
   return {
@@ -24,7 +25,7 @@ export function couponDraft(coupon?: Coupon): CouponDraft {
     fixedValue: coupon.discountType === "FIXED" ? maskMoneyInput(String(coupon.discountValue)) : "",
     maxUses: coupon.maxUses === null ? "" : String(coupon.maxUses),
     minOrder: coupon.minOrderCents === null ? "" : maskMoneyInput(String(coupon.minOrderCents)),
-    expiresAt: expiry ? new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo", dateStyle: "short" }).format(expiry) : "",
+    expiresAt: expiry ? storeDateInput(expiry, timeZone) : "",
   };
 }
 

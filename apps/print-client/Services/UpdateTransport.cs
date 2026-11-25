@@ -26,7 +26,7 @@ namespace MeuCardapio.PrintClient.Services
             req.AllowAutoRedirect = false;
             req.Timeout = TimeoutMs;
             req.ReadWriteTimeout = ReadTimeoutMs;
-            req.UserAgent = "MeuCardapio-PrintClient/" + Updater.CurrentVersion;
+            req.UserAgent = Brand.UserAgentProduct + "/" + Updater.CurrentVersion;
             return req;
         }
 

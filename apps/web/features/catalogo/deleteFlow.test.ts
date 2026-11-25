@@ -58,7 +58,8 @@ describe("textos da exclusão", () => {
     const one = categoryDeleteCopy({ id: "c", name: "Bebidas", icon: null, products: [product()] } as Category);
     expect(one.informOnly).toBe(true);
     expect(one.message).toContain("1 produto, mesmo os ocultos.");
-    expect(one.message).toContain("Exclua o produto antes");
+    expect(one.message).toContain("exclua o produto antes");
+    expect(one.message).toContain("Mover produtos");
     // só indica a saída que funciona hoje: nada de "mova"/"oculte", que não destravam a exclusão
     expect(one.message).not.toMatch(/mova|oculte/i);
     const two = categoryDeleteCopy({ id: "c", name: "Bebidas", icon: null, products: [product(), product({ id: "p2" })] } as Category);

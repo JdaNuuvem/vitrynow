@@ -2,6 +2,7 @@
 // LEGACY: o cliente lista pedidos com printedAt nulo. QUEUE: o cliente consome jobs. Só um dos dois caminhos funciona por vez.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore } from "./helpers";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
 // Estes testes esperam o lock da loja, disputam corridas e preparam banco: sob carga da máquina o tempo total varia de 1 s a 45 s (medido pelo
@@ -479,6 +480,7 @@ describe("API-12b — modo de impressão e virada", () => {
     const payment = await prisma.payment.create({
       data: {
         orderId: id,
+        storeId: await orderStore(id),
         providerPaymentId: `mp-${id}`,
         amountCents: 1000,
         status: "ESTORNO_PENDENTE",

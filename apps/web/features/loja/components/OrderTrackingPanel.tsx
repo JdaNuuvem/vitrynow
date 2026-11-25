@@ -3,8 +3,10 @@ import { statusLabel } from "@/core/domain/orderLabels";
 import type { OrderTracking } from "@/core/domain/storefront";
 import type { ReadOrderTracking } from "@/core/gateways/StorefrontGateway";
 import { TRACKING_UNAVAILABLE_MESSAGE } from "../hooks/useOrderFlow";
+import { formatInStoreTimezone } from "@/shared/format/storeTime";
 
-export function OrderTrackingPanel({ read, chatLink }: { read: ReadOrderTracking; chatLink?: string | null }) {
+// SSOT D1: horários no fuso da LOJA (vem do cardápio público), não no do celular do cliente.
+export function OrderTrackingPanel({ read, chatLink, timeZone }: { read: ReadOrderTracking; chatLink?: string | null; timeZone?: string }) {
   const [tracking, setTracking] = useState<OrderTracking | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +51,7 @@ export function OrderTrackingPanel({ read, chatLink }: { read: ReadOrderTracking
                 {tracking.timeline.map((event, index) => (
                   <li key={index}>
                     <span>{statusLabel(event.status)}</span>
-                    <time dateTime={event.at}>{new Date(event.at).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</time>
+                    <time dateTime={event.at}>{formatInStoreTimezone(event.at, timeZone, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</time>
                   </li>
                 ))}
               </ol>

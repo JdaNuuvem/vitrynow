@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { StuckRefundsCard } from "./components/StuckRefundsCard";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { StorePaymentSettings } from "@/core/gateways/StoreGateway";
 import { usePanelServices } from "@/core/services/PanelServices";
@@ -112,6 +113,7 @@ export function StorePaymentsPage() {
         </div>
         {pending && <p className="conta__meta">Conclua os pagamentos e estornos pendentes para desconectar a conta.</p>}
       </Panel>}
+      {settings && <StuckRefundsCard />}
       <ConfirmDialog open={confirming} title="Desconectar Mercado Pago?" message="A loja deixará de receber novos pedidos por PIX nesta conta."
         confirmLabel="Desconectar" tone="danger" onCancel={() => setConfirming(false)} onConfirm={disconnect} />
     </main>

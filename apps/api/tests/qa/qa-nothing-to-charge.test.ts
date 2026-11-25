@@ -4,6 +4,7 @@
 // (3) o tíquete é montado NO CLAIM (sem cópia antiga): pagamento aprovado depois de o job nascer ⇒ false; (4) fila: aviso e teste ⇒ false.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma, PaymentStatus } from "@meucardapio/db";
+import { orderStore, productStore } from "../helpers";
 import { buildPrintableOrder, nothingToCharge } from "../../src/lib/printable";
 import { makeApp, registerStore, resetDb } from "../helpers";
 
@@ -66,7 +67,7 @@ describe("QA-27 nothingToCharge (API-66)", () => {
     const c = await setup();
     const id = await pedidoGratis(c);
     expect((await buildPrintableOrder(id)).nothingToCharge, "sem pagamento").toBe(true);
-    const pay = await prisma.payment.create({ data: { orderId: id, providerPaymentId: "qa-1", amountCents: 0, status: "PENDENTE" } });
+    const pay = await prisma.payment.create({ data: { orderId: id, storeId: await orderStore(id), providerPaymentId: "qa-1", amountCents: 0, status: "PENDENTE" } });
     for (const s of [...VIVOS, ...MORTOS]) {
       await prisma.payment.update({ where: { id: pay.id }, data: { status: s } });
       const t = await buildPrintableOrder(id);
@@ -87,7 +88,7 @@ describe("QA-27 nothingToCharge (API-66)", () => {
     expect((await setMode(c, "QUEUE")).statusCode).toBe(200);
     const id = await pedidoGratis(c);
     expect(await prisma.printJob.count({ where: { orderId: id, kind: "ORDER_KITCHEN", status: "PENDING" } })).toBe(1);
-    await prisma.payment.create({ data: { orderId: id, providerPaymentId: "qa-2", amountCents: 0, status: "APROVADO" } }); // aprovado ENTRE a criação do job e o claim
+    await prisma.payment.create({ data: { orderId: id, storeId: await orderStore(id), providerPaymentId: "qa-2", amountCents: 0, status: "APROVADO" } }); // aprovado ENTRE a criação do job e o claim
     const job = await claim(c);
     expect(job?.kind).toBe("ORDER_KITCHEN");
     expect(ticketDe(job)).toMatchObject({ nothingToCharge: false });

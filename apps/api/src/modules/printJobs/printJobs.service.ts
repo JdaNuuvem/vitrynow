@@ -1,4 +1,5 @@
 import { Prisma, type prisma as prismaClient, type PrintJob, type PrintKind, type PrintJobStatus, type PrintMode } from "@meucardapio/db";
+import type { PanelRole } from "@meucardapio/shared-types";
 import { NOW_UTC } from "../../lib/sqlTime";
 import type { PrintableOrder, WsServerMessage } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
@@ -227,7 +228,7 @@ export class PrintJobService {
   }
 
   // ───────────── Painel ─────────────
-  async reprint(actor: { storeId: string; userId: string; role: "OWNER" | "STAFF" }, orderId: string) {
+  async reprint(actor: { storeId: string; userId: string; role: PanelRole }, orderId: string) {
     await this.requireQueueMode(actor.storeId);
     // A 2ª via sai com telefone e endereço COMPLETOS: é uma DIVULGAÇÃO de contato e segue a regra única do detalhe
     // (authorizeContactView): papel e idade (STAFF só pedido aberto ou encerrado há < 24 h), rastro `order.view_contact`
@@ -277,7 +278,7 @@ export class PrintJobService {
 
   // N6 "Imprimir agora": devolve à fila um job STALE (passou da janela de 12 h). Mesma regra de divulgação de contato da 2ª via; ordem de
   // travas lockPrintMode (compartilhado) → pedido → PrintJob; a transição é um UPDATE condicional (dois cliques = 1 efeito).
-  async printNow(actor: { storeId: string; userId: string; role: "OWNER" | "STAFF" }, jobId: string) {
+  async printNow(actor: { storeId: string; userId: string; role: PanelRole }, jobId: string) {
     await this.requireQueueMode(actor.storeId);
     const job = await this.db.printJob.findFirst({ where: { id: jobId, storeId: actor.storeId }, select: { id: true, kind: true, orderId: true } });
     if (!job) throw err(404, "PRINT_JOB_NOT_FOUND", "job não encontrado"); // idêntico para inexistente e de outra loja

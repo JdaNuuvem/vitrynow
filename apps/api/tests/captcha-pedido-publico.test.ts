@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { CAPTCHA_HEADER, FAKE_CAPTCHA_OK, captchaMode, setCaptchaVerifier, type CaptchaVerifier } from "../src/lib/captcha";
+import { CAPTCHA_HEADER, FAKE_CAPTCHA_OK, TURNSTILE_VERIFY_URL, TurnstileCaptcha, captchaMode, setCaptchaVerifier, type CaptchaVerifier } from "../src/lib/captcha";
 import { resetLimits } from "../src/lib/slidingLimit";
 import { CAPTCHA_AT_PENDING } from "../src/routes/storefront";
 import { makeApp, registerStore, resetDb } from "./helpers";
@@ -16,7 +16,41 @@ describe("NG-08: captcha — modo e fail-closed", () => {
     for (const NODE_ENV of ["production", undefined, "staging", "prod"]) {
       expect(() => captchaMode({ CAPTCHA_MODE: "fake", NODE_ENV } as NodeJS.ProcessEnv), `NODE_ENV=${NODE_ENV}`).toThrow(/dev\/teste/);
     }
-    expect(() => captchaMode({ CAPTCHA_MODE: "turnstile", NODE_ENV: "test" } as NodeJS.ProcessEnv)).toThrow(/inválido/);
+    expect(() => captchaMode({ CAPTCHA_MODE: "hcaptcha", NODE_ENV: "test" } as NodeJS.ProcessEnv)).toThrow(/inválido/);
+    // turnstile: vale em produção, mas sem a chave secreta derruba o boot
+    expect(() => captchaMode({ CAPTCHA_MODE: "turnstile", NODE_ENV: "production" } as NodeJS.ProcessEnv)).toThrow(/TURNSTILE_SECRET_KEY/);
+    expect(captchaMode({ CAPTCHA_MODE: "turnstile", NODE_ENV: "production", TURNSTILE_SECRET_KEY: "s" } as NodeJS.ProcessEnv)).toBe("turnstile");
+  });
+});
+
+describe("NG-08: Turnstile (fetch falso, nenhuma chamada externa)", () => {
+  const fakeFetch = (reply: () => Promise<Response>) => {
+    const calls: { url: string; body: URLSearchParams }[] = [];
+    const impl = (async (url: string, init: RequestInit) => {
+      calls.push({ url, body: init.body as URLSearchParams });
+      return reply();
+    }) as unknown as typeof fetch;
+    return { impl, calls };
+  };
+  const ok = (success: boolean) => async () => new Response(JSON.stringify({ success }), { status: 200 });
+
+  it("aceita só quando o provedor responde success=true e manda secret, token e IP", async () => {
+    const { impl, calls } = fakeFetch(ok(true));
+    expect(await new TurnstileCaptcha("segredo", impl).verify("tok", "ck", "203.0.113.9")).toBe(true);
+    expect(calls[0].url).toBe(TURNSTILE_VERIFY_URL);
+    expect(Object.fromEntries(calls[0].body)).toEqual({ secret: "segredo", response: "tok", remoteip: "203.0.113.9" });
+  });
+
+  it("recusa: success=false, token ausente (sem chamar o provedor), HTTP de erro, rede fora e timeout", async () => {
+    expect(await new TurnstileCaptcha("s", fakeFetch(ok(false)).impl).verify("tok", "ck")).toBe(false);
+    const semToken = fakeFetch(ok(true));
+    expect(await new TurnstileCaptcha("s", semToken.impl).verify(undefined, "ck")).toBe(false);
+    expect(semToken.calls).toHaveLength(0);
+    expect(await new TurnstileCaptcha("s", fakeFetch(async () => new Response("x", { status: 500 })).impl).verify("tok", "ck")).toBe(false);
+    expect(await new TurnstileCaptcha("s", fakeFetch(async () => { throw new TypeError("rede"); }).impl).verify("tok", "ck")).toBe(false);
+    const lento = (async (_u: string, init: RequestInit) =>
+      new Promise((_, reject) => init.signal?.addEventListener("abort", () => reject(new Error("abort"))))) as unknown as typeof fetch;
+    expect(await new TurnstileCaptcha("s", lento, 20).verify("tok", "ck")).toBe(false);
   });
 });
 

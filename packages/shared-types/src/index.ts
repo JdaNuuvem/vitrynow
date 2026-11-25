@@ -12,15 +12,27 @@ export const phoneSchema = z
   .regex(/^[0-9+()\s-]+$/, "telefone inválido");
 
 export const orderTypeSchema = z.enum(["MESA", "DELIVERY", "BALCAO"]);
-export const orderStatusSchema = z.enum([
-  "PENDENTE",
-  "CONFIRMADO",
-  "EM_PREPARO",
-  "PRONTO",
-  "SAIU_PARA_ENTREGA",
-  "CONCLUIDO",
-  "CANCELADO",
-]);
+
+// ---- Status do pedido e papeis do painel (SSOT D3/D4): listas em ./constants (sem zod, o web importa direto) ----
+import { ORDER_STATUSES, PANEL_ROLES } from "./constants";
+export * from "./constants";
+export * from "./quote"; // SSOT D5: cotação do pedido (servidor decide, vitrine prevê)
+export const panelRoleSchema = z.enum(PANEL_ROLES);
+
+// ---- Dinheiro / mensagens (SSOT D11) ----
+export function formatCents(cents: number): string {
+  // Espaço não-quebrável (U+00A0) do Intl trocado por espaço comum: o texto ao cliente (cancelamento, cupom) é o mesmo de antes.
+  return (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }).replace(/\u00a0/g, " ");
+}
+
+export function couponMinOrderMessage(minOrderCents: number): string {
+  return `pedido mínimo para este cupom é ${formatCents(minOrderCents)}`;
+}
+
+export function minOrderMessage(minOrderCents: number): string {
+  return `pedido mínimo é ${formatCents(minOrderCents)}`;
+}
+export const orderStatusSchema = z.enum(ORDER_STATUSES);
 
 export const createOrderItemSchema = z.object({
   productId: z.string().min(1),
@@ -53,6 +65,7 @@ export const createOrderSchema = z.object({
   tipCents: z.number().int().nonnegative().max(10_000_000).optional(),
   neighborhoodId: z.string().min(1).max(50).optional(), // API-16: bairro escolhido (só entrega)
   expectedDeliveryFeeCents: z.number().int().nonnegative().max(10_000_000).optional(), // taxa que o cliente viu (RN-B9-03)
+  scheduledFor: z.string().datetime({ offset: true }).optional(), // API-40 (PRO): pedido agendado, instante ISO com fuso; 30 min a 7 dias à frente
 });
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
 
@@ -70,14 +83,26 @@ export const qrSettingsSchema = z.object({
   qrOrderingEnabled: z.boolean().optional(),
   qrOrdersNeedApproval: z.boolean().optional(),
   confirmNoApproval: z.boolean().optional(), // RN-MB-01: desligar o aceite exige confirmar o aviso
-}).refine((v) => v.qrOrderingEnabled !== undefined || v.qrOrdersNeedApproval !== undefined, "nada para alterar");
+  serviceFeePercent: z.number().int().min(0).max(30).optional(), // taxa de serviço sugerida no fechamento (0 = não cobra)
+}).refine((v) => v.qrOrderingEnabled !== undefined || v.qrOrdersNeedApproval !== undefined || v.serviceFeePercent !== undefined, "nada para alterar");
 
-// API-24 — receber a mesa (BASICO: UMA forma de pagamento, sem taxa de serviço, desconto nem divisão; RN-MB-03). O servidor soma a conta; o total do cliente só confere.
-export const receiveTableSchema = z.object({
-  paymentMethod: paymentMethodSchema,
-  changeForCents: z.number().int().positive().max(100_000_000).optional(), // dinheiro: "troco para"
-  expectedTotalCents: z.number().int().positive().max(1_000_000_000).optional(), // o que a tela mostrava: se a conta mudou, 409 TOTAL_CHANGED
+// API-24/42/43 — receber a mesa. O servidor soma a conta; o total do cliente só confere.
+// Todos os planos: taxa de serviço opcional (percentual da loja) e desconto em R$ (STAFF até o limite da loja).
+// PRO (`tab_service`): `payments` divide o total em 2 a 10 formas; senão, UMA forma em `paymentMethod`.
+export const receivePaymentPartSchema = z.object({
+  method: paymentMethodSchema,
+  amountCents: z.number().int().positive().max(1_000_000_000),
+  changeForCents: z.number().int().positive().max(100_000_000).optional(), // só dinheiro: "troco para" desta parte
 }).strict();
+export const receiveTableSchema = z.object({
+  paymentMethod: paymentMethodSchema.optional(),
+  changeForCents: z.number().int().positive().max(100_000_000).optional(), // dinheiro: "troco para"
+  payments: z.array(receivePaymentPartSchema).min(2).max(10).optional(),
+  includeServiceFee: z.boolean().optional(), // padrão: sem taxa
+  discountCents: z.number().int().nonnegative().max(1_000_000_000).optional(),
+  expectedTotalCents: z.number().int().positive().max(1_000_000_000).optional(), // o que a tela mostrava como CONTA (antes de taxa/desconto): se mudou, 409 TOTAL_CHANGED
+}).strict().refine((v) => (v.paymentMethod !== undefined) !== (v.payments !== undefined), { message: "informe paymentMethod OU payments", path: ["paymentMethod"] })
+  .refine((v) => v.payments === undefined || v.changeForCents === undefined, { message: "com payments, o troco vai em cada parte", path: ["changeForCents"] });
 export type ReceiveTableInput = z.infer<typeof receiveTableSchema>;
 
 // API-13 — pedido lançado no PAINEL (atendente). O servidor calcula todo preço (RN-B2-01); a tela manda só ids e quantidades. Sem MESA no BASICO (RN-B2-13).
@@ -183,6 +208,8 @@ export const wsServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("device.alert"), code: z.string() }),
   // API-22 (mesa): chamar garçom / pedir a conta / rajada de pedidos do QR. Só ids e o tipo; nada de dado do cliente. Painel (ADR-0002 D2-5).
   z.object({ type: z.literal("table.alert"), tableId: z.string(), kind: z.enum(["CALL_WAITER", "ASK_BILL", "BURST"]) }),
+  // Estoque: o saldo do insumo CRUZOU o mínimo (LOW) ou ficou negativo (NEGATIVE). Só o id e o tipo; o painel busca o resto. Uma vez por cruzamento.
+  z.object({ type: z.literal("stock.low"), ingredientId: z.string(), kind: z.enum(["LOW", "NEGATIVE"]) }),
   z.object({ type: z.literal("ping") }),
 ]);
 export type WsServerMessage = z.infer<typeof wsServerMessageSchema>;
@@ -206,6 +233,7 @@ export const WS_AUDIENCE: Record<WsServerMessage["type"], WsAudience> = {
   "print.stale": "panel",
   "cashier.difference_over_tolerance": "panel",
   "device.alert": "panel",
+  "stock.low": "panel", // estoque: só id do insumo e tipo; nunca o aparelho de impressão
   ping: "both",
 };
 
@@ -525,6 +553,7 @@ export const updateStoreSettingsSchema = z.object({
   pickupEnabled: z.boolean().optional(),
   hideSoldOutProducts: z.boolean().optional(),
   deliveryFeeCents: z.number().int().nonnegative().max(10_000_000).optional(),
+  timezone: z.string().min(1).max(64).optional(),
 });
 export type UpdateStoreSettingsInput = z.infer<typeof updateStoreSettingsSchema>;
 
@@ -796,3 +825,6 @@ export const campaignContentSchema = z
 export type CampaignContent = z.infer<typeof campaignContentSchema>;
 export const campaignRevisionSchema = z.object({ revision: z.number().int().nonnegative() }).strict();
 export const campaignSaveSchema = z.object({ revision: z.number().int().nonnegative(), draft: campaignContentSchema }).strict();
+
+export * from "./errorMessages";
+export * from "./stock";

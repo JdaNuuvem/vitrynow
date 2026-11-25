@@ -2,6 +2,7 @@
 // Regra de ouro: "NÃO COBRAR" só com paymentStatus = PAGO, e a API só emite PAGO com pagamento APROVADO verificado.
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore, productStore } from "./helpers";
 import type { PaymentStatus } from "@meucardapio/db";
 import { printableOrderSchema, TICKET_SCHEMA_VERSION } from "@meucardapio/shared-types";
 import { buildPrintableOrder, ticketPaymentStatus } from "../src/lib/printable";
@@ -127,7 +128,7 @@ describe("API-14 — payload do tíquete", () => {
     for (const status of ALL_PAYMENT_STATUSES) {
       const id = await place(ctx, { paymentMethod: "DINHEIRO" });
       await prisma.order.update({ where: { id }, data: { paymentMethod: "PIX" } });
-      await prisma.payment.create({ data: { orderId: id, providerPaymentId: `mp-${id}`, amountCents: 3600, status } });
+      await prisma.payment.create({ data: { orderId: id, storeId: await orderStore(id), providerPaymentId: `mp-${id}`, amountCents: 3600, status } });
       const t = (await buildPrintableOrder(id))!;
       expect(t.paymentStatus, status).toBe(esperado[status] ?? "A_COBRAR");
     }
@@ -146,7 +147,7 @@ describe("API-14 — payload do tíquete", () => {
     const ctx = await setup();
     const id = await place(ctx);
     await prisma.order.update({ where: { id }, data: { paymentMethod: "PIX" } });
-    const pay = await prisma.payment.create({ data: { orderId: id, providerPaymentId: "mp-x", amountCents: 3600, status: "APROVADO" } });
+    const pay = await prisma.payment.create({ data: { orderId: id, storeId: await orderStore(id), providerPaymentId: "mp-x", amountCents: 3600, status: "APROVADO" } });
     expect((await buildPrintableOrder(id))!.paymentStatus).toBe("PAGO");
     await prisma.payment.update({ where: { id: pay.id }, data: { status: "REEMBOLSADO" } });
     expect((await buildPrintableOrder(id))!.paymentStatus).toBe("ESTORNADO");
@@ -168,7 +169,7 @@ describe("API-14 — payload do tíquete", () => {
     const id = await place(ctx);
     await prisma.order.update({ where: { id }, data: { paymentMethod: "PIX" } });
     await prisma.payment.create({
-      data: { orderId: id, providerPaymentId: "mp-segredo-123", amountCents: 3600, status: "APROVADO", pixQrCode: "00020126-copia-e-cola-SEGREDO", pixQrCodeBase64: "QVFSQ09ERQ==", idempotencyKey: "chave-idem-SEGREDO" },
+      data: { orderId: id, storeId: await orderStore(id), providerPaymentId: "mp-segredo-123", amountCents: 3600, status: "APROVADO", pixQrCode: "00020126-copia-e-cola-SEGREDO", pixQrCodeBase64: "QVFSQ09ERQ==", idempotencyKey: "chave-idem-SEGREDO" },
     });
     const dump = JSON.stringify(await buildPrintableOrder(id));
     for (const proibido of ["mp-segredo-123", "SEGREDO", "QVFSQ09ERQ", "providerPaymentId", "pixQr", "idempotency", "token", "@"]) {

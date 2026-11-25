@@ -6,4 +6,5 @@ export interface HttpClient {
   get<T>(path: string, options?: RequestOptions): Promise<HttpResult<T>>;
   post<T>(path: string, body?: unknown, options?: RequestOptions): Promise<HttpResult<T>>;
   put<T>(path: string, body: unknown, options?: RequestOptions): Promise<HttpResult<T>>;
+  patch<T>(path: string, body: unknown, options?: RequestOptions): Promise<HttpResult<T>>;
 }

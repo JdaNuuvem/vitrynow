@@ -176,6 +176,10 @@ model Store {
   // API-22 (mesa/QR, ADR-0002): aceita pedido pelo QR; por padrão a equipe precisa aceitar (RN-MB-01).
   qrOrderingEnabled    Boolean @default(true)
   qrOrdersNeedApproval Boolean @default(true)
+  // Taxa de serviço sugerida no fechamento da mesa (0 a 30 %; 0 = a loja não cobra). Opcional em cada recebimento. Todos os planos.
+  serviceFeePercent    Int     @default(10)
+  ingredients          Ingredient[]
+  stockMovements       StockMovement[]
   tables               Table[]
   receipts             Receipt[]
   // API-25: suspensão MANUAL pela equipe da plataforma (back-office). Nulo = não suspensa. Independe da suspensão por assinatura (API-09).
@@ -320,6 +324,7 @@ model Product {
   additionals ProductAdditional[]
   optionGroups ProductOptionGroup[]
   addonOptions Option[] @relation("AddonOptions")
+  recipeItems  RecipeItem[] // ESTOQUE: ficha técnica
   orderItems  OrderItem[]
   createdAt   DateTime     @default(now())
 
@@ -332,7 +337,8 @@ model Product {
 model ProductAdditional {
   id         String  @id @default(cuid())
   productId  String
-  product    Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  storeId    String // API-48b
+  product    Product @relation(fields: [productId, storeId], references: [id, storeId], onDelete: Cascade)
   name       String
   priceCents Int
 
@@ -371,6 +377,13 @@ model Order {
   deliveryEtaMaxMinutes Int?
   tipCents       Int        @default(0) // gorjeta — já incluída em totalCents
   awaitingPayment Boolean   @default(false) // true enquanto espera confirmação de pagamento online (ex. PIX) — não entra no kanban/impressão até confirmar
+  // API-40 (PRO): pedido agendado. `held` = retido até o job `schedule.release` soltar (scheduledFor - tempo de preparo); fora do kanban/impressão até lá.
+  scheduledFor    DateTime?
+  held            Boolean   @default(false)
+  // ESTOQUE: baixa feita ao aceitar (custo das mercadorias do pedido, CMV) e estorno se cancelado depois. Idempotência pelos instantes.
+  cogsCents        Int?
+  stockDeductedAt  DateTime?
+  stockReversedAt  DateTime?
   printedAt     DateTime?
   canceledAt        DateTime?
   couponReleasedAt  DateTime? // idempotência da devolução do cupom (ADR-0007)
@@ -407,6 +420,7 @@ model Order {
   @@index([storeId, createdAt]) // histórico e kanban por período (API-54)
   @@index([storeId, tableId, status])
   @@index([storeId, deviceTokenHash])
+  @@index([held, scheduledFor]) // API-40: o job schedule.release varre só os retidos
   @@index([receiptId]) // API-24: o CREATE INDEX da migracao 500000 tem que existir no schema (drift 0)
   @@index([couponId])
   @@index([delivererId])
@@ -435,7 +449,8 @@ enum SaleUnit {
 model OrderItem {
   id           String   @id @default(cuid())
   orderId      String
-  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  storeId      String // API-48b
+  order        Order    @relation(fields: [orderId, storeId], references: [id, storeId], onDelete: Cascade)
   productId    String?
   product      Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
   productName  String   @default("") // snapshot do nome no momento do pedido — sobrevive a produto renomeado/excluído
@@ -446,21 +461,26 @@ model OrderItem {
   listPriceCents Int?
   weightGrams    Int?
   pricePerKgCents Int?
+  cogsCents       Int? // ESTOQUE: custo da linha (ficha técnica × custo médio) gravado na baixa; base da margem real por prato
 
   additionals  OrderItemAdditional[]
   options      OrderItemOption[]
 
+  @@unique([id, storeId]) // API-48b: alvo das FKs compostas de adicionais e opções
   @@index([orderId])
 }
 
 // Snapshot do adicional escolhido (nome/preço no momento do pedido — não aponta mais para
 // ProductAdditional porque o cardápio pode mudar depois sem afetar pedidos já feitos).
+// ESTOQUE: `additionalId` (sem FK) = id do adicional, que é o mesmo da opção-espelho LEGACY; a ficha técnica dela dá baixa.
 model OrderItemAdditional {
   id          String    @id @default(cuid())
   orderItemId String
-  orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  storeId     String // API-48b
+  orderItem   OrderItem @relation(fields: [orderItemId, storeId], references: [id, storeId], onDelete: Cascade)
   name        String
   priceCents  Int
+  additionalId String?
 
   @@index([orderItemId])
 }
@@ -554,6 +574,7 @@ model Option {
   productId   String?
   priceSource OptionPriceSource @default(OWN)
   product     Product?          @relation("AddonOptions", fields: [productId, storeId], references: [id, storeId], onDelete: NoAction)
+  recipeItems OptionRecipeItem[]
 
   @@unique([id, storeId])
   @@index([groupId])
@@ -583,14 +604,107 @@ model ProductOptionGroup {
 model OrderItemOption {
   id          String          @id @default(cuid())
   orderItemId String
-  orderItem   OrderItem       @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  storeId     String // API-48b
+  orderItem   OrderItem       @relation(fields: [orderItemId, storeId], references: [id, storeId], onDelete: Cascade)
   groupName   String
   name        String
   priceCents  Int // preço unitário da opção (no grupo BASE, o preço-base da variação)
   quantity    Int             @default(1)
   priceMode   OptionPriceMode @default(SUM)
+  optionId    String? // ESTOQUE: de qual opção veio (sem FK: a opção pode ser apagada depois); a ficha técnica da opção dá baixa
 
   @@index([orderItemId])
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// ESTOQUE E LUCRO (todos os planos). Insumo em UNIDADE BASE inteira (grama, mililitro ou unidade). Custo médio ponderado em
+// MILÉSIMOS DE CENTAVO por unidade base (R$ 40,00/kg = 4 centavos/g = 4000). Toda mudança de saldo é uma StockMovement
+// imutável; o saldo do insumo é o cache delas (conferido pelo teste). A venda grava o custo DO MOMENTO: subir o preço da
+// carne não muda o lucro de um mês já fechado.
+enum StockUnit {
+  G
+  ML
+  UN
+}
+
+enum StockMovementType {
+  PURCHASE      // compra/entrada, com custo (recalcula o custo médio)
+  SALE          // baixa automática ao ACEITAR o pedido (ficha técnica)
+  SALE_REVERSAL // estorno da baixa quando o pedido aceito é cancelado
+  WASTE         // desperdício no preparo (queimou, caiu, erro)
+  SPOILAGE      // estragou/venceu
+  ADJUSTMENT    // ajuste de contagem (só o dono)
+}
+
+model Ingredient {
+  id                 String    @id @default(cuid())
+  storeId            String
+  store              Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  name               String
+  unit               StockUnit
+  stockQty           Int       @default(0) // saldo em unidade base; pode ficar NEGATIVO (só alerta)
+  minStockQty        Int? // abaixo disto, alerta de estoque baixo
+  unitCostMillicents Int       @default(0) // custo médio ponderado por unidade base, em milésimos de centavo
+  active             Boolean   @default(true)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  recipeItems       RecipeItem[]
+  optionRecipeItems OptionRecipeItem[]
+  movements         StockMovement[]
+
+  @@unique([storeId, name])
+  @@unique([id, storeId])
+  @@index([storeId])
+}
+
+// Ficha técnica do produto: quanto de cada insumo UMA unidade vendida consome. Produto por peso (KG/HG): quantidade por 1 kg vendido.
+model RecipeItem {
+  id           String     @id @default(cuid())
+  storeId      String
+  productId    String
+  product      Product    @relation(fields: [productId, storeId], references: [id, storeId], onDelete: Cascade)
+  ingredientId String
+  ingredient   Ingredient @relation(fields: [ingredientId, storeId], references: [id, storeId], onDelete: NoAction)
+  quantity     Int // unidade base do insumo
+
+  @@unique([productId, ingredientId])
+  @@index([storeId])
+}
+
+// Ficha técnica da opção (ex.: "bacon extra" consome 30 g de bacon), multiplicada pela quantidade escolhida.
+model OptionRecipeItem {
+  id           String     @id @default(cuid())
+  storeId      String
+  optionId     String
+  option       Option     @relation(fields: [optionId, storeId], references: [id, storeId], onDelete: Cascade)
+  ingredientId String
+  ingredient   Ingredient @relation(fields: [ingredientId, storeId], references: [id, storeId], onDelete: NoAction)
+  quantity     Int
+
+  @@unique([optionId, ingredientId])
+  @@index([storeId])
+}
+
+model StockMovement {
+  id                 String            @id @default(cuid())
+  storeId            String
+  ingredientId       String
+  store              Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  ingredient         Ingredient        @relation(fields: [ingredientId, storeId], references: [id, storeId], onDelete: NoAction) // histórico nunca some: insumo só se desativa (apagar insumo com movimentação é recusado pelo banco)
+  type               StockMovementType
+  quantity           Int // COM SINAL, unidade base (entrada > 0, saída < 0)
+  unitCostMillicents Int // custo unitário aplicado (compra: o pago; saída: o médio do momento)
+  costCents          Int // valor da movimentação COM SINAL, centavos (arredondado)
+  orderId            String? // SALE / SALE_REVERSAL
+  reason             String? // WASTE/SPOILAGE/ADJUSTMENT: motivo em lista fechada (sem texto livre)
+  userId             String? // quem lançou (null = sistema)
+  createdAt          DateTime          @default(now())
+
+  @@index([storeId, createdAt])
+  @@index([storeId, type, createdAt])
+  @@index([ingredientId, createdAt])
+  @@index([orderId])
 }
 
 // Pedidos de "refaça a vitrine desta loja" para o web (API-58, ADR-0013 §2.4). Uma linha pendente por slug: várias
@@ -608,7 +722,8 @@ model MenuRevalidation {
 model OrderStatusHistory {
   id        String      @id @default(cuid())
   orderId   String
-  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  storeId   String // API-48b
+  order     Order       @relation(fields: [orderId, storeId], references: [id, storeId], onDelete: Cascade)
   status    OrderStatus
   createdAt DateTime    @default(now())
   userId          String? // quem fez (painel); null = cliente/sistema
@@ -645,13 +760,15 @@ model CashSession {
 
   movements CashMovement[]
 
+  @@unique([id, storeId]) // API-48b: alvo da FK composta de CashMovement
   @@index([storeId, closedAt])
 }
 
 model CashMovement {
   id            String           @id @default(cuid())
   cashSessionId String
-  cashSession   CashSession      @relation(fields: [cashSessionId], references: [id], onDelete: Cascade)
+  storeId       String // API-48b
+  cashSession   CashSession      @relation(fields: [cashSessionId, storeId], references: [id, storeId], onDelete: Cascade)
   type          CashMovementType
   amountCents   Int
   notes         String?
@@ -692,7 +809,8 @@ model Coupon {
 model Payment {
   id                String        @id @default(cuid())
   orderId           String        @unique
-  order             Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  storeId           String // API-48b
+  order             Order         @relation(fields: [orderId, storeId], references: [id, storeId], onDelete: Cascade)
   provider          String        @default("mercadopago")
   providerPaymentId String?       @unique
   idempotencyKey    String?       @unique // gerada ANTES de chamar o provedor (cobrança sem órfã; ADR-0007 §6.2)
@@ -717,6 +835,7 @@ model Payment {
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
+  @@unique([orderId, storeId]) // API-48b: 1:1 com o pedido pela FK composta
   @@index([orderId])
   @@index([providerPaymentId])
 }
@@ -833,6 +952,10 @@ model Subscription {
   trialEndsAt      DateTime
   currentPeriodEnd DateTime?
   canceledAt       DateTime?
+  // Job subscription.transition: última fase OBSERVADA (TRIAL|ACTIVE|READ_ONLY|SUSPENDED) e quando mudou. Só histórico/auditoria:
+  // quem decide o acesso continua sendo `phaseOf` na hora da leitura (pagar libera na hora, sem esperar o job).
+  phase            String?
+  phaseChangedAt   DateTime?
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
 
