@@ -1,5 +1,5 @@
 import { clientIpOf } from "../lib/clientIp";
-import { minOrderMessage } from "@meucardapio/shared-types";
+import { minOrderMessage, QUEUED_ORDER_STATUSES } from "@meucardapio/shared-types";
 import { buildOrderLines } from "../lib/orderItems";
 import { quoteOrder } from "../lib/quoteOrder";
 import { randomBytes } from "node:crypto";
@@ -349,7 +349,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return reply.code(400).send({ error: minOrderMessage(store.minOrderCents), code: "MIN_ORDER" });
     }
 
-    if ((await prisma.order.count({ where: { storeId: store.id, tableId: table.id, status: { in: ["PENDENTE", "CONFIRMADO", "EM_PREPARO"] } } })) >= QR_OPEN_CAP) {
+    if ((await prisma.order.count({ where: { storeId: store.id, tableId: table.id, status: { in: [...QUEUED_ORDER_STATUSES] } } })) >= QR_OPEN_CAP) {
       return reply.code(429).send({ error: "Há muitos pedidos abertos nesta mesa. Chame o atendente.", code: "TABLE_BUSY" });
     }
 
