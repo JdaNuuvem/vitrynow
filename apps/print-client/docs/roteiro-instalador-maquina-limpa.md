@@ -2,14 +2,14 @@
 
 > **CL-15 (decisão do Claudio):** este teste é só antes do piloto; não faz parte do desenvolvimento. O roteiro fica pronto para quando ele pedir.
 
-Objetivo: provar que o instalador (`MeuCardapio-PrintClient-Setup.exe`) instala, atualiza e desinstala sem deixar lixo, **numa máquina que nunca viu o app**. **Não faça isto no PC do Claudio** (nem em loja real): use uma VM do Windows 10/11 limpa ou o Windows Sandbox.
+Objetivo: provar que o instalador (`Vitry-Impressao-Setup.exe`) instala, atualiza e desinstala sem deixar lixo, **numa máquina que nunca viu o app**. **Não faça isto no PC do Claudio** (nem em loja real): use uma VM do Windows 10/11 limpa ou o Windows Sandbox.
 O Windows Sandbox **não está instalado** neste computador (ativar exige administrador e reinício, e é decisão do Claudio). Alternativa: qualquer VM (Hyper-V, VirtualBox) com um snapshot limpo.
 
-**Antes:** gere o instalador com `tools\build-installer.ps1` (imprime o SHA-256 do instalador e do EXE) e anote os dois. Use **chave de impressora de TESTE** de uma API local/DEV, nunca a de uma loja. Sem Authenticode (adiado): o Windows vai avisar, é esperado (item 2).
+**Antes:** gere o instalador com `tools\build-installer.ps1` (imprime o SHA-256 do instalador e do EXE) e anote os dois. Use **chave de impressora de TESTE** de uma API local/DEV, nunca a de uma loja. Sem certificado configurado o instalador sai sem Authenticode e o Windows avisa "editor desconhecido" (item 2); com certificado (README, Assinatura) confira em Propriedades > Assinaturas digitais que o editor é Vitry.
 
 | # | Faça | Esperado | OK |
 |---|---|---|---|
-| 1 | Copie só o instalador para a máquina limpa; `Get-FileHash .\MeuCardapio-PrintClient-Setup.exe` | O SHA-256 é **igual** ao impresso pelo build | ☐ |
+| 1 | Copie só o instalador para a máquina limpa; `Get-FileHash .\Vitry-Impressao-Setup.exe` | O SHA-256 é **igual** ao impresso pelo build | ☐ |
 | 2 | Dê duplo clique | SmartScreen/Smart App Control pode avisar (EXE sem assinatura): **anote exatamente o que apareceu** (aviso, bloqueio total ou nada) e se foi possível seguir | ☐ |
 | 3 | Instale como **usuário comum** (sem administrador) | Instala sem pedir senha de admin (o instalador é por usuário); idioma português | ☐ |
 | 4 | Marque "Iniciar automaticamente com o Windows" e conclua | Pasta `%LOCALAPPDATA%\Programs\MeuCardapio\PrintClient` com o EXE; atalho no Menu Iniciar e na Inicialização | ☐ |
@@ -43,4 +43,4 @@ Arquivo `.wsb` de exemplo (salve fora do repositório, ajuste os caminhos; a pas
 O Sandbox descarta tudo ao fechar: os itens 9 (reiniciar) e 11–13 só valem numa VM com snapshot, não no Sandbox.
 
 ## Limites
-Não testa impressora térmica real (roteiro em `roteiro-impressora-real.md`), assinatura Authenticode (adiada), nem a chave de release de produção (CL-10, do Claudio).
+Não testa impressora térmica real (roteiro em `roteiro-impressora-real.md`), nem a chave de release de produção (CL-10, do Claudio).

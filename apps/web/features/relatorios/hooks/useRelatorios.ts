@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import type { ReportSummary } from "@/core/domain/reports";
 import { usePanelServices } from "@/core/services/PanelServices";
 import { defaultRange, toReportRange, type DateRange } from "../dateRange";
+import { useStoreTimezone } from "@/features/shell/useStoreTimezone";
 
 type Result = {
   key: string;
@@ -17,14 +18,15 @@ type Result = {
 export function useRelatorios() {
   const router = useRouter();
   const { reports } = usePanelServices();
-  const [range, setRange] = useState<DateRange>(defaultRange);
+  const timeZone = useStoreTimezone();
+  const [range, setRange] = useState<DateRange>(() => defaultRange(new Date(), timeZone));
   const [attempt, setAttempt] = useState(0);
   const [result, setResult] = useState<Result | null>(null);
   const key = [range.from, range.to].join("/");
 
   useEffect(() => {
     let active = true;
-    const bounds = toReportRange(range);
+    const bounds = toReportRange(range, timeZone);
     if (!Number.isFinite(bounds.from.getTime()) || !Number.isFinite(bounds.to.getTime()) || bounds.from > bounds.to) {
       setResult({ key, loading: false, error: "Informe um período com a data inicial anterior ou igual à final." });
       return;
@@ -51,7 +53,7 @@ export function useRelatorios() {
     }
     void load();
     return () => { active = false; };
-  }, [key, range, reports, router, attempt]);
+  }, [key, range, reports, router, attempt, timeZone]);
 
   const current = result?.key === key ? result : null;
   return {

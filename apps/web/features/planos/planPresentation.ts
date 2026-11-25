@@ -1,4 +1,5 @@
 import type { Subscription } from "@/core/domain/subscription";
+import { activeStoreTimezone, formatInStoreTimezone } from "@/shared/format/storeTime";
 
 export const FEATURE_LABELS: Record<string, string> = {
   multi_user: "Usuários da equipe com acesso limitado",
@@ -16,7 +17,7 @@ export type SubscriptionDescription = {
 };
 
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
+  return formatInStoreTimezone(iso, activeStoreTimezone(), { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 function days(count: number): string {

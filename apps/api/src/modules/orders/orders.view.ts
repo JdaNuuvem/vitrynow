@@ -1,4 +1,5 @@
 import type { Order, OrderItem, OrderItemAdditional, OrderItemOption, Payment, Deliverer } from "@meucardapio/db";
+import { panelRoleSchema, type PanelRole } from "@meucardapio/shared-types";
 import { MAX_REFUND_AUTO_ATTEMPTS } from "../../lib/refundPolicy";
 
 // Visão do pedido para o PAINEL (PRD-15, Nightingale API-54a). Regra geral: resposta de pedido SEMPRE por allowlist —
@@ -29,8 +30,8 @@ export function maskPhone(phone: string | null | undefined): string | null {
 }
 
 // OWNER vê contato completo; STAFF vê completo em pedido aberto ou encerrado há < 24 h e mascarado depois.
-export function contactAccessFor(role: "OWNER" | "STAFF", order: { status: string }, closedAt: Date | null, now: Date): ContactAccess {
-  if (role === "OWNER") return "FULL";
+export function contactAccessFor(role: PanelRole, order: { status: string }, closedAt: Date | null, now: Date): ContactAccess {
+  if (role === panelRoleSchema.enum.OWNER) return "FULL";
   const final = order.status === "CONCLUIDO" || order.status === "CANCELADO";
   if (!final) return "FULL";
   if (!closedAt) return "MASKED"; // sem data de encerramento confiável: o mais restritivo

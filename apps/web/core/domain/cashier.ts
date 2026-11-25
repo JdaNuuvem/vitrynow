@@ -1,3 +1,4 @@
+import type { PanelRole } from "@meucardapio/shared-types/constants";
 export type CashMovementType = "SUPRIMENTO" | "SANGRIA";
 
 export type CashMovement = {
@@ -7,7 +8,7 @@ export type CashMovement = {
   notes: string | null;
   reason?: string | null;
   reasonText?: string | null;
-  createdByRole?: "OWNER" | "STAFF" | null;
+  createdByRole?: PanelRole | null;
   createdAt: string;
 };
 
@@ -81,7 +82,7 @@ export type CashClosedSession = {
   openingBalanceCents: number;
   openedAt: string;
   closedAt: string;
-  closedByRole: "OWNER" | "STAFF" | null;
+  closedByRole: PanelRole | null;
   closingBalanceCents?: number | null;
   expectedClosingCents?: number | string | null;
   differenceCents?: number | string | null;

@@ -1,4 +1,5 @@
 import { Prisma, type prisma as prismaClient } from "@meucardapio/db";
+import { panelRoleSchema, type PanelRole } from "@meucardapio/shared-types";
 import type { AnonymizeCustomerInput } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
 import { ORDER_TX_OPTIONS } from "../../lib/order-code";
@@ -12,7 +13,7 @@ type Db = typeof prismaClient;
 // LGPD (ADR-0014 §3.1, spec do Leonardo RN-PV-01..10): ANONIMIZAR, não destruir. Zera nome, telefone, endereço, observações do cliente
 // e a observação interna; FICAM código, data, tipo, itens, valores, desconto, taxa, gorjeta, forma de pagamento, status e histórico,
 // então caixa e relatórios continuam fechando. Só pedido ENCERRADO; irreversível.
-export type PrivacyActor = { storeId: string; userId: string; role: "OWNER" | "STAFF" };
+export type PrivacyActor = { storeId: string; userId: string; role: PanelRole };
 export type AnonymizeTarget = { phone?: string; orderCode?: string };
 
 type Match = { id: string; code: string; phoneDigits: string; status: string; awaitingPayment: boolean; refundLockedAt: Date | null; paymentStatus: string | null; createdAt: Date; hasData: boolean };
@@ -178,6 +179,6 @@ export class PrivacyService {
   }
 
   private assertOwner(actor: PrivacyActor) {
-    if (actor.role !== "OWNER") throw err(403, "FORBIDDEN_ROLE", "Só o dono da loja pode fazer isso.");
+    if (actor.role !== panelRoleSchema.enum.OWNER) throw err(403, "FORBIDDEN_ROLE", "Só o dono da loja pode fazer isso.");
   }
 }

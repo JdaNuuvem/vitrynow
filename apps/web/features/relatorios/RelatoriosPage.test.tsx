@@ -10,6 +10,8 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock("@/core/session/useCurrentRole", () => ({ useCurrentRole: () => state.role }));
 vi.mock("@/features/inicio/hooks/useHiddenValues", () => ({ useHiddenValues: () => ({ hidden: state.hidden, toggle: () => {} }) }));
+// A seção avançada (API-45) busca dados por conta própria e tem teste próprio (AdvancedReports.test.tsx).
+vi.mock("./components/AdvancedReports", () => ({ AdvancedReports: () => null }));
 vi.mock("./hooks/useRelatorios", () => ({
   useRelatorios: () => ({ summary: state.summary, range: { from: "2026-11-01", to: "2026-11-18" }, setRange: () => {}, reload: () => {}, loading: false }),
 }));
@@ -55,6 +57,6 @@ describe("relatório por papel", () => {
     expect(container).toHaveTextContent("R$ 23,50");
     state.hidden = true;
     rerender(<RelatoriosPage />);
-    expect(container.innerHTML).not.toMatch(/R\$|23,50/);
+    expect(container.innerHTML).not.toMatch(/R\$\s?\d|23,50/); // oculto = "R$ ••••" (SSOT D11): nenhum valor vaza
   });
 });

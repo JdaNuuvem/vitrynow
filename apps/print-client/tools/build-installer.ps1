@@ -1,13 +1,15 @@
 # Monta o instalador do print-client de ponta a ponta (PC-09), sem instalar nada:
 #   1) build.ps1 (EXE deterministico, libs conferidas, versao do EXE = installer.iss)
-#   2) ISCC (Inno Setup 6) -> bin\Installer\MeuCardapio-PrintClient-Setup.exe
-#   3) scan-identity.ps1 (nenhum rastro do terceiro no codigo, no EXE e no instalador)
-#   4) imprime os SHA-256 (EXE e instalador) para o changelog / manifesto de update (tools\sign-update.ps1)
-# O EXE e reprodutivel (mesma fonte => mesmo hash). O instalador NAO e bit a bit reprodutivel (o Inno grava data de
-# compilacao); o que vale e o hash do EXE dentro dele e o hash do instalador publicado.
+#   2) assina o EXE (Authenticode, PC-13) quando ha certificado configurado (tools\sign-code.ps1)
+#   3) ISCC (Inno Setup 6) -> bin\Installer\Vitry-Impressao-Setup.exe, e assina o instalador
+#   4) scan-identity.ps1 (nenhum rastro do terceiro no codigo, no EXE e no instalador)
+#   5) imprime os SHA-256 (EXE e instalador) para o changelog / manifesto de update (tools\sign-update.ps1)
+# O EXE SEM assinatura e reprodutivel (mesma fonte => mesmo hash; build.ps1 imprime esse hash). A assinatura muda o hash do arquivo final:
+# os dois aparecem no fim. -RequireSignature (use em release publicada) FALHA se nao houver certificado.
 param(
     [string]$RoslynDir = "",
-    [string]$Iscc = ""
+    [string]$Iscc = "",
+    [switch]$RequireSignature
 )
 $ErrorActionPreference = "Stop"
 $base = Split-Path -Parent $PSScriptRoot
@@ -17,8 +19,17 @@ if (-not $Iscc) {
 }
 if (-not $Iscc -or -not (Test-Path $Iscc)) { throw "Inno Setup 6 nao encontrado. Instale (winget install JRSoftware.InnoSetup) ou passe -Iscc <caminho do ISCC.exe>." }
 
+$sign = Join-Path $PSScriptRoot "sign-code.ps1"
+& $sign -Check | Out-Null; $hasCert = ($LASTEXITCODE -eq 0)
+if ($RequireSignature -and -not $hasCert) { throw "-RequireSignature: nenhum certificado configurado (VITRY_SIGN_THUMBPRINT ou VITRY_SIGN_PFX)." }
+
 & (Join-Path $base "build.ps1") -RoslynDir $RoslynDir
 if ($LASTEXITCODE -ne 0) { throw "build.ps1 falhou ($LASTEXITCODE)" }
+
+$exe = Join-Path $base "bin\Release\Vitry Impressao.exe"
+if (-not (Test-Path $exe)) { throw "EXE nao encontrado em $exe" }
+$exeUnsigned = (Get-FileHash $exe -Algorithm SHA256).Hash
+if ($hasCert) { & $sign -Files $exe }
 
 Push-Location $base
 try {
@@ -26,14 +37,15 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "ISCC falhou ($LASTEXITCODE)" }
 } finally { Pop-Location }
 
-$setup = Join-Path $base "bin\Installer\MeuCardapio-PrintClient-Setup.exe"
+$setup = Join-Path $base "bin\Installer\Vitry-Impressao-Setup.exe"
 if (-not (Test-Path $setup)) { throw "instalador nao foi gerado em $setup" }
+if ($hasCert) { & $sign -Files $setup }
 
 & (Join-Path $PSScriptRoot "scan-identity.ps1") -Root $base
 if ($LASTEXITCODE -ne 0) { throw "scan-identity encontrou identidade do terceiro" }
 
-$exe = Join-Path $base "bin\Release\MeuCardapio - Impressao.exe"
 Write-Host ""
-Write-Host ("EXE        SHA256 " + (Get-FileHash $exe -Algorithm SHA256).Hash + "  (" + (Get-Item $exe).Length + " bytes)")
-Write-Host ("Instalador SHA256 " + (Get-FileHash $setup -Algorithm SHA256).Hash + "  (" + (Get-Item $setup).Length + " bytes)")
-Write-Host "Instalador sem assinatura de codigo (Authenticode): Windows/SmartScreen mostra 'editor desconhecido' ate o PC-13 (gasto: aval do Claudio)." -ForegroundColor Yellow
+Write-Host ("EXE (fonte, sem assinatura) SHA256 " + $exeUnsigned + "  <- reprodutivel")
+if ($hasCert) { Write-Host ("EXE assinado                SHA256 " + (Get-FileHash $exe -Algorithm SHA256).Hash) }
+Write-Host ("Instalador                  SHA256 " + (Get-FileHash $setup -Algorithm SHA256).Hash + "  (" + (Get-Item $setup).Length + " bytes)  <- vai no manifesto de update")
+if (-not $hasCert) { Write-Host "Instalador SEM assinatura de codigo: Windows/SmartScreen mostra 'editor desconhecido'. Configure o certificado (README, Assinatura)." -ForegroundColor Yellow }

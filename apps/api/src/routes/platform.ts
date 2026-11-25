@@ -1,3 +1,4 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import { clientIpOf } from "../lib/clientIp";
 import { randomBytes } from "node:crypto";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
@@ -192,7 +193,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
           OR: [
             { name: { contains: q, mode: "insensitive" } },
             { slug: { contains: q, mode: "insensitive" } },
-            { users: { some: { role: "OWNER", email: { contains: q, mode: "insensitive" } } } },
+            { users: { some: { role: panelRoleSchema.enum.OWNER, email: { contains: q, mode: "insensitive" } } } },
           ],
         } : {}),
     };
@@ -211,7 +212,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
           slug: true,
           createdAt: true,
           platformSuspendedAt: true,
-          users: { where: { role: "OWNER" }, select: { email: true }, orderBy: { createdAt: "asc" }, take: 1 },
+          users: { where: { role: panelRoleSchema.enum.OWNER }, select: { email: true }, orderBy: { createdAt: "asc" }, take: 1 },
           subscription: { include: { plan: true } },
           paymentAccounts: { where: { status: "CONNECTED" }, select: { id: true }, take: 1 },
           deviceTokens: { where: { revokedAt: null }, select: { lastSeenAt: true } },
@@ -254,7 +255,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
         acceptingOrders: true,
         platformSuspendedAt: true,
         platformSuspendedReason: true,
-        users: { where: { role: "OWNER" }, select: { email: true }, orderBy: { createdAt: "asc" }, take: 1 },
+        users: { where: { role: panelRoleSchema.enum.OWNER }, select: { email: true }, orderBy: { createdAt: "asc" }, take: 1 },
         subscription: {
           include: { plan: true, payments: { orderBy: { createdAt: "desc" }, take: 20, select: { id: true, planCode: true, status: true, amountCents: true, createdAt: true } } },
         },
@@ -416,7 +417,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
     }
     const store = await prisma.store.findUnique({
       where: { id: storeId },
-      select: { id: true, name: true, users: { where: { role: "OWNER" }, select: { email: true }, orderBy: { createdAt: "asc" }, take: 1 } },
+      select: { id: true, name: true, users: { where: { role: panelRoleSchema.enum.OWNER }, select: { email: true }, orderBy: { createdAt: "asc" }, take: 1 } },
     });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });
 

@@ -1,15 +1,11 @@
 import type { OrderDetail } from "@/core/domain/orderDetail";
 import { formatCents } from "@/shared/format/money";
+import { orderLabel } from "@/shared/format/orderCode";
+import { whatsappHref as whatsappLink } from "@/shared/format/phone";
 
 // Funções puras do detalhe do pedido (spec 11, regras do Leonardo). Nada aqui envia nada: só monta texto e links
 // que a pessoa decide abrir (ligar, WhatsApp, mapa).
 
-const digitsOf = (value: string) => value.replace(/\D/g, "");
-
-// Telefone do Brasil sem DDI (10 ou 11 dígitos) ganha 55; com DDI fica como está.
-function withCountryCode(digits: string): string {
-  return digits.length <= 11 ? `55${digits}` : digits;
-}
 
 // Só existe link de contato com o telefone COMPLETO. Mascarado (`contactMasked`) ou ausente: sem link.
 export function canContact(order: Pick<OrderDetail, "customerPhone" | "contactMasked">): boolean {
@@ -17,13 +13,11 @@ export function canContact(order: Pick<OrderDetail, "customerPhone" | "contactMa
   return Boolean(order.customerPhone) && !order.contactMasked && !/[*•]/.test(order.customerPhone ?? "");
 }
 
-export function telHref(phone: string): string {
-  return `tel:+${withCountryCode(digitsOf(phone))}`;
-}
+export { telHref } from "@/shared/format/phone";
 
 // WhatsApp abre o chat FORA do app, com o texto "Pedido #0123" e mais nada (sem nome, valor nem endereço).
 export function whatsappHref(phone: string, code: string): string {
-  return `https://wa.me/${withCountryCode(digitsOf(phone))}?text=${encodeURIComponent(`Pedido #${code}`)}`;
+  return whatsappLink(phone, orderLabel(code)) ?? "";
 }
 
 // Mapa externo, aberto só por ação da pessoa (decisão do Leonardo, reversível).

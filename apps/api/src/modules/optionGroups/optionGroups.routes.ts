@@ -1,3 +1,4 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { optionGroupInputSchema, productOptionGroupsSchema } from "@meucardapio/shared-types";
 import { useDomainErrors } from "../../shared/errors";
@@ -12,7 +13,7 @@ export function buildOptionGroupRoutes(service: OptionGroupsService): FastifyPlu
       preHandler: [
         app.requirePanelAuth,
         async (request: FastifyRequest, reply: FastifyReply) => {
-          if (request.user.role !== "OWNER") return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
+          if (request.user.role !== panelRoleSchema.enum.OWNER) return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
         },
       ],
     };

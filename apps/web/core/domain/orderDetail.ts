@@ -1,3 +1,4 @@
+import type { PanelRole } from "@meucardapio/shared-types/constants";
 import type { Order, PaymentStatus } from "./orders";
 import type { OrderOptionSnapshot } from "./storefront";
 
@@ -31,6 +32,9 @@ export type DetailPayment = {
   refundPending: boolean;
   reconcileRequired: boolean;
   refundManual?: boolean;
+  /** API-69: estorno que passou do teto de tentativas automáticas (só o dono encerra). */
+  refundStuck?: boolean;
+  refundAbandoned?: boolean;
 };
 
 // Quem cancelou e por quê (só em pedido cancelado). `by` é o PAPEL (nunca o e-mail).
@@ -39,7 +43,7 @@ export type DetailCancel = {
   reasonText: string | null;
   customerMessage: string | null;
   at: string;
-  by: "OWNER" | "STAFF" | "CUSTOMER" | "SYSTEM" | string;
+  by: PanelRole | "CUSTOMER" | "SYSTEM" | string;
 };
 
 export type OrderDetail = Omit<Order, "items" | "payment"> & {
@@ -53,6 +57,8 @@ export type OrderDetail = Omit<Order, "items" | "payment"> & {
   // (falha fechada), devolveu o telefone e o endereço mascarados. Não é questão de papel: tentar de novo pode resolver.
   contactUnavailable?: "AUDIT_UNAVAILABLE";
   notes: string | null;
+  /** Observação INTERNA da equipe (o cliente nunca vê; não sai na lista nem no histórico). */
+  internalNote?: string | null;
   subtotalCents: number;
   discountCents: number;
   deliveryFeeCents: number;

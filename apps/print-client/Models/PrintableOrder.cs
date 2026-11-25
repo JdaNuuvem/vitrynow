@@ -70,6 +70,10 @@ namespace MeuCardapio.PrintClient.Models
             set { NothingToChargeRaw = value.HasValue ? new Newtonsoft.Json.Linq.JValue(value.Value) : null; }
         }
         [JsonProperty("tableLabel")] public string TableLabel { get; set; }
+        // v4: rodada da mesa, quem pediu (garçom/cliente) e LGPD (dados do cliente anonimizados)
+        [JsonProperty("round")] public int? Round { get; set; }
+        [JsonProperty("requestedBy")] public string RequestedBy { get; set; }
+        [JsonProperty("customerRemoved")] public bool? CustomerRemoved { get; set; }
         // Job TEST sem tíquete do servidor: o cliente imprime o tíquete de teste próprio (não vem da API).
         [JsonIgnore] public bool IsTest { get; set; }
         [JsonProperty("createdAt")] public string CreatedAt { get; set; }

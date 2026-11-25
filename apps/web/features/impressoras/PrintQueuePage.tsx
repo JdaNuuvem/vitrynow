@@ -8,11 +8,12 @@ import { useCurrentRole } from "@/core/session/useCurrentRole";
 import { Button, PageHeading, Panel, StateMessage, StatusBadge } from "@/shared/design/components";
 import { Icon } from "@/shared/icons/Icon";
 import "./impressoras.css";
+import { activeStoreTimezone, formatInStoreTimezone } from "@/shared/format/storeTime";
 
 const status = { PENDING: "Na fila", CLAIMED: "Em impressão", PRINTED: "Impresso", FAILED: "Falhou", CANCELED: "Cancelado", STALE: "Aguardando retomada" };
 const statusTone = { PENDING: "info", CLAIMED: "info", PRINTED: "success", FAILED: "danger", CANCELED: "neutral", STALE: "warning" } as const;
 const kind = { ORDER_KITCHEN: "Tíquete da cozinha", ORDER_REPRINT: "Segunda via", ORDER_CANCEL_NOTICE: "Aviso de cancelamento", TEST: "Teste de impressão" };
-const date = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
+const date = { format: (value: Date | number) => formatInStoreTimezone(value, activeStoreTimezone(), { dateStyle: "short", timeStyle: "short" }) };
 
 export function PrintQueuePage() {
   const { printQueue } = usePanelServices();

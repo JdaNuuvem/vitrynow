@@ -1,9 +1,12 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { logAudit } from "../lib/audit";
 import { storeTimeZone } from "../lib/storeTz";
 import { CSV_TABLES, MAX_REPORT_DAYS, buildReport, reportRows, resolveRange, toCsv, type CsvTable } from "../lib/reports";
 import { REPORT_RULE_CHANGED_AT } from "../lib/saleLines";
+import { buildAdvancedReport } from "../lib/advancedReports";
+import { requireFeature } from "../lib/subscription";
 
 // SEC-16 — janela máxima e teto de pedidos por consulta; passou disso, 400/422 com a instrução de reduzir o período (nunca resposta parcial silenciosa).
 // A agregação agora é no banco (API-20), mas o teto continua: ele limita também o CSV. O resumo só traz agregados e nomes de produto/entregador:
@@ -70,7 +73,16 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
     if (!range) return reply;
     const full = { ...(await buildReport(storeId, range)), ruleChangedAt: REPORT_RULE_CHANGED_AT };
     // RN-R-06 / CA-R-15: dinheiro é do OWNER. O STAFF recebe só CONTAGENS (campos em reais AUSENTES, não zerados).
-    return request.user.role === "OWNER" ? full : staffReportView(full);
+    return request.user.role === panelRoleSchema.enum.OWNER ? full : staffReportView(full);
+  });
+
+  // API-45 (PRO): relatórios avançados — por hora, por dia da semana, comparação com o período anterior, por funcionário e clientes
+  // novos x recorrentes. Só o dono (dinheiro, RN-R-06); recurso fora do plano = 402 FEATURE_LOCKED.
+  app.get("/api/reports/advanced", { preHandler: [app.requirePanelAuth, app.requireOwner, requireFeature("advanced_reports")] }, async (request, reply) => {
+    const { storeId } = request.user;
+    const range = await periodOrReply(storeId, request.query as { from?: unknown; to?: unknown }, reply);
+    if (!range) return reply;
+    return buildAdvancedReport(storeId, range);
   });
 
   // CSV de cada tabela e do resumo (B14.2). Só o dono baixa (dado financeiro completo; SEC-16); toda exportação fica na auditoria.

@@ -112,6 +112,14 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/auth/verify-email/resend": "billing", // API-26: conta, tambem liberado na Suspensao
   "POST /api/onboarding/steps/:step": "blocked", // API-26: cadastro guiado
   // — Lote 2 (Atlas): rotas das branches integradas; classes conservadoras, a revisar com cada dono (Nightingale/Leonardo) —
+  // Estoque e lucro: lançar e configurar é escrita comum (Consulta bloqueia); a baixa da venda vai junto do pedido.
+  "POST /api/stock/ingredients": "blocked",
+  "PATCH /api/stock/ingredients/:id": "blocked",
+  "POST /api/stock/ingredients/:id/purchase": "blocked",
+  "POST /api/stock/ingredients/:id/loss": "blocked",
+  "POST /api/stock/ingredients/:id/count": "blocked",
+  "PUT /api/stock/products/:id/recipe": "blocked",
+  "PUT /api/stock/options/:id/recipe": "blocked",
   "POST /api/tables": "blocked", // API-22: cadastro de mesa
   "PATCH /api/tables/:id": "blocked",
   "POST /api/tables/:id/regenerate-qr": "blocked",

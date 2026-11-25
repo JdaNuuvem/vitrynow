@@ -1,3 +1,4 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import multipart from "@fastify/multipart";
 import type { FastifyPluginAsync } from "fastify";
 import { MAX_UPLOAD_BYTES } from "../../lib/imagePipeline";
@@ -22,7 +23,7 @@ export function buildMediaRoutes(service: MediaService): FastifyPluginAsync {
         const kind = (request.query as { kind?: string }).kind as Kind;
         if (!KINDS.includes(kind)) return reply.code(400).send({ error: "kind deve ser PRODUCT, LOGO ou COVER", code: "INVALID_KIND" });
         // Logo e capa mudam a identidade da loja: só o dono (foto de produto: OWNER ou STAFF).
-        if (kind !== "PRODUCT" && request.user.role !== "OWNER") return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
+        if (kind !== "PRODUCT" && request.user.role !== panelRoleSchema.enum.OWNER) return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
         if (!request.isMultipart()) return reply.code(415).send({ error: "envie multipart/form-data", code: "UNSUPPORTED_TYPE" });
 
         const file = await request.file();

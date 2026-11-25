@@ -49,7 +49,7 @@ export class PrintModeService {
          AND j."kind" = 'ORDER_KITCHEN' AND j."status" = 'PENDING' AND o."printedAt" IS NOT NULL`;
     const [r1] = await db.$queryRaw<{ n: bigint }[]>`
       SELECT count(*) AS n FROM "Order" o
-       WHERE o."storeId" = ${storeId} AND o."printedAt" IS NULL AND o."status" <> 'CANCELADO' AND o."awaitingPayment" = false
+       WHERE o."storeId" = ${storeId} AND o."printedAt" IS NULL AND o."status" <> 'CANCELADO' AND o."awaitingPayment" = false AND o."held" = false
          AND NOT EXISTS (SELECT 1 FROM "PrintJob" j WHERE j."orderId" = o."id" AND j."kind" = 'ORDER_KITCHEN')`;
     const [r2] = await db.$queryRaw<{ n: bigint }[]>`
       SELECT count(*) AS n FROM "Order" o JOIN "PrintJob" j ON j."orderId" = o."id"
@@ -141,7 +141,7 @@ export class PrintModeService {
       INSERT INTO "PrintJob" ("id", "storeId", "kind", "orderId", "maxAttempts", "dedupeKey", "availableAt", "createdAt", "updatedAt")
       SELECT 'c' || replace(gen_random_uuid()::text, '-', ''), o."storeId", 'ORDER_KITCHEN', o."id", 3, o."id" || ':ORDER_KITCHEN', ${NOW}, ${NOW}, ${NOW}
         FROM "Order" o
-       WHERE o."storeId" = ${storeId} AND o."printedAt" IS NULL AND o."status" <> 'CANCELADO' AND o."awaitingPayment" = false
+       WHERE o."storeId" = ${storeId} AND o."printedAt" IS NULL AND o."status" <> 'CANCELADO' AND o."awaitingPayment" = false AND o."held" = false
          AND NOT EXISTS (SELECT 1 FROM "PrintJob" j WHERE j."orderId" = o."id" AND j."kind" = 'ORDER_KITCHEN')
       ON CONFLICT ("dedupeKey") DO NOTHING`;
     return { closedPendingJobs: closed, createdJobs: created, markedOrdersPrinted: 0 };

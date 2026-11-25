@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { HttpResult } from "@/core/http/HttpClient";
 import { usePanelServices } from "@/core/services/PanelServices";
 import { monthRange, weekRange } from "../services/inicioMetrics";
+import { useStoreTimezone } from "@/features/shell/useStoreTimezone";
 
 const REFRESH_INTERVAL_MS = 60_000;
 
@@ -53,8 +54,9 @@ function useSnapshot<T>(fetchData: () => Promise<HttpResult<T>>, enabled = true)
 
 export function useInicioData() {
   const { reports, orders } = usePanelServices();
-  const loadMonth = useCallback(() => reports.getSummary(monthRange(new Date())), [reports]);
-  const loadWeek = useCallback(() => reports.getSummary(weekRange(new Date())), [reports]);
+  const timeZone = useStoreTimezone();
+  const loadMonth = useCallback(() => reports.getSummary(monthRange(new Date(), timeZone)), [reports, timeZone]);
+  const loadWeek = useCallback(() => reports.getSummary(weekRange(new Date(), timeZone)), [reports, timeZone]);
   const loadOpen = useCallback(() => orders.history({ status: "ABERTO", limit: 4 }), [orders]);
   const loadWaiting = useCallback(() => orders.awaitingPayments(), [orders]);
   const loadOrders = useCallback(() => orders.list(), [orders]);

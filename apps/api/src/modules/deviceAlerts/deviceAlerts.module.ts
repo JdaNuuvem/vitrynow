@@ -1,3 +1,4 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import { clientIpOf } from "../../lib/clientIp";
 import { createHash } from "node:crypto";
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
@@ -50,7 +51,7 @@ const deviceAlertRoutes: FastifyPluginAsync = async (app) => {
 
   // Dono (sessão do painel). STAFF ⇒ 403 e a tentativa fica registrada, como na troca de modo.
   app.get("/api/device-alerts", { preHandler: app.requirePanelAuth }, async (request, reply) => {
-    if (request.user.role !== "OWNER") {
+    if (request.user.role !== panelRoleSchema.enum.OWNER) {
       // A negativa grava auditoria: balde por USUÁRIO (10/min), como na troca de modo; passando disso, 429 sem gravar mais nada.
       if (limited(`denied-alerts:${request.user.userId}`, 10)) return tooMany(reply);
       prismaAuditLogger.log({ storeId: request.user.storeId, userId: request.user.userId, action: "device_alert.read_denied", targetType: "Store", targetId: request.user.storeId });

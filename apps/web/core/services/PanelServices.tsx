@@ -19,6 +19,7 @@ import type { UsersGateway } from "../gateways/UsersGateway";
 import type { MfaGateway } from "../gateways/MfaGateway";
 import type { NoticesGateway } from "../gateways/NoticesGateway";
 import type { SubscriptionGateway } from "../gateways/SubscriptionGateway";
+import type { StockGateway } from "../gateways/StockGateway";
 
 export type PanelServices = {
   deliveryZones: DeliveryZonesGateway;
@@ -38,6 +39,7 @@ export type PanelServices = {
   feedback: FeedbackGateway;
   realtime: RealtimeGateway;
   subscription: SubscriptionGateway;
+  stock: StockGateway;
   notices: NoticesGateway;
   mfa: MfaGateway;
 };

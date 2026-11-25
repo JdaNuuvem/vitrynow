@@ -1,15 +1,13 @@
 import { isSoldOutNow } from "../lib/soldOut";
+import { minOrderMessage, couponMinOrderMessage } from "@meucardapio/shared-types";
 import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { createOrderSchema } from "@meucardapio/shared-types";
-import { applyFreeShipping } from "../lib/deliveryZones";
-import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
-import { publishToStore } from "../realtime/hub";
+import { quoteOrder } from "../lib/quoteOrder";
 import { gatewayForStore } from "../modules/storePayments/gateway";
 import { PixUnavailableError } from "../modules/storePayments/storePayments.service";
 import { orderService } from "../modules/orders/orders.module";
-import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { customerMessageFor, messageActorFor, moneyLineFor } from "../lib/cancelMessages";
 import { DomainError, useDomainErrors } from "../shared/errors";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
@@ -19,7 +17,10 @@ import { CAPTCHA_HEADER, captchaVerifier } from "../lib/captcha";
 import { clientIpOf } from "../lib/clientIp";
 import { clientKey } from "../lib/clientKey";
 import { newOrderToken, orderTokenMatches, ORDER_TOKEN_HEADER } from "../lib/orderToken";
-import { assertOrderMoneyFits, buildOrderLines, optionCopiesCreate, orderItemExtras } from "../lib/orderItems";
+import { assertOrderMoneyFits, buildOrderLines } from "../lib/orderItems";
+import { getEntitlements } from "../lib/subscription";
+import { checkScheduledFor, prepMinutesFor, releaseAtFor } from "../lib/scheduling";
+import { parseStoredSchedule } from "../modules/storeHours/storeHours.domain";
 
 const COUPON_EXHAUSTED_MESSAGE = "Esse cupom acabou.";
 class CouponExhaustedError extends Error {}
@@ -73,9 +74,25 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       if (captcha.mode !== "off" && pendingOfPhone >= CAPTCHA_AT_PENDING) {
         const header = request.headers[CAPTCHA_HEADER];
         const token = typeof header === "string" && header.length <= 2000 ? header : undefined;
-        const ok = await captcha.verify(token, clientKey(clientIpOf(request))).catch(() => false); // erro do provedor = recusa (fail-closed)
+        const ip = clientIpOf(request);
+        const ok = await captcha.verify(token, clientKey(ip), ip).catch(() => false); // erro do provedor = recusa (fail-closed)
         if (!ok) return reply.code(403).send({ error: "Confirme que você não é um robô para continuar.", code: "CAPTCHA_REQUIRED" });
       }
+    }
+
+    // API-40 (PRO): pedido agendado. O portão (publicOrderGate) deixa passar loja fechada AGORA quando há horário; quem valida o horário é aqui.
+    // Sem o recurso no plano: resposta neutra, sem citar plano (RN-A-02).
+    let scheduledFor: Date | null = null;
+    let held = false;
+    if (input.scheduledFor) {
+      if (input.type === "MESA") return reply.code(400).send({ error: "Pedido de mesa não pode ser agendado.", code: "SCHEDULE_NOT_ALLOWED" });
+      const { features } = await getEntitlements(store.id);
+      if (!features.includes("scheduled_orders")) return reply.code(409).send({ error: "Esta loja não aceita pedidos agendados.", code: "SCHEDULING_UNAVAILABLE" });
+      scheduledFor = new Date(input.scheduledFor);
+      const now = new Date();
+      const problem = checkScheduledFor({ scheduledFor, now, schedule: parseStoredSchedule(store.schedule), timeZone: store.timezone, closedUntil: store.closedUntil });
+      if (problem) return reply.code(400).send({ error: problem.message, code: problem.code });
+      held = releaseAtFor(scheduledFor, prepMinutesFor(input.type, store)) > now;
     }
 
     // Mesa só entra por QR/comanda (API-22). Esta rota genérica não tem mesa: recusa até lá (API-60).
@@ -128,11 +145,10 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     const subtotalCents = itemsData.reduce((sum, item) => sum + item.lineTotalCents, 0);
 
     if (store.minOrderCents !== null && subtotalCents < store.minOrderCents) {
-      return reply.code(400).send({ error: `pedido mínimo é R$ ${(store.minOrderCents / 100).toFixed(2)}` });
+      return reply.code(400).send({ error: minOrderMessage(store.minOrderCents) });
     }
 
     let coupon = null;
-    let discountCents = 0;
     if (input.couponCode) {
       coupon = await prisma.coupon.findUnique({
         where: { storeId_code: { storeId: store.id, code: input.couponCode.trim().toUpperCase() } },
@@ -147,22 +163,17 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(400).send({ error: COUPON_EXHAUSTED_MESSAGE, code: "COUPON_EXHAUSTED" });
       }
       if (coupon.minOrderCents !== null && subtotalCents < coupon.minOrderCents) {
-        return reply.code(400).send({ error: `pedido mínimo para este cupom é R$ ${(coupon.minOrderCents / 100).toFixed(2)}` });
+        return reply.code(400).send({ error: couponMinOrderMessage(coupon.minOrderCents) });
       }
-      discountCents =
-        coupon.discountType === "PERCENT"
-          ? Math.round((subtotalCents * coupon.discountValue) / 100)
-          : coupon.discountValue;
-      discountCents = Math.min(discountCents, subtotalCents);
     }
 
     // API-16 (B9): taxa por bairro, recalculada AQUI (o cliente só informa o bairro e a taxa que viu). Retirada nunca tem taxa.
-    let deliveryFeeCents = 0;
+    let baseFee = 0;
+    let zoneFreeFrom: number | null = null;
     let zoneSnapshot: { name: string; etaMin: number | null; etaMax: number | null } | null = null;
     if (input.type === "DELIVERY") {
       const zoneCount = await prisma.deliveryZone.count({ where: { storeId: store.id } });
-      let baseFee = store.deliveryFeeCents; // sem bairros cadastrados: taxa única, como sempre (CA-B9-09)
-      let zoneFreeFrom: number | null = null;
+      baseFee = store.deliveryFeeCents; // sem bairros cadastrados: taxa única, como sempre (CA-B9-09)
       if (zoneCount > 0) {
         const activeZones = () => prisma.deliveryZone.findMany({ where: { storeId: store.id, active: true }, orderBy: { name: "asc" }, select: { id: true, name: true, feeCents: true } });
         if (input.neighborhoodId) {
@@ -179,11 +190,15 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
           return reply.code(400).send({ error: "Escolha o bairro da entrega.", code: "NEIGHBORHOOD_REQUIRED", details: { zones: await activeZones() } });
         }
       }
-      // Frete grátis sobre o subtotal LÍQUIDO (itens menos desconto), RN-B9-05.
-      deliveryFeeCents = applyFreeShipping(baseFee, subtotalCents - discountCents, zoneFreeFrom, store.freeShippingFromCents);
     }
+    // D5: cálculo único (subtotal, cupom, frete grátis sobre o subtotal LÍQUIDO RN-B9-05, gorjeta, total) em lib/quoteOrder.
+    const { discountCents, deliveryFeeCents, totalCents } = quoteOrder({
+      lineTotalsCents: itemsData.map((item) => item.lineTotalCents),
+      coupon,
+      delivery: input.type === "DELIVERY" ? { baseFeeCents: baseFee, zoneFreeFromCents: zoneFreeFrom, storeFreeFromCents: store.freeShippingFromCents } : null,
+      tipCents: input.tipCents,
+    });
     const tipCents = input.tipCents ?? 0;
-    const totalCents = subtotalCents - discountCents + deliveryFeeCents + tipCents;
     assertOrderMoneyFits(totalCents);
     // RN-B9-03: a taxa mudou desde que o cliente viu (ou é outra): 409 com o novo valor; a tela pede confirmação.
     if (input.expectedDeliveryFeeCents !== undefined && input.expectedDeliveryFeeCents !== deliveryFeeCents) {
@@ -206,80 +221,47 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     // NG-16: o cliente recebe este token UMA vez; só o hash vai ao banco.
     const accessToken = newOrderToken();
 
-    // Código e pedido na MESMA transação: o contador da loja fica travado até o commit, então
-    // pedidos simultâneos são serializados e nunca colidem (B01).
-    let ticketQueued = false;
     let order;
     try {
-      order = await prisma.$transaction(async (tx) => {
-      // FUNC-01: o uso do cupom é RESERVADO aqui, na mesma transação do pedido, com UPDATE condicional (usedCount < maxUses).
-      // Sem vaga ⇒ 0 linhas ⇒ recusa ANTES de gastar número de pedido; e se qualquer passo seguinte cair, o rollback desfaz
-      // pedido e uso juntos (nunca desconto sem contar o uso). A linha do cupom fica travada até o commit: usos simultâneos
-      // do mesmo cupom se enfileiram aqui, e só cabem `maxUses` deles.
-      if (coupon) {
-        const reserved = await tx.$executeRaw`
-          UPDATE "Coupon" SET "usedCount" = "usedCount" + 1
-           WHERE "id" = ${coupon.id} AND "storeId" = ${store.id} AND "active" = true
-             AND ("maxUses" IS NULL OR "usedCount" < "maxUses")`;
-        if (reserved === 0) throw new CouponExhaustedError();
-      }
-      const code = await nextOrderCode(tx, store.id);
-      const created = await tx.order.create({
-      data: {
+      order = await orderService.create({
+        origin: "STOREFRONT",
         storeId: store.id,
-        code,
-        type: input.type,
-        customerName: input.customerName?.normalize("NFC"), // NFC na gravação: nome vindo de Apple (NFD) é achado pela busca (QA-28 H3)
-        customerPhone: input.customerPhone,
-        address: input.address,
-        notes: input.notes,
-        subtotalCents,
-        discountCents,
-        deliveryFeeCents,
-        deliveryZoneName: zoneSnapshot?.name,
-        deliveryEtaMinMinutes: zoneSnapshot?.etaMin,
-        deliveryEtaMaxMinutes: zoneSnapshot?.etaMax,
-        tipCents,
-        totalCents,
-        paymentMethod,
-        changeForCents: zeroTotal ? undefined : input.changeForCents,
-        couponId: coupon?.id,
-        awaitingPayment: usePix,
-        publicTokenHash: accessToken.hash,
-        // PIX: o registro do pagamento nasce na MESMA transação do pedido, com a chave de idempotência, ANTES de
-        // falar com o provedor — se algo cair no meio, a cobrança é encontrada (e a conciliação resolve), nunca órfã.
-        ...(usePix ? { payment: { create: { amountCents: totalCents, idempotencyKey: randomUUID() } } } : {}),
-        statusHistory: { create: { status: "PENDENTE" } },
-        items: {
-          create: itemsData.map((item) => ({
-            productId: item.productId,
-            productName: item.productName,
-            quantity: item.quantity,
-            unitPriceCents: item.unitPriceCents,
-            notes: item.notes,
-            additionals: {
-              create: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })),
-            },
-            // Cópia da escolha no pedido (RN-B8-07): mudar o cardápio depois não altera pedido antigo. Na MESMA transação do pedido.
-            ...optionCopiesCreate(item.optionCopies),
-            ...orderItemExtras(item),
-          })),
-        },
-      },
+        items: itemsData,
+        coupon: coupon ? { id: coupon.id, ignoreLimit: false, exhaustedError: () => new CouponExhaustedError() } : null,
+        release: !usePix && !held, // PIX: tíquete e eventos só depois do pagamento aprovado; agendado: só quando o job soltar
+        fields: () => ({
+          type: input.type,
+          customerName: input.customerName?.normalize("NFC"), // NFC na gravação: nome vindo de Apple (NFD) é achado pela busca (QA-28 H3)
+          customerPhone: input.customerPhone,
+          address: input.address,
+          notes: input.notes,
+          subtotalCents,
+          discountCents,
+          deliveryFeeCents,
+          deliveryZoneName: zoneSnapshot?.name,
+          deliveryEtaMinMinutes: zoneSnapshot?.etaMin,
+          deliveryEtaMaxMinutes: zoneSnapshot?.etaMax,
+          tipCents,
+          totalCents,
+          paymentMethod,
+          changeForCents: zeroTotal ? undefined : input.changeForCents,
+          couponId: coupon?.id,
+          awaitingPayment: usePix,
+          scheduledFor,
+          held,
+          publicTokenHash: accessToken.hash,
+          // PIX: o registro do pagamento nasce na MESMA transação do pedido, com a chave de idempotência, ANTES de
+          // falar com o provedor — se algo cair no meio, a cobrança é encontrada (e a conciliação resolve), nunca órfã.
+          ...(usePix ? { payment: { create: { amountCents: totalCents, idempotencyKey: randomUUID() } } } : {}),
+          statusHistory: { create: { status: "PENDENTE" } },
+        }),
       });
-      // Pedido que já entra no kanban (não aguarda PIX): o tíquete nasce NA MESMA transação — nunca pedido sem job.
-      if (!usePix) ticketQueued = await enqueueOrderTicket(tx, { id: created.id, storeId: store.id });
-      return created;
-      }, ORDER_TX_OPTIONS);
     } catch (error) {
       if (error instanceof CouponExhaustedError) return reply.code(400).send({ error: COUPON_EXHAUSTED_MESSAGE, code: "COUPON_EXHAUSTED" });
       throw error;
     }
-
     if (!usePix) {
-      publishToStore(store.id, { type: "order.created", orderId: order.id });
-      if (ticketQueued) publishToStore(store.id, { type: "print.available" });
-      return reply.code(201).send({ orderId: order.id, code: order.code, token: accessToken.token, totalCents, discountCents });
+      return reply.code(201).send({ orderId: order.id, code: order.code, token: accessToken.token, totalCents, discountCents, ...(scheduledFor ? { scheduledFor } : {}) });
     }
 
     const payment = await prisma.payment.findUniqueOrThrow({ where: { orderId: order.id } });

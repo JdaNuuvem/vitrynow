@@ -9,11 +9,11 @@
 // ainda não entregue) ou "PRO". Só recurso do PRO aceita "Quero ser avisado" (RN-B10-05).
 export const FEATURE_REGISTRY = {
   multi_user: { released: true, tier: "PRO" }, // equipe (já existe: modules/users)
-  table_qr: { released: false, tier: "BASICO" }, // QR de mesa — libera com API-22
-  tab_service: { released: false, tier: "PRO" }, // comanda e pagamento dividido — API-42/43
-  scheduled_orders: { released: false, tier: "PRO" }, // pedido agendado — API-40
+  table_qr: { released: true, tier: "BASICO" }, // QR de mesa — entregue com API-22/24 (routes/tables.ts)
+  tab_service: { released: true, tier: "PRO" }, // comanda (conta da mesa) com pagamento dividido — API-42/43 (routes/tables.ts /receive)
+  scheduled_orders: { released: true, tier: "PRO" }, // pedido agendado — API-40 (storefront scheduledFor + job schedule.release)
   whatsapp_auto: { released: false, tier: "PRO" }, // WhatsApp automático — API-41
-  advanced_reports: { released: false, tier: "PRO" }, // relatórios avançados — API-45
+  advanced_reports: { released: true, tier: "PRO" }, // relatórios avançados — API-45 (GET /api/reports/advanced)
 } as const satisfies Record<string, { released: boolean; tier: "BASICO" | "PRO" }>;
 
 export type Feature = keyof typeof FEATURE_REGISTRY;

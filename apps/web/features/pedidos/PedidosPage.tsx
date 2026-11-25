@@ -97,6 +97,7 @@ export function PedidosPage() {
       <PageHeading title="Pedidos" actions={<>
         <Link href={HISTORY_HREF} className="ds-button ds-button--secondary">Histórico</Link>
         <Link href="/dashboard/pedidos/pix" className="ds-button ds-button--secondary">Pix pendentes</Link>
+      <Link href="/dashboard/pedidos/agendados" className="ds-button ds-button--secondary">Agendados</Link>
         <Link href="/dashboard/pedidos/novo" className="ds-button ds-button--primary">Novo pedido</Link>
       </>} />
 

@@ -29,6 +29,15 @@ namespace MeuCardapio.PrintClient
             Check("instancia unica: fechou a primeira, a proxima abertura volta a ser a dona", afterClose);
 
             Check("instancia unica: nome global compartilhado com o instalador (AppMutex)", SingleInstance.DefaultName == @"Global\MeuCardapioPrintClient-7C2D4B3E");
+
+            // Marca Vitry: o que o lojista le mudou; o que identifica a instalacao NAO pode mudar (lojas ja instaladas).
+            Check("marca: titulo do app e 'Vitry Impressão'", Brand.AppTitle == "Vitry Impressão" && Brand.Product == "Vitry");
+            Check("compatibilidade: pasta de dados continua MeuCardapioPrintClient (settings, chave e ledger das lojas instaladas)",
+                AppSettings.BaseDirectory.TrimEnd('\\').EndsWith(@"\MeuCardapioPrintClient", StringComparison.Ordinal));
+            var ent = typeof(SecretStore).GetField("Entropy", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            var entBytes = ent == null ? null : (byte[])ent.GetValue(null);
+            Check("compatibilidade: entropia do DPAPI inalterada (a chave de impressora salva continua abrindo)",
+                entBytes != null && System.Text.Encoding.UTF8.GetString(entBytes) == "MeuCardapio.PrintClient.v1");
         }
     }
 }

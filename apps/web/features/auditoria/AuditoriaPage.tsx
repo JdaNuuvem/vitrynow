@@ -6,10 +6,12 @@ import { Button, DataTable, PageHeading, Panel, StateMessage } from "@/shared/de
 import "./auditoria.css";
 import { LogRow } from "./components/LogRow";
 import { useAuditoria } from "./hooks/useAuditoria";
+import { useStoreTimezone } from "@/features/shell/useStoreTimezone";
+import { storeDateInput } from "@/shared/format/storeTime";
 
-const calendar = new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo", dateStyle: "short" });
 
 export function AuditoriaPage() {
+  const timeZone = useStoreTimezone();
   const { logs, forbidden, error, reload } = useAuditoria();
   const [action, setAction] = useState("");
   const [from, setFrom] = useState("");
@@ -17,7 +19,7 @@ export function AuditoriaPage() {
   const actionTypes = [...new Set(logs?.map((log) => log.action))].sort((a, b) => auditActionLabel(a).localeCompare(auditActionLabel(b), "pt-BR"));
   const datesInvalid = !!(from && to && from > to);
   const filtered = logs?.filter((log) => {
-    const day = calendar.format(new Date(log.createdAt));
+    const day = storeDateInput(new Date(log.createdAt), timeZone);
     return (!action || log.action === action) && (!from || day >= from) && (!to || day <= to);
   });
 

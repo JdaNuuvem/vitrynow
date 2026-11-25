@@ -1,3 +1,4 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import type { CreateCategoryInput, CreateProductInput, SetSoldOutInput, UpdateProductInput } from "@meucardapio/shared-types";
 import { nextSoldOutReset } from "../../lib/soldOut";
 import { storeTimeZone } from "../../lib/storeTz";
@@ -141,6 +142,10 @@ export class CatalogService {
     const { additionals, promoStartsOn, promoEndsOn, ...rest } = input;
     const data = { ...rest, ...(await this.detail(actor, before, { ...rest, promoStartsOn, promoEndsOn })) };
     if (data.categoryId) await this.requireCategory(actor.storeId, data.categoryId);
+    // Mover UM produto de categoria (RN-CT-04): sem posição explícita, entra no FIM da categoria de destino, como na criação
+    // e no "mover produtos" em lote. Manter a posição antiga embaralharia a ordem da categoria nova.
+    const moved = data.categoryId !== undefined && data.categoryId !== before.categoryId;
+    if (moved && data.position === undefined) data.position = await this.repo.nextProductPosition(data.categoryId!);
     let product;
     try {
       product = await this.repo.updateProduct(id, data, additionals);
@@ -149,6 +154,9 @@ export class CatalogService {
       if (error instanceof AdditionalNotInProductError) throw new NotFoundError("adicional não encontrado neste produto");
       if (isSkuTaken(error)) throw skuTaken();
       throw error;
+    }
+    if (moved) {
+      this.audit.log({ ...actor, action: "product.move", targetType: "Product", targetId: id, metadata: { name: before.name, fromCategoryId: before.categoryId, toCategoryId: product.categoryId } });
     }
     // RN-PD-09: toda mudança de promoção (valor, início ou fim) também grava auditoria (só números e instantes, sem texto livre).
     if (data.promoCents !== undefined || data.promoStartsAt !== undefined || data.promoEndsAt !== undefined) {
@@ -299,7 +307,7 @@ export class CatalogService {
         ((out.promoEndsAt !== undefined && (out.promoEndsAt === null ? before.promoEndsAt !== null : before.promoEndsAt !== null && out.promoEndsAt.getTime() > before.promoEndsAt.getTime())) ||
           (out.promoStartsAt !== undefined && (out.promoStartsAt === null ? before.promoStartsAt !== null : before.promoStartsAt !== null && out.promoStartsAt.getTime() < before.promoStartsAt.getTime())));
       const touchedPrice = input.priceCents !== undefined || input.promoCents !== undefined || extendsValidity;
-      if (touchedPrice && actor.role !== "OWNER" && promoAboveHalf(price, promo)) throw invalid("FORBIDDEN_ROLE", "Acima do seu limite. Peça ao dono.", 403);
+      if (touchedPrice && actor.role !== panelRoleSchema.enum.OWNER && promoAboveHalf(price, promo)) throw invalid("FORBIDDEN_ROLE", "Acima do seu limite. Peça ao dono.", 403);
     }
 
     // Tipo: ADICIONAL nasce sem vender sozinho (RN-PD-11); o dono pode marcar "Também vender sozinho".

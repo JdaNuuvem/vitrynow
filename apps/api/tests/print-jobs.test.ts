@@ -3,6 +3,7 @@
 import { createHmac } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore, productStore } from "./helpers";
 import { printableOrderSchema } from "@meucardapio/shared-types";
 import { BACKOFF_SECONDS, FAILURE_CODES, backoffSeconds, normalizeFailureCode, sanitizeDeviceText } from "../src/lib/printJobs";
 import { subscribe } from "../src/realtime/hub";
@@ -448,7 +449,7 @@ describe("API-12 — PrintJob", () => {
     const kitchen = json(await claim(token)).job;
     await ack(token, kitchen.id, { status: "PRINTED" }); // o tíquete já saiu: cancelar exige o aviso
     await prisma.order.update({ where: { id }, data: { paymentMethod: "PIX", awaitingPayment: false } });
-    await prisma.payment.create({ data: { orderId: id, providerPaymentId: `mp-c1-${id}`, amountCents: 1000, status: "APROVADO" } });
+    await prisma.payment.create({ data: { orderId: id, storeId: await orderStore(id), providerPaymentId: `mp-c1-${id}`, amountCents: 1000, status: "APROVADO" } });
     vi.mocked(mp.refundPayment).mockResolvedValue(undefined);
     vi.mocked(mp.refundPayment).mockClear();
 

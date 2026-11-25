@@ -127,6 +127,30 @@ describe("catálogo base (API-56)", () => {
     expect(await prisma.product.count({ where: { categoryId: from.id } })).toBe(1);
   });
 
+  it("mover UM produto (categoryId no update): entra no fim do destino, audita; sem mudança de categoria não audita nem mexe na posição", async () => {
+    const from = await category("Lanches");
+    const to = await category("Combos");
+    const a = await product(from.id, "A");
+    const b = await product(from.id, "B");
+    await product(to.id, "X");
+    await product(to.id, "Y");
+
+    const response = await post(`/api/catalog/products/${a.id}`, { categoryId: to.id });
+    expect(response.statusCode).toBe(200);
+    const inTarget = await prisma.product.findMany({ where: { categoryId: to.id }, orderBy: { position: "asc" } });
+    expect(inTarget.map((p) => p.name)).toEqual(["X", "Y", "A"]);
+    expect((await audit("product.move")).metadata).toMatchObject({ name: "A", fromCategoryId: from.id, toCategoryId: to.id });
+
+    const before = (await prisma.product.findUniqueOrThrow({ where: { id: b.id } })).position;
+    expect((await post(`/api/catalog/products/${b.id}`, { categoryId: from.id, name: "B2" })).statusCode).toBe(200);
+    expect((await prisma.product.findUniqueOrThrow({ where: { id: b.id } })).position).toBe(before);
+    expect(await prisma.auditLog.count({ where: { action: "product.move" } })).toBe(1);
+
+    const other = await registerStore(app, { slug: "outra-loja", code: "CT2" });
+    const foreign = await category("Alheia", other.cookie!);
+    expect((await post(`/api/catalog/products/${b.id}`, { categoryId: foreign.id })).statusCode).toBe(404); // SEC-11
+  });
+
   it("CA-CT-09: produto em pedido EM ABERTO não é excluído (409 PRODUCT_IN_OPEN_ORDERS); oculta-se no lugar", async () => {
     const c = await category("Lanches");
     const p = await product(c.id);

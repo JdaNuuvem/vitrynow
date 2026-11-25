@@ -20,6 +20,7 @@ case "$*" in
      esac; exit 0 ;;
   *" exec -T api node -e"*) exit "${STUB_HEALTH:-0}" ;;
   *" exec -T postgres-backup cat /backups/LAST_OK"*) [ "${STUB_BACKUP:-}" = ausente ] && exit 1; echo "$(( $(date -u +%s) - ${STUB_BACKUP_IDADE:-3600} )) abc"; exit 0 ;;
+  *" exec -T backup-offsite cat /state/OFFSITE_LAST_OK"*) [ "${STUB_OFFSITE:-}" = ausente ] && exit 1; echo "$(( $(date -u +%s) - ${STUB_OFFSITE_IDADE:-3600} )) abc.dump"; exit 0 ;;
   *" exec -T api df -P /uploads"*) [ "${STUB_DF:-}" = falha ] && exit 1; printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 1000 500 500 %s%% /uploads\n' "${STUB_DF:-50}"; exit 0 ;;
   *" exec -T api find /uploads"*) printf '/uploads/a.webp\n/uploads/b.webp\n/uploads/c.webp\n'; exit 0 ;;
   *" logs "*) cat "$STUB_LOGFILE" 2>/dev/null; exit 0 ;;
@@ -37,6 +38,7 @@ logbom() { local i; for i in $(seq 1 20); do echo "$REQ_RESET"; echo "$REQ_FORGO
 OUT=""; RC=0
 roda() { : > "$TMP/log.txt"; [ -n "${LOGFN:-}" ] && $LOGFN > "$TMP/log.txt"; OUT="$(cd "$TMP/infra" && env PATH="$TMP/bin:$PATH" STUB_LOGFILE="$TMP/log.txt" "$@" ./saude.sh $ARGS 2>&1)"; RC=$?; }
 caso() { local desc="$1" cond="$2"; if eval "$cond"; then PASS=$((PASS+1)); echo "  [ok]    $desc"; else FAILS=$((FAILS+1)); echo "  [FALHA] $desc"; echo "$OUT" | sed 's/^/          /' | head -14; fi; }
+export COMPOSE_PROFILES=offsite   # cenário padrão = produção completa (cópia off-site ligada)
 ARGS=""; LOGFN=logbom
 
 echo "== tudo saudável"
@@ -54,6 +56,15 @@ echo "== /health e backup"
 roda env STUB_HEALTH=1;         caso "/health fora: ALERTA" '[ "$RC" = 1 ] && [[ "$OUT" == *"/health da API NÃO respondeu"* ]]'
 roda env STUB_BACKUP_IDADE=100000; caso "backup com mais de 26 h: ALERTA" '[ "$RC" = 1 ] && [[ "$OUT" == *"último backup verificado há 27 h"* ]]'
 roda env STUB_BACKUP=ausente;   caso "sem LAST_OK: ALERTA" '[ "$RC" = 1 ] && [[ "$OUT" == *"nenhum backup verificado"* ]]'
+
+echo "== cópia off-site (perfil offsite)"
+roda env;                         caso "off-site conferida há 1 h: ok" ' [[ "$OUT" == *"última cópia off-site conferida há 1 h"* ]]'
+roda env STUB_OFFSITE_IDADE=110000; caso "off-site com mais de 28 h: ALERTA" '[ "$RC" = 1 ] && [[ "$OUT" == *"cópia off-site conferida há 30 h"* ]]'
+roda env STUB_OFFSITE=ausente;    caso "off-site sem OFFSITE_LAST_OK: ALERTA" '[ "$RC" = 1 ] && [[ "$OUT" == *"nenhuma cópia off-site conferida"* ]]'
+roda env STUB_PARADO=backup-offsite; caso "serviço backup-offsite parado: ALERTA" '[ "$RC" = 1 ] && [[ "$OUT" == *"backup-offsite: estado"* ]]'
+roda env COMPOSE_PROFILES=;       caso "perfil offsite desligado: ALERTA (backup só no servidor)" '[ "$RC" = 1 ] && [[ "$OUT" == *"cópia off-site DESLIGADA"* ]]'
+
+roda env COMPOSE_PROFILES= DEPLOY_ENV=staging; caso "staging sem off-site: ok (não alerta)" '[ "$RC" = 0 ] && [[ "$OUT" == *"staging: sem cópia off-site"* ]]'
 
 echo "== fotos (disco local)"
 roda env;                       caso "disco das fotos com 50%: ok, com a contagem de fotos" '[[ "$OUT" == *"disco das fotos com 50% de uso, 3 foto(s)"* ]]'

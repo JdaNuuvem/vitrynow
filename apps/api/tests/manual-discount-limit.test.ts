@@ -33,6 +33,15 @@ describe("SEC-15 - limite de desconto manual do STAFF", { timeout: 60_000 }, () 
   const pedido = (l: Loja, percent: number, cookie: string) =>
     app.inject({ method: "POST", url: "/api/orders", headers: { cookie }, payload: { type: "BALCAO", items: [{ productId: l.productId, quantity: 1 }], paymentMethod: "DINHEIRO", discount: { percent, reason: "CORTESIA" } } });
 
+  it("GET devolve o limite em vigor para dono e equipe; visitante 401", async () => {
+    const l = await loja();
+    const ler = (cookie?: string) => app.inject({ method: "GET", url: "/api/store/manual-discount-limit", headers: cookie ? { cookie } : {} });
+    expect(json(await ler(l.owner))).toEqual({ limitPercent: 10 });
+    await limite(l.owner, { limitPercent: 25 });
+    expect(json(await ler(l.staff))).toEqual({ limitPercent: 25 });
+    expect((await ler()).statusCode).toBe(401);
+  });
+
   it("STAFF e visitante NAO mudam o limite (403/401) e o valor continua o mesmo", async () => {
     const l = await loja();
     const r = await limite(l.staff, { limitPercent: 100 });

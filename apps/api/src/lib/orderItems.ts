@@ -38,7 +38,7 @@ export type OrderLine = {
   unitPriceCents: number;
   notes?: string | null;
   lineTotalCents: number;
-  additionals: Array<{ name: string; priceCents: number }>;
+  additionals: Array<{ name: string; priceCents: number; id?: string }>; // id: adicional legado (estoque: ficha da opção-espelho)
   optionCopies: OptionCopy[];
   // Produto detalhado: cópias do momento do pedido (null = produto comum, sem promoção e sem peso)
   listPriceCents: number | null;
@@ -110,7 +110,7 @@ export async function buildOrderLines(storeId: string, products: Array<Product &
       const unitTotal = resolved.unitPriceCents + additionalsCents;
       if (!orderMoneyFits(unitTotal * item.quantity)) return fail(400, ...TOO_HIGH);
       if (item.expectedUnitPriceCents !== undefined && item.expectedUnitPriceCents !== unitTotal) priceChanged.push({ index, productId: product.id, name: product.name, unitPriceCents: unitTotal });
-      lines.push({ productId: product.id, productName: product.name, quantity: item.quantity, unitPriceCents: resolved.unitPriceCents, notes: item.notes, lineTotalCents: unitTotal * item.quantity, additionals: chosenAdditionals.map(({ name, priceCents }) => ({ name, priceCents })), optionCopies: resolved.copies, listPriceCents: onPromo ? resolved.unitPriceCents + (product.priceCents - effective) : null, weightGrams: null, pricePerKgCents: null });
+      lines.push({ productId: product.id, productName: product.name, quantity: item.quantity, unitPriceCents: resolved.unitPriceCents, notes: item.notes, lineTotalCents: unitTotal * item.quantity, additionals: chosenAdditionals.map(({ id, name, priceCents }) => ({ id, name, priceCents })), optionCopies: resolved.copies, listPriceCents: onPromo ? resolved.unitPriceCents + (product.priceCents - effective) : null, weightGrams: null, pricePerKgCents: null });
       continue;
     }
     const extra = additionalsCents;
@@ -118,7 +118,7 @@ export async function buildOrderLines(storeId: string, products: Array<Product &
     if (!orderMoneyFits((effective + extra) * item.quantity)) return fail(400, ...TOO_HIGH);
     // `expectedUnitPriceCents` compara com o TOTAL por unidade (base + opções SOMA + adicionais legados), nunca com o campo gravado, e SÓ gera 409: nunca vira preço.
     if (item.expectedUnitPriceCents !== undefined && item.expectedUnitPriceCents !== effective + extra) priceChanged.push({ index, productId: product.id, name: product.name, unitPriceCents: effective + extra });
-    lines.push({ productId: product.id, productName: product.name, quantity: item.quantity, unitPriceCents: effective, notes: item.notes, lineTotalCents: (effective + extra) * item.quantity, additionals: chosen, optionCopies: [], listPriceCents: onPromo ? product.priceCents : null, weightGrams: null, pricePerKgCents: null });
+    lines.push({ productId: product.id, productName: product.name, quantity: item.quantity, unitPriceCents: effective, notes: item.notes, lineTotalCents: (effective + extra) * item.quantity, additionals: chosen.map(({ id, name, priceCents }) => ({ id, name, priceCents })), optionCopies: [], listPriceCents: onPromo ? product.priceCents : null, weightGrams: null, pricePerKgCents: null });
   }
   if (!orderMoneyFits(lines.reduce((sum, l) => sum + l.lineTotalCents, 0))) return fail(400, ...TOO_HIGH);
   if (priceChanged.length > 0) return fail(409, "O preço de um item mudou. Confira o carrinho antes de confirmar.", "ITEM_PRICE_CHANGED", { details: { items: priceChanged } });
@@ -130,7 +130,7 @@ export const orderItemExtras = (line: OrderLine) => ({ listPriceCents: line.list
 
 /** Parte `options` do `create` do item (cópia na MESMA transação do pedido). */
 export const optionCopiesCreate = (copies: OptionCopy[]) =>
-  copies.length > 0 ? { options: { create: copies.map((o) => ({ groupName: o.groupName, name: o.name, priceCents: o.priceCents, quantity: o.quantity, priceMode: o.priceMode })) } } : {};
+  copies.length > 0 ? { options: { create: copies.map((o) => ({ groupName: o.groupName, name: o.name, priceCents: o.priceCents, quantity: o.quantity, priceMode: o.priceMode, optionId: o.optionId ?? null })) } } : {};
 
 /** Campos públicos de opções do produto (catálogo do painel e cardápio): só grupos NATIVOS, opções ATIVAS, sem ids de loja nem metadados internos. */
 export function orderOptionFields(groups: GroupRow[]) {

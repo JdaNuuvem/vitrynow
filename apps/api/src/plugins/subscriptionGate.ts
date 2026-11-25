@@ -1,3 +1,4 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import fp from "fastify-plugin";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "@meucardapio/db";
@@ -62,7 +63,7 @@ function panelGate(policy: PanelPolicy, mutating: boolean) {
       const { phase, access } = await getRequestEntitlements(request, request.user.storeId);
       if (phase === "SUSPENDED") {
         if (policy === "billing") return undefined;
-        if (policy === "export" && request.user.role === "OWNER") return undefined;
+        if (policy === "export" && request.user.role === panelRoleSchema.enum.OWNER) return undefined;
         return blockSuspended(reply);
       }
       if (phase === "READ_ONLY" && mutating) {
@@ -93,6 +94,10 @@ const publicOrderGate = async (request: FastifyRequest, reply: FastifyReply) => 
   const { access } = await getEntitlements(store.id);
   // RN-B5-01: a assinatura (Consulta/Suspensão) vence todos os outros motivos.
   if (!access.publicOrders) return reply.code(409).send({ error: INACTIVE_MESSAGE, code: "SUBSCRIPTION_INACTIVE" });
+  // API-40: pedido AGENDADO não depende de a loja estar aberta agora; a rota confere o horário escolhido na grade (e o plano).
+  const body = request.body as { scheduledFor?: unknown } | undefined;
+  // Só na rota do cardápio: no QR da mesa o campo não existe e não pode furar o horário.
+  if (request.routeOptions.url === "/stores/:slug/orders" && typeof body?.scheduledFor === "string") return undefined;
   const hours = await storeHoursService.publicStatus(slug);
   if (hours && hours.status.status !== "ABERTO") {
     const { reason, nextOpenAt, message } = hours.status;

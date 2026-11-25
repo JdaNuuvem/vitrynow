@@ -20,7 +20,7 @@ const deviceRoutes: FastifyPluginAsync = async (app) => {
     const mode = await loadPrintMode(prisma, storeId);
     if (mode === "QUEUE") return { orders: [], mode };
     const orders = await prisma.order.findMany({
-      where: { storeId, printedAt: null, status: { not: "CANCELADO" }, awaitingPayment: false },
+      where: { storeId, printedAt: null, status: { not: "CANCELADO" }, awaitingPayment: false, held: false },
       orderBy: { createdAt: "asc" },
       select: { id: true, code: true },
     });

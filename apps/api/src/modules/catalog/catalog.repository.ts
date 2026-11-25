@@ -181,7 +181,7 @@ export class PrismaCatalogRepository implements CatalogRepository {
             if (result.count !== 1) throw new AdditionalNotInProductError(additional.id);
           } else {
             await tx.productAdditional.create({
-              data: { productId: id, name: additional.name, priceCents: additional.priceCents },
+              data: { productId: id, storeId: (await tx.product.findUniqueOrThrow({ where: { id }, select: { storeId: true } })).storeId, name: additional.name, priceCents: additional.priceCents },
             });
           }
         }

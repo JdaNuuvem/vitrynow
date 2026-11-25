@@ -63,7 +63,8 @@ Ordem = prioridade (risco ao cliente × custo). **PR = um tema por PR**; dono su
 - **Onde:** `loja/checkoutForm.ts` (`totalCents = subtotal + frete + gorjeta`) e `CheckoutDrawer.tsx` (limiar de frete grátis, taxa por zona) repetem a regra do servidor. Já existe a rede de segurança: o servidor recusa com 409 e devolve `details {deliveryFeeCents, totalCents}`, e o web se corrige.
 - **Correção:** uma função pura `quoteOrder()` em shared-types usada pelos DOIS (o web só para prévia) **ou** um endpoint de cotação; nos dois casos o teste cruzado "web == servidor" para ~20 casos. Sem isso, qualquer regra nova de frete (bairro, API-16) nasce duplicada. (Babbage + Tesla.) **Ordem 3.**
 
-### D6 — TEXTOS de erro sem catálogo único
+### D6 — TEXTOS de erro sem catálogo único — **API e catálogo FEITOS; ligação no web = PROPOSTA para o frontend** (docs/PARA-O-FRONTEND.md §2)
+- **Feito (fora do web):** catálogo `errorMessages` em shared-types (subpath `@meucardapio/shared-types/errors`, marcador `ok()` = texto aprovado); guarda da API (`error-catalog-guard.test.ts`); lista para revisão `docs/textos-de-erro-para-revisar.md` (`node scripts/textos-de-erro.mjs`).
 - **Fatos:** o servidor manda `{ error, code }`; o `code` é estável, o texto não tem dono (a API tem texto em português nas respostas, o web tem os dele; Ogilvy pede catálogo único para telas, e-mail e WhatsApp). Mapa de mensagens do web **não verificado**.
 - **Correção:** `code` é o contrato; um catálogo `messages[code]` por superfície (painel, loja, e-mail, WhatsApp) em shared-types; o `error` da API vira só diagnóstico. Guarda: todo `code` novo exige entrada no catálogo (teste que lista os `code:` no código). (Leonardo catálogo; Babbage guarda.) **Ordem 6.**
 
@@ -71,7 +72,7 @@ Ordem = prioridade (risco ao cliente × custo). **PR = um tema por PR**; dono su
 - **Risco:** `49,90`/`99,90` ou nomes digitados em tela, e-mail ou página de vendas; `planPresentation.ts` com a lista de recursos (**não verificado**).
 - **Correção:** a tela de planos só mostra o que `GET` devolve; guarda: `git grep` por padrão `\d{2},\d{2}` em textos de planos falha. **Ordem 7.**
 
-### D8 — CORES fora dos tokens (relato Tesla: 109 hex fora de `tokens.css`; `loja.css` 31)
+### D8 — CORES, z-index e breakpoints — **PROPOSTA para o frontend** (docs/PARA-O-FRONTEND.md §1 e §3; o web existente é do sócio)
 - **Mais (Da Vinci, documento interno do time):** 69 hex soltos só em CSS de feature; camadas de z-index sem escala (1 uso em `100000000`; a causa do #35); **12 larguras de breakpoint diferentes** (proposta: 2); o texto de situação "Em preparo" aparece em 4 arquivos fora de teste (**não verificado** se copiam o texto: ligado a D3). Menu, barra do celular e busca **já** leem UM arquivo (`core/navigation/panelNavigation.ts`): é o exemplo certo de fonte única no web.
 - **Correção:** tokens semânticos (ok/aviso/perigo/info) pelo Da Vinci/sócio (propostas P-01..P-12 a aprovar pelo sócio); cor da loja continua `Store.primaryColor` via `lojaThemeStyle`. Guarda: lint que proíbe hex fora de `tokens.css`/tema da loja. **Ordem 8.**
 

@@ -5,6 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { Category } from "@/core/domain/catalog";
 import type { StoreSettings } from "@/core/domain/store";
 import { usePanelServices } from "@/core/services/PanelServices";
+import { setActiveStoreTimezone } from "@/shared/format/storeTime";
 
 type StoreActions = {
   // Liga/desliga o recebimento de pedidos. Devolve a mensagem de erro, ou null se deu certo.
@@ -52,7 +53,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const request = settingsVersion.current;
     storeGateway.getSettings().then((result) => {
       if (cancelled || request !== settingsVersion.current) return;
-      if (result.ok) setStore(result.data);
+      if (result.ok) {
+        setActiveStoreTimezone(result.data.timezone); // SSOT D1: formatadores fora de componente usam o fuso da loja
+        setStore(result.data);
+      }
       else if (result.status === 401) router.push("/login");
     });
     return () => {
@@ -96,6 +100,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const publishStoreSettings = useCallback((settings: StoreSettings) => {
     settingsVersion.current += 1;
+    setActiveStoreTimezone(settings.timezone);
     setStore((current) => ({
       ...settings,
       acceptingOrders: current?.acceptingOrders ?? settings.acceptingOrders,

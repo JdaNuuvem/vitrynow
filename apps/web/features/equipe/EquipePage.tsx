@@ -6,6 +6,7 @@ import { Button, DataTable, PageHeading, Panel, StateMessage } from "@/shared/de
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import { InviteStaffCard } from "./components/InviteStaffCard";
 import { MemberRow } from "./components/MemberRow";
+import { DiscountLimitCard } from "./components/DiscountLimitCard";
 import "./equipe.css";
 import { useEquipe } from "./hooks/useEquipe";
 
@@ -44,6 +45,7 @@ export function EquipePage() {
         </DataTable> : <StateMessage title="Nenhum membro cadastrado" />}
       </Panel>
       <Panel title="Novo funcionário"><InviteStaffCard error={error} onInvite={invite} /></Panel>
+      <DiscountLimitCard owner />
     </div>}
     {selected && <ConfirmDialog open title="Remover acesso da equipe?" message={`${selected.email} perderá acesso ao painel da loja.`}
       tone="danger" confirmLabel="Remover acesso" busy={busy} error={failure} onConfirm={() => void confirmRemoval()}

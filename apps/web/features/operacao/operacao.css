@@ -52,3 +52,15 @@
 @media (max-width: 780px) {
   .operacao__grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Fechamento da mesa: resumo (consumo, taxa, desconto, total) e pagamentos (único ou dividido) */
+.operacao__summary { display: grid; gap: 6px; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.operacao__summary > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.operacao__summary dt, .operacao__summary dd { margin: 0; }
+.operacao__summary dd { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.operacao__summary label { display: flex; align-items: center; gap: 8px; }
+.operacao__summary input:not([type="checkbox"]) { width: 110px; }
+.operacao__summary-total { padding-top: 8px; border-top: 1px solid var(--line); font-weight: 750; font-size: 1.0625rem; }
+.operacao__payment { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 0; }
+.operacao__payment legend { padding: 0 4px; font-size: .8125rem; font-weight: 650; }
+.operacao__warning { color: var(--warning, #b54708); font-weight: 650; }

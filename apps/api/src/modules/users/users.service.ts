@@ -1,3 +1,4 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import type { ChangePasswordInput, CreateStaffUserInput } from "@meucardapio/shared-types";
 import type { Actor, AuditLogger } from "../../shared/audit";
 import { BadRequestError, ConflictError, NotFoundError, UnauthorizedError } from "../../shared/errors";
@@ -22,7 +23,7 @@ export class UsersService {
       throw new ConflictError("já existe um usuário com este e-mail");
     }
     const passwordHash = await this.hasher.hash(input.password, laneKey);
-    return this.repo.create({ storeId, email: input.email, passwordHash, role: input.role ?? "STAFF" });
+    return this.repo.create({ storeId, email: input.email, passwordHash, role: input.role ?? panelRoleSchema.enum.STAFF });
   }
 
   async remove(actor: Actor, id: string) {
@@ -31,7 +32,7 @@ export class UsersService {
     const target = await this.repo.findInStore(actor.storeId, id);
     if (!target) throw new NotFoundError("usuário não encontrado");
 
-    if (target.role === "OWNER" && (await this.repo.countOwners(actor.storeId)) <= 1) {
+    if (target.role === panelRoleSchema.enum.OWNER && (await this.repo.countOwners(actor.storeId)) <= 1) {
       throw new ConflictError("a loja precisa ter pelo menos um dono");
     }
 

@@ -19,7 +19,7 @@ namespace MeuCardapio.PrintClient.UI
 
         public SetupForm()
         {
-            Text = "MeuCardapio - Configuração inicial";
+            Text = Brand.SetupTitle;
             ClientSize = new Size(360, 220);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;

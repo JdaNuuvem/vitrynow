@@ -36,6 +36,7 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
         acceptingOrders: true,
         hideSoldOutProducts: true,
         deliveryFeeCents: true,
+        timezone: true,
       },
     });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });
@@ -109,6 +110,7 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
         acceptingOrders: true,
         hideSoldOutProducts: true,
         deliveryFeeCents: true,
+        timezone: true,
       },
     }).catch((error: unknown) => {
       const known = error as { code?: string; meta?: { target?: string[] | string } };

@@ -2,6 +2,7 @@
 
 import type { DeviceToken } from "@/core/domain/deviceTokens";
 import { Button } from "@/shared/design/components";
+import { activeStoreTimezone, formatInStoreTimezone } from "@/shared/format/storeTime";
 
 export const tokenName = (token: DeviceToken) => token.label || "(sem nome)";
 
@@ -19,7 +20,7 @@ export function TokenRow({ token, onRevoke }: { token: DeviceToken; onRevoke: (t
         {/* Espaço de verdade entre os trechos: sem ele o leitor de tela lê "offlinechave uIQA" */}
         {token.tokenPreview && <> <span className="impressoras-row__seen">chave {token.tokenPreview}</span></>}
         {token.lastSeenAt && (
-          <> <span className="impressoras-row__seen">última vez vista: {new Date(token.lastSeenAt).toLocaleString("pt-BR")}</span></>
+          <> <span className="impressoras-row__seen">última vez vista: {formatInStoreTimezone(token.lastSeenAt, activeStoreTimezone(), { dateStyle: "short", timeStyle: "short" })}</span></>
         )}
       </div>
       {!token.revokedAt && (

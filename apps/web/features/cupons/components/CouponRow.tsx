@@ -1,6 +1,8 @@
 import type { Coupon } from "@/core/domain/coupons";
 import { Button, StatusBadge } from "@/shared/design/components";
 import { formatCents } from "@/shared/format/money";
+import { useStoreTimezone } from "@/features/shell/useStoreTimezone";
+import { formatInStoreTimezone } from "@/shared/format/storeTime";
 
 export function CouponRow({ coupon, onSetActive, onEdit, onDelete, busy }: {
   coupon: Coupon;
@@ -9,10 +11,11 @@ export function CouponRow({ coupon, onSetActive, onEdit, onDelete, busy }: {
   onDelete?: () => void;
   busy: boolean;
 }) {
+  const timeZone = useStoreTimezone();
   const expired = !!coupon.expiresAt && Date.parse(coupon.expiresAt) <= Date.now();
   const exhausted = coupon.maxUses !== null && coupon.usedCount >= coupon.maxUses;
   const discount = coupon.discountType === "PERCENT" ? `${coupon.discountValue}%` : formatCents(coupon.discountValue);
-  const date = coupon.expiresAt ? new Date(coupon.expiresAt).toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" }) : "Sem prazo";
+  const date = coupon.expiresAt ? formatInStoreTimezone(coupon.expiresAt, timeZone, { dateStyle: "short" }) : "Sem prazo";
   return <tr>
     <th scope="row">{coupon.code}</th><td>{discount}</td>
     <td>{coupon.usedCount}{coupon.maxUses !== null ? ` de ${coupon.maxUses}` : ""}</td><td>{date}</td>

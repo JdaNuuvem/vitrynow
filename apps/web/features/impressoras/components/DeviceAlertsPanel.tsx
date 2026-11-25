@@ -5,8 +5,10 @@ import type { DeviceAlertCode, DeviceAlerts } from "@/core/gateways/PrintQueueGa
 import type { HttpResult } from "@/core/http/HttpClient";
 import { usePanelServices } from "@/core/services/PanelServices";
 import { Button, Panel, StateMessage, StatusBadge } from "@/shared/design/components";
+import { activeStoreTimezone, formatInStoreTimezone } from "@/shared/format/storeTime";
+import { orderLabel } from "@/shared/format/orderCode";
 
-const date = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
+const date = { format: (value: Date | number) => formatInStoreTimezone(value, activeStoreTimezone(), { dateStyle: "short", timeStyle: "short" }) };
 const labels: Record<DeviceAlertCode, string> = {
   NOTHING_TO_CHARGE_CONFLICT: "Divergência na cobrança do tíquete",
   NOTHING_TO_CHARGE_INVALID: "Valor de cobrança inconsistente",
@@ -50,7 +52,7 @@ export function DeviceAlertsPanel() {
       {data && (data.alerts.length ? <ul className="print-settings__alerts">
         {data.alerts.map((alert) => <li key={alert.id}>
           <div><strong>{labels[alert.code] ?? "Alerta de impressão"}</strong>
-            <small>{[date.format(new Date(alert.lastAt)), alert.orderCode && `Pedido #${alert.orderCode}`,
+            <small>{[date.format(new Date(alert.lastAt)), alert.orderCode && `${orderLabel(alert.orderCode)}`,
               alert.clientVersion && `Cliente ${alert.clientVersion}`].filter(Boolean).join(" · ")}</small>
           </div>
           <StatusBadge>{alert.count} {alert.count === 1 ? "ocorrência" : "ocorrências"}</StatusBadge>

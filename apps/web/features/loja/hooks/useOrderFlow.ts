@@ -182,7 +182,7 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
   }, [pixOnScreen]);
 
   // Devolve true se o pedido foi criado (quem chamou limpa o carrinho e fecha o checkout).
-  async function submit(form: CheckoutForm, cart: PlaceOrderInput["cart"], estimatedTotalCents: number, summary: OrderSummary | null = null): Promise<boolean> {
+  async function submit(form: CheckoutForm, cart: PlaceOrderInput["cart"], estimatedTotalCents: number, summary: OrderSummary | null = null, captchaToken?: string): Promise<boolean> {
     if (sending.current) return false;
     if (form.deliveryType === "DELIVERY" && !form.address.trim()) {
       setError("informe o endereço de entrega");
@@ -196,7 +196,7 @@ export function useOrderFlow(slug: string, onPlaced: (order: PlacedOrder) => voi
     setErrorDetails(null);
     let result;
     try {
-      result = await storefront.placeOrder(slug, toPlaceOrderInput(form, cart));
+      result = await storefront.placeOrder(slug, toPlaceOrderInput(form, cart), captchaToken ? { captchaToken } : undefined);
     } catch {
       setError("Não foi possível confirmar o envio do pedido. Confira com a loja antes de tentar novamente.");
       return false;

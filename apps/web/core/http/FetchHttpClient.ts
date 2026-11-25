@@ -49,4 +49,8 @@ export class FetchHttpClient implements HttpClient {
     const payload = body instanceof FormData ? body : JSON.stringify(body);
     return toResult<T>(await apiFetch(path, { method: "PUT", body: payload, headers: options?.headers }));
   }
+
+  async patch<T>(path: string, body: unknown, options?: RequestOptions): Promise<HttpResult<T>> {
+    return toResult<T>(await apiFetch(path, { method: "PATCH", body: JSON.stringify(body), headers: options?.headers }));
+  }
 }

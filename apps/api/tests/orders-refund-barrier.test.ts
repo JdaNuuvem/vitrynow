@@ -6,6 +6,7 @@
 // subconsulta em outra tabela (essa usaria o snapshot antigo).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore, productStore } from "./helpers";
 import { subscribe } from "../src/realtime/hub";
 import { makeApp, registerStore, resetDb, orderTokenHeader, useMockedProvider } from "./helpers";
 
@@ -64,7 +65,7 @@ describe("C5 — estorno × pedido, com barreira de linha", () => {
     expect(res.statusCode).toBe(201);
     const orderId = json(res).orderId as string;
     await prisma.order.update({ where: { id: orderId }, data: { paymentMethod: "PIX" } });
-    await prisma.payment.create({ data: { orderId, providerPaymentId: `mp-${orderId}`, amountCents: 1000, status: "APROVADO" } });
+    await prisma.payment.create({ data: { orderId, storeId: await orderStore(orderId), providerPaymentId: `mp-${orderId}`, amountCents: 1000, status: "APROVADO" } });
     const passos = ate === "PRONTO" ? ["CONFIRMADO", "EM_PREPARO", "PRONTO"] : [];
     for (const to of passos) {
       const r = await app.inject({ method: "POST", url: `/api/orders/${orderId}/transition`, headers: { cookie: l.cookie }, payload: { to } });

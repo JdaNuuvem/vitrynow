@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { useHelp } from "@/features/ajuda/HelpWidget";
-import { formatCents } from "@/shared/format/money";
+import { formatCents, moneyOrHidden } from "@/shared/format/money";
 import { Icon } from "@/shared/icons/Icon";
 import { useRevenueNotice } from "../hooks/useRevenueNotice";
 import type { InicioMetrics } from "../services/inicioMetrics";
@@ -13,7 +13,7 @@ export function RevenueCard({ metrics, hidden, onToggleHidden, teamHref }: Props
   const { openHelp } = useHelp();
   const notice = useRevenueNotice();
   const hasMoney = metrics.revenueCents !== undefined;
-  const money = (cents: number) => hidden ? "R$ ••••" : formatCents(cents);
+  const money = (cents: number) => moneyOrHidden(cents, hidden);
   return (
     <section className="inicio-card inicio-revenue">
       <div className="inicio-section-title"><h2>{hasMoney ? "Faturamento do mês" : "Vendas do mês"}</h2><Link href="/dashboard/relatorios">Ver relatório</Link></div>

@@ -47,7 +47,5 @@ export function parseZonePaste(text: string, existingKeys: Set<string>): { valid
 
 // Frete grátis: compara com o subtotal LÍQUIDO (itens menos desconto), nunca com o bruto (RN-B9-05, CA-B9-05).
 // A regra do bairro vale antes da regra geral da loja.
-export function applyFreeShipping(feeCents: number, netSubtotalCents: number, zoneFreeFrom: number | null | undefined, storeFreeFrom: number | null | undefined): number {
-  const threshold = zoneFreeFrom ?? storeFreeFrom ?? null;
-  return threshold !== null && netSubtotalCents >= threshold ? 0 : feeCents;
-}
+// SSOT D5: a regra de frete grátis mora em shared-types/quote (a mesma da prévia do checkout).
+export { applyFreeShipping } from "@meucardapio/shared-types";

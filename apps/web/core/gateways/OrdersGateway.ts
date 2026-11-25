@@ -1,5 +1,5 @@
 import type { HttpResult, RequestOptions } from "../http/HttpClient";
-import type { Deliverer, Order, OrderStatus } from "../domain/orders";
+import type { Deliverer, Order, OrderStatus, ScheduledOrder } from "../domain/orders";
 import type { OrderDetail } from "../domain/orderDetail";
 import type { ManualOrderInput, ManualOrderResult } from "../domain/manualOrder";
 import type { HistoryQuery, HistoryResponse } from "../domain/orderHistory";
@@ -27,6 +27,8 @@ export type PaymentCheck = "PAID" | "NOT_PAID" | "UNVERIFIED";
 export interface OrdersGateway {
   createManual(input: ManualOrderInput, openingKey: string): Promise<HttpResult<ManualOrderResult>>;
   list(): Promise<HttpResult<OrdersListResponse>>;
+  /** API-40: pedidos agendados ainda RETIDOS (fora do kanban até a liberação). */
+  scheduled(): Promise<HttpResult<{ orders: ScheduledOrder[] }>>;
   awaitingPayments(): Promise<HttpResult<PendingPixList>>;
   checkPayment(id: string): Promise<HttpResult<{ result: PaymentCheck }>>;
   // Histórico (API-54/API-70): lista paginada por cursor; o telefone vem sempre mascarado.

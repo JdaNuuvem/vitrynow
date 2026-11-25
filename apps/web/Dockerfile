@@ -20,6 +20,13 @@ RUN pnpm --filter @meucardapio/shared-types build
 FROM development AS build
 ARG NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+# Fixados no BUILD (o Next embute NEXT_PUBLIC_* no código do navegador). Vazio = desligado.
+#  - NEXT_PUBLIC_TURNSTILE_SITE_KEY: chave PÚBLICA do captcha (NG-08); também libera a Cloudflare no CSP.
+#  - NEXT_PUBLIC_MENU_CAMPAIGN_ENABLED: "1" liga a tela de campanha do cardápio (só depois da validação com 2 lojas).
+ARG NEXT_PUBLIC_TURNSTILE_SITE_KEY=""
+ENV NEXT_PUBLIC_TURNSTILE_SITE_KEY=${NEXT_PUBLIC_TURNSTILE_SITE_KEY}
+ARG NEXT_PUBLIC_MENU_CAMPAIGN_ENABLED=""
+ENV NEXT_PUBLIC_MENU_CAMPAIGN_ENABLED=${NEXT_PUBLIC_MENU_CAMPAIGN_ENABLED}
 ENV NEXT_OUTPUT_STANDALONE=1
 # output: "standalone" (next.config.mjs) resolve as dependências reais usadas em runtime
 # (inclusive o pacote workspace @meucardapio/shared-types) sem precisar dos symlinks do

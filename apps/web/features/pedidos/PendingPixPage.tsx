@@ -9,6 +9,8 @@ import { Button, PageHeading, StateMessage, StatusBadge } from "@/shared/design/
 import { useNow } from "./hooks/useNow";
 import "./pedidos.css";
 import "./pedidos-acoes.css";
+import { activeStoreTimezone, formatInStoreTimezone } from "@/shared/format/storeTime";
+import { orderLabel } from "@/shared/format/orderCode";
 
 const resultText: Record<PaymentCheck, string> = {
   PAID: "Pagamento confirmado pelo provedor.",
@@ -74,7 +76,7 @@ export function PendingPixPage() {
     if (response.ok || response.status === 429) {
       setNextCheck((previous) => ({ ...previous, [id]: Date.now() + 60_000 }));
     }
-    setNotice(`Pedido #${code}. ${response.ok ? resultText[response.data.result] : response.error}`);
+    setNotice(`${orderLabel(code)}. ${response.ok ? resultText[response.data.result] : response.error}`);
     await reload();
   }
 
@@ -92,7 +94,7 @@ export function PendingPixPage() {
           {list.orders.map((item) => (
             <li key={item.id} id={`pix-${item.id}`} tabIndex={-1}>
               <div><strong>#{item.code}</strong> · {item.customerName || "Cliente"}<br />
-                <small>{new Date(item.createdAt).toLocaleString("pt-BR")}{item.expiresAt ? ` · Vencimento às ${new Date(item.expiresAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}` : ""}</small>
+                <small>{formatInStoreTimezone(item.createdAt, activeStoreTimezone(), { dateStyle: "short", timeStyle: "short" })}{item.expiresAt ? ` · Vencimento às ${formatInStoreTimezone(item.expiresAt, activeStoreTimezone(), { hour: "2-digit", minute: "2-digit" })}` : ""}</small>
               </div>
               <strong>{formatCents(item.totalCents)}</strong>
               <StatusBadge tone={item.expiresAt && Date.parse(item.expiresAt) < now ? "danger" : "warning"}>

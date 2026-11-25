@@ -3,9 +3,14 @@
 import Link from "next/link";
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { Modal } from "@/shared/ui/Modal";
+import { FetchHttpClient } from "@/core/http/FetchHttpClient";
+
+const http = new FetchHttpClient();
 import "./planos.css";
 
-type FeatureUpgradeApi = { openUpgrade: () => void };
+// `feature` (opcional): o recurso que o servidor bloqueou (402 FEATURE_LOCKED). Com ele, o aviso oferece "Quero ser avisado"
+// (RN-B10-05: mede a demanda; não promete data nem preço).
+type FeatureUpgradeApi = { openUpgrade: (feature?: string) => void };
 
 const FeatureUpgradeContext = createContext<FeatureUpgradeApi | null>(null);
 
@@ -17,8 +22,24 @@ export function useFeatureUpgrade(): FeatureUpgradeApi {
 
 export function FeatureUpgradeProvider({ plansHref, children }: { plansHref: string; children: ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [feature, setFeature] = useState<string | null>(null);
+  const [interest, setInterest] = useState<"idle" | "sending" | "done" | "error">("idle");
   const close = useCallback(() => setOpen(false), []);
-  const api = useMemo<FeatureUpgradeApi>(() => ({ openUpgrade: () => setOpen(true) }), []);
+  const api = useMemo<FeatureUpgradeApi>(() => ({
+    openUpgrade: (locked?: string) => {
+      setFeature(locked ?? null);
+      setInterest("idle");
+      setOpen(true);
+    },
+  }), []);
+
+  async function registerInterest() {
+    if (!feature || interest === "sending") return;
+    setInterest("sending");
+    const result = await http.post("/api/store/feature-interest", { feature });
+    // 409 = o plano já inclui: nada a avisar, mas também não é erro para quem clicou.
+    setInterest(result.ok || (!result.ok && result.status === 409) ? "done" : "error");
+  }
 
   return (
     <FeatureUpgradeContext.Provider value={api}>
@@ -37,11 +58,16 @@ export function FeatureUpgradeProvider({ plansHref, children }: { plansHref: str
               <span>Ela faz parte de um plano mais completo.</span>
               <span>Assine em poucos cliques e continue exatamente de onde parou.</span>
             </p>
+            {interest === "done" && <p role="status">Anotado! Vamos avisar a loja quando houver novidade sobre esta função.</p>}
+            {interest === "error" && <p role="alert">Não foi possível registrar agora. Tente de novo.</p>}
           </div>
           <div className="feature-upgrade__actions">
             <Link href={plansHref} className="feature-upgrade__primary" onClick={close}>
               Ver planos
             </Link>
+            {feature && interest !== "done" && <button type="button" className="feature-upgrade__secondary" disabled={interest === "sending"} onClick={() => void registerInterest()}>
+              Quero ser avisado
+            </button>}
             <button type="button" className="feature-upgrade__secondary" onClick={close}>
               Agora não
             </button>

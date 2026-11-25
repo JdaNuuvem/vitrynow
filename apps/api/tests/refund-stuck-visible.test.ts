@@ -1,6 +1,7 @@
 // API-69 — estorno preso visível para o dono (RN-REF-01..05, CA-REF-01..04).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore } from "./helpers";
 import { OrderService, MAX_REFUND_AUTO_ATTEMPTS } from "../src/modules/orders/orders.service";
 import { prismaAuditLogger } from "../src/shared/audit";
 import { makeApp, registerStore, resetDb } from "./helpers";
@@ -46,7 +47,7 @@ describe("API-69 — estorno preso visível", () => {
     await prisma.order.update({ where: { id: orderId }, data: { paymentMethod: "PIX", status: "CONFIRMADO", refundLockedAt: new Date() } });
     const payment = await prisma.payment.create({
       data: {
-        orderId, providerPaymentId: `mp-${orderId}`, amountCents: 3000, status: "ESTORNO_PENDENTE", refundAttempts: attempts, refundLastError: "x",
+        orderId, storeId: await orderStore(orderId), providerPaymentId: `mp-${orderId}`, amountCents: 3000, status: "ESTORNO_PENDENTE", refundAttempts: attempts, refundLastError: "x",
         refundContext: { source: "PANEL", userId: null, actor: "OWNER", reason: { code: "ITEM_EM_FALTA" } },
       },
     });
