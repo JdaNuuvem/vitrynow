@@ -1,6 +1,7 @@
 import type { HttpResult, RequestOptions } from "../http/HttpClient";
-import type { Deliverer, Order, OrderStatus } from "../domain/orders";
+import type { Deliverer, Order, OrderStatus, ScheduledOrder } from "../domain/orders";
 import type { OrderDetail } from "../domain/orderDetail";
+import type { ManualOrderInput, ManualOrderResult } from "../domain/manualOrder";
 import type { HistoryQuery, HistoryResponse } from "../domain/orderHistory";
 
 // Resposta de cancelar/estornar (contrato B3 §2.2): `refund` só vem quando havia dinheiro online.
@@ -15,9 +16,21 @@ export type CancelBody = {
 // Resposta do kanban (GET /api/orders). Só `orders` é obrigatório: a API antiga não manda o resto. `openHidden` (API-70) é quantos
 // abertos o teto deixou de fora; `openCapped` é o mesmo aviso em booleano (a tela usa só `openHidden`, que traz o número).
 export type OrdersListResponse = { orders: Order[]; openCapped?: boolean; openHidden?: number };
+export type PendingPixOrder = Pick<Order, "id" | "code" | "customerName" | "totalCents"> & {
+  createdAt: string;
+  expiresAt: string | null;
+  secondsLeft: number | null;
+};
+export type PendingPixList = { count: number; orders: PendingPixOrder[] };
+export type PaymentCheck = "PAID" | "NOT_PAID" | "UNVERIFIED";
 
 export interface OrdersGateway {
+  createManual(input: ManualOrderInput, openingKey: string): Promise<HttpResult<ManualOrderResult>>;
   list(): Promise<HttpResult<OrdersListResponse>>;
+  /** API-40: pedidos agendados ainda RETIDOS (fora do kanban até a liberação). */
+  scheduled(): Promise<HttpResult<{ orders: ScheduledOrder[] }>>;
+  awaitingPayments(): Promise<HttpResult<PendingPixList>>;
+  checkPayment(id: string): Promise<HttpResult<{ result: PaymentCheck }>>;
   // Histórico (API-54/API-70): lista paginada por cursor; o telefone vem sempre mascarado.
   history(query: HistoryQuery): Promise<HttpResult<HistoryResponse>>;
   // Detalhe de um pedido (contato já mascarado no servidor conforme papel e idade do pedido).
@@ -33,6 +46,7 @@ export interface OrdersGateway {
 export interface DeliverersGateway {
   list(): Promise<HttpResult<{ deliverers: Deliverer[] }>>;
   create(input: { name: string; phone?: string }): Promise<HttpResult<unknown>>;
+  update(id: string, input: { name: string; phone?: string }): Promise<HttpResult<unknown>>;
   setActive(id: string, active: boolean): Promise<HttpResult<unknown>>;
   remove(id: string): Promise<HttpResult<unknown>>;
 }

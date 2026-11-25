@@ -1,3 +1,4 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import type { FastifyPluginAsync } from "fastify";
 import { createCategorySchema, createProductSchema, moveProductsSchema, reorderCategoriesSchema, reorderProductsSchema, setSoldOutSchema, updateProductSchema } from "@meucardapio/shared-types";
 import type { FastifyReply, FastifyRequest } from "fastify";
@@ -18,7 +19,7 @@ export function buildCatalogRoutes(service: CatalogService): FastifyPluginAsync 
       preHandler: [
         app.requirePanelAuth,
         async (request: FastifyRequest, reply: FastifyReply) => {
-          if (request.user.role !== "OWNER") return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
+          if (request.user.role !== panelRoleSchema.enum.OWNER) return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
         },
       ],
     };
@@ -64,7 +65,7 @@ export function buildCatalogRoutes(service: CatalogService): FastifyPluginAsync 
     app.post("/api/catalog/products", auth, async (request, reply) => {
       const parsed = createProductSchema.safeParse(request.body);
       if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
-      const product = await service.createProduct(request.user.storeId, parsed.data);
+      const product = await service.createProduct(request.user, parsed.data);
       return reply.code(201).send({ product });
     });
 

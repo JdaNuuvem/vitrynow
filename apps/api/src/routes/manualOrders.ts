@@ -1,17 +1,19 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
-import { buildOrderLines, optionCopiesCreate } from "../lib/orderItems";
+import { couponMinOrderMessage } from "@meucardapio/shared-types";
+import { buildOrderLines } from "../lib/orderItems";
 import { Prisma, prisma } from "@meucardapio/db";
 import { createManualOrderSchema } from "@meucardapio/shared-types";
-import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
 import { newOrderToken } from "../lib/orderToken";
-import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
-import { publishToStore } from "../realtime/hub";
+import { orderService } from "../modules/orders/orders.module";
 import { createHmac } from "node:crypto";
 import { getJwtSecret } from "../lib/securityConfig";
 import { logAudit } from "../lib/audit";
 import { limited, tooMany } from "../lib/slidingLimit";
 import { CodedError, useDomainErrors } from "../shared/errors";
+import { assertOrderMoneyFits } from "../lib/orderItems";
+import { quoteOrder } from "../lib/quoteOrder";
 
 // API-13 — pedido lançado no PAINEL (B2). O servidor decide TODO preço (RN-B2-01); o pedido nasce CONFIRMADO (o atendente já o aceitou), com tíquete na MESMA
 // transação (nunca pedido sem job) e `source = PAINEL`. Ignora "loja fechada", horário, pedido mínimo e modalidade desligada: a loja decide (RN-B2-04).
@@ -66,10 +68,10 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
     const store = await prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { id: true, deliveryFeeCents: true, manualDiscountStaffLimitPercent: true } });
 
     // RN-B2-06: desconto manual do STAFF até o limite da loja; acima disso só o OWNER.
-    if (input.discount && role !== "OWNER" && input.discount.percent > store.manualDiscountStaffLimitPercent) {
+    if (input.discount && role !== panelRoleSchema.enum.OWNER && input.discount.percent > store.manualDiscountStaffLimitPercent) {
       return reply.code(403).send({ error: "Desconto acima do seu limite. Peça ao dono.", code: "DISCOUNT_ABOVE_LIMIT", limitPercent: store.manualDiscountStaffLimitPercent });
     }
-    if (input.forceCoupon && role !== "OWNER") {
+    if (input.forceCoupon && role !== panelRoleSchema.enum.OWNER) {
       return reply.code(403).send({ error: "Só o dono pode forçar um cupom esgotado.", code: "FORBIDDEN_ROLE" });
     }
 
@@ -87,31 +89,32 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
       });
     }
     const built = await buildOrderLines(storeId, products, input.items);
-    if (!built.ok) return reply.code(400).send(built.body);
+    if (!built.ok) return reply.code(built.status).send(built.body);
     const itemsData = built.lines;
     const subtotalCents = itemsData.reduce((sum, i) => sum + i.lineTotalCents, 0);
 
     // Cupom: mesma validação do cardápio (validade, limite, mínimo); o OWNER pode forçar um cupom ESGOTADO (RN-B2-05), nunca um inativo ou vencido.
     let coupon = null;
-    let couponDiscountCents = 0;
     if (input.couponCode) {
       coupon = await prisma.coupon.findUnique({ where: { storeId_code: { storeId, code: input.couponCode.trim().toUpperCase() } } });
       if (!coupon || !coupon.active) return reply.code(400).send({ error: "cupom inválido", code: "COUPON_INVALID" });
       if (coupon.expiresAt && coupon.expiresAt < new Date()) return reply.code(400).send({ error: "cupom expirado", code: "COUPON_EXPIRED" });
       if (coupon.minOrderCents !== null && subtotalCents < coupon.minOrderCents) {
-        return reply.code(400).send({ error: `pedido mínimo para este cupom é R$ ${(coupon.minOrderCents / 100).toFixed(2)}`, code: "COUPON_MIN_ORDER" });
+        return reply.code(400).send({ error: couponMinOrderMessage(coupon.minOrderCents), code: "COUPON_MIN_ORDER" });
       }
       const exhausted = coupon.maxUses !== null && coupon.usedCount >= coupon.maxUses;
-      if (exhausted && !(input.forceCoupon && role === "OWNER")) return reply.code(400).send({ error: "Esse cupom acabou.", code: "COUPON_EXHAUSTED" });
-      couponDiscountCents = Math.min(coupon.discountType === "PERCENT" ? Math.round((subtotalCents * coupon.discountValue) / 100) : coupon.discountValue, subtotalCents);
+      if (exhausted && !(input.forceCoupon && role === panelRoleSchema.enum.OWNER)) return reply.code(400).send({ error: "Esse cupom acabou.", code: "COUPON_EXHAUSTED" });
     }
-    // Desconto manual em % sobre o que sobrou depois do cupom; o total de desconto nunca passa do subtotal (RN-B2-06).
-    const manualDiscountCents = input.discount ? Math.round(((subtotalCents - couponDiscountCents) * input.discount.percent) / 100) : 0;
-    const discountCents = Math.min(couponDiscountCents + manualDiscountCents, subtotalCents);
-
-    const deliveryFeeCents = input.type === "DELIVERY" ? store.deliveryFeeCents : 0;
+    // D5: cálculo único em lib/quoteOrder. Desconto manual em % sobre o que sobrou depois do cupom; o total de desconto nunca passa do subtotal (RN-B2-06).
+    const { discountCents, deliveryFeeCents, totalCents } = quoteOrder({
+      lineTotalsCents: itemsData.map((i) => i.lineTotalCents),
+      coupon,
+      manualDiscountPercent: input.discount?.percent,
+      delivery: input.type === "DELIVERY" ? { baseFeeCents: store.deliveryFeeCents } : null,
+      tipCents: input.tipCents,
+    });
     const tipCents = input.tipCents ?? 0;
-    const totalCents = subtotalCents - discountCents + deliveryFeeCents + tipCents;
+    assertOrderMoneyFits(totalCents);
     const zeroTotal = totalCents === 0;
     const paymentMethod = zeroTotal ? null : toOrderPaymentMethod(input.paymentMethod);
     if (!zeroTotal && input.changeForCents !== undefined) {
@@ -121,68 +124,57 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
     const receivedNow = !!input.alreadyPaid && !zeroTotal;
     const accessToken = newOrderToken();
 
-    let ticketQueued = false;
     let order;
     try {
-      order = await prisma.$transaction(async (tx) => {
+      order = await orderService.create({
+        origin: "MANUAL",
+        storeId,
+        items: itemsData,
         // RN-B2-07: dinheiro "já pago" só com caixa ABERTO. FOR SHARE: o fechamento (FOR UPDATE) espera este pedido terminar, e o dinheiro nunca cai num caixa já fechado.
-        if (receivedNow && paymentMethod === "DINHEIRO") {
-          const open = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "CashSession" WHERE "storeId" = ${storeId} AND "closedAt" IS NULL FOR SHARE`;
-          if (open.length === 0) throw new CodedError(409, "CASH_REQUIRED", "Abra o caixa para registrar este pagamento em dinheiro.");
-        }
-        if (coupon) {
-          const forced = input.forceCoupon && role === "OWNER";
-          const reserved = forced
-            ? await tx.$executeRaw`UPDATE "Coupon" SET "usedCount" = "usedCount" + 1 WHERE "id" = ${coupon.id} AND "storeId" = ${storeId} AND "active" = true`
-            : await tx.$executeRaw`UPDATE "Coupon" SET "usedCount" = "usedCount" + 1 WHERE "id" = ${coupon.id} AND "storeId" = ${storeId} AND "active" = true AND ("maxUses" IS NULL OR "usedCount" < "maxUses")`;
-          if (reserved === 0) throw new CodedError(400, "COUPON_EXHAUSTED", "Esse cupom acabou.");
-        }
-        const code = await nextOrderCode(tx, storeId);
-        const created = await tx.order.create({
-          data: {
+        precondition: async (tx) => {
+          if (receivedNow && paymentMethod === "DINHEIRO") {
+            const open = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "CashSession" WHERE "storeId" = ${storeId} AND "closedAt" IS NULL FOR SHARE`;
+            if (open.length === 0) throw new CodedError(409, "CASH_REQUIRED", "Abra o caixa para registrar este pagamento em dinheiro.");
+          }
+        },
+        coupon: coupon ? { id: coupon.id, ignoreLimit: !!input.forceCoupon && role === panelRoleSchema.enum.OWNER, exhaustedError: () => new CodedError(400, "COUPON_EXHAUSTED", "Esse cupom acabou.") } : null,
+        release: true,
+        fields: (code) => ({
+          type: input.type,
+          status: "CONFIRMADO", // o atendente já aceitou ao lançar
+          channel: input.channel ?? null,
+          createdByUserId: userId,
+          manualKey: manualKey ?? null,
+          manualBodyHash: manualKey ? fingerprint : null,
+          customerName: (input.customerName ?? (input.type === "BALCAO" ? `Balcão #${code}` : undefined))?.normalize("NFC"),
+          customerPhone: input.customerPhone,
+          address: input.address,
+          notes: input.notes,
+          subtotalCents,
+          discountCents,
+          deliveryFeeCents,
+          tipCents,
+          totalCents,
+          paymentMethod,
+          changeForCents: zeroTotal ? undefined : input.changeForCents,
+          couponId: coupon?.id,
+          manualDiscountPercent: input.discount?.percent,
+          manualDiscountReason: input.discount?.reason,
+          awaitingPayment: false,
+          paidAt: receivedNow ? new Date() : null, // RN-CX-02(a): "já pago" = recebido agora
+          publicTokenHash: accessToken.hash,
+          statusHistory: { create: { status: "CONFIRMADO", userId, source: "PANEL", kind: "ADVANCE" } },
+        }),
+        afterCommit: (created) =>
+          logAudit({
             storeId,
-            code,
-            type: input.type,
-            status: "CONFIRMADO", // o atendente já aceitou ao lançar
-            source: "PAINEL",
-            channel: input.channel ?? null,
-            createdByUserId: userId,
-            manualKey: manualKey ?? null,
-            manualBodyHash: manualKey ? fingerprint : null,
-            customerName: (input.customerName ?? (input.type === "BALCAO" ? `Balcão #${code}` : undefined))?.normalize("NFC"),
-            customerPhone: input.customerPhone,
-            address: input.address,
-            notes: input.notes,
-            subtotalCents,
-            discountCents,
-            deliveryFeeCents,
-            tipCents,
-            totalCents,
-            paymentMethod,
-            changeForCents: zeroTotal ? undefined : input.changeForCents,
-            couponId: coupon?.id,
-            manualDiscountPercent: input.discount?.percent,
-            manualDiscountReason: input.discount?.reason,
-            awaitingPayment: false,
-            paidAt: receivedNow ? new Date() : null, // RN-CX-02(a): "já pago" = recebido agora
-            publicTokenHash: accessToken.hash,
-            statusHistory: { create: { status: "CONFIRMADO", userId, source: "PANEL", kind: "ADVANCE" } },
-            items: {
-              create: itemsData.map((item) => ({
-                productId: item.productId,
-                productName: item.productName,
-                quantity: item.quantity,
-                unitPriceCents: item.unitPriceCents,
-                notes: item.notes,
-                additionals: { create: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })) },
-              ...optionCopiesCreate(item.optionCopies),
-              })),
-            },
-          },
-        });
-        ticketQueued = await enqueueOrderTicket(tx, { id: created.id, storeId });
-        return created;
-      }, ORDER_TX_OPTIONS);
+            userId,
+            action: "order.manual_create",
+            targetType: "Order",
+            targetId: created.id,
+            metadata: { channel: input.channel ?? null, type: input.type, totalCents, ...(input.discount ? { discountPercent: input.discount.percent, discountReason: input.discount.reason } : {}), ...(input.forceCoupon ? { couponForced: true } : {}), role },
+          }),
+      });
     } catch (error) {
       // Duas aberturas com a MESMA chave que chegaram juntas: a unicidade do banco decide, o perdedor recebe o pedido do vencedor.
       if (manualKey && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
@@ -192,19 +184,15 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
       throw error;
     }
 
-    logAudit({
-      storeId,
-      userId,
-      action: "order.manual_create",
-      targetType: "Order",
-      targetId: order.id,
-      metadata: { channel: input.channel ?? null, type: input.type, totalCents, ...(input.discount ? { discountPercent: input.discount.percent, discountReason: input.discount.reason } : {}), ...(input.forceCoupon ? { couponForced: true } : {}), role },
-    });
-    publishToStore(storeId, { type: "order.created", orderId: order.id });
-    if (ticketQueued) publishToStore(storeId, { type: "print.available" });
     return reply.code(201).send({ orderId: order.id, code: order.code, token: accessToken.token });
   });
   // SEC-15 / RN-B2-06: o limite de desconto manual do STAFF (%) é do DONO: só o OWNER muda (0 = STAFF sem desconto), a faixa é 0..100 e a mudança fica na auditoria.
+  // Limite atual (a tela mostra o valor em vigor; a equipe também lê, para saber até quanto pode dar sem pedir ao dono).
+  app.get("/api/store/manual-discount-limit", { preHandler: app.requirePanelAuth }, async (request) => {
+    const store = await prisma.store.findUniqueOrThrow({ where: { id: request.user.storeId }, select: { manualDiscountStaffLimitPercent: true } });
+    return { limitPercent: store.manualDiscountStaffLimitPercent };
+  });
+
   app.put("/api/store/manual-discount-limit", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request, reply) => {
     const { storeId, userId } = request.user;
     const percent = (request.body as { limitPercent?: unknown } | null)?.limitPercent;

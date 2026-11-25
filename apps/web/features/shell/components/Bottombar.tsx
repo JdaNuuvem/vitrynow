@@ -14,7 +14,7 @@ export function Bottombar({ onOpenMenu, onNavigate, menuOpen = false }: { onOpen
   return (
     <nav className="shell-bottombar" aria-label="Navegação rápida">
       {tabs.map((route) => (
-        <Link key={route.id} href={route.href} className={isRouteActive(route, pathname) ? "is-active" : undefined} onClick={onNavigate}>
+        <Link key={route.id} href={route.href} className={isRouteActive(route, pathname) ? "is-active" : undefined} aria-current={isRouteActive(route, pathname) ? "page" : undefined} onClick={onNavigate}>
           <Icon name={route.icon} size={22} />
           {route.label}
         </Link>

@@ -12,6 +12,13 @@
   line-height: 32px;
 }
 
+.pedidos .ds-heading h1 {
+  margin: 0;
+  font: 780 var(--ds-text-title)/1.08 var(--ds-font-display);
+}
+.pedidos .ds-heading { margin-block-end: 16px; }
+.pedidos > .ds-state { margin-block-end: 10px; }
+
 .pedidos__board {
   display: grid;
   /* uma coluna por status conhecido, mais "Outros" quando houver (WEB-21) */
@@ -102,3 +109,16 @@
   font-size: 12px;
   line-height: 16px;
 }
+.pix-queue__title { margin-block: 20px 12px !important; font-size: 18px; }
+.pix-queue { max-width: 840px; list-style: none; }
+.pix-queue li {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-block: 8px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+}
+.pix-queue li > div { flex: 1 1 230px; }
+.pix-queue small { color: var(--ink-soft); }
+
+/* API-40: agenda de pedidos agendados, agrupada por dia (no fuso da loja). */
+.pedidos__scheduled-day { display: grid; gap: 10px; margin-block: 18px; }
+.pedidos__scheduled-day h2 { font-size: 1.0625rem; font-weight: 700; }
+.pedidos__muted { color: var(--ink-soft); font-weight: 500; font-size: .875rem; }

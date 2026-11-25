@@ -2,37 +2,59 @@ import { z } from "zod";
 import { textField } from "./text";
 export * from "./text";
 
-// Telefone tolerante (BR ou genérico): dígitos, espaços, parênteses, hífen, "+", 8-20 chars.
-// Não valida DDD/formato exato — só rejeita lixo claramente não-telefone.
+import { PHONE_INVALID_MESSAGE, PHONE_MAX_INPUT, isValidBrPhone } from "./phone";
+export * from "./phone";
+
+// Telefone do Brasil (SSOT D9, regra em ./phone): DDD + 10/11 dígitos, DDI 55 opcional, pontuação comum aceita.
+// Antes só contava caracteres (8-20) e "11948539593503953242" (20 dígitos) passava.
 export const phoneSchema = z
   .string()
   .trim()
-  .min(8)
-  .max(20)
-  .regex(/^[0-9+()\s-]+$/, "telefone inválido");
+  .min(8, PHONE_INVALID_MESSAGE)
+  .max(PHONE_MAX_INPUT, PHONE_INVALID_MESSAGE)
+  .refine(isValidBrPhone, PHONE_INVALID_MESSAGE);
 
 export const orderTypeSchema = z.enum(["MESA", "DELIVERY", "BALCAO"]);
-export const orderStatusSchema = z.enum([
-  "PENDENTE",
-  "CONFIRMADO",
-  "EM_PREPARO",
-  "PRONTO",
-  "SAIU_PARA_ENTREGA",
-  "CONCLUIDO",
-  "CANCELADO",
-]);
+
+// ---- Status do pedido e papeis do painel (SSOT D3/D4): listas em ./constants (sem zod, o web importa direto) ----
+import { ORDER_STATUSES, PANEL_ROLES } from "./constants";
+export * from "./constants";
+export * from "./quote"; // SSOT D5: cotação do pedido (servidor decide, vitrine prevê)
+export const panelRoleSchema = z.enum(PANEL_ROLES);
+
+// ---- Dinheiro / mensagens (SSOT D11) ----
+export function formatCents(cents: number): string {
+  // Espaço não-quebrável (U+00A0) do Intl trocado por espaço comum: o texto ao cliente (cancelamento, cupom) é o mesmo de antes.
+  return (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }).replace(/\u00a0/g, " ");
+}
+
+export function couponMinOrderMessage(minOrderCents: number): string {
+  return `pedido mínimo para este cupom é ${formatCents(minOrderCents)}`;
+}
+
+export function minOrderMessage(minOrderCents: number): string {
+  return `pedido mínimo é ${formatCents(minOrderCents)}`;
+}
+export const orderStatusSchema = z.enum(ORDER_STATUSES);
 
 export const createOrderItemSchema = z.object({
-  productId: z.string().min(1),
+  productId: z.string().min(1).max(100),
   quantity: z.number().int().positive().max(100),
   notes: textField({ max: 150, multiline: true }).optional(), // RN-TXT-02: observação do item
-  additionalIds: z.array(z.string().min(1)).max(50).optional(),
+  additionalIds: z.array(z.string().min(1).max(100)).max(50).optional(),
+  optionSelections: z.array(z.object({ optionId: z.string().min(1).max(150), quantity: z.number().int().min(1).max(99) })).max(300).optional(),
+  expectedUnitPriceCents: z.number().int().nonnegative().max(2_147_483_647).optional(),
+  // Produto detalhado (venda por peso): peso ESCOLHIDO em gramas inteiras; o servidor valida minimo/passo/maximo e calcula o valor da linha (quantity tem de ser 1).
+  weightGrams: z.number().int().positive().max(100_000).optional(),
   // API-15 parte 2 (B8): opções escolhidas por id, com quantidade (padrão 1). O servidor é a ÚNICA fonte do preço (RN-B8-03).
   options: z.array(z.object({ optionId: z.string().min(1), quantity: z.number().int().positive().max(20).optional() })).max(60).optional(),
 });
+export type CreateOrderItem = z.infer<typeof createOrderItemSchema>;
 
 // "CARTAO" é o valor legado do checkout antigo e vale como CREDITO.
 export const paymentMethodSchema = z.enum(["PIX", "DINHEIRO", "CARTAO", "CREDITO", "DEBITO", "VR", "VA"]);
+// Cupom digitado no pedido: sem espaços nas pontas (o código salvo nunca tem espaço), 1 a 50 caracteres.
+export const couponCodeInput = z.string().trim().min(1).max(50);
 export type PaymentMethod = z.infer<typeof paymentMethodSchema>;
 
 export const createOrderSchema = z.object({
@@ -42,19 +64,20 @@ export const createOrderSchema = z.object({
   address: textField({ max: 280, multiline: true }).optional(), // rua+número 200 e complemento 80 (RN-TXT-02)
   notes: textField({ max: 300, multiline: true }).optional(), // observação do pedido
   items: z.array(createOrderItemSchema).min(1).max(100),
-  couponCode: z.string().min(1).max(50).optional(),
+  couponCode: couponCodeInput.optional(),
   paymentMethod: paymentMethodSchema.optional(),
   changeForCents: z.number().int().positive().max(100_000_000).optional(),
   tipCents: z.number().int().nonnegative().max(10_000_000).optional(),
   neighborhoodId: z.string().min(1).max(50).optional(), // API-16: bairro escolhido (só entrega)
   expectedDeliveryFeeCents: z.number().int().nonnegative().max(10_000_000).optional(), // taxa que o cliente viu (RN-B9-03)
+  scheduledFor: z.string().datetime({ offset: true }).optional(), // API-40 (PRO): pedido agendado, instante ISO com fuso; 30 min a 7 dias à frente
 });
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
 
 // API-22 — mesa e pedido pelo QR (ADR-0002 nível 1). O cliente não manda preço, telefone nem forma de pagamento: paga ao receber a mesa (API-24).
 export const createTableOrderSchema = z.object({
-  customerName: z.string().trim().min(1).max(60).optional(),
-  notes: z.string().max(500).optional(),
+  customerName: textField({ max: 60, min: 1 }).optional(),
+  notes: textField({ max: 500, multiline: true }).optional(),
   items: z.array(createOrderItemSchema).min(1).max(100),
 });
 export type CreateTableOrderInput = z.infer<typeof createTableOrderSchema>;
@@ -65,14 +88,26 @@ export const qrSettingsSchema = z.object({
   qrOrderingEnabled: z.boolean().optional(),
   qrOrdersNeedApproval: z.boolean().optional(),
   confirmNoApproval: z.boolean().optional(), // RN-MB-01: desligar o aceite exige confirmar o aviso
-}).refine((v) => v.qrOrderingEnabled !== undefined || v.qrOrdersNeedApproval !== undefined, "nada para alterar");
+  serviceFeePercent: z.number().int().min(0).max(30).optional(), // taxa de serviço sugerida no fechamento (0 = não cobra)
+}).refine((v) => v.qrOrderingEnabled !== undefined || v.qrOrdersNeedApproval !== undefined || v.serviceFeePercent !== undefined, "nada para alterar");
 
-// API-24 — receber a mesa (BASICO: UMA forma de pagamento, sem taxa de serviço, desconto nem divisão; RN-MB-03). O servidor soma a conta; o total do cliente só confere.
-export const receiveTableSchema = z.object({
-  paymentMethod: paymentMethodSchema,
-  changeForCents: z.number().int().positive().max(100_000_000).optional(), // dinheiro: "troco para"
-  expectedTotalCents: z.number().int().positive().max(1_000_000_000).optional(), // o que a tela mostrava: se a conta mudou, 409 TOTAL_CHANGED
+// API-24/42/43 — receber a mesa. O servidor soma a conta; o total do cliente só confere.
+// Todos os planos: taxa de serviço opcional (percentual da loja) e desconto em R$ (STAFF até o limite da loja).
+// PRO (`tab_service`): `payments` divide o total em 2 a 10 formas; senão, UMA forma em `paymentMethod`.
+export const receivePaymentPartSchema = z.object({
+  method: paymentMethodSchema,
+  amountCents: z.number().int().positive().max(1_000_000_000),
+  changeForCents: z.number().int().positive().max(100_000_000).optional(), // só dinheiro: "troco para" desta parte
 }).strict();
+export const receiveTableSchema = z.object({
+  paymentMethod: paymentMethodSchema.optional(),
+  changeForCents: z.number().int().positive().max(100_000_000).optional(), // dinheiro: "troco para"
+  payments: z.array(receivePaymentPartSchema).min(2).max(10).optional(),
+  includeServiceFee: z.boolean().optional(), // padrão: sem taxa
+  discountCents: z.number().int().nonnegative().max(1_000_000_000).optional(),
+  expectedTotalCents: z.number().int().positive().max(1_000_000_000).optional(), // o que a tela mostrava como CONTA (antes de taxa/desconto): se mudou, 409 TOTAL_CHANGED
+}).strict().refine((v) => (v.paymentMethod !== undefined) !== (v.payments !== undefined), { message: "informe paymentMethod OU payments", path: ["paymentMethod"] })
+  .refine((v) => v.payments === undefined || v.changeForCents === undefined, { message: "com payments, o troco vai em cada parte", path: ["changeForCents"] });
 export type ReceiveTableInput = z.infer<typeof receiveTableSchema>;
 
 // API-13 — pedido lançado no PAINEL (atendente). O servidor calcula todo preço (RN-B2-01); a tela manda só ids e quantidades. Sem MESA no BASICO (RN-B2-13).
@@ -80,12 +115,12 @@ export const MANUAL_DISCOUNT_REASONS = ["CORTESIA", "ERRO_DO_PEDIDO", "CLIENTE_F
 export const manualOrderChannelSchema = z.enum(["TELEFONE", "WHATSAPP", "BALCAO", "OUTRO"]);
 export const createManualOrderSchema = z.object({
   type: z.enum(["DELIVERY", "BALCAO"]),
-  customerName: z.string().trim().min(1).max(150).optional(),
+  customerName: textField({ max: 150, min: 1 }).optional(),
   customerPhone: phoneSchema.optional(),
-  address: z.string().max(500).optional(),
-  notes: z.string().max(500).optional(),
+  address: textField({ max: 500, multiline: true }).optional(),
+  notes: textField({ max: 500, multiline: true }).optional(),
   items: z.array(createOrderItemSchema).min(1).max(100),
-  couponCode: z.string().min(1).max(50).optional(),
+  couponCode: couponCodeInput.optional(),
   forceCoupon: z.boolean().optional(), // só OWNER: aceita cupom esgotado (RN-B2-05)
   paymentMethod: paymentMethodSchema.optional(),
   alreadyPaid: z.boolean().optional(), // "já pago": o dinheiro foi recebido agora (em dinheiro exige caixa aberto, RN-B2-07)
@@ -178,6 +213,8 @@ export const wsServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("device.alert"), code: z.string() }),
   // API-22 (mesa): chamar garçom / pedir a conta / rajada de pedidos do QR. Só ids e o tipo; nada de dado do cliente. Painel (ADR-0002 D2-5).
   z.object({ type: z.literal("table.alert"), tableId: z.string(), kind: z.enum(["CALL_WAITER", "ASK_BILL", "BURST"]) }),
+  // Estoque: o saldo do insumo CRUZOU o mínimo (LOW) ou ficou negativo (NEGATIVE). Só o id e o tipo; o painel busca o resto. Uma vez por cruzamento.
+  z.object({ type: z.literal("stock.low"), ingredientId: z.string(), kind: z.enum(["LOW", "NEGATIVE"]) }),
   z.object({ type: z.literal("ping") }),
 ]);
 export type WsServerMessage = z.infer<typeof wsServerMessageSchema>;
@@ -201,6 +238,7 @@ export const WS_AUDIENCE: Record<WsServerMessage["type"], WsAudience> = {
   "print.stale": "panel",
   "cashier.difference_over_tolerance": "panel",
   "device.alert": "panel",
+  "stock.low": "panel", // estoque: só id do insumo e tipo; nunca o aparelho de impressão
   ping: "both",
 };
 
@@ -335,14 +373,46 @@ export const httpsUrl = z
     { message: "use um endereço que comece com https://" },
   );
 
+const localMediaUrl = /^\/media\/stores\/[A-Za-z0-9_-]{1,64}\/[a-f0-9-]{36}-\d{2,5}\.webp$/;
+const mediaImageUrl = z.string().trim().max(500).refine((value) => {
+  if (httpsUrl.safeParse(value).success) return true;
+  const env = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env;
+  return env?.NODE_ENV === "development" && env.STORAGE_PUBLIC_BASE_URL === "/media" && localMediaUrl.test(value);
+}, "use um endereço que comece com https://");
+
+// Produto detalhado, extras (PD-800000). Tags: lista FECHADA (selos do cardápio); SKU: código interno do dono, 1 a 30 caracteres, único na loja, sempre em maiúsculas.
+export const PRODUCT_TAGS = ["VEGANO", "VEGETARIANO", "SEM_GLUTEN", "SEM_LACTOSE", "PICANTE", "FIT"] as const;
+export type ProductTag = (typeof PRODUCT_TAGS)[number];
+export const productSkuSchema = z
+  .string()
+  .transform((value) => value.trim().toUpperCase())
+  .pipe(z.string().regex(/^[A-Z0-9_-]{1,30}$/, "Use de 1 a 30 caracteres: letras sem acento, números, hífen ou sublinhado."));
+export const productTagsSchema = z.array(z.enum(PRODUCT_TAGS)).max(PRODUCT_TAGS.length).transform((tags) => [...new Set(tags)]);
+
 export const createProductSchema = z.object({
   categoryId: z.string().min(1), // obrigatório (RN-CT-07, API-56): produto sem categoria nunca aparece na vitrine
   name: textField({ max: 80, min: 1 }), // API-49: sanitiza e limita (o 150 era o limite antigo, anterior a API-49)
   description: textField({ max: 300, multiline: true }).optional(),
-  imageUrl: httpsUrl.optional().or(z.literal("")), // SEC-14: so https
-  priceCents: z.number().int().nonnegative().max(100_000_000),
+  imageUrl: mediaImageUrl.optional().or(z.literal("")),
+  priceCents: z.number().int().nonnegative().max(100_000_000), // preço NORMAL (real); em produto por peso é o preço do QUILO
+  // Produto detalhado (PD): promoção e vigência (datas no FUSO DA LOJA; o servidor converte para instantes UTC), tipo, unidade de venda, prato único. Todos opcionais.
+  promoCents: z.number().int().positive().max(100_000_000).nullable().optional(),
+  promoStartsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  promoEndsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  kind: z.enum(["PRATO", "ADICIONAL"]).optional(),
+  sellAlone: z.boolean().optional(),
+  saleUnit: z.enum(["UN", "KG", "HG"]).optional(),
+  minGrams: z.number().int().min(1).max(100_000).optional(),
+  stepGrams: z.number().int().min(1).max(100_000).optional(),
+  maxGrams: z.number().int().min(1).max(100_000).optional(),
+  isSingleDish: z.boolean().optional(),
+  sku: productSkuSchema.nullable().optional(),
+  tags: productTagsSchema.optional(),
+  portionGrams: z.number().int().min(1).max(5000).nullable().optional(),
+  serves: z.number().int().min(1).max(20).nullable().optional(),
   active: z.boolean().optional(),
-  // `featured` não é aceito: a coluna existe, mas nenhuma tela a usa (RN-CT-14).
+  // Seleção editorial do cardápio público, editável no catálogo do CRM.
+  featured: z.boolean().optional(),
   position: z.number().int().optional(),
   additionals: z.array(productAdditionalInputSchema).max(50).optional(),
 });
@@ -384,14 +454,17 @@ export const orderInternalNoteSchema = z.object({ note: textField({ max: 500, mu
 
 export const optionInputSchema = z.object({
   id: z.string().min(1).optional(), // presente ao editar uma opção existente
-  name: z.string().trim().min(1).max(150),
+  name: textField({ max: 150, min: 1 }),
   priceCents: z.number().int().min(0).max(100_000_000),
   active: z.boolean().optional(),
+  // RN-PD-12: aponta para um produto ADICIONAL da mesma loja. INHERIT (padrão ao ligar) = nome e preço do adicional; OWN = preço próprio só aqui.
+  productId: z.string().min(1).max(150).nullish(),
+  priceSource: z.enum(["OWN", "INHERIT"]).optional(),
 });
 
 export const optionGroupInputSchema = z.object({
-  name: z.string().trim().min(1).max(150),
-  helpText: z.string().trim().max(300).nullish().transform((v) => (v ? v : null)),
+  name: textField({ max: 150, min: 1 }),
+  helpText: textField({ max: 300, multiline: true }).nullish().transform((v) => (v ? v : null)),
   minSelect: z.number().int().min(0).max(100).default(0),
   maxSelect: z.number().int().min(1).max(100).nullable().default(1), // null = sem limite
   maxPerOption: z.number().int().min(1).max(99).default(1),
@@ -414,6 +487,8 @@ export type OpenCashSessionInput = z.infer<typeof openCashSessionSchema>;
 // `reason`/`reasonText` são validados pelo servidor contra a lista fechada (CASH_REASON_REQUIRED / CASH_REASON_INVALID).
 export const closeCashSessionSchema = z.object({
   closingBalanceCents: z.number().int().nonnegative().max(100_000_000).nullable().optional(),
+  sessionId: z.string().min(1).max(128).optional(),
+  expectedBalanceCents: z.number().int().safe().optional(),
   notes: textField({ max: 300, multiline: true }).optional(),
   reason: z.string().max(40).nullable().optional(),
   reasonText: textField({ max: 400 }).nullable().optional(), // limpa aqui; o limite de 200 do motivo OUTRO é regra do servidor (CASH_REASON_INVALID, API-27)
@@ -446,7 +521,7 @@ export const createCouponSchema = z.object({
   discountType: couponDiscountTypeSchema,
   discountValue: z.number().int().positive().max(100_000_000),
   active: z.boolean().optional(),
-  maxUses: z.number().int().positive().optional(),
+  maxUses: z.number().int().positive().max(1_000_000).optional(),
   minOrderCents: z.number().int().nonnegative().max(100_000_000).optional(),
   // Validade: "AAAA-MM-DD" (vale até 23:59 desse dia, no fuso da loja) ou um instante ISO. Que não seja passado é regra do servidor.
   expiresAt: z
@@ -463,8 +538,8 @@ export type UpdateCouponInput = z.infer<typeof updateCouponSchema>;
 
 export const updateStoreSettingsSchema = z.object({
   name: textField({ max: 150, min: 1 }).optional(),
-  logoUrl: httpsUrl.optional().or(z.literal("")),
-  coverImageUrl: httpsUrl.optional().or(z.literal("")),
+  logoUrl: mediaImageUrl.optional().or(z.literal("")),
+  coverImageUrl: mediaImageUrl.optional().or(z.literal("")),
   primaryColor: z
     .string()
     .regex(/^#[0-9a-fA-F]{6}$/, "use um hex de cor, ex. #16a34a")
@@ -483,6 +558,7 @@ export const updateStoreSettingsSchema = z.object({
   pickupEnabled: z.boolean().optional(),
   hideSoldOutProducts: z.boolean().optional(),
   deliveryFeeCents: z.number().int().nonnegative().max(10_000_000).optional(),
+  timezone: z.string().min(1).max(64).optional(),
 });
 export type UpdateStoreSettingsInput = z.infer<typeof updateStoreSettingsSchema>;
 
@@ -507,7 +583,7 @@ export type AssignDelivererInput = z.infer<typeof assignDelivererSchema>;
 // ---- Chaves de impressora (device tokens) ----
 
 export const createDeviceTokenSchema = z.object({
-  label: z.string().max(100).optional(),
+  label: textField({ max: 100 }).optional(),
 });
 export type CreateDeviceTokenInput = z.infer<typeof createDeviceTokenSchema>;
 
@@ -575,6 +651,8 @@ export const storeScheduleSchema = z.object({
 });
 export type StoreScheduleInput = z.infer<typeof storeScheduleSchema>;
 export const updateStoreHoursSchema = z.object({ schedule: storeScheduleSchema.nullable() });
+// PR-03/a2: sugestão de grade a partir do texto. `text` ausente = usa o texto LEGADO da loja. Não grava nada.
+export const suggestHoursSchema = z.object({ text: textField({ max: 500, multiline: true }).optional() }).strict();
 // Tempo médio de preparo por modalidade (RN-PZ-01): 5 a 240 minutos; null limpa (sem previsão; nada é inventado).
 const prepMinutesSchema = z.number().int().min(5).max(240).nullable();
 export const updatePrepTimesSchema = z.object({ deliveryMinutes: prepMinutesSchema, pickupMinutes: prepMinutesSchema });
@@ -585,6 +663,16 @@ export const storeStatusActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("RESUME") }),
 ]);
 export type StoreStatusAction = z.infer<typeof storeStatusActionSchema>;
+// Modo ocupado (g1, RN-OCU-01/05): 15, 30, 60 ou 120 min (máx. 4 h seguidas); prazo extra opcional de 10, 20 ou 30 min.
+export const BUSY_MAX_MINUTES = 240;
+export const busyRequestSchema = z.object({
+  minutes: z.union([z.literal(15), z.literal(30), z.literal(60), z.literal(120)]),
+  extraMinutes: z.union([z.literal(10), z.literal(20), z.literal(30)]).optional(),
+});
+export type BusyRequest = z.infer<typeof busyRequestSchema>;
+// Motivo de a loja não receber pedido agora (`hours.reason` e `store.reason` do cardápio público): o web lê pelo enum, não por texto.
+export const storeClosedReasonSchema = z.enum(["SWITCHED_OFF", "PAUSED", "CLOSED_TODAY", "OUTSIDE_HOURS", "BUSY"]);
+export type StoreClosedReason = z.infer<typeof storeClosedReasonSchema>;
 
 // ---- Planos e assinatura ----
 
@@ -636,7 +724,7 @@ export const setPrintModeSchema = z.object({ mode: printModeSchema });
 export const DELIVERY_ZONE_LIMIT = 300; // RN-B9-09
 const zoneMinutes = z.number().int().min(1).max(1440);
 export const deliveryZoneFieldsSchema = z.object({
-  name: z.string().trim().min(1).max(100),
+  name: textField({ max: 100, min: 1 }),
   feeCents: z.number().int().nonnegative().max(10_000_000),
   etaMinMinutes: zoneMinutes.nullable().optional(),
   etaMaxMinutes: zoneMinutes.nullable().optional(),
@@ -698,6 +786,7 @@ export const platformMfaChallengeSchema = z.object({ purpose: z.enum(PLATFORM_MF
 
 export const platformStoreListQuerySchema = z.object({
   q: z.string().trim().max(100).optional(),
+  availability: z.enum(["available", "suspended"]).optional(),
   page: z.coerce.number().int().min(1).max(10_000).default(1),
   pageSize: z.coerce.number().int().min(1).max(50).default(20),
 });
@@ -741,3 +830,6 @@ export const campaignContentSchema = z
 export type CampaignContent = z.infer<typeof campaignContentSchema>;
 export const campaignRevisionSchema = z.object({ revision: z.number().int().nonnegative() }).strict();
 export const campaignSaveSchema = z.object({ revision: z.number().int().nonnegative(), draft: campaignContentSchema }).strict();
+
+export * from "./errorMessages";
+export * from "./stock";

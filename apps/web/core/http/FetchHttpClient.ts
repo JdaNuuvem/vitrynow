@@ -30,7 +30,7 @@ async function toResult<T>(response: Response): Promise<HttpResult<T>> {
   const payload = await response.json().catch(() => null);
   if (response.ok) return { ok: true, data: payload as T };
   const code = typeof payload?.code === "string" ? payload.code : undefined;
-  return { ok: false, status: response.status, error: extractErrorMessage(payload), code };
+  return { ok: false, status: response.status, error: extractErrorMessage(payload), code, ...(payload?.details != null ? { details: payload.details } : {}) };
 }
 
 export class FetchHttpClient implements HttpClient {
@@ -39,8 +39,18 @@ export class FetchHttpClient implements HttpClient {
   }
 
   async post<T>(path: string, body?: unknown, options?: RequestOptions): Promise<HttpResult<T>> {
+    const payload = body instanceof FormData ? body : JSON.stringify(body);
     return toResult<T>(
-      await apiFetch(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body), headers: options?.headers }),
+      await apiFetch(path, { method: "POST", body: payload, headers: options?.headers }),
     );
+  }
+
+  async put<T>(path: string, body: unknown, options?: RequestOptions): Promise<HttpResult<T>> {
+    const payload = body instanceof FormData ? body : JSON.stringify(body);
+    return toResult<T>(await apiFetch(path, { method: "PUT", body: payload, headers: options?.headers }));
+  }
+
+  async patch<T>(path: string, body: unknown, options?: RequestOptions): Promise<HttpResult<T>> {
+    return toResult<T>(await apiFetch(path, { method: "PATCH", body: JSON.stringify(body), headers: options?.headers }));
   }
 }

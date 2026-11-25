@@ -18,7 +18,7 @@ const metrics = (over: Partial<InicioMetrics> = {}): InicioMetrics => ({
   week: { orderCount: 2, revenueCents: 6100 },
   orderTypes: { delivery: 0, table: 0, pickup: 2 },
   topProducts: [],
-  monthSeries: [{ day: 1, revenueCents: 6100 }],
+  monthSeries: [{ date: "2026-11-01", orderCount: 1, revenueCents: 3100 }, { date: "2026-11-02", orderCount: 1, revenueCents: 3000 }],
   ...over,
 });
 

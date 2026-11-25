@@ -1,21 +1,26 @@
 import { formatCents } from "@/shared/format/money";
+import type { ReadOrderTracking } from "@/core/gateways/StorefrontGateway";
 import { PIX_PAID_REASSURANCE, TRACKING_UNAVAILABLE_MESSAGE } from "../hooks/useOrderFlow";
 import type { PlacedOrder } from "../hooks/useOrderHistory";
 import { storeChatLink } from "./OrderResultScreen";
+import { OrderTrackingPanel } from "./OrderTrackingPanel";
+import { formatInStoreTimezone } from "@/shared/format/storeTime";
 
-// Depois de recarregar o token do pedido não existe mais: nenhum pedido da lista pode ser acompanhado ou cancelado por
-// aqui (spec 09 §10.6). Cada linha diz isso, sem "pedido não existe", e leva o cliente à loja. A frase "a loja recebe o
-// pedido" só aparece para um pedido PIX que ainda tem payload válido guardado; em dúvida, é omitida.
+// Pedidos feitos nesta sessão podem ser consultados. Depois de recarregar, sobra o comprovante local.
 export function OrdersScreen({
   orders,
   storeName,
   whatsapp = null,
   pendingPix = null,
+  trackingFor,
+  timeZone,
 }: {
+  timeZone?: string; // SSOT D1: fuso da loja
   orders: PlacedOrder[];
   storeName: string;
   whatsapp?: string | null;
   pendingPix?: { code: string; expiresAt: number } | null;
+  trackingFor?: (order: PlacedOrder) => ReadOrderTracking | undefined;
 }) {
   return (
     <div className="loja__orders">
@@ -25,22 +30,23 @@ export function OrdersScreen({
       ) : (
         <div className="loja__list">
           {orders.map((order) => {
+            const read = trackingFor?.(order);
             const chatLink = storeChatLink(whatsapp, order.code);
             const pixStillValid = pendingPix !== null && pendingPix.code === order.code && Date.now() < pendingPix.expiresAt;
             return (
               <div key={order.code + order.placedAt} className="loja__order-row">
                 <div>
                   <div className="loja__order-code">Pedido #{order.code}</div>
-                  <div className="loja__order-date">{new Date(order.placedAt).toLocaleString("pt-BR")}</div>
-                  <p className="loja__order-note">{TRACKING_UNAVAILABLE_MESSAGE}</p>
-                  {pixStillValid && <p className="loja__order-note">{PIX_PAID_REASSURANCE}</p>}
+                  <div className="loja__order-date">{formatInStoreTimezone(order.placedAt, timeZone)}</div>
+                  {read ? <OrderTrackingPanel read={read} timeZone={timeZone} /> : <p className="loja__order-note">{TRACKING_UNAVAILABLE_MESSAGE}</p>}
+                  {!read && pixStillValid && <p className="loja__order-note">{PIX_PAID_REASSURANCE}</p>}
                   {chatLink && (
                     <a href={chatLink} target="_blank" rel="noreferrer" className="loja__empty-menu-link">
                       Falar com a loja no WhatsApp
                     </a>
                   )}
                 </div>
-                <div className="loja__order-total">{formatCents(order.totalCents)}</div>
+                {order.totalCents != null && <div className="loja__order-total">{formatCents(order.totalCents)}</div>}
               </div>
             );
           })}

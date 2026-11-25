@@ -1,4 +1,5 @@
 import type { PaymentStatus } from "@meucardapio/db";
+import { formatCents } from "@meucardapio/shared-types";
 
 // Mensagem ao cliente quando o pedido é cancelado (contrato B3 §12 / GRW-15; textos: leonardo/mensagens-cancelamento-cliente.md).
 // Decisão da v1: a loja NÃO edita o texto. Cada (motivo, ator) tem UMA frase fixa, escolhida aqui no servidor —
@@ -49,7 +50,7 @@ export function customerMessageFor(reasonCode: string | null | undefined, actor:
 }
 
 export function formatBRL(cents: number): string {
-  return `R$ ${(cents / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return formatCents(cents);
 }
 
 // Linha de dinheiro, montada pelo sistema com o valor REAL do pagamento (nunca digitado) e SEM prometer prazo.

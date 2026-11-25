@@ -1,3 +1,4 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import { sendSubscriptionNoticeEmail } from "../lib/email";
 import { dueNotice, NOTICE_TEXT } from "../lib/subscriptionNotices";
 import { errorTag } from "./errorTag";
@@ -52,7 +53,7 @@ export const subscriptionNoticesJob: Job = {
           });
         if (!reserved) continue;
         // 2) só o OWNER recebe (STAFF nunca); sem OWNER não há para quem avisar
-        const owners = await db.user.findMany({ where: { storeId: subscription.storeId, role: "OWNER" }, select: { email: true } });
+        const owners = await db.user.findMany({ where: { storeId: subscription.storeId, role: panelRoleSchema.enum.OWNER }, select: { email: true } });
         const text = NOTICE_TEXT[due.kind];
         // Cada envio isolado: um e-mail que LANÇA (rede, provedor) não pode impedir os outros nem deixar a reserva presa. Basta UM dono ter
         // recebido para o aviso contar como enviado (refazer o ciclo reenviaria ao que já recebeu).

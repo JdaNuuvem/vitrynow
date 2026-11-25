@@ -10,7 +10,8 @@ import { SecurityConfirmProvider } from "./SecurityConfirmProvider";
 
 // SEC-13: com MFA_ENFORCED=true a API devolve 403 MFA_REQUIRED nestas ações do dono. Com o provedor REAL (diálogo, código, repetição),
 // prova que a tela abre a confirmação, manda o código e repete a MESMA chamada com o cabeçalho x-mfa-challenge.
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+const { router } = vi.hoisted(() => ({ router: { push: vi.fn() } }));
+vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
 const ok = <T,>(data: T): HttpResult<T> => ({ ok: true, data });
 const needMfa = (): HttpResult<never> => ({ ok: false, status: 403, error: "Confirme com o código enviado por e-mail.", code: "MFA_REQUIRED" });

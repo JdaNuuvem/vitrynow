@@ -1,4 +1,5 @@
 import type { prisma as prismaClient } from "@meucardapio/db";
+import type { PanelRole } from "@meucardapio/shared-types";
 import type { AuditLogger } from "../../shared/audit";
 import { contactAccessFor, type ContactAccess } from "./orders.view";
 
@@ -21,7 +22,7 @@ export type ContactDecision = {
 // Nunca contato completo sem rastro.
 export async function authorizeContactView(
   deps: { db: Db; audit: AuditLogger; now: () => Date; onError?: (error: unknown) => void },
-  actor: { storeId: string; userId: string; role: "OWNER" | "STAFF" },
+  actor: { storeId: string; userId: string; role: PanelRole },
   order: { id: string; status: string; customerPhone: string | null; address: string | null },
   closedAt: Date | null,
 ): Promise<ContactDecision> {

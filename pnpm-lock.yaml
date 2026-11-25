@@ -201,9 +201,6 @@ importers:
       bcrypt:
         specifier: 6.0.0
         version: 6.0.0
-      bcryptjs:
-        specifier: ^2.4.3
-        version: 2.4.3
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1
@@ -238,6 +235,9 @@ importers:
       '@types/ws':
         specifier: ^8.5.12
         version: 8.18.2
+      bcryptjs:
+        specifier: ^2.4.3
+        version: 2.4.3
       tsx:
         specifier: ^4.19.1
         version: 4.23.15
@@ -250,9 +250,15 @@ importers:
 
   apps/web:
     dependencies:
+      '@meucardapio/shared-types':
+        specifier: workspace:*
+        version: link:../../packages/shared-types
       next:
         specifier: 14.2.15
         version: 14.2.15(@babel/core@7.29.13(supports-color@7.2.0))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      qrcode-generator:
+        specifier: 1.4.4
+        version: 1.4.4
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -296,6 +302,9 @@ importers:
       jsdom:
         specifier: ^31.0.1
         version: 31.0.1
+      playwright-core:
+        specifier: 1.62.1
+        version: 1.62.1
       postcss:
         specifier: ^8.4.47
         version: 8.5.33
@@ -314,13 +323,13 @@ importers:
       '@prisma/client':
         specifier: ^5.19.1
         version: 5.22.0(prisma@5.22.0)
-      bcryptjs:
-        specifier: ^2.4.3
-        version: 2.4.3
     devDependencies:
       '@types/node':
         specifier: ^20.19.43
         version: 20.19.43
+      bcryptjs:
+        specifier: ^2.4.3
+        version: 2.4.3
       prisma:
         specifier: ^5.19.1
         version: 5.22.0
@@ -2962,6 +2971,11 @@ packages:
     resolution: {integrity: sha512-TfySrs/5nm8fQJDcBDuUng3VOUKsd7S+zqvbOTiGXHfxX4wK31ard+hoNuvkicM/2YFzlpDgABOevKSsB4G/FA==}
     engines: {node: '>= 6'}
 
+  playwright-core@1.62.1:
+    resolution: {integrity: sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==}
+    engines: {node: '>=20'}
+    hasBin: true
+
   possible-typed-array-names@1.1.0:
     resolution: {integrity: sha512-/+5VFTchJDoVj3bhoqi6UeymcD00DAwb1nJwamzPvHEszJ4FpF6SNNbUbOS8yI56qHzdV8eK0qEfOSiodkTdxg==}
     engines: {node: '>= 0.4'}
@@ -3049,6 +3063,9 @@ packages:
   punycode@2.3.1:
     resolution: {integrity: sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg==}
     engines: {node: '>=6'}
+
+  qrcode-generator@1.4.4:
+    resolution: {integrity: sha512-HM7yY8O2ilqhmULxGMpcHSF1EhJJ9yBj8gvDEuZ6M+KGJ0YY2hKpnXvRD+hZPLrDVck3ExIGhmPtSdcjC+guuw==}
 
   queue-microtask@1.2.3:
     resolution: {integrity: sha512-NuaNSa6flKT5JaSYQzJok04JzTL1CA6aGhv5rfLW3PgqA+M2ChpZQnAC8h8i4ZFkBS8X5RqkDBHA7r4hej3K9A==}
@@ -6395,6 +6412,8 @@ snapshots:
 
   pirates@4.0.7: {}
 
+  playwright-core@1.62.1: {}
+
   possible-typed-array-names@1.1.0: {}
 
   postal-mime@2.7.6: {}
@@ -6472,6 +6491,8 @@ snapshots:
       ipaddr.js: 1.9.1
 
   punycode@2.3.1: {}
+
+  qrcode-generator@1.4.4: {}
 
   queue-microtask@1.2.3: {}
 

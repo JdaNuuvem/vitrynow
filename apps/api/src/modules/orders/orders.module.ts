@@ -1,3 +1,4 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { orderHistoryQuerySchema, orderInternalNoteSchema, orderStatusSchema, TEXT_TOO_LONG_PREFIX } from "@meucardapio/shared-types";
@@ -19,7 +20,7 @@ const actorOf = (request: FastifyRequest): PanelActor => ({
 // MFA só quando o cancelamento/estorno movimenta dinheiro (OWNER, MFA_ENFORCED). Retorna false se já respondeu.
 async function guardRefund(request: FastifyRequest, reply: FastifyReply, orderId: string): Promise<boolean> {
   if (!(await orderService.needsRefund(request.user.storeId, orderId))) return true;
-  if (request.user.role !== "OWNER") {
+  if (request.user.role !== panelRoleSchema.enum.OWNER) {
     reply.code(403).send({ error: "Só o dono da loja pode cancelar um pedido já pago.", code: "FORBIDDEN_ROLE" });
     return false;
   }
@@ -92,7 +93,7 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/api/orders/:id/refund/retry", auth, async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (request.user.role !== "OWNER") return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
+    if (request.user.role !== panelRoleSchema.enum.OWNER) return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
     if (!(await mfaProofAccepted(request, "refund"))) {
       return reply.code(403).send({ error: "Confirmação de segurança necessária.", code: "MFA_REQUIRED", purpose: "refund" });
     }
@@ -103,7 +104,7 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
   // API-65: registra o estorno que o dono já fez no app do Mercado Pago (RN-B1-08). OWNER + MFA; motivo obrigatório por código.
   app.post("/api/orders/:id/refund/manual", auth, async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (request.user.role !== "OWNER") return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
+    if (request.user.role !== panelRoleSchema.enum.OWNER) return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
     const code = MANUAL_REFUND_CODES.find((c) => c === (request.body as { code?: unknown } | null)?.code);
     if (!code) return reply.code(400).send({ error: "Informe o motivo.", code: "VALIDATION_ERROR" });
     if (!(await mfaProofAccepted(request, "refund"))) {
@@ -115,7 +116,7 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
   // API-61: encerra o estorno preso SEM devolver por aqui (RN-ABD). OWNER + MFA; motivo por código (+ nota 1..200 fora da auditoria).
   app.post("/api/orders/:id/refund/abandon", auth, async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (request.user.role !== "OWNER") return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
+    if (request.user.role !== panelRoleSchema.enum.OWNER) return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
     const body = (request.body ?? {}) as { code?: unknown; note?: unknown };
     const code = ABANDON_CODES.find((c) => c === body.code);
     const note = typeof body.note === "string" ? body.note.trim() : undefined;

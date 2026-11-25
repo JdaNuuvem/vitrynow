@@ -134,7 +134,7 @@ export async function buildPrintableOrder(orderId: string, options: PrintableOpt
       // (o `unitPriceCents` do item já é base + extras). Opção BASE: linha com R$ 0 (o preço dela já é a base); opção SOMA: extra = preço × quantidade da opção.
       const extras = item.options.filter((o) => o.priceMode === "SUM").reduce((sum, o) => sum + o.priceCents * o.quantity, 0);
       return {
-        productName: clean(item.productName) ?? "",
+        productName: clean(item.weightGrams ? `${item.productName} (${item.weightGrams} g)` : item.productName) ?? "",
         quantity: item.quantity,
         unitPriceCents: item.options.length > 0 ? Math.max(0, item.unitPriceCents - extras) : item.unitPriceCents, // piso 0: item antigo com opções inconsistentes nunca sai negativo
         notes: clean(item.notes, true),

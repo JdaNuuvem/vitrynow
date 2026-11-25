@@ -1,6 +1,7 @@
 // API-54 / API-62 — kanban (RN-KB), histórico (RN-HP), observação interna e statusChangedAt/serverNow.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore, productStore } from "./helpers";
 import { HISTORY_PHONE_RATE_LIMIT, HISTORY_RATE_LIMIT, assertHistoryRate, assertPhoneSearchRate, foldText, parseSearch, recordPhoneRefusal, resetHistoryRate, resolvePeriod } from "../src/modules/orders/orders.history";
 import { OrderService } from "../src/modules/orders/orders.service";
 import { contactAccessFor, isWithinRecentWindow, RECENT_WINDOW_MS } from "../src/modules/orders/orders.view";
@@ -98,13 +99,18 @@ describe("puros: período, busca e limite", () => {
 
 describe("API-54 / API-62 — kanban, histórico e observação interna", () => {
   let app: ReturnType<typeof makeApp>;
+  // INF-16: o relógio do TESTE é fixo (só o `Date`): 12:00 de Brasília. Sem isso, rodar entre 21h e 03h UTC (ou logo após 00:00 BRT) joga pedidos de "há 1 h" para
+  // ONTEM no fuso da loja e o kanban de "hoje" os esconde (o CI quebrou às 00:15 BRT). Timers reais continuam: o banco e o Fastify não dependem dele.
+  const RELOGIO = new Date("2026-11-17T15:00:00Z");
   beforeEach(async () => {
     vi.clearAllMocks();
     resetHistoryRate();
+    vi.useFakeTimers({ toFake: ["Date"], now: RELOGIO });
     app = makeApp();
     await app.ready();
   });
   afterEach(async () => {
+    vi.useRealTimers();
     await app.close();
     await resetDb();
   });
@@ -146,7 +152,7 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
         updatedAt: createdAt,
       },
     });
-    for (const h of data.history ?? []) await prisma.orderStatusHistory.create({ data: { orderId: order.id, status: h.status, createdAt: new Date(Date.now() - h.ago) } });
+    for (const h of data.history ?? []) await prisma.orderStatusHistory.create({ data: { orderId: order.id, storeId: await orderStore(order.id), status: h.status, createdAt: new Date(Date.now() - h.ago) } });
     return order.id;
   }
 
@@ -691,10 +697,10 @@ describe("API-54 / API-62 — kanban, histórico e observação interna", () => 
       const aguardando = await mk(ctx, { status: "PENDENTE", awaiting: true });
       const expirado = await mk(ctx, { status: "CANCELADO", awaiting: true });
       await prisma.order.updateMany({ where: { id: { in: [aguardando, expirado] } }, data: { paymentMethod: "PIX" } });
-      await prisma.payment.create({ data: { orderId: expirado, amountCents: 1500, status: "EXPIRADO" } });
+      await prisma.payment.create({ data: { orderId: expirado, storeId: await orderStore(expirado), amountCents: 1500, status: "EXPIRADO" } });
       const estorno = await mk(ctx, { status: "CANCELADO" });
       await prisma.order.update({ where: { id: estorno }, data: { paymentMethod: "PIX" } });
-      await prisma.payment.create({ data: { orderId: estorno, amountCents: 1500, status: "ESTORNO_PENDENTE" } });
+      await prisma.payment.create({ data: { orderId: estorno, storeId: await orderStore(estorno), amountCents: 1500, status: "ESTORNO_PENDENTE" } });
 
       const ids = async (qs: string) => (json(await hist(ctx.owner, qs)).rows.map((r: { id: string }) => r.id) as string[]).sort();
       expect(await ids("?status=CONCLUIDO")).toEqual([concluido]);

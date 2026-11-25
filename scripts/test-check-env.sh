@@ -35,7 +35,7 @@ caso() {
   if [ "$rc" = "$want" ] && { [ -z "$frag" ] || [[ "$out" == *"$frag"* ]]; }; then PASS=$((PASS+1)); echo "  [ok]    $desc"
   else FAILS=$((FAILS+1)); echo "  [FALHA] $desc (exit=$rc, esperado $want, trecho '$frag')"; echo "$out" | sed 's/^/          /' | head -12; fi
   # segurança: nenhum valor de segredo pode aparecer na saída
-  for s in "$S1" "$S2" "$S3" "$S4" "$S5" "$PG" "segredo-do-painel-mp"; do
+  for s in "$S1" "$S2" "$S3" "$S4" "$S5" "$PG" "segredo-do-painel-mp" "segredo-offsite-ficticio" "sal-ficticio-0123456789"; do
     if [[ "$out" == *"$s"* ]]; then FAILS=$((FAILS+1)); echo "  [FALHA] VAZOU um valor de segredo na saída em: $desc"; fi
   done
 }
@@ -77,7 +77,9 @@ caso "PRIVACY_ACTIONS_ENABLED=true sem PRIVACY_HASH_SALT reprova" 1 "PRIVACY_HAS
 
 # --- INF-19/C2: --prod transforma os riscos em ERRO (e sem --prod continuam avisos)
 STORAGE() { echo STORAGE_S3_ENDPOINT=https://s3.exemplo.invalid; echo STORAGE_S3_BUCKET=cardapio-media; echo STORAGE_S3_ACCESS_KEY_ID=AKIAFICTICIA; echo STORAGE_S3_SECRET_ACCESS_KEY=chave-secreta-ficticia-do-teste; echo STORAGE_PUBLIC_BASE_URL=https://cdn.exemplo.invalid/cardapio-media; }
-PRODOK() { base; echo MFA_ENFORCED=true; echo RESEND_API_KEY=re_chave_ficticia_para_o_teste; }   # storage: padrão local, nada a preencher
+OFF() { echo COMPOSE_PROFILES=offsite; echo OFFSITE_S3_ENDPOINT=https://s3.backup.exemplo.invalid; echo OFFSITE_S3_BUCKET=vitry-backup; echo OFFSITE_S3_ACCESS_KEY_ID=KEYFICTICIA; echo OFFSITE_S3_SECRET_ACCESS_KEY=segredo-offsite-ficticio; echo OFFSITE_CRYPT_PASSWORD=$S5; echo OFFSITE_CRYPT_SALT=sal-ficticio-0123456789; }
+ALR() { echo ALERT_TELEGRAM_BOT_TOKEN=123:abc; echo ALERT_TELEGRAM_CHAT_ID=42; echo ALERT_HEARTBEAT_URL=https://hc.exemplo.invalid/x; }
+PRODOK() { base; echo MFA_ENFORCED=true; echo RESEND_API_KEY=re_chave_ficticia_para_o_teste; OFF; ALR; }   # storage: padrão local, nada a preencher
 caso "sem --prod: MFA desligada, sem e-mail e APP_VERSION=local são só aviso" 0 "RESEND_API_KEY vazia" "$(base | troca APP_VERSION local)"
 ARGS=--prod
 caso "--prod: configuração completa passa" 0 "OK:" "$(PRODOK)"
@@ -85,7 +87,7 @@ caso "--prod: MFA_ENFORCED ausente reprova" 1 "MFA_ENFORCED não é true" "$(bas
 caso "--prod: MFA_ENFORCED=false reprova" 1 "MFA_ENFORCED não é true" "$(PRODOK | troca MFA_ENFORCED false)"
 caso "--prod: APP_VERSION=local reprova" 1 "APP_VERSION=local" "$(PRODOK | troca APP_VERSION local)"
 caso "--prod: RESEND_API_KEY vazia reprova" 1 "RESEND_API_KEY vazia" "$(base; echo MFA_ENFORCED=true; echo RESEND_API_KEY=)"
-caso "--prod: os três riscos juntos (sem MFA, sem e-mail, APP_VERSION=local) dão 3 erros" 1 "3 erro(s)" "$(base | troca APP_VERSION local)"
+caso "--prod: os três riscos juntos (sem MFA, sem e-mail, APP_VERSION=local) dão 3 erros" 1 "3 erro(s)" "$({ base; OFF; ALR; } | troca APP_VERSION local)"
 caso "--prod: storage em DISCO LOCAL (padrão) passa SEM nenhuma variável de S3" 0 "STORAGE_DRIVER=local" "$(PRODOK)"
 caso "--prod: STORAGE_DRIVER=local explícito, com https, passa" 0 "OK:" "$(PRODOK; echo STORAGE_DRIVER=local; echo STORAGE_PUBLIC_BASE_URL=https://pedidos.exemplo.invalid/media)"
 caso "--prod: local com STORAGE_LOCAL_DIR relativo reprova" 1 "caminho ABSOLUTO" "$(PRODOK; echo STORAGE_DRIVER=local; echo STORAGE_LOCAL_DIR=uploads)"
@@ -96,6 +98,26 @@ caso "--prod: driver s3 sem nenhuma variável reprova e lista as 5" 1 "faltam ST
 caso "--prod: driver s3 completo passa" 0 "storage S3 das imagens configurado" "$(PRODOK; echo STORAGE_DRIVER=s3; STORAGE)"
 caso "--prod: driver s3 sem só a chave secreta reprova e nomeia a variável" 1 "faltam STORAGE_S3_SECRET_ACCESS_KEY" "$({ PRODOK; echo STORAGE_DRIVER=s3; STORAGE; } | sem STORAGE_S3_SECRET_ACCESS_KEY)"
 caso "--prod: driver s3 com URL pública http reprova" 1 "STORAGE_PUBLIC_BASE_URL deve começar com https://" "$({ PRODOK; echo STORAGE_DRIVER=s3; STORAGE; } | troca STORAGE_PUBLIC_BASE_URL http://cdn.exemplo.invalid/x)"
+ARGS=
+# --- CL-12 cópia off-site e INF-08 alertas
+caso "sem --prod: sem off-site e sem alerta são só aviso" 0 "cópia off-site DESLIGADA" "$(base)"
+ARGS=--prod
+caso "--prod: sem off-site reprova" 1 "cópia off-site DESLIGADA" "$(PRODOK | sem COMPOSE_PROFILES)"
+caso "--prod: off-site sem bucket reprova" 1 "OFFSITE_S3_BUCKET vazia" "$(PRODOK | sem OFFSITE_S3_BUCKET)"
+caso "--prod: off-site com endpoint http reprova" 1 "OFFSITE_S3_ENDPOINT deve ser https" "$(PRODOK | troca OFFSITE_S3_ENDPOINT http://s3.exemplo.invalid)"
+caso "--prod: off-site na AWS dispensa endpoint" 0 "OK:" "$({ PRODOK | sem OFFSITE_S3_ENDPOINT; echo OFFSITE_S3_PROVIDER=AWS; })"
+caso "--prod: senha de cifra curta reprova" 1 "OFFSITE_CRYPT_PASSWORD curto" "$(PRODOK | troca OFFSITE_CRYPT_PASSWORD curta123)"
+caso "--prod: senha de cifra igual ao sal reprova" 1 "iguais (precisam ser diferentes)" "$(PRODOK | troca OFFSITE_CRYPT_SALT $S5)"
+caso "--prod: senha de cifra igual ao JWT_SECRET reprova (sem imprimir o valor)" 1 "OFFSITE_CRYPT_PASSWORD igual a JWT_SECRET" "$(PRODOK | troca OFFSITE_CRYPT_PASSWORD $S1)"
+caso "--prod: COMPOSE_PROFILES com outros perfis e offsite passa" 0 "cópia off-site LIGADA" "$(PRODOK | troca COMPOSE_PROFILES 'extra,offsite')"
+caso "--prod: sem canal de alerta reprova" 1 "nenhum canal de alerta" "$(PRODOK | sem ALERT_TELEGRAM_BOT_TOKEN | sem ALERT_TELEGRAM_CHAT_ID)"
+caso "--prod: só webhook https como canal passa" 0 "alertas com canal" "$({ PRODOK | sem ALERT_TELEGRAM_BOT_TOKEN | sem ALERT_TELEGRAM_CHAT_ID; echo ALERT_WEBHOOK_URL=https://hooks.exemplo.invalid/x; })"
+caso "--prod: webhook http reprova" 1 "ALERT_WEBHOOK_URL deve começar com https://" "$(PRODOK; echo ALERT_WEBHOOK_URL=http://hooks.exemplo.invalid/x)"
+caso "token do Telegram sem chat reprova" 1 "sem ALERT_TELEGRAM_CHAT_ID" "$(PRODOK | sem ALERT_TELEGRAM_CHAT_ID)"
+caso "staging sem off-site: só aviso" 0 "staging (DEPLOY_ENV=staging): sem cópia off-site" "$(PRODOK | sem COMPOSE_PROFILES; echo DEPLOY_ENV=staging)"
+caso "staging continua exigindo canal de alerta" 1 "nenhum canal de alerta" "$(PRODOK | sem COMPOSE_PROFILES | sem ALERT_TELEGRAM_BOT_TOKEN | sem ALERT_TELEGRAM_CHAT_ID; echo DEPLOY_ENV=staging)"
+caso "DEPLOY_ENV inválido reprova" 1 "DEPLOY_ENV='homolog' inválido" "$(PRODOK; echo DEPLOY_ENV=homolog)"
+caso "sem heartbeat: só aviso" 0 "ALERT_HEARTBEAT_URL vazia" "$(PRODOK | sem ALERT_HEARTBEAT_URL)"
 ARGS=
 caso "sem --prod: driver s3 incompleto é só aviso" 0 "STORAGE_DRIVER=s3 incompleto" "$(base; echo STORAGE_DRIVER=s3)"
 caso "local com chave de S3 preenchida: aviso de que é ignorada" 0 "STORAGE_DRIVER=local a ignora" "$(base; echo STORAGE_S3_BUCKET=x)"
@@ -108,6 +130,14 @@ caso "REVALIDATE_SECRET igual a outro segredo reprova" 1 "REVALIDATE_SECRET têm
 caso "ADMIN_TOKEN curto reprova mesmo sem --prod" 1 "ADMIN_TOKEN curto" "$(base; echo ADMIN_TOKEN=curto123)"
 caso "ADMIN_TOKEN forte passa" 0 "" "$(base; echo ADMIN_TOKEN=$S5)"
 caso "ADMIN_TOKEN vazio passa" 0 "" "$(base; echo ADMIN_TOKEN=)"
+# --- NG-08: captcha do pedido público (off | turnstile; as DUAS chaves com turnstile; fake nunca)
+caso "captcha desligado (padrão) passa" 0 "CAPTCHA_MODE=off" "$(base)"
+caso "captcha turnstile com as duas chaves passa" 0 "NEXT_PUBLIC_TURNSTILE_SITE_KEY preenchida" "$(base; echo CAPTCHA_MODE=turnstile; echo TURNSTILE_SECRET_KEY=0x4AAAsecreta; echo NEXT_PUBLIC_TURNSTILE_SITE_KEY=0x4AAAsite)"
+caso "captcha turnstile sem a chave secreta reprova" 1 "TURNSTILE_SECRET_KEY vazia" "$(base; echo CAPTCHA_MODE=turnstile; echo NEXT_PUBLIC_TURNSTILE_SITE_KEY=0x4AAAsite)"
+caso "captcha turnstile sem a chave do site reprova (o cardápio não mostraria o captcha)" 1 "NEXT_PUBLIC_TURNSTILE_SITE_KEY vazia" "$(base; echo CAPTCHA_MODE=turnstile; echo TURNSTILE_SECRET_KEY=0x4AAAsecreta)"
+caso "captcha com a chave secreta igual à do site reprova" 1 "a secreta nunca pode ir para o navegador" "$(base; echo CAPTCHA_MODE=turnstile; echo TURNSTILE_SECRET_KEY=0x4AAAmesma; echo NEXT_PUBLIC_TURNSTILE_SITE_KEY=0x4AAAmesma)"
+caso "captcha fake reprova" 1 "CAPTCHA_MODE=fake é só para desenvolvimento" "$(base; echo CAPTCHA_MODE=fake)"
+caso "captcha com modo desconhecido reprova" 1 "inválido (use off ou turnstile)" "$(base; echo CAPTCHA_MODE=hcaptcha)"
 # --- INF-19/C3: .env legível por outros gera aviso (só onde o modo do arquivo é confiável)
 case "$(uname -s 2>/dev/null)" in
   MINGW*|MSYS*|CYGWIN*) echo "  [pulado] modo do .env (Windows: o modo de arquivo não é confiável); testar no Linux" ;;

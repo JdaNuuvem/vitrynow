@@ -1,5 +1,4 @@
-// Finalidades que a API protege com confirmação por código (SEC-13). Cada ação irreversível ou sensível do dono tem a sua.
-export type MfaPurpose = "refund" | "change_password" | "delete_user" | "device_token_create" | "device_token_revoke" | "cancel_subscription" | "invite_owner";
+export type MfaPurpose = "refund" | "change_password" | "delete_user" | "connect_payment" | "disconnect_payment" | "device_token_create" | "device_token_revoke" | "cancel_subscription" | "invite_owner" | "anonymize_customer" | "export_customer";
 
 export type MfaChallenge = {
   challengeId: string;

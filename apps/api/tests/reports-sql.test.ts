@@ -1,6 +1,7 @@
 // API-20 (B14): relatórios agregados em SQL no fuso da loja + CSV. CA-B14-01..07 (a parte de API).
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore, productStore } from "./helpers";
 import { csvCell, reais, resolveRange, toCsv } from "../src/lib/reports";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
@@ -140,7 +141,7 @@ describe("relatórios (rotas)", () => {
     await seed(storeId, { subtotal: 1500, createdAt: "2026-11-10T16:00:00Z", items: [{ name: "X-Burger", qty: 1, unit: 1500 }, { name: "Suco", qty: 5, unit: 400 }] });
     const r = await summary(cookie, "from=2026-11-10&to=2026-11-10");
     const burger = r.topProducts.find((p: { productName: string }) => p.productName === "X-Burger");
-    expect(burger).toEqual({ productName: "X-Burger", quantity: 3, revenueCents: 3 * 1500 + 2 * 800 });
+    expect(burger).toEqual({ productName: "X-Burger", quantity: 3, revenueCents: 3 * 1500 + 2 * 800, weightGrams: 0 });
     expect(r.topProducts[0].productName).toBe("Suco"); // 5 > 3 por quantidade
     for (let i = 0; i < 12; i++) await seed(storeId, { subtotal: 100, createdAt: "2026-11-10T17:00:00Z", items: [{ name: `P${String(i).padStart(2, "0")}`, qty: 1, unit: 100 }] });
     expect((await summary(cookie, "from=2026-11-10&to=2026-11-10")).topProducts).toHaveLength(10);
@@ -175,7 +176,7 @@ describe("relatórios (rotas)", () => {
     expect(r.byDay).toEqual([{ date: "2026-11-04", orderCount: 1, revenueCents: 5500 }]);
     expect(r.byType).toEqual({ MESA: { count: 1, revenueCents: 5500 } });
     expect(r.byPaymentMethod).toEqual({ PIX: { count: 1, revenueCents: 3000 }, DINHEIRO: { count: 1, revenueCents: 2500 } });
-    expect(r.topProducts).toEqual([{ productName: "Pizza", quantity: 2, revenueCents: 2 * 3000 }]);
+    expect(r.topProducts).toEqual([{ productName: "Pizza", quantity: 2, revenueCents: 2 * 3000, weightGrams: 0 }]);
   });
 
   it("entregador: pedidos e valor por entregador; só vendas", async () => {
@@ -191,7 +192,7 @@ describe("relatórios (rotas)", () => {
     const { cookie, storeId } = await setup("rel-g", "RG1");
     const user = await prisma.user.findFirstOrThrow({ where: { storeId } });
     const s = await prisma.cashSession.create({ data: { storeId, openedByUserId: user.id, openedAt: new Date("2026-11-10T12:00:00Z") } });
-    await prisma.cashMovement.createMany({ data: [{ cashSessionId: s.id, type: "SUPRIMENTO", amountCents: 5000 }, { cashSessionId: s.id, type: "SANGRIA", amountCents: 1200 }] });
+    await prisma.cashMovement.createMany({ data: [{ cashSessionId: s.id, storeId: s.storeId, type: "SUPRIMENTO", amountCents: 5000 }, { cashSessionId: s.id, storeId: s.storeId, type: "SANGRIA", amountCents: 1200 }] });
     const r = await summary(cookie, "from=2026-11-10&to=2026-11-10");
     expect(r.cashSummary).toEqual({ sessionCount: 1, suprimentosCents: 5000, sangriasCents: 1200 });
     expect((await summary(cookie, "from=2026-11-11&to=2026-11-11")).cashSummary.sessionCount).toBe(0);
@@ -236,8 +237,8 @@ describe("relatórios (rotas)", () => {
     expect(res.headers["content-disposition"]).toContain("relatorio-topProducts-2026-11-10-a-2026-11-10.csv");
     expect(res.body.charCodeAt(0)).toBe(0xfeff);
     const lines = res.body.slice(1).split(String.fromCharCode(13, 10));
-    expect(lines[0]).toBe("Produto;Quantidade;Receita com opções (R$)");
-    expect(lines[1]).toBe(`"'=Açaí; ""G""";2;46,00`); // 2 x (15,00 + 8,00)
+    expect(lines[0]).toBe("Produto;Quantidade;Receita com opções (R$);Peso vendido (kg)");
+    expect(lines[1]).toBe(`"'=Açaí; ""G""";2;46,00;`); // 2 x (15,00 + 8,00)
 
     const summaryCsv = (await app.inject({ method: "GET", url: url("table=summary"), headers: { cookie } })).body;
     expect(summaryCsv).toContain("Faturamento (R$);36,00");

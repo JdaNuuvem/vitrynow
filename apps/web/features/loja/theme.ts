@@ -8,6 +8,7 @@ export const DEFAULT_ACCENT = "#1f7a54";
 const MIN_CONTRAST = 4.5;
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
+export const DARK_MENU_SURFACE = "#222922";
 
 function channel(hex: string, start: number): number {
   return Number.parseInt(hex.slice(start, start + 2), 16);
@@ -26,8 +27,8 @@ export function contrastRatio(a: string, b: string): number {
   return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
 }
 
-function darken(hex: string, amount: number): string {
-  const part = (start: number) => Math.round(channel(hex, start) * (1 - amount)).toString(16).padStart(2, "0");
+function mix(hex: string, destination: number, amount: number): string {
+  const part = (start: number) => Math.round(channel(hex, start) * (1 - amount) + destination * amount).toString(16).padStart(2, "0");
   return `#${part(1)}${part(3)}${part(5)}`;
 }
 
@@ -38,13 +39,15 @@ export function normalizeAccent(primaryColor: string | null | undefined): string
 
 // Texto sobre o destaque (botão "+", chip ativo): branco se der 4,5:1; senão escuro.
 export function accentOn(accent: string): string {
-  return contrastRatio(accent, "#ffffff") >= MIN_CONTRAST ? "#ffffff" : "#111111";
+  if (contrastRatio(accent, "#ffffff") >= MIN_CONTRAST) return "#ffffff";
+  return contrastRatio(accent, "#111111") >= MIN_CONTRAST ? "#111111" : "#000000";
 }
 
 // Destaque usado COMO TEXTO sobre branco (preço, "Ver todas ›"): escurece aos poucos até 4,5:1.
-export function accentInk(accent: string): string {
+export function accentInk(accent: string, surface = "#ffffff"): string {
   let ink = accent;
-  for (let step = 0; step < 25 && contrastRatio(ink, "#ffffff") < MIN_CONTRAST; step++) ink = darken(ink, 0.08);
+  const endpoint = contrastRatio("#ffffff", surface) >= contrastRatio("#000000", surface) ? 255 : 0;
+  for (let step = 0; step < 25 && contrastRatio(ink, surface) < MIN_CONTRAST; step++) ink = mix(ink, endpoint, 0.08);
   return ink;
 }
 
@@ -54,5 +57,6 @@ export function lojaThemeStyle(primaryColor: string | null | undefined): CSSProp
     "--loja-accent": accent,
     "--loja-accent-on": accentOn(accent),
     "--loja-accent-ink": accentInk(accent),
+    "--loja-accent-ink-dark": accentInk(accent, DARK_MENU_SURFACE),
   } as CSSProperties;
 }

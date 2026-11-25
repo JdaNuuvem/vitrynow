@@ -1,6 +1,7 @@
 // API-52b (LGPD art. 18): exportação dos dados de UM titular. OWNER, reautenticação, auditoria sem conteúdo, isolamento entre lojas, chave desligada.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore, productStore } from "./helpers";
 import { login, makeApp, registerStore, resetDb } from "./helpers";
 
 vi.mock("../src/lib/email", () => ({ sendPasswordResetEmail: vi.fn(), sendMfaCodeEmail: vi.fn() }));
@@ -48,7 +49,7 @@ describe("privacidade: exportar dados do titular", { timeout: 60_000 }, () => {
         items: { create: [{ productName: "Pizza", quantity: 1, unitPriceCents: 2500, notes: "bem passada" }] },
       },
     });
-    await prisma.orderStatusHistory.create({ data: { orderId: order.id, status: "CONCLUIDO", reasonText: "cliente Maria ligou" } });
+    await prisma.orderStatusHistory.create({ data: { orderId: order.id, storeId: await orderStore(order.id), status: "CONCLUIDO", reasonText: "cliente Maria ligou" } });
     return order.code;
   }
   const exp = (cookie: string, body: object, auth = true) =>
@@ -111,6 +112,12 @@ describe("privacidade: exportar dados do titular", { timeout: 60_000 }, () => {
     expect((await exp(ctx.staff, { phone: PHONE })).statusCode).toBe(403);
     const anon = await app.inject({ method: "POST", url: "/api/privacy/export", payload: { phone: PHONE, currentPassword: SENHA } });
     expect(anon.statusCode).toBe(401);
+    const capability = (cookie?: string) => app.inject({ method: "GET", url: "/api/privacy/status", headers: cookie ? { cookie } : {} });
+    expect((await capability()).statusCode).toBe(401);
+    expect((await capability(ctx.staff)).statusCode).toBe(403);
+    expect((await capability(ctx.owner)).json()).toEqual({ reauth: "PASSWORD" });
+    process.env.MFA_ENFORCED = "true";
+    expect((await capability(ctx.owner)).json()).toEqual({ reauth: "MFA" });
   });
 
   it("isolamento: a loja B não exporta pedidos da loja A, nem pelo código", async () => {
@@ -143,5 +150,8 @@ describe("privacidade: exportar dados do titular", { timeout: 60_000 }, () => {
     expect(json(r).code).toBe("FEATURE_DISABLED");
     const a = await app.inject({ method: "POST", url: "/api/privacy/anonymize", headers: { cookie: ctx.owner }, payload: { phone: PHONE, reason: "HOLDER_REQUEST", expectedOrders: 1, currentPassword: SENHA } });
     expect(a.statusCode).toBe(404);
+    const capability = await app.inject({ method: "GET", url: "/api/privacy/status" });
+    expect(capability.statusCode).toBe(404);
+    expect(capability.json()).toMatchObject({ code: "FEATURE_DISABLED" });
   });
 });

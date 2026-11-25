@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore, productStore } from "./helpers";
 import { activateSubscription } from "../src/lib/subscription";
+import { buildPrintableOrder } from "../src/lib/printable";
 import { optionGroupsService } from "../src/modules/optionGroups/optionGroups.module";
 import { resolveLine } from "../src/modules/optionGroups/optionGroups.domain";
 import { login, makeApp, registerStore, resetDb } from "./helpers";
@@ -219,6 +221,70 @@ describe("grupos de opções (API-15)", () => {
     expect(resolveLine({ name: "Pizza", priceCents: 5000 }, groups, [{ optionId: gId }, { optionId: catupiry }])).toMatchObject({ ok: true, unitPriceCents: 6800 });
     expect(resolveLine({ name: "Pizza", priceCents: 5000 }, groups, [{ optionId: catupiry }]).ok).toBe(false); // falta o tamanho
   });
+
+  it("revalida a cotação e grava as mesmas escolhas na entrega, retirada, mesa, balcão e impressão", async () => {
+    await prisma.store.update({ where: { id: storeId }, data: { deliveryFeeCents: 500, qrOrderingEnabled: true } });
+    const productId = await createProduct();
+    const additional = await prisma.productAdditional.create({ data: { productId, storeId: await productStore(productId), name: "Orégano", priceCents: 300 } });
+    const legacy = await prisma.optionGroup.create({ data: {
+      storeId, name: "Adicionais", source: "LEGACY_ADDITIONALS",
+      options: { create: { id: additional.id, name: additional.name, priceCents: 200 } },
+    } });
+    await prisma.productOptionGroup.create({ data: { storeId, productId, groupId: legacy.id } });
+    const tamanho = await createGroup(tamanhoInput);
+    const borda = await createGroup({ ...bordaInput, maxSelect: 2, maxPerOption: 2 });
+    expect((await post(`/api/catalog/products/${productId}/option-groups`, { groupIds: [tamanho.id, borda.id] })).statusCode).toBe(200);
+    expect(await prisma.productOptionGroup.count({ where: { productId } })).toBe(3);
+
+    const basePath = "/stores/loja-opc";
+    const menu = json(await get(`${basePath}/menu`));
+    expect(menu.categories[0].products[0]).toMatchObject({
+      fromPriceCents: 3000,
+      optionGroups: [{ name: "Tamanho", priceMode: "BASE" }, { name: "Borda", priceMode: "SUM" }],
+      additionals: [{ name: "Orégano", priceCents: 300 }],
+    });
+    const item = {
+      productId, quantity: 2, additionalIds: [additional.id], notes: "Bem assada",
+      optionSelections: [{ optionId: tamanho.options[2].id, quantity: 1 }, { optionId: borda.options[0].id, quantity: 2 }],
+      expectedUnitPriceCents: 7900,
+    };
+    const publicOrder = (items: unknown[], fields: Record<string, unknown> = {}) => post(`${basePath}/orders`, { type: "BALCAO", items, ...fields });
+    const required = await publicOrder([{ productId, quantity: 1 }]);
+    expect([required.statusCode, json(required).code]).toEqual([400, "OPTION_INVALID"]);
+    const stale = await publicOrder([{ ...item, expectedUnitPriceCents: 7600 }]);
+    expect([stale.statusCode, json(stale).code]).toEqual([409, "ITEM_PRICE_CHANGED"]);
+    expect(json(stale).details.items[0]).toMatchObject({ productId, unitPriceCents: 7900 });
+    expect(await prisma.order.count({ where: { storeId } })).toBe(0);
+
+    const pickup = await publicOrder([item]);
+    const delivery = await publicOrder([item], { type: "DELIVERY", customerName: "Ana", customerPhone: "21999990000", address: "Rua A, 1" });
+    const manual = await post("/api/orders", { type: "BALCAO", items: [item], paymentMethod: "DEBITO" });
+    const table = json(await post("/api/tables", { label: "20" })).table;
+    const tablePath = `${basePath}/tables/${table.qrToken}`;
+    const qr = await post(`${tablePath}/orders`, { items: [item] });
+    const responses = [pickup, delivery, manual, qr];
+    for (const response of responses) expect(response.statusCode, response.body).toBe(201);
+
+    await prisma.option.update({ where: { id: borda.options[0].id }, data: { name: "Borda nova", priceCents: 999 } });
+    const snapshots = [
+      { groupName: "Tamanho", name: "G", priceMode: "BASE", priceCents: 6000, quantity: 1 },
+      { groupName: "Borda", name: "Catupiry", priceMode: "SUM", priceCents: 800, quantity: 2 },
+    ];
+    for (const response of responses) {
+      const { orderId } = json(response);
+      const detail = json(await get(`/api/orders/${orderId}`)).order;
+      expect(detail.totalCents).toBe(response === delivery ? 16300 : 15800);
+      expect(detail.items[0]).toMatchObject({ unitPriceCents: 7600, notes: item.notes });
+      expect(detail.items[0].options).toEqual(expect.arrayContaining(snapshots));
+      const ticket = await buildPrintableOrder(orderId);
+      expect(ticket?.items[0]).toMatchObject({ productName: "Pizza", unitPriceCents: 6000, quantity: 2 }); // tíquete (convenção da main): unitário = BASE; opções em linhas "Grupo: opção"
+      expect(ticket?.items[0].additionals).toEqual(expect.arrayContaining([
+        { name: "Orégano", priceCents: 300 }, { name: "Tamanho: G", priceCents: 0 }, { name: "Borda: Catupiry x2", priceCents: 1600 },
+      ]));
+    }
+    const myOrders = await app.inject({ method: "GET", url: `${tablePath}/my-orders`, headers: { "x-device-token": json(qr).deviceToken } });
+    expect(json(myOrders).orders[0].items[0].options).toEqual(expect.arrayContaining(snapshots));
+  });
 });
 
 describe("migração 20261117350000 (adicionais atuais → grupo 'Adicionais', CA-B8-06)", () => {
@@ -233,8 +299,8 @@ describe("migração 20261117350000 (adicionais atuais → grupo 'Adicionais', C
     const category = await prisma.category.create({ data: { storeId: store.id, name: "Lanches" } });
     const burger = await prisma.product.create({ data: { storeId: store.id, categoryId: category.id, name: "Burger", priceCents: 2500 } });
     const plain = await prisma.product.create({ data: { storeId: store.id, categoryId: category.id, name: "Suco", priceCents: 900 } });
-    const bacon = await prisma.productAdditional.create({ data: { productId: burger.id, name: "Bacon", priceCents: 400 } });
-    const queijo = await prisma.productAdditional.create({ data: { productId: burger.id, name: "Queijo", priceCents: 300 } });
+    const bacon = await prisma.productAdditional.create({ data: { productId: burger.id, storeId: await productStore(burger.id), name: "Bacon", priceCents: 400 } });
+    const queijo = await prisma.productAdditional.create({ data: { productId: burger.id, storeId: await productStore(burger.id), name: "Queijo", priceCents: 300 } });
 
     // a migração é idempotente sobre o estado pós-DDL: limpa o que a própria migração cria e roda só a parte de dados
     await prisma.productOptionGroup.deleteMany();

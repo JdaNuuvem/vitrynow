@@ -110,18 +110,19 @@ describe("QA isolamento entre lojas", () => {
   it("D26c (ST-11, defesa em profundidade) o cardápio público de B nunca lista produto de outra loja, mesmo com dado inconsistente no banco", async () => {
     const a = await storeWithProduct("a");
     const b = await storeWithProduct("b");
-    // Simula dado ruim já gravado (a API de catálogo antiga aceitava isso): produto da loja A dentro da categoria de B.
-    await prisma.product.create({ data: { storeId: a.store.id, categoryId: b.categoryId, name: "Produto fantasma de A", priceCents: 100 } });
+    // API-48: o dado ruim (produto da loja A dentro da categoria de B) já NÃO consegue ser gravado: a FK composta (categoryId, storeId) o recusa.
+    await expect(prisma.product.create({ data: { storeId: a.store.id, categoryId: b.categoryId, name: "Produto fantasma de A", priceCents: 100 } })).rejects.toMatchObject({ code: "P2003" });
     const menuB = JSON.parse((await app.inject({ method: "GET", url: `/stores/${b.store.slug}/menu` })).body);
     const names = menuB.categories.flatMap((c: { products: { name: string }[] }) => c.products.map((p) => p.name));
     expect(names).not.toContain("Produto fantasma de A");
     expect(names).toContain("Produto b");
   });
 
-  bug("D26d (ST-11) excluir a categoria de B não é bloqueado por produto de outra loja", async () => {
+  // API-48: era um bug conhecido (`bug` = it.fails). Com a FK composta o "produto fantasma de A" na categoria de B nem existe mais, então nada bloqueia a exclusão.
+  it("D26d (ST-11) excluir a categoria de B não é bloqueado por produto de outra loja (o banco recusa o fantasma)", async () => {
     const a = await storeWithProduct("a");
     const b = await storeWithProduct("b");
-    await prisma.product.create({ data: { storeId: a.store.id, categoryId: b.categoryId, name: "Produto fantasma de A", priceCents: 100 } });
+    await expect(prisma.product.create({ data: { storeId: a.store.id, categoryId: b.categoryId, name: "Produto fantasma de A", priceCents: 100 } })).rejects.toMatchObject({ code: "P2003" });
     await prisma.product.delete({ where: { id: b.productId } });
     const del = await app.inject({ method: "POST", url: `/api/catalog/categories/${b.categoryId}/delete`, headers: { cookie: b.cookie } });
     expect(del.statusCode).toBe(200);

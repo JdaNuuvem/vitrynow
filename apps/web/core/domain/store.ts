@@ -1,5 +1,7 @@
 export type StoreSettings = {
   id: string;
+  /** SSOT D1: fuso IANA da loja (ex.: America/Manaus). Toda data do painel usa este, nunca o do aparelho. */
+  timezone?: string;
   name: string;
   slug: string;
   code: string;
@@ -14,6 +16,7 @@ export type StoreSettings = {
   deliveryEnabled: boolean;
   pickupEnabled: boolean;
   acceptingOrders: boolean;
+  hideSoldOutProducts?: boolean;
   deliveryFeeCents: number;
 };
 
@@ -27,15 +30,16 @@ export type PlanStatus = {
 
 // Payload de POST /api/store/settings: campos de texto vazios limpam o valor no servidor.
 export type StoreSettingsInput = {
-  name: string;
-  logoUrl: string;
-  coverImageUrl: string;
-  primaryColor: string;
-  address: string;
-  whatsapp: string;
-  openingHours: string;
+  hideSoldOutProducts?: boolean;
+  name?: string;
+  logoUrl?: string;
+  coverImageUrl?: string;
+  primaryColor?: string;
+  address?: string;
+  whatsapp?: string;
+  openingHours?: string;
   minOrderCents?: number;
-  deliveryFeeCents: number;
-  deliveryEnabled: boolean;
-  pickupEnabled: boolean;
+  deliveryFeeCents?: number;
+  deliveryEnabled?: boolean;
+  pickupEnabled?: boolean;
 };

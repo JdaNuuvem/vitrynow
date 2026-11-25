@@ -13,12 +13,17 @@ import type { AuditGateway } from "../gateways/AuditGateway";
 import type { CatalogGateway } from "../gateways/CatalogGateway";
 import type { CouponsGateway } from "../gateways/CouponsGateway";
 import type { DeviceTokensGateway } from "../gateways/DeviceTokensGateway";
+import type { DeliveryZonesGateway } from "../gateways/DeliveryZonesGateway";
+import type { PrintQueueGateway } from "../gateways/PrintQueueGateway";
 import type { UsersGateway } from "../gateways/UsersGateway";
 import type { MfaGateway } from "../gateways/MfaGateway";
 import type { NoticesGateway } from "../gateways/NoticesGateway";
 import type { SubscriptionGateway } from "../gateways/SubscriptionGateway";
+import type { StockGateway } from "../gateways/StockGateway";
 
 export type PanelServices = {
+  deliveryZones: DeliveryZonesGateway;
+  printQueue: PrintQueueGateway;
   catalog: CatalogGateway;
   coupons: CouponsGateway;
   deviceTokens: DeviceTokensGateway;
@@ -34,6 +39,7 @@ export type PanelServices = {
   feedback: FeedbackGateway;
   realtime: RealtimeGateway;
   subscription: SubscriptionGateway;
+  stock: StockGateway;
   notices: NoticesGateway;
   mfa: MfaGateway;
 };

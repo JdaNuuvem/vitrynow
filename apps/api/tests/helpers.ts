@@ -40,6 +40,10 @@ export function makeApp() {
 
 // Limpa todas as tabelas entre testes (ordem respeita FKs). Só roda contra meucardapio_test
 // (ver vitest.config.ts) — nunca o banco de dev/produção.
+// API-48b: tabelas filhas têm `storeId` próprio (FK composta com o pai). Para os testes que criam linhas filhas direto no banco.
+export const orderStore = async (orderId: string) => (await prisma.order.findUniqueOrThrow({ where: { id: orderId }, select: { storeId: true } })).storeId;
+export const productStore = async (productId: string) => (await prisma.product.findUniqueOrThrow({ where: { id: productId }, select: { storeId: true } })).storeId;
+
 export async function resetDb() {
   // INF-16: antes do primeiro DELETE, confere a URL e pergunta ao servidor em que banco ele está (recusa se não for _test).
   await assertSafeToReset({
@@ -59,6 +63,7 @@ export async function resetDb() {
     prisma.cashMovement.deleteMany(),
     prisma.cashSession.deleteMany(),
     prisma.productAdditional.deleteMany(),
+    prisma.option.deleteMany(),
     prisma.product.deleteMany(),
     prisma.category.deleteMany(),
     prisma.coupon.deleteMany(),

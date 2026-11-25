@@ -113,7 +113,7 @@
   border: none;
   border-radius: 8px;
   background: var(--color-primary);
-  color: #fff;
+  color: var(--on-primary);
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -128,3 +128,10 @@
     padding: 24px 16px 120px;
   }
 }
+.controlecaixa > .ds-heading { margin-bottom: 16px; }
+.controlecaixa__forms { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+.controlecaixa__movement small { display: block; color: var(--ink-soft); overflow-wrap: anywhere; }
+.closed-cash { display: grid; gap: 14px; padding: 16px; }
+.closed-cash h2 { font-size: var(--ds-text-md); font-weight: 700; }
+.closed-cash > .ds-button { justify-self: start; }
+@media (max-width: 760px) { .controlecaixa__forms { grid-template-columns: minmax(0, 1fr); } }

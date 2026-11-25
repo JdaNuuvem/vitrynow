@@ -9,6 +9,26 @@
       "development": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./constants": {
+      "development": "./src/constants.ts",
+      "types": "./dist/constants.d.ts",
+      "default": "./dist/constants.js"
+    },
+    "./quote": {
+      "development": "./src/quote.ts",
+      "types": "./dist/quote.d.ts",
+      "default": "./dist/quote.js"
+    },
+    "./phone": {
+      "development": "./src/phone.ts",
+      "types": "./dist/phone.d.ts",
+      "default": "./dist/phone.js"
+    },
+    "./errors": {
+      "development": "./src/errorMessages.ts",
+      "types": "./dist/errorMessages.d.ts",
+      "default": "./dist/errorMessages.js"
     }
   },
   "scripts": {

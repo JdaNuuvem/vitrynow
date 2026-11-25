@@ -246,7 +246,7 @@ describe("OrderResultScreen: a frase 'a loja recebe o pedido' só em pedido PIX 
 
 describe("OrderResultScreen: tela recuperada depois de recarregar (WEB-33b, UI-V-20/21)", () => {
   const pix = { pixQrCode: "000201PIXCODE", pixQrCodeBase64: "QUJD" };
-  const expires = Date.parse("2026-11-17T14:50:00");
+  const expires = Date.parse("2026-11-17T14:50:00-03:00");
 
   it("PIX válido: 'Pedido #0123 enviado', mesmo QR e copiar, prazo e faixa; sem cancelar e sem 'verificando'", () => {
     setup({ code: "0123", resume: "valid", trackingUnavailable: true, pixData: pix, pixExpiresAt: expires, summary: null, whatsapp: "5521999999999" });
@@ -312,7 +312,7 @@ const stubViewport = (wide: boolean) =>
 
 describe("OrderResultScreen: hierarquia, valor e ordem da tela do PIX (A1 a A4)", () => {
   const pix = { pixQrCode: "000201PIXCODE", pixQrCodeBase64: "QUJD" };
-  const base = { code: "0101", resume: "valid" as const, trackingUnavailable: true, pixData: pix, pixExpiresAt: Date.parse("2026-11-17T04:45:00"), totalCents: 4500, storeName: "Pizzaria Boa", whatsapp: "5521999999999", summary: null };
+  const base = { code: "0101", resume: "valid" as const, trackingUnavailable: true, pixData: pix, pixExpiresAt: Date.parse("2026-11-17T04:45:00-03:00"), totalCents: 4500, storeName: "Pizzaria Boa", whatsapp: "5521999999999", summary: null };
   afterEach(() => vi.unstubAllGlobals());
   beforeEach(() => stubViewport(true));
 

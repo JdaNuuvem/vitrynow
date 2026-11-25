@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatCents } from "@/shared/format/money";
+import { PageHeading, StateMessage } from "@/shared/design/components";
+import type { HistoryQuery } from "@/core/domain/orderHistory";
 import type { Order } from "@/core/domain/orders";
 import { useCurrentRole } from "@/core/session/useCurrentRole";
 import { useMediaQuery } from "@/lib/useMediaQuery";
@@ -17,6 +19,7 @@ import { usePedidos } from "../hooks/usePedidos";
 import { HISTORY_HREF } from "../hiddenOpen";
 import { customerText, formatWhen, rowBadges, statusChip, typeLabel } from "./historyFormat";
 import { useOrderHistoryList } from "./useOrderHistoryList";
+import { HistoryFilters, readHistoryFilters } from "./HistoryFilters";
 import "../pedidos.css";
 import "../pedidos-acoes.css";
 import "../pedidos-detalhe.css";
@@ -27,12 +30,12 @@ type CancelTarget = { order: Order; action: CardAction } | null;
 const RETRY_REFUND_ACTION: CardAction = { to: "CANCELADO", label: "Tentar estorno", kind: "CANCEL", primary: false, requiresReason: false, refund: true, disabledReason: null };
 
 // Textos desta tela. Os marcados (provisório) aguardam o Ogilvy.
-export const HISTORY_EMPTY_TEXT = "Nenhum pedido em aberto."; // (provisório)
+export const HISTORY_EMPTY_TEXT = "Nenhum pedido encontrado.";
 export const HISTORY_ERROR_TEXT = "Não foi possível carregar o histórico. Verifique sua internet."; // (provisório)
 export const HISTORY_RATE_TEXT = "Muitas buscas em pouco tempo. Aguarde um instante."; // spec 10 §2.3 (CA-HP, anti-abuso)
 export const HISTORY_MORE_ERROR_TEXT = "Não foi possível carregar mais pedidos."; // (provisório)
 
-const countText = (total: number) => (total === 1 ? "1 pedido em aberto" : `${total.toLocaleString("pt-BR")} pedidos em aberto`); // (provisório)
+const countText = (total: number) => (total === 1 ? "1 pedido" : `${total.toLocaleString("pt-BR")} pedidos`);
 
 // Histórico de pedidos, Fatia 1 (WEB-44, spec 10 §2): "Em aberto" sem limite de data (API-72), para o dono achar os pedidos antigos que o teto do quadro
 // escondeu. Tocar numa linha abre o MESMO detalhe do quadro (WEB-26), com as ações que o servidor permite a cada papel.
@@ -45,7 +48,8 @@ export function HistoricoPage() {
   const selectedId = searchParams.get("pedido");
   const desktop = useMediaQuery("(min-width: 1100px)");
   // "Em aberto" não manda período: a API devolve todo pedido aberto da loja, por mais antigo que seja (API-72).
-  const query = useMemo(() => ({ status: "ABERTO" as const }), []);
+  const [search, setSearch] = useState("");
+  const query = useMemo(() => ({ ...readHistoryFilters(searchParams), q: search || undefined }), [searchParams, search]);
   const h = useOrderHistoryList(query);
   const [cancelTarget, setCancelTarget] = useState<CancelTarget>(null);
   // Muda a cada ação concluída aqui: faz o detalhe aberto recarregar (o pedido pode nem estar no quadro).
@@ -72,22 +76,37 @@ export function HistoricoPage() {
 
   const current = cancelTarget ? (p.orders.find((order) => order.id === cancelTarget.order.id) ?? cancelTarget.order) : null;
 
+  function applyFilters(filters: HistoryQuery) {
+    setSearch(filters.q ?? "");
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters)) {
+      if (key !== "q" && value !== undefined && value !== "") params.set(key, String(value));
+    }
+    const suffix = params.toString();
+    router.replace(suffix ? HISTORY_HREF + "?" + suffix : HISTORY_HREF, { scroll: false });
+  }
+
   const openDetail = useCallback(
     (orderId: string) => {
       openedHere.current = true;
       lastOpened.current = orderId;
-      router.push(`${HISTORY_HREF}?pedido=${encodeURIComponent(orderId)}`);
+      const next = new URLSearchParams(searchParams.toString());
+      next.set("pedido", orderId);
+      router.push(HISTORY_HREF + "?" + next.toString(), { scroll: false });
     },
-    [router],
+    [router, searchParams],
   );
   const closeDetail = useCallback(() => {
     if (openedHere.current) {
       openedHere.current = false;
       router.back();
     } else {
-      router.replace(HISTORY_HREF);
+      const next = new URLSearchParams(searchParams.toString());
+      next.delete("pedido");
+      const suffix = next.toString();
+      router.replace(suffix ? HISTORY_HREF + "?" + suffix : HISTORY_HREF, { scroll: false });
     }
-  }, [router]);
+  }, [router, searchParams]);
 
   // Painel lateral fechado: o foco volta à linha que o abriu.
   useEffect(() => {
@@ -126,17 +145,8 @@ export function HistoricoPage() {
   return (
     <main className={`pedidos historico${selectedId && desktop ? " pedidos--with-detail" : ""}`}>
       <div className="pedidos__content">
-        <div className="historico__top">
-          <Link href="/dashboard/pedidos" className="historico__back">
-            <span aria-hidden="true">← </span>Pedidos
-          </Link>
-          <h1>Histórico</h1>
-        </div>
-
-        {/* Fatia 1: um filtro só, "Em aberto". Não é botão (nada a escolher ainda); busca e demais filtros chegam na Fatia 2. */}
-        <p className="historico__filter">
-          <span className="historico__chip">Em aberto</span>
-        </p>
+        <PageHeading title="Histórico" actions={<Link href="/dashboard/pedidos" className="ds-button ds-button--secondary">Voltar aos pedidos</Link>} />
+        <HistoryFilters key={JSON.stringify(query)} applied={query} onApply={applyFilters} />
 
         {p.notice && (
           <div role="alert" className="pedidos__notice">
@@ -176,7 +186,7 @@ export function HistoricoPage() {
             </p>
 
             {h.rows.length === 0 ? (
-              <p className="pedidos__empty historico__empty">{HISTORY_EMPTY_TEXT}</p>
+              <StateMessage title={HISTORY_EMPTY_TEXT}>Ajuste os filtros para ampliar a busca.</StateMessage>
             ) : (
               <ul className="historico__list" ref={listRef}>
                 {h.rows.map((row) => {

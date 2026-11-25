@@ -1,10 +1,11 @@
 import type { OrderStatus, OrderType, PaymentStatus } from "@meucardapio/db";
+import { FINAL_ORDER_STATUSES, panelRoleSchema, type PanelRole } from "@meucardapio/shared-types";
 
 // Máquina de estados do pedido (ADR-0007 §3) — única tabela de arestas do sistema. Funções
 // puras: sem banco, sem relógio implícito. O servidor decide; a UI só desenha `allowedTransitions`.
 
-export type Role = "OWNER" | "STAFF";
-export const FINAL_STATUSES: readonly OrderStatus[] = ["CONCLUIDO", "CANCELADO"];
+export type Role = PanelRole;
+export const FINAL_STATUSES: readonly OrderStatus[] = FINAL_ORDER_STATUSES; // SSOT D3: a mesma lista do web
 export const UNDO_WINDOW_MS = 2 * 60 * 1000;
 
 // Motivos de cancelamento escolhidos por pessoas. PAGAMENTO_NAO_APROVADO é só do sistema.
@@ -63,16 +64,16 @@ export function holdsMoney(payment?: { status: PaymentStatus } | null): boolean 
   return payment?.status === "APROVADO" || payment?.status === "ESTORNO_PENDENTE";
 }
 
-export type Actor = "OWNER" | "STAFF" | "CUSTOMER" | "SYSTEM";
+export type Actor = PanelRole | "CUSTOMER" | "SYSTEM";
 
 // Quem pode cancelar o pedido no estado atual (B3.2 do Leonardo).
 export function canCancel(order: OrderFacts, actor: Actor): boolean {
   if (FINAL_STATUSES.includes(order.status)) return false;
   switch (actor) {
-    case "OWNER":
+    case panelRoleSchema.enum.OWNER:
     case "SYSTEM":
       return true;
-    case "STAFF":
+    case panelRoleSchema.enum.STAFF:
       return (order.status === "PENDENTE" || order.status === "CONFIRMADO") && !holdsMoney(order.payment);
     case "CUSTOMER":
       return order.status === "PENDENTE";
@@ -175,5 +176,5 @@ export function blockedTransitions(order: OrderFacts, role: Role): BlockedTransi
 
 // Desfazer: só a última ação "para frente" (nunca a partir de estado final nem de cancelamento).
 export function undoUntil(lastChangeAt: Date, role: Role): Date | null {
-  return role === "OWNER" ? null : new Date(lastChangeAt.getTime() + UNDO_WINDOW_MS);
+  return role === panelRoleSchema.enum.OWNER ? null : new Date(lastChangeAt.getTime() + UNDO_WINDOW_MS);
 }

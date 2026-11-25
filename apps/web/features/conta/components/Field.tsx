@@ -11,6 +11,8 @@ export function Field({
   adornment,
   error,
   inputRef,
+  maxLength,
+  inputMode,
 }: {
   label?: string;
   value: string;
@@ -20,6 +22,9 @@ export function Field({
   adornment?: ReactNode;
   error?: string | null;
   inputRef?: (element: HTMLInputElement | null) => void;
+  /** Limite do servidor para o campo (o navegador impede digitar além). */
+  maxLength?: number;
+  inputMode?: "text" | "numeric" | "tel" | "email" | "url";
 }) {
   const inputId = useId();
   const errorId = `${inputId}-erro`;
@@ -33,6 +38,8 @@ export function Field({
           type={type}
           value={value}
           placeholder={placeholder}
+          maxLength={maxLength}
+          inputMode={inputMode}
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? errorId : undefined}
           onChange={(event) => onChange(event.target.value)}

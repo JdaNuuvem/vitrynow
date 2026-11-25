@@ -1,35 +1,29 @@
 import { isSoldOutNow } from "../lib/soldOut";
+import { minOrderMessage, couponMinOrderMessage } from "@meucardapio/shared-types";
 import { randomUUID } from "node:crypto";
 import type { FastifyPluginAsync } from "fastify";
 import { prisma } from "@meucardapio/db";
 import { createOrderSchema } from "@meucardapio/shared-types";
-import { applyFreeShipping } from "../lib/deliveryZones";
-import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
-import { publishToStore } from "../realtime/hub";
+import { quoteOrder } from "../lib/quoteOrder";
 import { gatewayForStore } from "../modules/storePayments/gateway";
 import { PixUnavailableError } from "../modules/storePayments/storePayments.service";
 import { orderService } from "../modules/orders/orders.module";
-import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
 import { customerMessageFor, messageActorFor, moneyLineFor } from "../lib/cancelMessages";
-import { DomainError } from "../shared/errors";
+import { DomainError, useDomainErrors } from "../shared/errors";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
 import { buildMenuView } from "../lib/menuView";
-import { resolveLine, type GroupRow } from "../modules/optionGroups/optionGroups.domain";
-import { PrismaOptionGroupsRepository } from "../modules/optionGroups/optionGroups.repository";
 import { limited, tooMany } from "../lib/slidingLimit";
 import { CAPTCHA_HEADER, captchaVerifier } from "../lib/captcha";
 import { clientIpOf } from "../lib/clientIp";
 import { clientKey } from "../lib/clientKey";
 import { newOrderToken, orderTokenMatches, ORDER_TOKEN_HEADER } from "../lib/orderToken";
+import { assertOrderMoneyFits, buildOrderLines } from "../lib/orderItems";
+import { getEntitlements } from "../lib/subscription";
+import { checkScheduledFor, prepMinutesFor, releaseAtFor } from "../lib/scheduling";
+import { parseStoredSchedule } from "../modules/storeHours/storeHours.domain";
 
 const COUPON_EXHAUSTED_MESSAGE = "Esse cupom acabou.";
 class CouponExhaustedError extends Error {}
-// API-15: erro de escolha de opções do item (vira 400 com `code`, sem dizer se a opção existe em outra loja/produto).
-class OptionRequestError extends Error {
-  constructor(message: string, readonly code: string) {
-    super(message);
-  }
-}
 
 // Rotas públicas do cardápio (sem autenticação) — equivalente ao /online/{slug} do original.
 // NG-08: tetos do pedido público (por loja e por telefone); ver o comentário no uso.
@@ -39,6 +33,7 @@ export const CAPTCHA_AT_PENDING = 2; // com captcha ligado, a partir do 2º pedi
 const PENDING_WINDOW_MS = 30 * 60 * 1000;
 
 const storefrontRoutes: FastifyPluginAsync = async (app) => {
+  useDomainErrors(app);
   app.get("/stores/:slug/menu", async (request, reply) => {
     const { slug } = request.params as { slug: string };
     const store = await prisma.store.findUnique({ where: { slug } });
@@ -79,9 +74,25 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       if (captcha.mode !== "off" && pendingOfPhone >= CAPTCHA_AT_PENDING) {
         const header = request.headers[CAPTCHA_HEADER];
         const token = typeof header === "string" && header.length <= 2000 ? header : undefined;
-        const ok = await captcha.verify(token, clientKey(clientIpOf(request))).catch(() => false); // erro do provedor = recusa (fail-closed)
+        const ip = clientIpOf(request);
+        const ok = await captcha.verify(token, clientKey(ip), ip).catch(() => false); // erro do provedor = recusa (fail-closed)
         if (!ok) return reply.code(403).send({ error: "Confirme que você não é um robô para continuar.", code: "CAPTCHA_REQUIRED" });
       }
+    }
+
+    // API-40 (PRO): pedido agendado. O portão (publicOrderGate) deixa passar loja fechada AGORA quando há horário; quem valida o horário é aqui.
+    // Sem o recurso no plano: resposta neutra, sem citar plano (RN-A-02).
+    let scheduledFor: Date | null = null;
+    let held = false;
+    if (input.scheduledFor) {
+      if (input.type === "MESA") return reply.code(400).send({ error: "Pedido de mesa não pode ser agendado.", code: "SCHEDULE_NOT_ALLOWED" });
+      const { features } = await getEntitlements(store.id);
+      if (!features.includes("scheduled_orders")) return reply.code(409).send({ error: "Esta loja não aceita pedidos agendados.", code: "SCHEDULING_UNAVAILABLE" });
+      scheduledFor = new Date(input.scheduledFor);
+      const now = new Date();
+      const problem = checkScheduledFor({ scheduledFor, now, schedule: parseStoredSchedule(store.schedule), timeZone: store.timezone, closedUntil: store.closedUntil });
+      if (problem) return reply.code(400).send({ error: problem.message, code: problem.code });
+      held = releaseAtFor(scheduledFor, prepMinutesFor(input.type, store)) > now;
     }
 
     // Mesa só entra por QR/comanda (API-22). Esta rota genérica não tem mesa: recusa até lá (API-60).
@@ -110,9 +121,8 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       where: { storeId: store.id, id: { in: input.items.map((i) => i.productId) } },
       include: { additionals: true },
     });
-    const productById = new Map(products.map((p) => [p.id, p]));
     if (products.length !== new Set(input.items.map((i) => i.productId)).size) {
-      return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja" });
+      return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja", code: "PRODUCT_NOT_FOUND" });
     }
     // Produto pausado some do cardápio e não pode ser pedido por chamada direta (B08).
     // API-17: esgotado hoje também é recusado (RN-B11-04), mesmo se escondido ou enviado direto à API.
@@ -127,69 +137,18 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    // API-15 parte 2 (B8): produto com grupo de opções REAL (MANUAL) é precificado por `resolveLine` (o servidor é a única fonte do preço);
-    // produto só com o espelho legado dos adicionais (LEGACY_ADDITIONALS) segue o caminho antigo, idêntico ao de antes (CA-B8-06).
-    const groupsByProduct = await new PrismaOptionGroupsRepository(prisma).groupsForProducts(store.id, [...productById.keys()]);
-    const optionIssues: Array<{ productId: string; code: string; message: string; groupId?: string }> = [];
-    let itemsData;
-    try {
-      itemsData = input.items.map((item) => {
-        const product = productById.get(item.productId)!;
-        const groups: GroupRow[] = groupsByProduct.get(product.id) ?? [];
-        const realGroups = groups.filter((g) => g.source !== "LEGACY_ADDITIONALS");
-        if (item.options && item.additionalIds?.length) throw new OptionRequestError("Envie `options` OU `additionalIds` no mesmo item, não os dois.", "OPTIONS_AMBIGUOUS");
-        if (realGroups.length > 0 || item.options) {
-          // grupo legado entra no cálculo só como lista de opções válidas (ids iguais aos dos adicionais): produto sem grupo real aceita `options` também
-          const resolved = resolveLine({ name: product.name, priceCents: product.priceCents }, groups, item.options ?? []);
-          if (!resolved.ok) {
-            for (const issue of resolved.issues) optionIssues.push({ productId: product.id, code: issue.code, message: issue.message, groupId: issue.groupId });
-            throw new OptionRequestError("As opções escolhidas não são válidas.", "OPTION_INVALID");
-          }
-          return {
-            productId: item.productId,
-            productName: product.name,
-            quantity: item.quantity,
-            unitPriceCents: resolved.unitPriceCents, // preço UNITÁRIO já com a variação e as opções (RN-B8-03)
-            notes: item.notes,
-            lineTotalCents: resolved.unitPriceCents * item.quantity,
-            additionals: [] as Array<{ name: string; priceCents: number }>,
-            optionCopies: resolved.copies,
-          };
-        }
-        const additionalsByProduct = new Map(product.additionals.map((a) => [a.id, a]));
-        const chosenAdditionals = (item.additionalIds ?? []).map((id) => {
-          const additional = additionalsByProduct.get(id);
-          if (!additional) throw new Error(`adicional ${id} não pertence ao produto ${product.id}`);
-          return additional;
-        });
-        const additionalsCents = chosenAdditionals.reduce((sum, a) => sum + a.priceCents, 0);
-        return {
-          productId: item.productId,
-          productName: product.name,
-          quantity: item.quantity,
-          unitPriceCents: product.priceCents,
-          notes: item.notes,
-          lineTotalCents: (product.priceCents + additionalsCents) * item.quantity,
-          additionals: chosenAdditionals,
-          optionCopies: [] as Array<{ groupName: string; name: string; priceCents: number; quantity: number; priceMode: "SUM" | "BASE" }>,
-        };
-      });
-    } catch (error) {
-      if (error instanceof OptionRequestError) {
-        // Uma resposta SÓ para opção inexistente, inativa, de outro produto ou de outra loja: nenhuma pista (RN-B8-02).
-        return reply.code(400).send({ error: error.message, code: error.code, ...(optionIssues.length ? { issues: optionIssues } : {}) });
-      }
-      return reply.code(400).send({ error: error instanceof Error ? error.message : "pedido inválido" });
-    }
+    // API-15: UMA regra de preço/opções para vitrine, mesa e balcão (`lib/orderItems.ts`): preço só do servidor, cópia imutável, mesma resposta para opção alheia/inexistente.
+    const built = await buildOrderLines(store.id, products, input.items);
+    if (!built.ok) return reply.code(built.status).send(built.body);
+    const itemsData = built.lines;
 
     const subtotalCents = itemsData.reduce((sum, item) => sum + item.lineTotalCents, 0);
 
     if (store.minOrderCents !== null && subtotalCents < store.minOrderCents) {
-      return reply.code(400).send({ error: `pedido mínimo é R$ ${(store.minOrderCents / 100).toFixed(2)}` });
+      return reply.code(400).send({ error: minOrderMessage(store.minOrderCents) });
     }
 
     let coupon = null;
-    let discountCents = 0;
     if (input.couponCode) {
       coupon = await prisma.coupon.findUnique({
         where: { storeId_code: { storeId: store.id, code: input.couponCode.trim().toUpperCase() } },
@@ -204,22 +163,17 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(400).send({ error: COUPON_EXHAUSTED_MESSAGE, code: "COUPON_EXHAUSTED" });
       }
       if (coupon.minOrderCents !== null && subtotalCents < coupon.minOrderCents) {
-        return reply.code(400).send({ error: `pedido mínimo para este cupom é R$ ${(coupon.minOrderCents / 100).toFixed(2)}` });
+        return reply.code(400).send({ error: couponMinOrderMessage(coupon.minOrderCents) });
       }
-      discountCents =
-        coupon.discountType === "PERCENT"
-          ? Math.round((subtotalCents * coupon.discountValue) / 100)
-          : coupon.discountValue;
-      discountCents = Math.min(discountCents, subtotalCents);
     }
 
     // API-16 (B9): taxa por bairro, recalculada AQUI (o cliente só informa o bairro e a taxa que viu). Retirada nunca tem taxa.
-    let deliveryFeeCents = 0;
+    let baseFee = 0;
+    let zoneFreeFrom: number | null = null;
     let zoneSnapshot: { name: string; etaMin: number | null; etaMax: number | null } | null = null;
     if (input.type === "DELIVERY") {
       const zoneCount = await prisma.deliveryZone.count({ where: { storeId: store.id } });
-      let baseFee = store.deliveryFeeCents; // sem bairros cadastrados: taxa única, como sempre (CA-B9-09)
-      let zoneFreeFrom: number | null = null;
+      baseFee = store.deliveryFeeCents; // sem bairros cadastrados: taxa única, como sempre (CA-B9-09)
       if (zoneCount > 0) {
         const activeZones = () => prisma.deliveryZone.findMany({ where: { storeId: store.id, active: true }, orderBy: { name: "asc" }, select: { id: true, name: true, feeCents: true } });
         if (input.neighborhoodId) {
@@ -236,11 +190,16 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
           return reply.code(400).send({ error: "Escolha o bairro da entrega.", code: "NEIGHBORHOOD_REQUIRED", details: { zones: await activeZones() } });
         }
       }
-      // Frete grátis sobre o subtotal LÍQUIDO (itens menos desconto), RN-B9-05.
-      deliveryFeeCents = applyFreeShipping(baseFee, subtotalCents - discountCents, zoneFreeFrom, store.freeShippingFromCents);
     }
+    // D5: cálculo único (subtotal, cupom, frete grátis sobre o subtotal LÍQUIDO RN-B9-05, gorjeta, total) em lib/quoteOrder.
+    const { discountCents, deliveryFeeCents, totalCents } = quoteOrder({
+      lineTotalsCents: itemsData.map((item) => item.lineTotalCents),
+      coupon,
+      delivery: input.type === "DELIVERY" ? { baseFeeCents: baseFee, zoneFreeFromCents: zoneFreeFrom, storeFreeFromCents: store.freeShippingFromCents } : null,
+      tipCents: input.tipCents,
+    });
     const tipCents = input.tipCents ?? 0;
-    const totalCents = subtotalCents - discountCents + deliveryFeeCents + tipCents;
+    assertOrderMoneyFits(totalCents);
     // RN-B9-03: a taxa mudou desde que o cliente viu (ou é outra): 409 com o novo valor; a tela pede confirmação.
     if (input.expectedDeliveryFeeCents !== undefined && input.expectedDeliveryFeeCents !== deliveryFeeCents) {
       return reply.code(409).send({ error: "A taxa de entrega mudou. Confira o novo total.", code: "DELIVERY_FEE_CHANGED", details: { deliveryFeeCents, totalCents } });
@@ -262,81 +221,47 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     // NG-16: o cliente recebe este token UMA vez; só o hash vai ao banco.
     const accessToken = newOrderToken();
 
-    // Código e pedido na MESMA transação: o contador da loja fica travado até o commit, então
-    // pedidos simultâneos são serializados e nunca colidem (B01).
-    let ticketQueued = false;
     let order;
     try {
-      order = await prisma.$transaction(async (tx) => {
-      // FUNC-01: o uso do cupom é RESERVADO aqui, na mesma transação do pedido, com UPDATE condicional (usedCount < maxUses).
-      // Sem vaga ⇒ 0 linhas ⇒ recusa ANTES de gastar número de pedido; e se qualquer passo seguinte cair, o rollback desfaz
-      // pedido e uso juntos (nunca desconto sem contar o uso). A linha do cupom fica travada até o commit: usos simultâneos
-      // do mesmo cupom se enfileiram aqui, e só cabem `maxUses` deles.
-      if (coupon) {
-        const reserved = await tx.$executeRaw`
-          UPDATE "Coupon" SET "usedCount" = "usedCount" + 1
-           WHERE "id" = ${coupon.id} AND "storeId" = ${store.id} AND "active" = true
-             AND ("maxUses" IS NULL OR "usedCount" < "maxUses")`;
-        if (reserved === 0) throw new CouponExhaustedError();
-      }
-      const code = await nextOrderCode(tx, store.id);
-      const created = await tx.order.create({
-      data: {
+      order = await orderService.create({
+        origin: "STOREFRONT",
         storeId: store.id,
-        code,
-        type: input.type,
-        customerName: input.customerName?.normalize("NFC"), // NFC na gravação: nome vindo de Apple (NFD) é achado pela busca (QA-28 H3)
-        customerPhone: input.customerPhone,
-        address: input.address,
-        notes: input.notes,
-        subtotalCents,
-        discountCents,
-        deliveryFeeCents,
-        deliveryZoneName: zoneSnapshot?.name,
-        deliveryEtaMinMinutes: zoneSnapshot?.etaMin,
-        deliveryEtaMaxMinutes: zoneSnapshot?.etaMax,
-        tipCents,
-        totalCents,
-        paymentMethod,
-        changeForCents: zeroTotal ? undefined : input.changeForCents,
-        couponId: coupon?.id,
-        awaitingPayment: usePix,
-        publicTokenHash: accessToken.hash,
-        // PIX: o registro do pagamento nasce na MESMA transação do pedido, com a chave de idempotência, ANTES de
-        // falar com o provedor — se algo cair no meio, a cobrança é encontrada (e a conciliação resolve), nunca órfã.
-        ...(usePix ? { payment: { create: { amountCents: totalCents, idempotencyKey: randomUUID() } } } : {}),
-        statusHistory: { create: { status: "PENDENTE" } },
-        items: {
-          create: itemsData.map((item) => ({
-            productId: item.productId,
-            productName: item.productName,
-            quantity: item.quantity,
-            unitPriceCents: item.unitPriceCents,
-            notes: item.notes,
-            additionals: {
-              create: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })),
-            },
-            // Cópia da escolha no pedido (RN-B8-07): mudar o cardápio depois não altera pedido antigo. Na MESMA transação do pedido.
-            ...(item.optionCopies.length > 0
-              ? { options: { create: item.optionCopies.map((o) => ({ groupName: o.groupName, name: o.name, priceCents: o.priceCents, quantity: o.quantity, priceMode: o.priceMode })) } }
-              : {}),
-          })),
-        },
-      },
+        items: itemsData,
+        coupon: coupon ? { id: coupon.id, ignoreLimit: false, exhaustedError: () => new CouponExhaustedError() } : null,
+        release: !usePix && !held, // PIX: tíquete e eventos só depois do pagamento aprovado; agendado: só quando o job soltar
+        fields: () => ({
+          type: input.type,
+          customerName: input.customerName?.normalize("NFC"), // NFC na gravação: nome vindo de Apple (NFD) é achado pela busca (QA-28 H3)
+          customerPhone: input.customerPhone,
+          address: input.address,
+          notes: input.notes,
+          subtotalCents,
+          discountCents,
+          deliveryFeeCents,
+          deliveryZoneName: zoneSnapshot?.name,
+          deliveryEtaMinMinutes: zoneSnapshot?.etaMin,
+          deliveryEtaMaxMinutes: zoneSnapshot?.etaMax,
+          tipCents,
+          totalCents,
+          paymentMethod,
+          changeForCents: zeroTotal ? undefined : input.changeForCents,
+          couponId: coupon?.id,
+          awaitingPayment: usePix,
+          scheduledFor,
+          held,
+          publicTokenHash: accessToken.hash,
+          // PIX: o registro do pagamento nasce na MESMA transação do pedido, com a chave de idempotência, ANTES de
+          // falar com o provedor — se algo cair no meio, a cobrança é encontrada (e a conciliação resolve), nunca órfã.
+          ...(usePix ? { payment: { create: { amountCents: totalCents, idempotencyKey: randomUUID() } } } : {}),
+          statusHistory: { create: { status: "PENDENTE" } },
+        }),
       });
-      // Pedido que já entra no kanban (não aguarda PIX): o tíquete nasce NA MESMA transação — nunca pedido sem job.
-      if (!usePix) ticketQueued = await enqueueOrderTicket(tx, { id: created.id, storeId: store.id });
-      return created;
-      }, ORDER_TX_OPTIONS);
     } catch (error) {
       if (error instanceof CouponExhaustedError) return reply.code(400).send({ error: COUPON_EXHAUSTED_MESSAGE, code: "COUPON_EXHAUSTED" });
       throw error;
     }
-
     if (!usePix) {
-      publishToStore(store.id, { type: "order.created", orderId: order.id });
-      if (ticketQueued) publishToStore(store.id, { type: "print.available" });
-      return reply.code(201).send({ orderId: order.id, code: order.code, token: accessToken.token });
+      return reply.code(201).send({ orderId: order.id, code: order.code, token: accessToken.token, totalCents, discountCents, ...(scheduledFor ? { scheduledFor } : {}) });
     }
 
     const payment = await prisma.payment.findUniqueOrThrow({ where: { orderId: order.id } });
@@ -364,6 +289,8 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         orderId: order.id,
         code: order.code,
         token: accessToken.token,
+        totalCents,
+        discountCents,
         payment: { pixQrCode: pix.pixQrCode, pixQrCodeBase64: pix.pixQrCodeBase64, expiresAt: pix.expiresAt },
       });
     } catch (error) {

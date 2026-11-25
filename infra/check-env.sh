@@ -129,6 +129,54 @@ case "$mode" in
   *)    bad "MP_OAUTH_MODE='$mode' inválido (use off ou real)" ;;
 esac
 
+# --- captcha do pedido público (NG-08): off | turnstile. `fake` é só dev/teste (a API recusa subir com ele em produção).
+# Com turnstile são DUAS chaves do mesmo widget da Cloudflare: a SECRETA (API) e a do SITE (fixada no build da imagem web).
+# Faltar a do site = a API cobra o captcha e o cardápio não consegue mostrá-lo: quem já tem 2 pedidos pendentes não pede mais.
+cap="$(get CAPTCHA_MODE)"; cap="${cap:-off}"
+case "$cap" in
+  off)       ok "CAPTCHA_MODE=off: captcha do pedido público desligado"
+             for n in TURNSTILE_SECRET_KEY NEXT_PUBLIC_TURNSTILE_SITE_KEY; do [ -n "$(get $n)" ] && warn "$n está preenchida mas CAPTCHA_MODE=off a ignora"; done ;;
+  turnstile) [ -n "$(get TURNSTILE_SECRET_KEY)" ] && ok "TURNSTILE_SECRET_KEY preenchida" || bad "TURNSTILE_SECRET_KEY vazia (obrigatória com CAPTCHA_MODE=turnstile; a API não sobe sem ela)"
+             [ -n "$(get NEXT_PUBLIC_TURNSTILE_SITE_KEY)" ] && ok "NEXT_PUBLIC_TURNSTILE_SITE_KEY preenchida (reconstrua a imagem web)" || bad "NEXT_PUBLIC_TURNSTILE_SITE_KEY vazia: a API cobraria o captcha e o cardápio não conseguiria mostrá-lo"
+             if [ -n "$(get TURNSTILE_SECRET_KEY)" ] && [ "$(get TURNSTILE_SECRET_KEY)" = "$(get NEXT_PUBLIC_TURNSTILE_SITE_KEY)" ]; then bad "TURNSTILE_SECRET_KEY e NEXT_PUBLIC_TURNSTILE_SITE_KEY iguais: a secreta nunca pode ir para o navegador"; fi ;;
+  fake)      bad "CAPTCHA_MODE=fake é só para desenvolvimento/teste (a API recusa subir fora disso)" ;;
+  *)         bad "CAPTCHA_MODE='$cap' inválido (use off ou turnstile)" ;;
+esac
+
+# --- cópia OFF-SITE cifrada dos backups (CL-12; perfil "offsite" do compose). Sem ela o backup só existe NESTE servidor:
+# aviso em dev, ERRO com --prod. A senha de cifra decifra TODA cópia externa: forte, diferente do sal e guardada fora do servidor.
+perfis=",$(get COMPOSE_PROFILES | tr -d ' '),"
+if [[ "$perfis" == *",offsite,"* ]]; then
+  ok "cópia off-site LIGADA (COMPOSE_PROFILES contém offsite)"
+  for n in OFFSITE_S3_BUCKET OFFSITE_S3_ACCESS_KEY_ID OFFSITE_S3_SECRET_ACCESS_KEY; do [ -n "$(get $n)" ] && ok "$n preenchida" || bad "$n vazia (obrigatória com o perfil offsite)"; done
+  if [ "$(get OFFSITE_S3_PROVIDER)" != AWS ]; then https_url OFFSITE_S3_ENDPOINT; fi
+  strong OFFSITE_CRYPT_PASSWORD 32; strong OFFSITE_CRYPT_SALT 16
+  if [ -n "$(get OFFSITE_CRYPT_PASSWORD)" ] && [ "$(get OFFSITE_CRYPT_PASSWORD)" = "$(get OFFSITE_CRYPT_SALT)" ]; then bad "OFFSITE_CRYPT_PASSWORD e OFFSITE_CRYPT_SALT iguais (precisam ser diferentes)"; fi
+  for n in POSTGRES_PASSWORD JWT_SECRET MFA_HMAC_KEY API_INTERNAL_SECRET; do
+    if [ -n "$(get OFFSITE_CRYPT_PASSWORD)" ] && [ "$(get OFFSITE_CRYPT_PASSWORD)" = "$(get $n)" ]; then bad "OFFSITE_CRYPT_PASSWORD igual a $n (quem ler o .env não pode também decifrar a cópia externa com o mesmo valor)"; fi
+  done
+elif [ "$(get DEPLOY_ENV)" = staging ]; then
+  warn "staging (DEPLOY_ENV=staging): sem cópia off-site; aceitável SÓ porque staging não tem dado real de cliente"
+else
+  risco "cópia off-site DESLIGADA: o backup só existe neste servidor (ligue COMPOSE_PROFILES=offsite e preencha OFFSITE_*; RUNBOOK-infra §5c)"
+fi
+case "$(get DEPLOY_ENV)" in
+  ""|production) ;;
+  staging) ok "DEPLOY_ENV=staging"
+           [ "$(get MP_OAUTH_MODE)" = real ] && [[ "$(get MP_CLIENT_ID)" != TEST-* ]] && warn "staging com MP_OAUTH_MODE=real: use a aplicação de TESTE do Mercado Pago (credenciais TEST-...), nunca a de produção" ;;
+  *) bad "DEPLOY_ENV='$(get DEPLOY_ENV)' inválido (use production ou staging)" ;;
+esac
+
+# --- alertas (infra/alerta.sh no cron): pelo menos UM canal; sem canal, problema só aparece se alguém rodar o saude.sh à mão
+tg_t="$(get ALERT_TELEGRAM_BOT_TOKEN)"; tg_c="$(get ALERT_TELEGRAM_CHAT_ID)"; wh="$(get ALERT_WEBHOOK_URL)"; hb="$(get ALERT_HEARTBEAT_URL)"
+if [ -n "$tg_t" ] && [ -z "$tg_c" ]; then bad "ALERT_TELEGRAM_BOT_TOKEN sem ALERT_TELEGRAM_CHAT_ID (o bot não sabe para quem mandar)"; fi
+if [ -z "$tg_t" ] && [ -n "$tg_c" ]; then bad "ALERT_TELEGRAM_CHAT_ID sem ALERT_TELEGRAM_BOT_TOKEN"; fi
+if [ -n "$wh" ]; then [[ "$wh" =~ ^https:// ]] && ok "ALERT_WEBHOOK_URL https" || bad "ALERT_WEBHOOK_URL deve começar com https://"; fi
+if [ -n "$hb" ]; then [[ "$hb" =~ ^https:// ]] && ok "ALERT_HEARTBEAT_URL https" || bad "ALERT_HEARTBEAT_URL deve começar com https://"; fi
+if { [ -n "$tg_t" ] && [ -n "$tg_c" ]; } || [ -n "$wh" ]; then ok "alertas com canal de envio configurado"
+else risco "nenhum canal de alerta (ALERT_TELEGRAM_* ou ALERT_WEBHOOK_URL): problemas só aparecem se alguém rodar saude.sh à mão"; fi
+[ -z "$hb" ] && warn "ALERT_HEARTBEAT_URL vazia: se o servidor inteiro cair, ninguém é avisado (use um monitor externo, ex.: healthchecks.io)"
+
 # --- nenhum segredo repetido entre si (compara valores, imprime só nomes)
 names=(POSTGRES_PASSWORD JWT_SECRET MFA_HMAC_KEY API_INTERNAL_SECRET)
 [ -n "$(get REVALIDATE_SECRET)" ] && names+=(REVALIDATE_SECRET)

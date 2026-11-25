@@ -10,8 +10,8 @@ const TYPES: { key: keyof InicioMetrics["orderTypes"]; label: string; icon: Icon
 
 export function OrderTypesCard({ orderTypes }: { orderTypes: InicioMetrics["orderTypes"] | null }) {
   return (
-    <div className="inicio-card inicio-types">
-      <p className="inicio-card__title inicio-card__title--large">Formas mais pedidas</p>
+    <section className="inicio-card inicio-types">
+      <h2 className="inicio-card__title">Pedidos por modalidade no mês</h2>
       <div className="inicio-types__row">
         {TYPES.map((type) => (
           <div key={type.key} className="inicio-types__item">
@@ -21,6 +21,6 @@ export function OrderTypesCard({ orderTypes }: { orderTypes: InicioMetrics["orde
           </div>
         ))}
       </div>
-    </div>
+    </section>
   );
 }

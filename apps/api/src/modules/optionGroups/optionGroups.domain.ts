@@ -34,7 +34,7 @@ export type OptionIssueCode =
 export type OptionIssue = { code: OptionIssueCode; groupId?: string; groupName?: string; optionId?: string; message: string };
 
 /** Cópia gravada no pedido (RN-B8-07): mudar o cardápio depois não altera pedidos antigos. */
-export type OptionCopy = { groupName: string; name: string; priceCents: number; quantity: number; priceMode: PriceMode };
+export type OptionCopy = { groupName: string; name: string; priceCents: number; quantity: number; priceMode: PriceMode; optionId?: string };
 
 export type ResolveResult =
   | { ok: true; unitPriceCents: number; baseCents: number; extrasCents: number; copies: OptionCopy[] }
@@ -151,7 +151,7 @@ export function resolveLine(product: { name: string; priceCents: number }, group
     for (const { option, quantity } of chosenByGroup.get(group.id) ?? []) {
       if (group.priceMode === "BASE") baseCents = option.priceCents;
       else extrasCents += option.priceCents * quantity;
-      copies.push({ groupName: group.name, name: option.name, priceCents: option.priceCents, quantity, priceMode: group.priceMode });
+      copies.push({ groupName: group.name, name: option.name, priceCents: option.priceCents, quantity, priceMode: group.priceMode, optionId: option.id });
     }
   }
   return { ok: true, unitPriceCents: baseCents + extrasCents, baseCents, extrasCents, copies };
@@ -166,7 +166,7 @@ export type GroupInput = {
   maxSelect: number | null;
   maxPerOption: number;
   priceMode: PriceMode;
-  options: Array<{ id?: string; name: string; priceCents: number; active?: boolean }>;
+  options: Array<{ id?: string; name: string; priceCents: number; active?: boolean; productId?: string | null; priceSource?: "OWN" | "INHERIT" }>;
 };
 
 export type ConfigProblem = { code: string; message: string };

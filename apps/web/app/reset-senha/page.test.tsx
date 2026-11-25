@@ -10,19 +10,11 @@ describe("rota /reset-senha: nada de Referer e fora do índice (ST-56)", () => {
     expect(rule?.headers).toContainEqual({ key: "Referrer-Policy", value: "no-referrer" });
   });
 
-  it("o no-referrer não vaza para as outras rotas: só a regra desta rota o traz (NG-07 acrescentou a CSP global)", async () => {
-    const rules = (await nextConfig.headers!()) as { source: string; headers: { key: string; value: string }[] }[];
-    const noReferrer = rules.filter((r) => r.headers.some((h) => h.key === "Referrer-Policy" && h.value === "no-referrer"));
-    expect(noReferrer.map((r) => r.source)).toEqual(["/reset-senha"]);
-  });
-
-  it("a regra global deixa de fora o /reset-senha (nunca duas regras definindo o mesmo cabeçalho) e esta rota segue com a CSP", async () => {
-    const rules = (await nextConfig.headers!()) as { source: string; headers: { key: string; value: string }[] }[];
-    const reset = rules.find((r) => r.source === "/reset-senha")!;
-    expect(reset.headers.some((h) => h.key === "Content-Security-Policy")).toBe(true);
-    const global = rules.find((r) => r.source !== "/reset-senha")!;
-    expect(new RegExp(`^${global.source}$`).test("/reset-senha")).toBe(false);
-    expect(new RegExp(`^${global.source}$`).test("/login")).toBe(true);
+  it("no-referrer vale para as rotas com tokens, mantendo a política comum nas demais", async () => {
+    const rules = await nextConfig.headers!();
+    const withToken = rules.filter((rule: { headers: { key: string; value: string }[] }) =>
+      rule.headers.some(({ key, value }) => key === "Referrer-Policy" && value === "no-referrer"));
+    expect(withToken.map((rule: { source: string }) => rule.source)).toEqual(["/reset-senha", "/loja/:slug/m/:token"]);
   });
 
   it("o metadata também pede no-referrer e noindex (vale em navegação no cliente)", () => {

@@ -11,6 +11,13 @@ obj/
 # segredos e dados locais (adicionado na Fase 0)
 .env.*
 !.env.example
+!.env.*.example
+# certificados de assinatura e config local do agente
+*.pfx
+*.p12
+.claude/settings.local.json
+# copia antiga do repositorio (nao versionar)
+VitryNow front/
 *.dump
 infra/backups/*
 !infra/backups/.gitkeep
@@ -22,3 +29,4 @@ apps/print-client/tools/roslyn/
 # chaves de assinatura de release NUNCA no repositorio
 *.updkey
 *.updkey.xml
+.qa-output/

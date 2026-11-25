@@ -1,10 +1,12 @@
 import type { Store } from "@meucardapio/db";
 import { prisma } from "@meucardapio/db";
 import { isSoldOutNow } from "./soldOut";
-import { unavailableGroups, type GroupRow } from "../modules/optionGroups/optionGroups.domain";
+import { promoActive } from "./productPrice";
+import { fromPriceCents, unavailableGroups, type GroupRow } from "../modules/optionGroups/optionGroups.domain";
 import { PrismaOptionGroupsRepository } from "../modules/optionGroups/optionGroups.repository";
 import { publicCampaign } from "../modules/campaign/campaign.service";
 import { publicCategory, publicStore } from "./publicDto";
+import { getEntitlements } from "./subscription";
 
 // Cardapio publico da loja (mesmo formato no link da loja e no QR da mesa). So produto ATIVO e DESTA loja (SEC-11).
 // Lote 2: junta API-22 (builder unico para o link e o QR), API-17 (`soldOut` EFETIVO agora; com "esconder esgotados" o produto
@@ -29,9 +31,15 @@ export async function buildMenuView(store: Store) {
       .map(({ soldOut, soldOutUntil, ...product }) => {
         // O espelho LEGACY_ADDITIONALS ja sai em `additionals`; aqui so os grupos reais (sem duplicar a escolha).
         const real: GroupRow[] = (groupsByProduct.get(product.id) ?? []).filter((g) => g.source !== "LEGACY_ADDITIONALS");
-        return { ...product, soldOut: isSoldOutNow({ soldOut, soldOutUntil }, now), optionGroups: real, unavailable: unavailableGroups(real).length > 0 };
+        return { ...product, soldOut: isSoldOutNow({ soldOut, soldOutUntil }, now), optionGroups: real, unavailable: unavailableGroups(real).length > 0, fromPriceCents: fromPriceCents(real), promoActiveNow: promoActive(product, now) };
       })
+      .filter((product) => product.sellAlone) // adicional que não vende sozinho nunca aparece na vitrine (RN-PD-11/16)
       .filter((product) => !(store.hideSoldOutProducts && product.soldOut)),
   }));
-  return { store: { ...publicStore(store), campaign: await publicCampaign(store.id) }, categories: visibleCategories.map(publicCategory) };
+  // API-40: `scheduling` diz só se a loja ACEITA pedido agendado (a vitrine mostra o seletor); nunca cita plano (RN-A-02).
+  const { features } = await getEntitlements(store.id, now);
+  return {
+    store: { ...publicStore(store), campaign: await publicCampaign(store.id), scheduling: features.includes("scheduled_orders") },
+    categories: visibleCategories.map(publicCategory),
+  };
 }

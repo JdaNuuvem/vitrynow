@@ -32,7 +32,7 @@ namespace MeuCardapio.PrintClient.UI
 
         public MainForm()
         {
-            Text = "MeuCardapio - Impressão";
+            Text = Brand.AppTitle;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { /* sem ícone embutido no EXE atual */ }
             ClientSize = new Size(420, 230);
             FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -97,7 +97,7 @@ namespace MeuCardapio.PrintClient.UI
             if (manual) { PromptInstallUpdate(); return; }
             // Verificação automática: só avisa (balão + item no menu), sem tirar o foco da cozinha.
             if (_tray.Visible)
-                _tray.ShowBalloonTip(10000, "MeuCardapio - Impressão",
+                _tray.ShowBalloonTip(10000, Brand.AppTitle,
                     (r.Required ? "Atualização obrigatória " : "Atualização ") + r.Version + " pronta. Clique com o botão direito no ícone > Instalar atualização, num momento tranquilo.",
                     r.Required ? ToolTipIcon.Warning : ToolTipIcon.Info);
         }
@@ -111,7 +111,7 @@ namespace MeuCardapio.PrintClient.UI
                 + "O aplicativo será fechado e a impressão para até você abri-lo de novo (os pedidos novos ficam na fila e saem depois)."
                 + Environment.NewLine + "Prefira um momento sem pedidos."
                 + (r.Required ? Environment.NewLine + Environment.NewLine + "Esta versão do aplicativo não é mais suportada: atualize assim que puder." : "");
-            if (MessageBox.Show(this, text, "MeuCardapio - Impressão", MessageBoxButtons.YesNo, r.Required ? MessageBoxIcon.Warning : MessageBoxIcon.Question) != DialogResult.Yes)
+            if (MessageBox.Show(this, text, Brand.AppTitle, MessageBoxButtons.YesNo, r.Required ? MessageBoxIcon.Warning : MessageBoxIcon.Question) != DialogResult.Yes)
             {
                 Updater.DiscardPending(); // não deixa o instalador esperando em disco; "Verificar atualizações" baixa de novo quando quiser
                 _installItem.Visible = false;
@@ -138,14 +138,14 @@ namespace MeuCardapio.PrintClient.UI
                     MessageBox.Show(this,
                         "Não foi possível proteger a chave de impressora neste computador (o arquivo de configuração não pôde ser gravado)." + Environment.NewLine + Environment.NewLine
                         + "Verifique as permissões da pasta " + AppSettings.BaseDirectory + ". O aplicativo tentará de novo na próxima abertura.",
-                        "MeuCardapio - Impressão", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        Brand.AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     break;
                 case TokenMigration.Protected:
                     Logger.Info("Chave de impressora migrada de texto puro para proteção do Windows");
                     MessageBox.Show(this,
                         "A chave de impressora agora fica protegida neste computador." + Environment.NewLine + Environment.NewLine
                         + "Como a chave anterior estava salva em texto puro, gere uma nova chave no painel (Impressoras) e troque-a pelo menu da bandeja (\"Configurar chave...\").",
-                        "MeuCardapio - Impressão", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        Brand.AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Information);
                     break;
             }
         }
@@ -158,7 +158,7 @@ namespace MeuCardapio.PrintClient.UI
                 {
                     App.Device.RetryNow(); // chave nova vale na hora (se estava pausada, testa já)
                     MessageBox.Show(this, "Configuração salva. A nova chave já está em uso. Se você mudou a URL da API, feche e abra o aplicativo.",
-                        "MeuCardapio - Impressão", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        Brand.AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             }
         }
@@ -188,15 +188,15 @@ namespace MeuCardapio.PrintClient.UI
             _failedOrders = list;
             RefreshProblemLabel();
             if (grew && _tray.Visible)
-                _tray.ShowBalloonTip(8000, "MeuCardapio - Impressão", list.Count + " pedido(s) sem imprimir: " + string.Join(", ", list) + ". Confira papel, cabo e se a impressora está ligada.", ToolTipIcon.Warning);
-            _tray.Text = list.Count == 0 ? "MeuCardapio - Impressão" : "MeuCardapio: " + list.Count + " pedido(s) SEM IMPRIMIR";
+                _tray.ShowBalloonTip(8000, Brand.AppTitle, list.Count + " pedido(s) sem imprimir: " + string.Join(", ", list) + ". Confira papel, cabo e se a impressora está ligada.", ToolTipIcon.Warning);
+            _tray.Text = list.Count == 0 ? Brand.AppTitle : Brand.Product + ": " + list.Count + " pedido(s) SEM IMPRIMIR";
         }
 
         void ShowKeyRevoked()
         {
             _revokedText = "CHAVE DE IMPRESSORA RECUSADA. A impressão está PAUSADA. Gere uma chave nova no painel e use \"Configurar chave...\" na bandeja. O app volta sozinho quando a chave valer.";
             RefreshProblemLabel();
-            if (_tray.Visible) _tray.ShowBalloonTip(10000, "MeuCardapio - Impressão", "Chave de impressora revogada: impressão pausada.", ToolTipIcon.Error);
+            if (_tray.Visible) _tray.ShowBalloonTip(10000, Brand.AppTitle, "Chave de impressora revogada: impressão pausada.", ToolTipIcon.Error);
         }
 
         void RefreshProblemLabel()

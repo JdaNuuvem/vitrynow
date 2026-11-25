@@ -2,6 +2,7 @@
 // `refundLastError`/`refundAttempts` fora de qualquer resposta pública (parecer da Nightingale à API-02).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore, productStore } from "./helpers";
 import { MAX_REFUND_AUTO_ATTEMPTS, providerErrorCode, refundAutoRetryable } from "../src/modules/orders/orders.service";
 import { orderService } from "../src/modules/orders/orders.module";
 import { makeApp, registerStore, resetDb, useMockedProvider } from "./helpers";
@@ -41,7 +42,7 @@ describe("API-06a — estorno travado", () => {
     const res = await app.inject({ method: "POST", url: `/stores/${store.slug}/orders`, payload: { type: "BALCAO", items: [{ productId, quantity: 1 }], paymentMethod: "DINHEIRO" } });
     const orderId = json(res).orderId as string;
     await prisma.order.update({ where: { id: orderId }, data: { paymentMethod: "PIX" } });
-    const payment = await prisma.payment.create({ data: { orderId, providerPaymentId: `mp-${orderId}`, amountCents: 1000, status: "APROVADO" } });
+    const payment = await prisma.payment.create({ data: { orderId, storeId: await orderStore(orderId), providerPaymentId: `mp-${orderId}`, amountCents: 1000, status: "APROVADO" } });
     // O acompanhamento público exige o token do pedido (NG-16): vem na resposta da criação.
     return { owner: cookie!, store, orderId, paymentId: payment.id, token: json(res).token as string };
   }

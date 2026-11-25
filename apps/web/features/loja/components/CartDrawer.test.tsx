@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CartLine, Product } from "@/core/domain/storefront";
 import { CartDrawer } from "./CartDrawer";
 
@@ -32,6 +32,16 @@ function setup(over: Partial<React.ComponentProps<typeof CartDrawer>> = {}) {
 }
 
 describe("CartDrawer", () => {
+  it("preserva a remoção de linhas esgotadas e removidas do catálogo", async () => {
+    const { onChangeQuantity } = setup({
+      productsById: new Map([["p1", { ...burger, soldOut: true }]]),
+      cart: [line, { ...line, productId: "ausente" }],
+    });
+    expect(screen.getByRole("button", { name: "Continuar" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Aumentar quantidade de Cheeseburguer" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Remover Item removido do cardápio" }));
+    expect(onChangeQuantity).toHaveBeenCalledWith(1, -2);
+  });
   it("é um diálogo 'Seu carrinho' com a lista de itens", () => {
     setup();
     expect(screen.getByRole("dialog", { name: "Seu carrinho" })).toBeInTheDocument();
@@ -86,9 +96,13 @@ describe("CartDrawer", () => {
   });
 
   it("Esc fecha e o botão Fechar tem nome acessível", async () => {
+    // sem animação de saída (menos movimento): fecha na hora
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
     const { onClose } = setup();
     expect(screen.getByRole("button", { name: "Fechar" })).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
+
+afterEach(() => vi.unstubAllGlobals());

@@ -1,5 +1,9 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import type { CreateCategoryInput, CreateProductInput, SetSoldOutInput, UpdateProductInput } from "@meucardapio/shared-types";
 import { nextSoldOutReset } from "../../lib/soldOut";
+import { storeTimeZone } from "../../lib/storeTz";
+import { DEFAULT_STORE_TIMEZONE, parseLocalDate, startOfStoreDay } from "../../lib/storeTime";
+import { promoAboveHalf } from "../../lib/productPrice";
 import type { Actor, AuditLogger } from "../../shared/audit";
 import { CodedError, NotFoundError } from "../../shared/errors";
 import { AdditionalNotInProductError, type CatalogRepository } from "./catalog.repository";
@@ -7,6 +11,33 @@ import { AdditionalNotInProductError, type CatalogRepository } from "./catalog.r
 // Limites padrão do catálogo (RN-CT-01, RN-CT-16). Ao atingir, mensagem clara e nada é apagado.
 export const MAX_CATEGORIES_PER_STORE = 50;
 export const MAX_PRODUCTS_PER_STORE = 500;
+
+// Quem edita o catálogo (RN-PD-10): o papel decide o teto da promoção (acima de 50% só o dono).
+export type ProductActor = Actor & { role: string };
+
+// Campos do produto detalhado que o cliente da API pode mandar (datas em AAAA-MM-DD no fuso da loja)
+type DetailInput = {
+  priceCents?: number;
+  promoCents?: number | null;
+  promoStartsOn?: string | null;
+  promoEndsOn?: string | null;
+  kind?: "PRATO" | "ADICIONAL";
+  sellAlone?: boolean;
+  saleUnit?: "UN" | "KG" | "HG";
+  minGrams?: number;
+  stepGrams?: number;
+  maxGrams?: number;
+  portionGrams?: number | null;
+};
+const invalid = (code: string, message: string, status = 400) => new CodedError(status, code, message);
+
+// SKU repetido na loja: a chave única (storeId, sku) do banco decide; duas gravações simultâneas nunca passam as duas.
+const isSkuTaken = (error: unknown) => {
+  const known = error as { code?: string; meta?: { target?: string[] | string } };
+  const target = Array.isArray(known.meta?.target) ? known.meta.target.join(",") : String(known.meta?.target ?? "");
+  return known.code === "P2002" && target.includes("sku");
+};
+const skuTaken = () => new CodedError(409, "SKU_TAKEN", "Este código já está em uso.");
 
 // Nome de categoria único na loja, sem diferenciar maiúsculas nem acentos (RN-CT-01, CA-CT-02).
 export function normalizeName(name: string): string {
@@ -87,8 +118,10 @@ export class CatalogService {
     await this.repo.setProductOrder(storeId, categoryId, ids);
   }
 
-  async createProduct(storeId: string, input: CreateProductInput) {
-    const { additionals, ...data } = input;
+  async createProduct(actor: ProductActor, input: CreateProductInput) {
+    const storeId = actor.storeId;
+    const { additionals, promoStartsOn, promoEndsOn, ...rest } = input;
+    const data = { ...rest, ...(await this.detail(actor, null, { ...rest, promoStartsOn, promoEndsOn })) };
     // SEC-11: categoryId vem do cliente; categoria de outra loja injetaria o produto no cardápio dela.
     await this.requireCategory(storeId, data.categoryId);
     if ((await this.repo.countProducts(storeId)) >= MAX_PRODUCTS_PER_STORE) {
@@ -96,20 +129,47 @@ export class CatalogService {
     }
     // Produto novo entra no FIM da categoria (RN-CT-02).
     const position = data.position ?? (await this.repo.nextProductPosition(data.categoryId));
-    return this.repo.createProduct(storeId, { ...data, position }, additionals);
+    try {
+      return await this.repo.createProduct(storeId, { ...data, position }, additionals);
+    } catch (error) {
+      if (isSkuTaken(error)) throw skuTaken();
+      throw error;
+    }
   }
 
-  async updateProduct(actor: Actor, id: string, input: UpdateProductInput) {
+  async updateProduct(actor: ProductActor, id: string, input: UpdateProductInput) {
     const before = await this.requireProduct(actor.storeId, id);
-    const { additionals, ...data } = input;
+    const { additionals, promoStartsOn, promoEndsOn, ...rest } = input;
+    const data = { ...rest, ...(await this.detail(actor, before, { ...rest, promoStartsOn, promoEndsOn })) };
     if (data.categoryId) await this.requireCategory(actor.storeId, data.categoryId);
+    // Mover UM produto de categoria (RN-CT-04): sem posição explícita, entra no FIM da categoria de destino, como na criação
+    // e no "mover produtos" em lote. Manter a posição antiga embaralharia a ordem da categoria nova.
+    const moved = data.categoryId !== undefined && data.categoryId !== before.categoryId;
+    if (moved && data.position === undefined) data.position = await this.repo.nextProductPosition(data.categoryId!);
     let product;
     try {
       product = await this.repo.updateProduct(id, data, additionals);
     } catch (error) {
       // SEC-10: adicional que não é deste produto (inclusive de outra loja) => 404, nada alterado.
       if (error instanceof AdditionalNotInProductError) throw new NotFoundError("adicional não encontrado neste produto");
+      if (isSkuTaken(error)) throw skuTaken();
       throw error;
+    }
+    if (moved) {
+      this.audit.log({ ...actor, action: "product.move", targetType: "Product", targetId: id, metadata: { name: before.name, fromCategoryId: before.categoryId, toCategoryId: product.categoryId } });
+    }
+    // RN-PD-09: toda mudança de promoção (valor, início ou fim) também grava auditoria (só números e instantes, sem texto livre).
+    if (data.promoCents !== undefined || data.promoStartsAt !== undefined || data.promoEndsAt !== undefined) {
+      const changed = (data.promoCents !== undefined && data.promoCents !== before.promoCents) || (data.promoStartsAt !== undefined && (data.promoStartsAt?.getTime() ?? null) !== (before.promoStartsAt?.getTime() ?? null)) || (data.promoEndsAt !== undefined && (data.promoEndsAt?.getTime() ?? null) !== (before.promoEndsAt?.getTime() ?? null));
+      if (changed) {
+        this.audit.log({
+          ...actor,
+          action: "product.promo_change",
+          targetType: "Product",
+          targetId: id,
+          metadata: { name: before.name, beforeCents: before.promoCents, afterCents: product.promoCents, beforeStartsAt: before.promoStartsAt, beforeEndsAt: before.promoEndsAt, startsAt: product.promoStartsAt, endsAt: product.promoEndsAt },
+        });
+      }
     }
     // RN-CT-13: toda mudança de preço grava auditoria com valor antes e depois.
     if (data.priceCents !== undefined && data.priceCents !== before.priceCents) {
@@ -128,7 +188,7 @@ export class CatalogService {
   async setSoldOut(actor: Actor, id: string, input: SetSoldOutInput) {
     const product = await this.requireProduct(actor.storeId, id);
     const duration = input.duration ?? "TODAY";
-    const soldOutUntil = input.soldOut && duration === "TODAY" ? nextSoldOutReset() : null;
+    const soldOutUntil = input.soldOut && duration === "TODAY" ? nextSoldOutReset(new Date(), await storeTimeZone(actor.storeId)) : null;
     const updated = await this.repo.updateProduct(id, { soldOut: input.soldOut, soldOutUntil });
     this.audit.log({
       ...actor,
@@ -142,6 +202,11 @@ export class CatalogService {
 
   async deleteProduct(actor: Actor, id: string) {
     const product = await this.requireProduct(actor.storeId, id);
+    // RN-PD-15: adicional em uso em algum grupo não se exclui (a saída é tirar dos grupos ou ocultar).
+    const usage = await this.repo.addonUsage(actor.storeId, id);
+    if (usage.groups.length > 0) {
+      throw new CodedError(409, "ADDON_IN_USE", `Este adicional é usado em ${usage.products} produto(s). Remova-o dos grupos primeiro.`, { products: usage.products, groups: usage.groups, hint: "REMOVE_FROM_GROUPS" });
+    }
     // RN-CT-12: com pedido em aberto a exclusão é bloqueada; a saída é ocultar (active=false).
     const openOrders = await this.repo.countOpenOrdersWithProduct(id);
     if (openOrders > 0) {
@@ -150,7 +215,13 @@ export class CatalogService {
         hint: "HIDE_INSTEAD",
       });
     }
-    await this.repo.deleteProduct(id);
+    try {
+      await this.repo.deleteProduct(id);
+    } catch (error) {
+      // Corrida: alguém ligou o adicional a um grupo entre a conferência e a exclusão; a FK recusa (P2003).
+      if ((error as { code?: string }).code === "P2003") throw new CodedError(409, "ADDON_IN_USE", "Este adicional está em uso. Remova-o dos grupos primeiro.", { hint: "REMOVE_FROM_GROUPS" });
+      throw error;
+    }
     this.audit.log({
       ...actor,
       action: "product.delete",
@@ -178,6 +249,97 @@ export class CatalogService {
     const category = await this.repo.findCategory(storeId, id);
     if (!category) throw new NotFoundError("categoria não encontrada");
     return category;
+  }
+
+  /**
+   * Regras do produto detalhado (RN-PD-01..10, 15, 17, 24, 27): confere o ESTADO FINAL (o que já existe + o que veio) e devolve só o que mudou, já convertido
+   * (datas do fuso da loja → instantes UTC). Nada é gravado se alguma regra falhar. `before` nulo = criação.
+   */
+  private async detail(
+    actor: ProductActor,
+    before: { id: string; priceCents: number; promoCents: number | null; promoStartsAt: Date | null; promoEndsAt: Date | null; kind: string; saleUnit: string; minGrams: number; stepGrams: number; maxGrams: number; portionGrams: number | null } | null,
+    input: DetailInput,
+  ) {
+    const out: { promoCents?: number | null; promoStartsAt?: Date | null; promoEndsAt?: Date | null; sellAlone?: boolean; kind?: "PRATO" | "ADICIONAL" } = {};
+    const needsTz = input.promoStartsOn != null || input.promoEndsOn != null;
+    const tz = needsTz ? await this.repo.storeTimezone(actor.storeId) : DEFAULT_STORE_TIMEZONE;
+    const now = new Date();
+
+    // Vigência: AAAA-MM-DD no fuso da loja. Início = 00:00 do dia; fim = 00:00 do dia SEGUINTE (o dia final vale inteiro; `início ≤ agora < fim`).
+    if (input.promoStartsOn !== undefined) {
+      if (input.promoStartsOn === null) out.promoStartsAt = null;
+      else {
+        const date = parseLocalDate(input.promoStartsOn, tz);
+        if (!date) throw invalid("PROMO_INVALID", "Data de início da promoção inválida.");
+        out.promoStartsAt = date;
+      }
+    }
+    if (input.promoEndsOn !== undefined) {
+      if (input.promoEndsOn === null) out.promoEndsAt = null;
+      else {
+        const day = parseLocalDate(input.promoEndsOn, tz);
+        if (!day) throw invalid("PROMO_EXPIRY_INVALID", "Data final da promoção inválida.");
+        out.promoEndsAt = startOfStoreDay(new Date(day.getTime() + 36 * 3600_000), tz, 0); // dia seguinte (36 h cobre dias de 23 e 25 h) normalizado para 00:00 local
+        if (out.promoEndsAt.getTime() <= now.getTime()) throw invalid("PROMO_EXPIRY_INVALID", "A data final da promoção já passou.");
+      }
+    }
+    if (input.promoCents !== undefined) out.promoCents = input.promoCents;
+    // Desligar a promoção limpa as datas junto (sem promoção, data não faz sentido).
+    if (input.promoCents === null) {
+      out.promoStartsAt = null;
+      out.promoEndsAt = null;
+    }
+
+    const price = input.priceCents ?? before?.priceCents ?? 0;
+    const promo = out.promoCents !== undefined ? out.promoCents : (before?.promoCents ?? null);
+    const startsAt = out.promoStartsAt !== undefined ? out.promoStartsAt : (before?.promoStartsAt ?? null);
+    const endsAt = out.promoEndsAt !== undefined ? out.promoEndsAt : (before?.promoEndsAt ?? null);
+    if (promo !== null) {
+      // RN-PD-01 e RN-PD-09: 1 ≤ promo < normal (inclusive ao EDITAR o preço normal para um valor ≤ promoção).
+      if (promo < 1 || promo >= price) throw invalid("PROMO_INVALID", "O preço promocional precisa ser menor que o preço normal.");
+      if (startsAt && endsAt && endsAt.getTime() <= startsAt.getTime()) throw invalid("PROMO_INVALID", "A promoção termina antes de começar.");
+      // RN-PD-10: acima de 50% só o dono (inteiros: promo × 2 < normal; 50% exato passa).
+      // Só quando preço ou promoção vieram no corpo: o STAFF segue podendo editar nome, foto etc. de produto com promoção do dono acima de 50%.
+      // RN-PD-10b: mexer nas DATAS também é "tocar a promoção" quando a mudança AUMENTA a vigência (adiar ou tirar o fim, antecipar ou tirar o início): reaplica o desconto.
+      // Encurtar a vigência continua liberado ao STAFF (e desligar a promoção, que não chega aqui porque `promo` fica nulo).
+      const extendsValidity =
+        before !== null &&
+        ((out.promoEndsAt !== undefined && (out.promoEndsAt === null ? before.promoEndsAt !== null : before.promoEndsAt !== null && out.promoEndsAt.getTime() > before.promoEndsAt.getTime())) ||
+          (out.promoStartsAt !== undefined && (out.promoStartsAt === null ? before.promoStartsAt !== null : before.promoStartsAt !== null && out.promoStartsAt.getTime() < before.promoStartsAt.getTime())));
+      const touchedPrice = input.priceCents !== undefined || input.promoCents !== undefined || extendsValidity;
+      if (touchedPrice && actor.role !== panelRoleSchema.enum.OWNER && promoAboveHalf(price, promo)) throw invalid("FORBIDDEN_ROLE", "Acima do seu limite. Peça ao dono.", 403);
+    }
+
+    // Tipo: ADICIONAL nasce sem vender sozinho (RN-PD-11); o dono pode marcar "Também vender sozinho".
+    if (input.kind !== undefined) out.kind = input.kind;
+    const kind = input.kind ?? before?.kind ?? "PRATO";
+    if (!before && input.kind === "ADICIONAL" && input.sellAlone === undefined) out.sellAlone = false;
+
+    // Unidade de venda e gramas (RN-PD-17/18/24/27)
+    const saleUnit = input.saleUnit ?? before?.saleUnit ?? "UN";
+    const minG = input.minGrams ?? before?.minGrams ?? 100;
+    const stepG = input.stepGrams ?? before?.stepGrams ?? 50;
+    const maxG = input.maxGrams ?? before?.maxGrams ?? 5000;
+    if (saleUnit !== "UN") {
+      if (minG > maxG) throw invalid("WEIGHT_OUT_OF_RANGE", "O peso mínimo não pode ser maior que o máximo.");
+      const portion = input.portionGrams !== undefined ? input.portionGrams : (before?.portionGrams ?? null);
+      if (portion !== null) throw invalid("VALIDATION_ERROR", "Produto vendido por peso não tem gramatura de porção.");
+      if (maxG !== minG && stepG > maxG - minG) throw invalid("WEIGHT_STEP_INVALID", "O passo é maior que a faixa de peso.");
+    }
+    if (before && (input.saleUnit !== undefined || input.kind !== undefined) && (saleUnit !== "UN" || kind === "ADICIONAL")) {
+      const state = await this.repo.optionState(actor.storeId, before.id);
+      if (saleUnit !== "UN" && (state.groups > 0 || state.legacyAdditionals > 0)) throw invalid("PRODUCT_WEIGHT_NO_OPTIONS", "Produto vendido por peso não aceita opções.");
+      if (kind === "ADICIONAL" && state.groups > 0) throw invalid("ADDON_HAS_GROUPS", "Um adicional não tem grupos de opções.");
+    }
+    // Deixar de ser adicional (ou virar por peso) com o produto ligado a grupos o deixaria apontado por uma opção inválida.
+    if (before && (kind !== "ADICIONAL" || saleUnit !== "UN") && (input.kind !== undefined || input.saleUnit !== undefined)) {
+      const usage = await this.repo.addonUsage(actor.storeId, before.id);
+      if (usage.groups.length > 0) throw new CodedError(409, "ADDON_IN_USE", `Este adicional é usado em ${usage.products} produto(s). Remova-o dos grupos primeiro.`, { products: usage.products, groups: usage.groups, hint: "REMOVE_FROM_GROUPS" });
+    }
+    if (promo !== null && before && out.promoCents !== undefined) {
+      if ((await this.repo.optionState(actor.storeId, before.id)).hasBaseGroup) throw invalid("PROMO_NOT_ALLOWED", "Este produto tem o preço definido pelas variações.");
+    }
+    return out;
   }
 
   private async requireProduct(storeId: string, id: string) {

@@ -2,6 +2,7 @@
 // telefone do STAFF não podem deslocar. Mesmo método do `sql-timezone.test.ts`: conexões recriadas, São Paulo e Tóquio, com controle positivo.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore, productStore } from "./helpers";
 import { startOfStoreDay } from "../src/lib/storeTime";
 import { resetHistoryRate } from "../src/modules/orders/orders.history";
 import { login, makeApp, registerStore, resetDb } from "./helpers";
@@ -64,7 +65,7 @@ describe.each(ZONES)("histórico com o banco em %s", (zone) => {
     const order = await prisma.order.create({
       data: { storeId, code: `Y${String(seq).padStart(5, "0")}`, type: "BALCAO", status, customerName: "Cliente", customerPhone: data.phone ?? "11987654321", totalCents: 1500, awaitingPayment: false, createdAt: data.createdAt, updatedAt: data.createdAt },
     });
-    if (data.closedAt) await prisma.orderStatusHistory.create({ data: { orderId: order.id, status: "CONCLUIDO", createdAt: data.closedAt } });
+    if (data.closedAt) await prisma.orderStatusHistory.create({ data: { orderId: order.id, storeId: await orderStore(order.id), status: "CONCLUIDO", createdAt: data.closedAt } });
     return order.id;
   }
 

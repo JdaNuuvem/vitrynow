@@ -5,6 +5,9 @@ import type { Deliverer, Order } from "@/core/domain/orders";
 import { Modal } from "@/shared/ui/Modal";
 import { OrderDetailView, type DetailHandlers } from "./OrderDetailView";
 import { useOrderDetail } from "./useOrderDetail";
+import { ManualRefundAction, ManualRefundRecord } from "./ManualRefundAction";
+import { OrderExtraActions } from "./OrderExtraActions";
+import { orderLabel } from "@/shared/format/orderCode";
 
 type Props = {
   orderId: string;
@@ -27,7 +30,7 @@ export function OrderDetailPanel({ orderId, listOrder, refreshKey, deliverers, n
   const titleRef = useRef<HTMLHeadingElement>(null);
   const detail = state.status === "ready" ? state.order : state.status === "error" ? state.order : null;
   const code = detail?.code ?? listOrder?.code ?? null;
-  const title = code ? `Pedido #${code}` : "Pedido";
+  const title = code ? `${orderLabel(code)}` : "Pedido";
 
   // Painel lateral: o foco entra no título ao abrir (e ao trocar de pedido). A folha modal já leva o foco ao diálogo.
   useEffect(() => {
@@ -79,9 +82,14 @@ export function OrderDetailPanel({ orderId, listOrder, refreshKey, deliverers, n
         </div>
       )}
 
-      {detail && (
+      {detail && <>
         <OrderDetailView order={detail} deliverers={deliverers} nowMs={nowMs} busy={busy} canRetryRefund={canRetryRefund} onRetryContact={retry} retryingContact={refreshing} {...handlers} />
-      )}
+        {detail.payment?.refundManual && <ManualRefundRecord />}
+        {state.status === "ready" && canRetryRefund && detail.status !== "CONCLUIDO" && detail.paymentMethod === "PIX"
+          && (detail.payment?.status === "APROVADO" || detail.payment?.status === "ESTORNO_PENDENTE")
+          && <ManualRefundAction key={detail.id} order={detail} onRegistered={retry} />}
+        {state.status === "ready" && <OrderExtraActions key={`extra-${detail.id}`} order={detail} owner={canRetryRefund} onChanged={retry} />}
+      </>}
     </>
   );
 

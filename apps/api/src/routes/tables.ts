@@ -1,19 +1,23 @@
 import { clientIpOf } from "../lib/clientIp";
-import { buildOrderLines, optionCopiesCreate } from "../lib/orderItems";
+import { minOrderMessage } from "@meucardapio/shared-types";
+import { buildOrderLines } from "../lib/orderItems";
+import { quoteOrder } from "../lib/quoteOrder";
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { Prisma, prisma } from "@meucardapio/db";
-import { createTableOrderSchema, createTableSchema, qrSettingsSchema, receiveTableSchema, updateTableSchema } from "@meucardapio/shared-types";
+import { createTableOrderSchema, createTableSchema, panelRoleSchema, qrSettingsSchema, receiveTableSchema, updateTableSchema } from "@meucardapio/shared-types";
+import { getRequestEntitlements } from "../lib/subscription";
 import { logAudit } from "../lib/audit";
 import { buildMenuView } from "../lib/menuView";
 import { clientKey } from "../lib/clientKey";
-import { nextOrderCode, ORDER_TX_OPTIONS } from "../lib/order-code";
+import { ORDER_TX_OPTIONS } from "../lib/order-code";
 import { newOrderToken } from "../lib/orderToken";
 import { toOrderPaymentMethod } from "../lib/paymentMethod";
 import { SALE_STATUSES } from "../lib/saleLines";
 import { limited, tooMany } from "../lib/slidingLimit";
+import { isSoldOutNow } from "../lib/soldOut";
 import { hashToken } from "../lib/tokenHash";
-import { enqueueOrderTicket } from "../modules/printJobs/printJobs.queue";
+import { orderService } from "../modules/orders/orders.module";
 import { publishToStore } from "../realtime/hub";
 import { CodedError, useDomainErrors } from "../shared/errors";
 
@@ -71,7 +75,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
   app.get("/api/tables", { preHandler: app.requirePanelAuth }, async (request) => {
     const { storeId } = request.user;
     const [store, tables, pending, account] = await Promise.all([
-      prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { slug: true, qrOrderingEnabled: true, qrOrdersNeedApproval: true } }),
+      prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { slug: true, qrOrderingEnabled: true, qrOrdersNeedApproval: true, serviceFeePercent: true } }),
       prisma.table.findMany({ where: { storeId }, orderBy: [{ position: "asc" }, { label: "asc" }] }),
       prisma.order.groupBy({ by: ["tableId"], where: { storeId, tableId: { not: null }, receiptId: null, status: "PENDENTE" }, _count: { _all: true } }),
       prisma.order.groupBy({ by: ["tableId"], where: { storeId, tableId: { not: null }, receiptId: null, paidAt: null, awaitingPayment: false, status: { in: [...SALE_STATUSES] } }, _count: { _all: true }, _sum: { totalCents: true } }),
@@ -79,7 +83,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const pendingBy = new Map(pending.map((p) => [p.tableId, p._count._all]));
     const accountBy = new Map(account.map((a) => [a.tableId, { count: a._count._all, totalCents: a._sum.totalCents ?? 0 }]));
     return {
-      settings: { qrOrderingEnabled: store.qrOrderingEnabled, qrOrdersNeedApproval: store.qrOrdersNeedApproval },
+      settings: { qrOrderingEnabled: store.qrOrderingEnabled, qrOrdersNeedApproval: store.qrOrdersNeedApproval, serviceFeePercent: store.serviceFeePercent },
       tables: tables.map((t) => {
         const acc = accountBy.get(t.id);
         const pendingOrders = pendingBy.get(t.id) ?? 0;
@@ -155,12 +159,16 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const { storeId, userId } = request.user;
     const parsed = qrSettingsSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Corpo inválido.", code: "VALIDATION_ERROR", fields: parsed.error.flatten().fieldErrors });
-    const { qrOrderingEnabled, qrOrdersNeedApproval, confirmNoApproval } = parsed.data;
+    const { qrOrderingEnabled, qrOrdersNeedApproval, confirmNoApproval, serviceFeePercent } = parsed.data;
     if (qrOrdersNeedApproval === false && !confirmNoApproval) {
       throw new CodedError(400, "CONFIRMATION_REQUIRED", "Sem o aceite, qualquer pessoa com o QR poderá lançar pedidos já aceitos, que entram direto no andamento da cozinha. Confirme para desligar o aceite.");
     }
-    const store = await prisma.store.update({ where: { id: storeId }, data: { qrOrderingEnabled, qrOrdersNeedApproval }, select: { qrOrderingEnabled: true, qrOrdersNeedApproval: true } });
-    logAudit({ storeId, userId, action: "store.qr_settings", targetType: "Store", targetId: storeId, metadata: { qrOrderingEnabled, qrOrdersNeedApproval } });
+    const store = await prisma.store.update({
+      where: { id: storeId },
+      data: { qrOrderingEnabled, qrOrdersNeedApproval, serviceFeePercent },
+      select: { qrOrderingEnabled: true, qrOrdersNeedApproval: true, serviceFeePercent: true },
+    });
+    logAudit({ storeId, userId, action: "store.qr_settings", targetType: "Store", targetId: storeId, metadata: { qrOrderingEnabled, qrOrdersNeedApproval, serviceFeePercent } });
     return { settings: store };
   });
 
@@ -181,19 +189,36 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     return { table, orders, pendingOrders, totalCents: orders.reduce((sum, o) => sum + o.totalCents, 0) };
   });
 
-  // RECEBER A MESA (API-24; RN-MB-03/04/05, ADR-0012): soma a conta no SERVIDOR e grava UM Receipt com UMA forma de pagamento, marcando os pedidos.
+  // RECEBER A MESA (API-24/42/43; RN-MB-03/04/05, ADR-0012): soma a conta no SERVIDOR e grava UM Receipt, marcando os pedidos.
+  // Todos os planos: taxa de serviço opcional (percentual da loja) e desconto em R$. PRO (`tab_service`): pagamento dividido em várias formas.
   app.post("/api/tables/:id/receive", { preHandler: app.requirePanelAuth }, async (request, reply) => {
-    const { storeId, userId } = request.user;
+    const { storeId, userId, role } = request.user;
     const { id } = request.params as { id: string };
     if (limited(`table-receive:${userId}`, RECEIVES_PER_MINUTE)) return tooMany(reply);
     const parsed = receiveTableSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "Corpo inválido.", code: "VALIDATION_ERROR", fields: parsed.error.flatten().fieldErrors });
     const input = parsed.data;
-    const method = toOrderPaymentMethod(input.paymentMethod);
-    if (!method) return reply.code(400).send({ error: "Forma de pagamento inválida.", code: "PAYMENT_METHOD_REQUIRED" });
-    if (input.changeForCents !== undefined && method !== "DINHEIRO") return reply.code(400).send({ error: "troco só se aplica a pagamento em dinheiro", code: "CHANGE_ONLY_CASH" });
-    const table = await prisma.table.findFirst({ where: { id, storeId }, select: { id: true } });
+    // Partes do pagamento: uma (paymentMethod) ou várias (payments, só PRO). Valores das partes conferidos contra o total dentro da transação.
+    const parts: { method: NonNullable<ReturnType<typeof toOrderPaymentMethod>>; amountCents?: number; changeForCents?: number }[] = [];
+    for (const part of input.payments ?? [{ method: input.paymentMethod!, changeForCents: input.changeForCents }]) {
+      const method = toOrderPaymentMethod(part.method);
+      if (!method) return reply.code(400).send({ error: "Forma de pagamento inválida.", code: "PAYMENT_METHOD_REQUIRED" });
+      if (part.changeForCents !== undefined && method !== "DINHEIRO") return reply.code(400).send({ error: "troco só se aplica a pagamento em dinheiro", code: "CHANGE_ONLY_CASH" });
+      parts.push({ method, amountCents: "amountCents" in part ? part.amountCents : undefined, changeForCents: part.changeForCents });
+    }
+    if (input.payments) {
+      const entitlements = await getRequestEntitlements(request, storeId);
+      if (!entitlements.features.includes("tab_service")) {
+        return reply.code(402).send({ error: "Dividir a conta não está disponível no seu plano.", code: "FEATURE_LOCKED", feature: "tab_service", details: { feature: "tab_service" } });
+      }
+    }
+    const method = parts[0].method; // forma principal (compatível com a resposta antiga)
+    const [table, store] = await Promise.all([
+      prisma.table.findFirst({ where: { id, storeId }, select: { id: true } }),
+      prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { serviceFeePercent: true, manualDiscountStaffLimitPercent: true } }),
+    ]);
     if (!table) return notFound(reply);
+    if (input.includeServiceFee && store.serviceFeePercent === 0) return reply.code(400).send({ error: "Esta loja não cobra taxa de serviço.", code: "SERVICE_FEE_DISABLED" });
 
     const receipt = await prisma.$transaction(async (tx) => {
       // Trava os pedidos da mesa: cancelar e receber ao mesmo tempo se enfileiram (o cancelamento só vale com receiptId nulo).
@@ -203,15 +228,29 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const pending = await tx.order.count({ where: { storeId, tableId: id, receiptId: null, status: "PENDENTE" } });
       if (pending > 0) throw new CodedError(409, "PENDING_ORDERS", "Aceite ou recuse os pedidos pendentes da mesa antes de receber.", { details: { pendingOrders: pending } });
       const orders = await tx.order.findMany({ where: accountWhere(storeId, id), select: { id: true, totalCents: true } });
-      const totalCents = orders.reduce((sum, o) => sum + o.totalCents, 0);
-      if (orders.length === 0 || totalCents <= 0) throw new CodedError(409, "NOTHING_TO_RECEIVE", "Esta mesa não tem conta a receber.");
-      if (input.expectedTotalCents !== undefined && input.expectedTotalCents !== totalCents) {
-        throw new CodedError(409, "TOTAL_CHANGED", "A conta da mesa mudou. Confira o novo total.", { details: { totalCents } });
+      const subtotalCents = orders.reduce((sum, o) => sum + o.totalCents, 0);
+      if (orders.length === 0 || subtotalCents <= 0) throw new CodedError(409, "NOTHING_TO_RECEIVE", "Esta mesa não tem conta a receber.");
+      if (input.expectedTotalCents !== undefined && input.expectedTotalCents !== subtotalCents) {
+        throw new CodedError(409, "TOTAL_CHANGED", "A conta da mesa mudou. Confira o novo total.", { details: { totalCents: subtotalCents } });
       }
-      if (input.changeForCents !== undefined && input.changeForCents < totalCents) throw new CodedError(400, "CHANGE_TOO_LOW", "o valor para troco deve cobrir o total da mesa");
+      const serviceFeeCents = input.includeServiceFee ? Math.round((subtotalCents * store.serviceFeePercent) / 100) : 0;
+      const discountCents = input.discountCents ?? 0;
+      const totalCents = subtotalCents + serviceFeeCents - discountCents;
+      if (totalCents <= 0) throw new CodedError(400, "DISCOUNT_TOO_HIGH", "O desconto não pode zerar a conta. Para cortesia total, cancele os pedidos.");
+      // Mesmo limite do pedido manual (RN-B2-06): STAFF até o percentual da loja sobre a conta com taxa; acima, só o dono.
+      if (discountCents > 0 && role !== panelRoleSchema.enum.OWNER && discountCents * 100 > (subtotalCents + serviceFeeCents) * store.manualDiscountStaffLimitPercent) {
+        throw new CodedError(403, "DISCOUNT_ABOVE_LIMIT", "Desconto acima do seu limite. Peça ao dono.", { details: { limitPercent: store.manualDiscountStaffLimitPercent } });
+      }
+      // Uma forma: ela leva o total. Várias: a soma das partes tem de bater com o total, centavo a centavo.
+      if (parts.length === 1) parts[0].amountCents = totalCents;
+      const paid = parts.reduce((sum, p) => sum + (p.amountCents ?? 0), 0);
+      if (paid !== totalCents) throw new CodedError(400, "PAYMENTS_MISMATCH", "A soma das formas de pagamento não bate com o total da conta.", { details: { totalCents, paidCents: paid } });
+      for (const p of parts) {
+        if (p.changeForCents !== undefined && p.changeForCents < p.amountCents!) throw new CodedError(400, "CHANGE_TOO_LOW", "o valor para troco deve cobrir a parte em dinheiro");
+      }
       // RN-MB-03/CA-MB-04: dinheiro só com caixa ABERTO. FOR SHARE: o fechamento (FOR UPDATE) espera este recebimento terminar.
       let cashSessionId: string | null = null;
-      if (method === "DINHEIRO") {
+      if (parts.some((p) => p.method === "DINHEIRO")) {
         const open = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "CashSession" WHERE "storeId" = ${storeId} AND "closedAt" IS NULL FOR SHARE`;
         if (open.length === 0) throw new CodedError(409, "CASH_REQUIRED", "Abra o caixa para receber esta mesa em dinheiro.");
         cashSessionId = open[0].id;
@@ -222,12 +261,14 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           storeId,
           kind: "TABLE",
           tableId: id,
-          subtotalCents: totalCents,
+          subtotalCents,
+          serviceFeeCents,
+          discountCents,
           totalCents,
           receivedAt,
           receivedByUserId: userId,
           cashSessionId,
-          payments: { create: { storeId, method, amountCents: totalCents, changeForCents: input.changeForCents ?? null } },
+          payments: { create: parts.map((p) => ({ method: p.method, amountCents: p.amountCents!, changeForCents: p.changeForCents ?? null })) },
         },
         include: { payments: true },
       });
@@ -236,16 +277,24 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       return { ...created, orderIds: orders.map((o) => o.id) };
     }, ORDER_TX_OPTIONS);
 
-    logAudit({ storeId, userId, action: "table.receive", targetType: "Receipt", targetId: receipt.id, metadata: { tableId: id, method, totalCents: receipt.totalCents, orders: receipt.orderIds.length } });
+    logAudit({
+      storeId, userId, action: "table.receive", targetType: "Receipt", targetId: receipt.id,
+      metadata: { tableId: id, method, methods: parts.map((p) => p.method), subtotalCents: receipt.subtotalCents, serviceFeeCents: receipt.serviceFeeCents, discountCents: receipt.discountCents, totalCents: receipt.totalCents, orders: receipt.orderIds.length },
+    });
     for (const orderId of receipt.orderIds) publishToStore(storeId, { type: "order.updated", orderId });
+    const single = parts.length === 1 ? parts[0] : null;
     return reply.code(201).send({
       receipt: {
         id: receipt.id,
+        subtotalCents: receipt.subtotalCents,
+        serviceFeeCents: receipt.serviceFeeCents,
+        discountCents: receipt.discountCents,
         totalCents: receipt.totalCents,
         receivedAt: receipt.receivedAt,
         method,
-        changeForCents: input.changeForCents ?? null,
-        changeDueCents: input.changeForCents !== undefined ? input.changeForCents - receipt.totalCents : null,
+        changeForCents: single?.changeForCents ?? null,
+        changeDueCents: single?.changeForCents !== undefined ? single.changeForCents - receipt.totalCents : null,
+        payments: receipt.payments.map((p) => ({ method: p.method, amountCents: p.amountCents, changeForCents: p.changeForCents, changeDueCents: p.changeForCents !== null ? p.changeForCents - p.amountCents : null })),
         orderIds: receipt.orderIds,
       },
     });
@@ -283,7 +332,8 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (products.length !== new Set(input.items.map((i) => i.productId)).size) {
       return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja", code: "PRODUCT_NOT_FOUND" });
     }
-    const unavailable = products.filter((p) => !p.active);
+    const now = new Date();
+    const unavailable = products.filter((p) => !p.active || isSoldOutNow(p, now));
     if (unavailable.length > 0) {
       return reply.code(400).send({
         error: `Item indisponível no momento: ${unavailable.map((p) => p.name).join(", ")}.`,
@@ -292,11 +342,11 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
     }
     const built = await buildOrderLines(store.id, products, input.items);
-    if (!built.ok) return reply.code(400).send(built.body);
+    if (!built.ok) return reply.code(built.status).send(built.body);
     const itemsData = built.lines;
-    const subtotalCents = itemsData.reduce((sum, i) => sum + i.lineTotalCents, 0);
+    const { subtotalCents, totalCents: quotedTotalCents } = quoteOrder({ lineTotalsCents: itemsData.map((i) => i.lineTotalCents) }); // D5
     if (store.minOrderCents !== null && subtotalCents < store.minOrderCents) {
-      return reply.code(400).send({ error: `pedido mínimo é R$ ${(store.minOrderCents / 100).toFixed(2)}`, code: "MIN_ORDER" });
+      return reply.code(400).send({ error: minOrderMessage(store.minOrderCents), code: "MIN_ORDER" });
     }
 
     if ((await prisma.order.count({ where: { storeId: store.id, tableId: table.id, status: { in: ["PENDENTE", "CONFIRMADO", "EM_PREPARO"] } } })) >= QR_OPEN_CAP) {
@@ -309,46 +359,26 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const orderToken = newOrderToken();
     const direct = !store.qrOrdersNeedApproval; // sem aceite: entra CONFIRMADO e vai à cozinha
 
-    let ticketQueued = false;
-    const order = await prisma.$transaction(async (tx) => {
-      const code = await nextOrderCode(tx, store.id);
-      const created = await tx.order.create({
-        data: {
-          storeId: store.id,
-          tableId: table.id,
-          deviceTokenHash: device.hash,
-          code,
-          type: "MESA",
-          source: "QR_MESA",
-          status: direct ? "CONFIRMADO" : "PENDENTE",
-          customerName: input.customerName?.normalize("NFC"),
-          notes: input.notes,
-          subtotalCents,
-          totalCents: subtotalCents, // sem desconto, taxa nem forma de pagamento: o recebimento é na mesa (API-24)
-          paymentMethod: null,
-          awaitingPayment: false,
-          publicTokenHash: orderToken.hash,
-          statusHistory: { create: { status: direct ? "CONFIRMADO" : "PENDENTE" } },
-          items: {
-            create: itemsData.map((item) => ({
-              productId: item.productId,
-              productName: item.productName,
-              quantity: item.quantity,
-              unitPriceCents: item.unitPriceCents,
-              notes: item.notes,
-              additionals: { create: item.additionals.map((a) => ({ name: a.name, priceCents: a.priceCents })) },
-              ...optionCopiesCreate(item.optionCopies),
-            })),
-          },
-        },
-      });
-      // Decisão do Claudio (18/11): imprime AO CHEGAR, com ou sem aceite; o aceite só muda o estado. O tíquete nasce na MESMA transação (nunca pedido sem job).
-      ticketQueued = await enqueueOrderTicket(tx, { id: created.id, storeId: store.id });
-      return created;
-    }, ORDER_TX_OPTIONS);
-
-    publishToStore(store.id, { type: "order.created", orderId: order.id });
-    if (ticketQueued) publishToStore(store.id, { type: "print.available" });
+    const order = await orderService.create({
+      origin: "TABLE",
+      storeId: store.id,
+      items: itemsData,
+      release: true, // decisão do Claudio (18/11): imprime AO CHEGAR, com ou sem aceite; o aceite só muda o estado
+      fields: () => ({
+        tableId: table.id,
+        deviceTokenHash: device.hash,
+        type: "MESA",
+        status: direct ? "CONFIRMADO" : "PENDENTE",
+        customerName: input.customerName?.normalize("NFC"),
+        notes: input.notes,
+        subtotalCents,
+        totalCents: quotedTotalCents, // sem desconto, taxa nem forma de pagamento: o recebimento é na mesa (API-24)
+        paymentMethod: null,
+        awaitingPayment: false,
+        publicTokenHash: orderToken.hash,
+        statusHistory: { create: { status: direct ? "CONFIRMADO" : "PENDENTE" } },
+      }),
+    });
     // Rajada (RN-MB-08): muitos PENDENTE na mesma mesa => alerta no painel.
     if (!direct) {
       const pending = await prisma.order.count({ where: { storeId: store.id, tableId: table.id, status: "PENDENTE" } });
@@ -370,7 +400,21 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
           where: { storeId: found.store.id, tableId: found.table.id, deviceTokenHash: hash },
           orderBy: { createdAt: "asc" },
           take: 100,
-          select: { id: true, code: true, status: true, totalCents: true, createdAt: true, items: { select: { productName: true, quantity: true, unitPriceCents: true, notes: true, additionals: { select: { name: true, priceCents: true } } } } },
+          select: {
+            id: true,
+            code: true,
+            status: true,
+            totalCents: true,
+            createdAt: true,
+            items: { select: {
+              productName: true,
+              quantity: true,
+              unitPriceCents: true,
+              notes: true,
+              additionals: { select: { name: true, priceCents: true } },
+              options: { select: { groupName: true, name: true, priceCents: true, quantity: true, priceMode: true } },
+            } },
+          },
         })
       : [];
     return { table: { label: found.table.label }, orders };

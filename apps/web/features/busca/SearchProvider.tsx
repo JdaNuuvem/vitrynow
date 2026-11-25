@@ -1,9 +1,10 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { PANEL_ROUTES } from "@/core/navigation/panelNavigation";
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { PANEL_ROUTES, type PanelRoute } from "@/core/navigation/panelNavigation";
 import { Icon } from "@/shared/icons/Icon";
+import { Modal } from "@/shared/ui/Modal";
 import { buildSearchIndex, searchEntries } from "./searchIndex";
 import "./busca.css";
 
@@ -17,9 +18,10 @@ export function useSearch(): SearchApi {
   return api;
 }
 
-export function SearchProvider({ children }: { children: ReactNode }) {
+export function SearchProvider({ children, routes = PANEL_ROUTES }: { children: ReactNode; routes?: readonly PanelRoute[] }) {
   const router = useRouter();
-  const index = useMemo(() => buildSearchIndex(PANEL_ROUTES), []);
+  const index = useMemo(() => buildSearchIndex(routes), [routes]);
+  const id = useId();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -39,6 +41,7 @@ export function SearchProvider({ children }: { children: ReactNode }) {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
+        if (document.querySelector('[role="dialog"][aria-modal="true"], #shell-sidebar:not([hidden])')) return;
         openSearch();
       }
     };
@@ -56,10 +59,9 @@ export function SearchProvider({ children }: { children: ReactNode }) {
   }
 
   function onInputKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Escape") return close();
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setActive((current) => Math.min(current + 1, results.length - 1));
+      setActive((current) => Math.max(0, Math.min(current + 1, results.length - 1)));
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       setActive((current) => Math.max(current - 1, 0));
@@ -71,21 +73,24 @@ export function SearchProvider({ children }: { children: ReactNode }) {
   return (
     <SearchContext.Provider value={api}>
       {children}
-      {open && (
-        <div className="search-modal">
-          <div className="search-modal__scrim" onClick={close} />
-          <div className="search-modal__panel" role="dialog" aria-modal="true" aria-label="Buscar no painel">
+      <Modal open={open} onClose={close} labelledBy={id + "-title"} width={560} sheetOnMobile fitContent>
+          <div className="search-modal__panel">
+            <h2 id={id + "-title"} className="sr-only">Buscar no painel</h2>
             <div className="search-modal__field">
               <Icon name="search" size={20} />
               <input
                 ref={inputRef}
                 type="text"
                 value={query}
-                placeholder="O que você procura? Ex.: cadastrar motoboy, horários, cupons"
+                placeholder="Buscar por seção ou ação"
                 autoComplete="off"
                 spellCheck={false}
                 aria-label="Buscar no painel"
-                aria-controls="search-results"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={results.length > 0}
+                aria-controls={results.length ? id + "-results" : undefined}
+                aria-activedescendant={results[active] ? id + "-result-" + active : undefined}
                 onChange={(event) => {
                   setQuery(event.target.value);
                   setActive(0);
@@ -95,10 +100,11 @@ export function SearchProvider({ children }: { children: ReactNode }) {
               <kbd>Esc</kbd>
             </div>
             {results.length > 0 ? (
-              <ul id="search-results" className="search-modal__list" role="listbox">
+              <ul id={id + "-results"} className="search-modal__list" role="listbox" aria-label="Resultados">
                 {results.map((entry, position) => (
                   <li
                     key={entry.id}
+                    id={id + "-result-" + position}
                     role="option"
                     aria-selected={position === active}
                     className={position === active ? "is-active" : undefined}
@@ -126,8 +132,7 @@ export function SearchProvider({ children }: { children: ReactNode }) {
               </span>
             </div>
           </div>
-        </div>
-      )}
+      </Modal>
     </SearchContext.Provider>
   );
 }

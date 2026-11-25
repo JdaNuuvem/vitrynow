@@ -82,8 +82,7 @@ async function reauthorize(request: FastifyRequest, reply: FastifyReply, current
   return true;
 }
 
-// Privacidade (LGPD, API-52). Só OWNER; STAFF recebe 403 FORBIDDEN_ROLE. Em Consulta vale (obrigação legal, RN-PV-10); a política de fase
-// (routePolicy.ts, API-09) deve classificar estas rotas como liberadas na Consulta e bloqueadas na Suspensão.
+// Privacidade (LGPD, API-52). Só OWNER, inclusive em Consulta e Suspensão (RN-PV-10).
 const privacyRoutes: FastifyPluginAsync = async (app) => {
   useDomainErrors(app);
   const enabled = privacyActionsEnabled(); // fixo no boot
@@ -91,7 +90,15 @@ const privacyRoutes: FastifyPluginAsync = async (app) => {
   app.addHook("preHandler", async (_request, reply) => {
     if (!enabled) return featureOff(reply);
   });
+  app.addHook("onSend", (_request, reply, payload, done) => {
+    reply.header("Cache-Control", "no-store");
+    done(null, payload);
+  });
   const limit = { rateLimit: { max: 10, timeWindow: "1 minute" } };
+
+  app.get("/api/privacy/status", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async () => ({
+    reauth: mfaEnforced() ? ("MFA" as const) : ("PASSWORD" as const),
+  }));
 
   // Prévia: quantos pedidos, período e o que bloqueia. Não devolve nome, telefone nem endereço.
   app.post("/api/privacy/anonymize/preview", { preHandler: [app.requirePanelAuth, app.requireOwner], config: limit }, async (request, reply) => {
@@ -107,7 +114,6 @@ const privacyRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.code(400).send({ error: "Informe o telefone OU o código do pedido.", code: "VALIDATION_ERROR" });
     const { currentPassword, ...target } = parsed.data;
     if (!(await reauthorize(request, reply, currentPassword, "export_customer"))) return reply;
-    reply.header("Cache-Control", "no-store");
     return privacyService.exportData(actorOf(request), target);
   });
 

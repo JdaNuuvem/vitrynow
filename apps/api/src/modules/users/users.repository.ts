@@ -1,3 +1,4 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import type { User, UserRole, prisma as prismaClient } from "@meucardapio/db";
 
 type Db = typeof prismaClient;
@@ -39,7 +40,7 @@ export class PrismaUsersRepository implements UsersRepository {
   }
 
   countOwners(storeId: string) {
-    return this.db.user.count({ where: { storeId, role: "OWNER" } });
+    return this.db.user.count({ where: { storeId, role: panelRoleSchema.enum.OWNER } });
   }
 
   create(data: { storeId: string; email: string; passwordHash: string; role: UserRole }) {

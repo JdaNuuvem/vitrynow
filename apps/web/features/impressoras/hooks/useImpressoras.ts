@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { DeviceToken } from "@/core/domain/deviceTokens";
 import { MFA_REQUIRED_CODE } from "@/core/domain/mfa";
 import { usePanelServices } from "@/core/services/PanelServices";
@@ -16,17 +16,26 @@ export function useImpressoras() {
   const { deviceTokens } = usePanelServices();
   const { runProtected } = useSecurityConfirm();
   const [tokens, setTokens] = useState<DeviceToken[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const revision = useRef(0);
   // Dois motivos independentes: a lista recusada (STAFF) e uma ação recusada (criar/revogar).
   // Separados para um reload tardio não apagar o aviso de uma ação.
   const [listForbidden, setListForbidden] = useState(false);
   const [actionForbidden, setActionForbidden] = useState(false);
 
   const reload = useCallback(async () => {
+    const request = ++revision.current;
+    setLoading(true);
+    setLoadError(null);
     const result = await deviceTokens.list();
+    if (request !== revision.current) return;
+    setLoading(false);
     if (!result.ok) {
       if (result.status === 401) router.push("/login");
-      // 403: a lista é restrita ao dono (NG-06). Mostra o aviso em vez de "nenhuma chave".
+      if (result.status === 401 || result.status === 403) setTokens(null);
       if (result.status === 403) setListForbidden(true);
+      else setLoadError(result.error);
       return;
     }
     setListForbidden(false);
@@ -34,7 +43,8 @@ export function useImpressoras() {
   }, [deviceTokens, router]);
 
   useEffect(() => {
-    reload();
+    void reload();
+    return () => { revision.current++; };
   }, [reload]);
 
   const create = useCallback(
@@ -77,5 +87,5 @@ export function useImpressoras() {
     [deviceTokens, reload, runProtected],
   );
 
-  return { tokens, forbidden: listForbidden || actionForbidden, create, revoke };
+  return { tokens, loading, loadError, reload, forbidden: listForbidden || actionForbidden, create, revoke };
 }

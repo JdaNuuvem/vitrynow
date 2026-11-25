@@ -1,3 +1,4 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import { clientIpOf } from "../lib/clientIp";
 import { randomBytes } from "node:crypto";
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
@@ -26,6 +27,7 @@ import { securityEvent } from "../lib/securityEvents";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const PRINTER_ONLINE_MS = 2 * 60 * 1000;
+const noticeListQuerySchema = platformStoreListQuerySchema.pick({ page: true, pageSize: true });
 
 function envInt(name: string, fallback: number): number {
   const value = Number(process.env[name]);
@@ -46,6 +48,10 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
   const throttle = new LoginThrottle();
   const guard = { preHandler: app.requirePlatformAdmin };
   const adminOnly = { preHandler: [app.requirePlatformAdmin, requirePlatformRole("ADMIN")] };
+  app.addHook("onSend", (_request, reply, payload, done) => {
+    reply.header("Cache-Control", "no-store");
+    done(null, payload);
+  });
 
   const sessionToken = (admin: { id: string; tokenVersion: number }) => {
     const now = Math.floor(Date.now() / 1000);
@@ -141,7 +147,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
   app.get("/api/platform/me", guard, async (request) => ({ email: request.platformAdmin!.email, role: request.platformAdmin!.role }));
 
   // Comprovante de uso único para ações sensíveis (hoje: conceder créditos).
-  app.post("/api/platform/mfa/challenge", { ...guard, config: { rateLimit: { max: 5, timeWindow: "1 minute" } } }, async (request, reply) => {
+  app.post("/api/platform/mfa/challenge", { ...adminOnly, config: { rateLimit: { max: 5, timeWindow: "1 minute" } } }, async (request, reply) => {
     const parsed = platformMfaChallengeSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     const admin = request.platformAdmin!;
@@ -150,7 +156,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
     return reply.code(201).send({ challengeId: challenge.id, maskedEmail: maskEmail(admin.email) });
   });
 
-  app.post("/api/platform/mfa/verify", { ...guard, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
+  app.post("/api/platform/mfa/verify", { ...adminOnly, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (request, reply) => {
     const parsed = platformMfaVerifySchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
     const outcome = await verifyChallenge(request.platformAdmin!.id, parsed.data.challengeId, parsed.data.code);
@@ -179,16 +185,18 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
   app.get("/api/platform/stores", guard, async (request, reply) => {
     const parsed = platformStoreListQuerySchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
-    const { q, page, pageSize } = parsed.data;
-    const where: Prisma.StoreWhereInput = q
-      ? {
+    const { q, availability, page, pageSize } = parsed.data;
+    const where: Prisma.StoreWhereInput = {
+      ...(availability === "available" ? { platformSuspendedAt: null } : {}),
+      ...(availability === "suspended" ? { platformSuspendedAt: { not: null } } : {}),
+      ...(q ? {
           OR: [
             { name: { contains: q, mode: "insensitive" } },
             { slug: { contains: q, mode: "insensitive" } },
-            { users: { some: { role: "OWNER", email: { contains: q, mode: "insensitive" } } } },
+            { users: { some: { role: panelRoleSchema.enum.OWNER, email: { contains: q, mode: "insensitive" } } } },
           ],
-        }
-      : {};
+        } : {}),
+    };
     await platformAudit({ adminId: request.platformAdmin!.id, action: "stores.list", metadata: { hasQuery: Boolean(q), page } });
 
     const [total, stores] = await Promise.all([
@@ -204,7 +212,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
           slug: true,
           createdAt: true,
           platformSuspendedAt: true,
-          users: { where: { role: "OWNER" }, select: { email: true }, orderBy: { createdAt: "asc" }, take: 1 },
+          users: { where: { role: panelRoleSchema.enum.OWNER }, select: { email: true }, orderBy: { createdAt: "asc" }, take: 1 },
           subscription: { include: { plan: true } },
           paymentAccounts: { where: { status: "CONNECTED" }, select: { id: true }, take: 1 },
           deviceTokens: { where: { revokedAt: null }, select: { lastSeenAt: true } },
@@ -247,7 +255,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
         acceptingOrders: true,
         platformSuspendedAt: true,
         platformSuspendedReason: true,
-        users: { where: { role: "OWNER" }, select: { email: true }, orderBy: { createdAt: "asc" }, take: 1 },
+        users: { where: { role: panelRoleSchema.enum.OWNER }, select: { email: true }, orderBy: { createdAt: "asc" }, take: 1 },
         subscription: {
           include: { plan: true, payments: { orderBy: { createdAt: "desc" }, take: 20, select: { id: true, planCode: true, status: true, amountCents: true, createdAt: true } } },
         },
@@ -315,6 +323,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
     const { id } = request.params as { id: string };
     const { days, reason } = parsed.data;
     const outcome = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Subscription" WHERE "storeId" = ${id} FOR UPDATE`;
       const subscription = await tx.subscription.findUnique({ where: { storeId: id } });
       if (!subscription) return { error: 404 as const };
       if (subscription.status !== "TRIAL") return { error: 409 as const };
@@ -333,6 +342,22 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // ---------- Avisos (substitui o x-admin-token) ----------
+
+  app.get("/api/platform/notices", guard, async (request, reply) => {
+    const parsed = noticeListQuerySchema.safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    const { page, pageSize } = parsed.data;
+    const [total, notices] = await Promise.all([
+      prisma.notice.count(),
+      prisma.notice.findMany({
+        orderBy: [{ publishedAt: "desc" }, { id: "asc" }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        select: { id: true, title: true, body: true, imageUrl: true, publishedAt: true, expiresAt: true },
+      }),
+    ]);
+    return { total, page, pageSize, notices };
+  });
 
   app.post("/api/platform/notices", guard, async (request, reply) => {
     const parsed = platformCreateNoticeSchema.safeParse(request.body);
@@ -392,7 +417,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
     }
     const store = await prisma.store.findUnique({
       where: { id: storeId },
-      select: { id: true, name: true, users: { where: { role: "OWNER" }, select: { email: true }, orderBy: { createdAt: "asc" }, take: 1 } },
+      select: { id: true, name: true, users: { where: { role: panelRoleSchema.enum.OWNER }, select: { email: true }, orderBy: { createdAt: "asc" }, take: 1 } },
     });
     if (!store) return reply.code(404).send({ error: "loja não encontrada" });
 

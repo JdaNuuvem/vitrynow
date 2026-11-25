@@ -2,7 +2,7 @@
 // um campo novo no banco (ou um `include` cru) que apareca na resposta quebra aqui, em vez de vazar em producao.
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
-import { PUBLIC_ADDITIONAL_KEYS, PUBLIC_CATEGORY_KEYS, PUBLIC_OPTION_GROUP_KEYS, PUBLIC_OPTION_KEYS, PUBLIC_PRODUCT_KEYS, PUBLIC_STORE_KEYS } from "../src/lib/publicDto";
+import { PUBLIC_ADDITIONAL_KEYS, PUBLIC_CATEGORY_KEYS, PUBLIC_OPTION_GROUP_KEYS, PUBLIC_STORE_HOURS_KEYS, PUBLIC_STORE_BUSY_KEYS, PUBLIC_OPTION_KEYS, PUBLIC_PRODUCT_KEYS, PUBLIC_STORE_KEYS } from "../src/lib/publicDto";
 import { makeApp, orderTokenHeader, registerStore, resetDb } from "./helpers";
 
 describe("SEC-18 - respostas das rotas publicas so com campos permitidos", { timeout: 60_000 }, () => {
@@ -38,12 +38,12 @@ describe("SEC-18 - respostas das rotas publicas so com campos permitidos", { tim
     expect(res.statusCode).toBe(200);
     const body = json(res);
     expect(keys(body)).toEqual(["categories", "store"]);
-    expect(keys(body.store)).toEqual(sorted([...PUBLIC_STORE_KEYS, "payment", "accepting", "hours", "campaign"])); // `payment.pixAvailable` vem do plugin do PIX; `accepting` (loja recebe pedido AGORA) vem do portao de assinatura (API-09)
+    expect(keys(body.store)).toEqual(sorted([...PUBLIC_STORE_KEYS, "payment", "accepting", "hours", "campaign", "scheduling", ...PUBLIC_STORE_HOURS_KEYS, ...PUBLIC_STORE_BUSY_KEYS])); // `payment.pixAvailable` vem do plugin do PIX; `accepting` (loja recebe pedido AGORA) vem do portao de assinatura (API-09)
     expect(keys(body.categories[0])).toEqual(sorted(PUBLIC_CATEGORY_KEYS));
     expect(keys(body.categories[0].products[0])).toEqual(sorted(PUBLIC_PRODUCT_KEYS));
     expect(keys(body.categories[0].products[0].additionals[0])).toEqual(sorted(PUBLIC_ADDITIONAL_KEYS));
     const text = res.body;
-    for (const forbidden of ['"storeId"', '"createdAt"', '"updatedAt"', '"active"', '"position"', '"categoryId"', '"productId"', '"timezone"', '"customDomain"', '"printMode"', '"cashStaffWithdrawalLimitCents"']) {
+    for (const forbidden of ['"storeId"', '"createdAt"', '"updatedAt"', '"active"', '"position"', '"categoryId"', '"productId"', '"customDomain"', '"printMode"', '"cashStaffWithdrawalLimitCents"']) {
       expect(text, forbidden).not.toContain(forbidden);
     }
     expect(text).not.toContain(l.store.id); // o id interno da loja nunca aparece
@@ -66,7 +66,8 @@ describe("SEC-18 - respostas das rotas publicas so com campos permitidos", { tim
       payload: { type: "DELIVERY", items: [{ productId: l.productId, quantity: 1 }], paymentMethod: "DINHEIRO", customerName: "Maria Segredo", customerPhone: "11987654321", address: "Rua Reservada 123", notes: "obs secreta" },
     });
     expect(created.statusCode, created.body).toBe(201);
-    expect(keys(json(created))).toEqual(["code", "orderId", "token"]);
+    expect(keys(json(created))).toEqual(["code", "discountCents", "orderId", "token", "totalCents"]);
+    expect(json(created)).toMatchObject({ discountCents: 0, totalCents: 3000 });
     const orderId = json(created).orderId as string;
     const headers = orderTokenHeader(orderId);
 

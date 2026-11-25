@@ -266,6 +266,7 @@ describe("CORS do cardápio (preflight) e redação de log", () => {
     expect(redactLogUrl(undefined)).toBeUndefined();
     expect(redactLogUrl("/a/b")).toBe("/a/b");
     expect(redactLogUrl("/a?page=1&q=pizza")).toBe("/a?page=1&q=pizza");
+    expect(redactLogUrl("/api/platform/stores?page=1&%71=dono%40teste.com")).toBe("/api/platform/stores?page=1&%71=[redigido]");
     expect(redactLogUrl("/a?token=1&page=1")).toBe("/a?token=[redigido]&page=1");
     expect(redactLogUrl("/a?%E0%A4%A=x&token=1")).toBe("/a?%E0%A4%A=x&token=[redigido]");
     expect(redactLogUrl("/a?code=1#f")).toBe("/a?code=[redigido]#f");

@@ -1,7 +1,6 @@
 import { Prisma, prisma } from "@meucardapio/db";
 import { SALE_STATUSES } from "./saleLines";
-import { STORE_TIMEZONE } from "./storeDay";
-import { localMidnightUtc, parseLocalDate } from "./storeTime";
+import { DEFAULT_STORE_TIMEZONE, localMidnightUtc, parseLocalDate } from "./storeTime";
 import { utc } from "./sqlTime";
 
 // API-20 (B14): relatórios agregados NO BANCO, no fuso da loja, com a definição única de venda (API-21, lib/saleLines):
@@ -11,17 +10,17 @@ import { utc } from "./sqlTime";
 export const MAX_REPORT_DAYS = 366;
 export const DEFAULT_REPORT_DAYS = 30;
 
-export type ReportRange = { fromDate: string; toDate: string; fromUtc: Date; toExclusiveUtc: Date };
+export type ReportRange = { fromDate: string; toDate: string; fromUtc: Date; toExclusiveUtc: Date; timeZone: string };
 export type RangeError = "INVALID_DATE" | "FROM_AFTER_TO" | "PERIOD_TOO_LONG";
 
 const DAY = 24 * 60 * 60 * 1000;
-const dateOf = (instant: Date) => instant.toLocaleDateString("en-CA", { timeZone: STORE_TIMEZONE });
+const dateOf = (instant: Date, timeZone: string) => instant.toLocaleDateString("en-CA", { timeZone });
 
 // "AAAA-MM-DD" vale como está (dia da LOJA, inclusivo). Um instante ISO (formato antigo do painel) vira o dia da loja desse instante.
-function toLocalDate(value: string): string | null {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return parseLocalDate(value, STORE_TIMEZONE) ? value : null;
+function toLocalDate(value: string, timeZone: string): string | null {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return parseLocalDate(value, timeZone) ? value : null;
   const instant = new Date(value);
-  return Number.isNaN(instant.getTime()) ? null : dateOf(instant);
+  return Number.isNaN(instant.getTime()) ? null : dateOf(instant, timeZone);
 }
 
 // Período padrão: os últimos 30 dias, de hoje para trás (datas inclusivas no fuso da loja).
@@ -31,16 +30,16 @@ const utcDay = (date: string) => {
 };
 const shiftDate = (date: string, days: number) => new Date(utcDay(date) + days * DAY).toISOString().slice(0, 10);
 
-export function resolveRange(query: { from?: string; to?: string }, now: Date = new Date()): ReportRange | { error: RangeError } {
-  const toDate = query.to ? toLocalDate(query.to) : dateOf(now);
+export function resolveRange(query: { from?: string; to?: string }, now: Date = new Date(), timeZone: string = DEFAULT_STORE_TIMEZONE): ReportRange | { error: RangeError } {
+  const toDate = query.to ? toLocalDate(query.to, timeZone) : dateOf(now, timeZone);
   if (!toDate) return { error: "INVALID_DATE" };
-  const fromDate = query.from ? toLocalDate(query.from) : shiftDate(toDate, -(DEFAULT_REPORT_DAYS - 1));
+  const fromDate = query.from ? toLocalDate(query.from, timeZone) : shiftDate(toDate, -(DEFAULT_REPORT_DAYS - 1));
   if (!fromDate) return { error: "INVALID_DATE" };
   if (fromDate > toDate) return { error: "FROM_AFTER_TO" };
   if ((utcDay(toDate) - utcDay(fromDate)) / DAY + 1 > MAX_REPORT_DAYS) return { error: "PERIOD_TOO_LONG" };
-  const fromUtc = parseLocalDate(fromDate, STORE_TIMEZONE)!;
+  const fromUtc = parseLocalDate(fromDate, timeZone)!;
   const [y, m, d] = shiftDate(toDate, 1).split("-").map(Number);
-  return { fromDate, toDate, fromUtc, toExclusiveUtc: localMidnightUtc(y, m, d, STORE_TIMEZONE) };
+  return { fromDate, toDate, fromUtc, toExclusiveUtc: localMidnightUtc(y, m, d, timeZone), timeZone };
 }
 
 export type Bucket = { count: number; revenueCents: number };
@@ -53,6 +52,7 @@ export type Report = {
   orderCount: number;
   revenueCents: number;
   discountCents: number;
+  serviceFeeCents: number;
   averageTicketCents: number;
   customerCount: number;
   deliveryFeeCents: number;
@@ -60,7 +60,8 @@ export type Report = {
   byPaymentMethod: Record<string, Bucket>;
   byDay: { date: string; orderCount: number; revenueCents: number }[];
   byType: Record<string, Bucket>;
-  topProducts: { productName: string; quantity: number; revenueCents: number }[];
+  // Produto por PESO (PD, RN-PD-22): `quantity` conta PEDIDOS (1 por linha, nunca gramas como unidades) e `weightGrams` soma o peso vendido (kg = gramas ÷ 1.000, 3 casas no CSV).
+  topProducts: { productName: string; quantity: number; revenueCents: number; weightGrams: number }[];
   byDeliverer: { delivererName: string; orderCount: number; revenueCents: number }[];
   cashSummary: { sessionCount: number; suprimentosCents: number; sangriasCents: number };
   canceledCount: number;
@@ -75,10 +76,10 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
   const sale = Prisma.sql`o."status"::text = ANY(${[...SALE_STATUSES]}) AND o."type"::text <> 'MESA'`; // API-24: a venda da mesa é o RECEBIMENTO, não o pedido
   // Janela por instante (UTC) das 00:00 locais; o agrupamento por dia converte para o fuso da loja DENTRO do banco.
   const window = Prisma.sql`o."storeId" = ${storeId} AND o."awaitingPayment" = false AND o."createdAt" >= ${utc(range.fromUtc)} AND o."createdAt" < ${utc(range.toExclusiveUtc)}`;
-  const localDay = Prisma.sql`to_char((o."createdAt" AT TIME ZONE 'UTC') AT TIME ZONE ${STORE_TIMEZONE}, 'YYYY-MM-DD')`;
+  const localDay = Prisma.sql`to_char((o."createdAt" AT TIME ZONE 'UTC') AT TIME ZONE ${range.timeZone}, 'YYYY-MM-DD')`;
 
   const rWindow = Prisma.sql`r."storeId" = ${storeId} AND r."receivedAt" >= ${utc(range.fromUtc)} AND r."receivedAt" < ${utc(range.toExclusiveUtc)}`;
-  const rDay = Prisma.sql`to_char((r."receivedAt" AT TIME ZONE 'UTC') AT TIME ZONE ${STORE_TIMEZONE}, 'YYYY-MM-DD')`;
+  const rDay = Prisma.sql`to_char((r."receivedAt" AT TIME ZONE 'UTC') AT TIME ZONE ${range.timeZone}, 'YYYY-MM-DD')`;
 
   const [totals, days, payments, types, products, deliverers, cash, rTotal, rDays, rPayments, rProducts] = await Promise.all([
     prisma.$queryRaw<
@@ -110,9 +111,9 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
       SELECT o."type"::text AS "bucket", count(*) AS "count", sum(o."totalCents" - o."tipCents")::bigint AS "revenue"
       FROM "Order" o WHERE ${window} AND ${sale} GROUP BY 1 ORDER BY 1`),
     // Receita do produto INCLUI as opções (CA-B14-04): (preço unitário + soma das opções da linha) x quantidade.
-    prisma.$queryRaw<{ key: string; name: string; quantity: bigint; revenue: bigint }[]>(Prisma.sql`
+    prisma.$queryRaw<{ key: string; name: string; quantity: bigint; revenue: bigint; grams: bigint }[]>(Prisma.sql`
       SELECT coalesce(i."productId", i."productName") AS "key", max(i."productName") AS "name", sum(i."quantity") AS "quantity",
-             sum((i."unitPriceCents" + coalesce(a."extra", 0)) * i."quantity")::bigint AS "revenue"
+             sum((i."unitPriceCents" + coalesce(a."extra", 0)) * i."quantity")::bigint AS "revenue", coalesce(sum(i."weightGrams"), 0)::bigint AS "grams"
       FROM "OrderItem" i
       JOIN "Order" o ON o."id" = i."orderId"
       LEFT JOIN LATERAL (SELECT sum(x."priceCents") AS "extra" FROM "OrderItemAdditional" x WHERE x."orderItemId" = i."id") a ON true
@@ -130,12 +131,15 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
       FROM "CashSession" s LEFT JOIN "CashMovement" m ON m."cashSessionId" = s."id"
       WHERE s."storeId" = ${storeId} AND s."openedAt" >= ${utc(range.fromUtc)} AND s."openedAt" < ${utc(range.toExclusiveUtc)}`),
     // API-24 (RN-MB-04): cada recebimento de mesa é UMA venda, reconhecida em receivedAt.
-    prisma.$queryRaw<{ count: bigint; revenue: bigint }[]>(Prisma.sql`SELECT count(*) AS "count", coalesce(sum(r."totalCents"), 0)::bigint AS "revenue" FROM "Receipt" r WHERE ${rWindow}`),
+    prisma.$queryRaw<{ count: bigint; revenue: bigint; discount: bigint; serviceFee: bigint }[]>(Prisma.sql`
+      SELECT count(*) AS "count", coalesce(sum(r."totalCents"), 0)::bigint AS "revenue",
+             coalesce(sum(r."discountCents"), 0)::bigint AS "discount", coalesce(sum(r."serviceFeeCents"), 0)::bigint AS "serviceFee"
+      FROM "Receipt" r WHERE ${rWindow}`),
     prisma.$queryRaw<{ date: string; count: bigint; revenue: bigint }[]>(Prisma.sql`SELECT ${rDay} AS "date", count(*) AS "count", sum(r."totalCents")::bigint AS "revenue" FROM "Receipt" r WHERE ${rWindow} GROUP BY 1`),
     prisma.$queryRaw<{ bucket: string; count: bigint; revenue: bigint }[]>(Prisma.sql`SELECT p."method"::text AS "bucket", count(*) AS "count", sum(p."amountCents")::bigint AS "revenue" FROM "ReceiptPayment" p JOIN "Receipt" r ON r."id" = p."receiptId" WHERE ${rWindow} GROUP BY 1`),
-    prisma.$queryRaw<{ key: string; name: string; quantity: bigint; revenue: bigint }[]>(Prisma.sql`
+    prisma.$queryRaw<{ key: string; name: string; quantity: bigint; revenue: bigint; grams: bigint }[]>(Prisma.sql`
       SELECT coalesce(i."productId", i."productName") AS "key", max(i."productName") AS "name", sum(i."quantity") AS "quantity",
-             sum((i."unitPriceCents" + coalesce(a."extra", 0)) * i."quantity")::bigint AS "revenue"
+             sum((i."unitPriceCents" + coalesce(a."extra", 0)) * i."quantity")::bigint AS "revenue", coalesce(sum(i."weightGrams"), 0)::bigint AS "grams"
       FROM "OrderItem" i JOIN "Order" o ON o."id" = i."orderId" JOIN "Receipt" r ON r."id" = o."receiptId"
       LEFT JOIN LATERAL (SELECT sum(x."priceCents") AS "extra" FROM "OrderItemAdditional" x WHERE x."orderItemId" = i."id") a ON true
       WHERE ${rWindow} AND o."status" <> 'CANCELADO' GROUP BY 1`),
@@ -161,11 +165,12 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
     e.revenueCents += n(r.revenue);
     dayMap.set(r.date, e);
   }
-  const productMap = new Map<string, { productName: string; quantity: number; revenueCents: number }>();
+  const productMap = new Map<string, { productName: string; quantity: number; revenueCents: number; weightGrams: number }>();
   for (const r of [...products, ...rProducts]) {
-    const e = productMap.get(r.key) ?? { productName: r.name, quantity: 0, revenueCents: 0 };
+    const e = productMap.get(r.key) ?? { productName: r.name, quantity: 0, revenueCents: 0, weightGrams: 0 };
     e.quantity += n(r.quantity);
     e.revenueCents += n(r.revenue);
+    e.weightGrams += n(r.grams);
     productMap.set(r.key, e);
   }
   const toBuckets = (rows: { bucket: string; count: bigint; revenue: bigint }[]) =>
@@ -175,10 +180,11 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
     to: range.toExclusiveUtc.toISOString(),
     fromDate: range.fromDate,
     toDate: range.toDate,
-    timeZone: STORE_TIMEZONE,
+    timeZone: range.timeZone,
     orderCount,
     revenueCents,
-    discountCents: n(t.discount),
+    discountCents: n(t.discount) + n(rTotal[0].discount), // desconto dos pedidos + desconto dado no fechamento da mesa
+    serviceFeeCents: n(rTotal[0].serviceFee), // taxa de serviço das mesas (já incluída na receita)
     averageTicketCents: orderCount > 0 ? Math.round(revenueCents / orderCount) : 0,
     customerCount: n(t.customers),
     deliveryFeeCents: n(t.fee),
@@ -200,6 +206,9 @@ export async function buildReport(storeId: string, range: ReportRange): Promise<
 
 export const CSV_TABLES = ["summary", "byDay", "byPaymentMethod", "byType", "topProducts", "byDeliverer"] as const;
 export type CsvTable = (typeof CSV_TABLES)[number];
+
+// Peso vendido em kg com 3 casas e vírgula decimal (1250 g => "1,250"); vazio quando o produto não é vendido por peso.
+export const kgText = (grams: number) => (grams > 0 ? `${Math.floor(grams / 1000)},${String(grams % 1000).padStart(3, "0")}` : "");
 
 export const reais = (cents: number) => `${cents < 0 ? "-" : ""}${Math.floor(Math.abs(cents) / 100)},${String(Math.abs(cents) % 100).padStart(2, "0")}`;
 
@@ -241,7 +250,7 @@ export function reportRows(report: Report, table: CsvTable): (string | number)[]
     case "byType":
       return [["Tipo", "Vendas", "Faturamento (R$)"], ...Object.entries(report.byType).map(([k, v]) => [TYPE_LABEL[k] ?? k, v.count, reais(v.revenueCents)])];
     case "topProducts":
-      return [["Produto", "Quantidade", "Receita com opções (R$)"], ...report.topProducts.map((r) => [r.productName, r.quantity, reais(r.revenueCents)])];
+      return [["Produto", "Quantidade", "Receita com opções (R$)", "Peso vendido (kg)"], ...report.topProducts.map((r) => [r.productName, r.quantity, reais(r.revenueCents), kgText(r.weightGrams)])];
     case "byDeliverer":
       return [["Entregador", "Entregas", "Valor dos pedidos (R$)"], ...report.byDeliverer.map((r) => [r.delivererName, r.orderCount, reais(r.revenueCents)])];
   }

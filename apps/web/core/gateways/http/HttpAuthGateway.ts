@@ -16,6 +16,10 @@ export class HttpAuthGateway implements AuthGateway {
     return this.http.post("/auth/logout");
   }
 
+  logoutAll() {
+    return this.http.post<{ ok: true }>("/auth/logout-all");
+  }
+
   changePassword(currentPassword: string, newPassword: string, options?: RequestOptions) {
     return this.http.post("/auth/change-password", { currentPassword, newPassword }, options);
   }

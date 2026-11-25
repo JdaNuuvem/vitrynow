@@ -1,3 +1,4 @@
+import { panelRoleSchema } from "@meucardapio/shared-types";
 import { Prisma, type prisma as prismaClient } from "@meucardapio/db";
 import { HISTORY_PERIODS, HISTORY_STATUS_FILTERS } from "@meucardapio/shared-types";
 import { CodedError } from "../../shared/errors";
@@ -80,7 +81,7 @@ const escapeLike = (text: string) => text.replace(/[\\%_]/g, (c) => `\\${c}`);
  * Telefone por TRECHO só para o OWNER. O STAFF só casa o FINAL do número (os 4 dígitos que a máscara já mostra, ou o número
  * completo, 10+ dígitos): busca por trecho deixaria reconstruir o telefone dígito a dígito sem passar pela máscara (Nightingale).
  */
-export function parseSearch(raw: string | undefined, role: Role = "OWNER"): { code: string | null; name: string | null; phone: string | null; phoneMatch: "contains" | "suffix" } | null {
+export function parseSearch(raw: string | undefined, role: Role = panelRoleSchema.enum.OWNER): { code: string | null; name: string | null; phone: string | null; phoneMatch: "contains" | "suffix" } | null {
   const q = (raw ?? "").trim();
   if (!q) return null;
   if (q.length < 2) throw bad("SEARCH_TOO_SHORT", "Digite ao menos 2 caracteres para buscar.");
@@ -94,8 +95,8 @@ export function parseSearch(raw: string | undefined, role: Role = "OWNER"): { co
   return {
     code: codeLike ? digits : null,
     name: /\p{L}/u.test(q) ? foldText(q) : null,
-    phone: phoneLike && (role === "OWNER" || staffAllowed) ? phoneDigits : null,
-    phoneMatch: role === "OWNER" ? "contains" : "suffix",
+    phone: phoneLike && (role === panelRoleSchema.enum.OWNER || staffAllowed) ? phoneDigits : null,
+    phoneMatch: role === panelRoleSchema.enum.OWNER ? "contains" : "suffix",
   };
 }
 
@@ -139,7 +140,7 @@ export async function searchOrderHistory(
   timeZone: string,
   now: Date,
   query: HistoryQuery,
-  role: Role = "OWNER",
+  role: Role = panelRoleSchema.enum.OWNER,
   opts: { skipPhone?: boolean } = {},
 ): Promise<{ rows: HistoryRow[]; total: number; nextCursor: string | null; period: { from: string; to: string } | null; timezone: string }> {
   const tz = safeTimeZone(timeZone);
@@ -155,7 +156,7 @@ export async function searchOrderHistory(
   const where: Prisma.Sql[] = [Prisma.sql`o."storeId" = ${storeId}`];
   if (period) where.push(Prisma.sql`o."createdAt" >= ${utc(period.start)}`, Prisma.sql`o."createdAt" < ${utc(period.end)}`);
   // ABERTO = o que o kanban considera em andamento (fora o PIX não pago): é por onde o dono acha os pedidos antigos escondidos pelo teto.
-  if (status === "ABERTO") where.push(Prisma.sql`o."awaitingPayment" = false AND o."status" IN (${OPEN_SQL})`);
+  if (status === "ABERTO") where.push(Prisma.sql`o."awaitingPayment" = false AND o."held" = false AND o."status" IN (${OPEN_SQL})`);
   if (status === "CONCLUIDO") where.push(Prisma.sql`o."status" = 'CONCLUIDO'`);
   if (status === "CANCELADO") where.push(Prisma.sql`o."status" = 'CANCELADO' AND COALESCE(p."status"::text, '') <> 'EXPIRADO'`);
   if (status === "AGUARDANDO_PAGAMENTO") where.push(Prisma.sql`o."awaitingPayment" = true AND o."status" <> 'CANCELADO'`);
@@ -176,7 +177,7 @@ export async function searchOrderHistory(
     }
     if (search.phone) {
       const phoneLike = Prisma.sql`regexp_replace(coalesce(o."customerPhone", ''), '\\D', '', 'g') LIKE ${search.phoneMatch === "suffix" ? `%${search.phone}` : `%${search.phone}%`}`;
-      if (role === "OWNER") any.push(phoneLike);
+      if (role === panelRoleSchema.enum.OWNER) any.push(phoneLike);
       else {
         // STAFF: mesma janela do contato completo (aberto, ou última mudança de estado há menos de 24 h). Pedido antigo não é achado por telefone.
         // Mesma fronteira do detalhe (`isWithinRecentWindow`): idade < 24 h, ou seja, ESTRITAMENTE depois do corte. Ver a regra de revisão em orders.view.ts.

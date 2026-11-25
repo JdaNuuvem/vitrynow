@@ -3,36 +3,38 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Icon } from "@/shared/icons/Icon";
-import { isStoreOpenNow } from "@/lib/openingHours";
 
-export function StoreHoursCard({ openingHours, settingsHref, acceptingOrders = true }: { openingHours: string | null; settingsHref: string; acceptingOrders?: boolean }) {
+export function StoreHoursCard({ openingHours, settingsHref, acceptingOrders }: { openingHours: string | null; settingsHref: string; acceptingOrders: boolean }) {
   const [expanded, setExpanded] = useState(false);
 
+  // Rebrand: "Recebendo pedidos" vem SEMPRE de `acceptingOrders` (a mesma fonte do pedido público); o texto de horário
+  // é só informativo. Sem texto, o status continua visível e o atalho leva à configuração.
   if (!openingHours) {
     return (
       <div className="shell-hours">
         <Link href={settingsHref} className="shell-hours__summary">
+          <span className={`shell-hours__status${acceptingOrders ? " is-open" : " is-closed"}`}>
+            {acceptingOrders && <span className="shell-hours__dot" />}
+            {acceptingOrders ? "Recebendo pedidos" : "Pedidos pausados"}
+          </span>
           <span className="shell-hours__action">Definir horários</span>
         </Link>
       </div>
     );
   }
 
-  const open = acceptingOrders ? isStoreOpenNow(openingHours) : false;
   return (
     <div className={`shell-hours${expanded ? " is-expanded" : ""}`}>
-      <div className="shell-hours__summary" role="button" tabIndex={0} onClick={() => setExpanded((v) => !v)} onKeyDown={(e) => e.key === "Enter" && setExpanded((v) => !v)}>
-        {open !== null && (
-          <span className={`shell-hours__status${open ? " is-open" : " is-closed"}`}>
-            {open && <span className="shell-hours__dot" />}
-            {open ? "Aberto agora" : acceptingOrders ? "Fechado" : "Pedidos pausados"}
-          </span>
-        )}
+      <button type="button" className="shell-hours__summary" aria-expanded={expanded} onClick={() => setExpanded((v) => !v)}>
+        <span className={`shell-hours__status${acceptingOrders ? " is-open" : " is-closed"}`}>
+          {acceptingOrders && <span className="shell-hours__dot" />}
+          {acceptingOrders ? "Recebendo pedidos" : "Pedidos pausados"}
+        </span>
         <span className="shell-hours__action">
           {expanded ? "Fechar" : "Ver horários"}
           <Icon name="chevronDown" size={14} />
         </span>
-      </div>
+      </button>
       {expanded && (
         <div className="shell-hours__details">
           <p className="shell-hours__title">Horários de funcionamento</p>

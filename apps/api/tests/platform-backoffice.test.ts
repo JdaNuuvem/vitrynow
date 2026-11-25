@@ -191,6 +191,8 @@ describe("back-office da plataforma", () => {
       const b = await newStore();
       const { cookie } = await staff("SUPPORT");
       await post(`/api/platform/stores/${a.storeId}/suspend`, cookie, { reason: "motivo válido" });
+      expect(json(await get("/api/platform/stores?availability=suspended", cookie)).stores.map((store: { id: string }) => store.id)).toEqual([a.storeId]);
+      expect(json(await get("/api/platform/stores?availability=available", cookie)).stores.map((store: { id: string }) => store.id)).toEqual([b.storeId]);
       expect((await post("/auth/logout-all", b.cookie, {})).statusCode).toBe(200);
       const menuB = json(await app.inject({ method: "GET", url: `/stores/${b.slug}/menu` }));
       expect(menuB.store.acceptingOrders).toBe(true);
@@ -198,6 +200,16 @@ describe("back-office da plataforma", () => {
   });
 
   describe("estender o trial (CA-BKO-02)", () => {
+    it("acumula dias quando duas solicitações são confirmadas em paralelo", async () => {
+      const store = await newStore();
+      const { cookie } = await staff("SUPPORT");
+      const before = await prisma.subscription.findUniqueOrThrow({ where: { storeId: store.storeId } });
+      const responses = await Promise.all([2, 3].map((days) => post(`/api/platform/stores/${store.storeId}/extend-trial`, cookie, { days, reason: "pedido do lojista" })));
+      expect(responses.map((response) => response.statusCode)).toEqual([200, 200]);
+      const after = await prisma.subscription.findUniqueOrThrow({ where: { storeId: store.storeId } });
+      expect(after.trialEndsAt.getTime() - before.trialEndsAt.getTime()).toBe(5 * 24 * 60 * 60 * 1000);
+    });
+
     it("sem motivo é recusado; com motivo muda o fim do trial e grava auditoria; fora do trial é 409", async () => {
       const s = await newStore();
       const { cookie, admin } = await staff("SUPPORT");
@@ -233,6 +245,7 @@ describe("back-office da plataforma", () => {
       const response = await grant(s.storeId, cookie, undefined);
       expect(response.statusCode).toBe(403);
       expect(json(response).code).toBe("PLATFORM_ROLE_REQUIRED");
+      expect((await post("/api/platform/mfa/challenge", cookie, { purpose: "platform_credit_grant" })).statusCode).toBe(403);
       expect(await prisma.aiCreditLedger.count()).toBe(0);
     });
 

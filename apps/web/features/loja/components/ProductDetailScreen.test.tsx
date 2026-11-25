@@ -25,6 +25,12 @@ function setup(over: Partial<React.ComponentProps<typeof ProductDetailScreen>> =
   return { onClose, onConfirm };
 }
 
+it("informa que o produto esgotou mesmo quando a loja aceita pedidos", () => {
+  setup({ product: { ...product, soldOut: true } });
+  expect(screen.getByRole("status")).toHaveTextContent("Este produto está esgotado.");
+  expect(screen.queryByRole("button", { name: /Adicionar/ })).not.toBeInTheDocument();
+});
+
 describe("ProductDetailScreen: botões nomeados (spec 09 §10.2)", () => {
   it("voltar e quantidade têm nome acessível", () => {
     setup();
@@ -49,6 +55,27 @@ describe("ProductDetailScreen: botões nomeados (spec 09 §10.2)", () => {
 });
 
 describe("ProductDetailScreen: escolha e total", () => {
+  it("exige uma variação de preço-base e cobra cada unidade de uma opção adicional", async () => {
+    const { onConfirm } = setup({ product: { ...product, fromPriceCents: 1200, optionGroups: [
+      { id: "size", name: "Tamanho", helpText: null, priceMode: "BASE", minSelect: 1, maxSelect: 1, maxPerOption: 1,
+        options: [{ id: "p", name: "Pequeno", priceCents: 1200 }, { id: "g", name: "Grande", priceCents: 2400 }] },
+      { id: "sauces", name: "Molhos", helpText: null, priceMode: "SUM", minSelect: 0, maxSelect: 2, maxPerOption: 2,
+        options: [{ id: "bbq", name: "Barbecue", priceCents: 300 }] },
+    ] } });
+    const add = screen.getByRole("button", { name: /^Adicionar · R\$/ });
+    expect(add).toBeDisabled();
+    await userEvent.click(screen.getByRole("radio", { name: /Grande/ }));
+    const moreSauce = screen.getByRole("button", { name: "Adicionar uma unidade de Barbecue" });
+    await userEvent.click(moreSauce);
+    await userEvent.click(moreSauce);
+    expect(moreSauce).toBeDisabled();
+    expect(add).toHaveTextContent("R$ 30,00");
+    await userEvent.click(add);
+    expect(onConfirm).toHaveBeenCalledWith({ quantity: 1, additionalIds: [], notes: "", optionSelections: [
+      { optionId: "g", quantity: 1 }, { optionId: "bbq", quantity: 2 },
+    ] });
+  });
+
   it("o botão Adicionar mostra o total com adicionais e quantidade", async () => {
     setup();
     await userEvent.click(screen.getByRole("checkbox", { name: /Bacon extra/ }));

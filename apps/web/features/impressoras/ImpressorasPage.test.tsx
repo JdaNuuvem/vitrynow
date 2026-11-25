@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceToken } from "@/core/domain/deviceTokens";
 import type { DeviceTokensGateway } from "@/core/gateways/DeviceTokensGateway";
+import type { PrintQueueGateway } from "@/core/gateways/PrintQueueGateway";
 import type { HttpResult } from "@/core/http/HttpClient";
 import { PanelServicesProvider, type PanelServices } from "@/core/services/PanelServices";
 import { ImpressorasPage } from "./ImpressorasPage";
@@ -22,7 +23,9 @@ const antiga: DeviceToken = { id: "t3", label: "Antiga", revokedAt: "2026-11-01T
 const ok = <T,>(data: T): HttpResult<T> => ({ ok: true, data });
 const fail = (status: number, error = "x"): HttpResult<never> => ({ ok: false, status, error });
 
-function setup(gateway: Partial<DeviceTokensGateway>) {
+const conference = { pendingJobOfPrintedOrder: 0, printableOrderWithoutJob: 0, printedJobOfUnprintedOrder: 0 };
+
+function setup(gateway: Partial<DeviceTokensGateway>, printGateway: Partial<PrintQueueGateway> = {}) {
   const confirmSpy = vi.spyOn(window, "confirm");
   const deviceTokens = {
     list: vi.fn().mockResolvedValue(ok({ tokens: [balcao, cozinha, antiga] })),
@@ -30,12 +33,21 @@ function setup(gateway: Partial<DeviceTokensGateway>) {
     revoke: vi.fn().mockResolvedValue(ok({})),
     ...gateway,
   } as unknown as DeviceTokensGateway;
+  const printQueue = {
+    configuration: vi.fn().mockResolvedValue(ok({ mode: "LEGACY", conference })),
+    alerts: vi.fn().mockResolvedValue(ok({ alerts: [], banner: { needsAttention: {
+      queueWithoutPrinter: false, modeUnconfirmed: false, moneyAlert: false,
+    } } })),
+    setMode: vi.fn().mockResolvedValue(ok({ mode: "QUEUE", changed: true, conference,
+      reconciled: { closedPendingJobs: 0, createdJobs: 1, markedOrdersPrinted: 0 } })),
+    ...printGateway,
+  };
   render(
-    <PanelServicesProvider services={{ deviceTokens } as unknown as PanelServices}>
+    <PanelServicesProvider services={{ deviceTokens, printQueue } as unknown as PanelServices}>
       <ImpressorasPage />
     </PanelServicesProvider>,
   );
-  return { deviceTokens, confirmSpy };
+  return { deviceTokens, confirmSpy, printQueue };
 }
 
 beforeEach(() => vi.restoreAllMocks());
@@ -89,9 +101,11 @@ describe("Impressoras: revogar com janela de confirmação (WEB-20b, A1)", () =>
 
 describe("Impressoras: acessibilidade da lista (WEB-20b, A2–A4)", () => {
   it("403 na lista (STAFF): o aviso é role=alert e o formulário some", async () => {
-    setup({ list: vi.fn().mockResolvedValue(fail(403)) });
+    const { printQueue } = setup({ list: vi.fn().mockResolvedValue(fail(403)) });
     expect(await screen.findByRole("alert")).toHaveTextContent("Essa ação é restrita ao dono da loja.");
     expect(screen.queryByRole("button", { name: "Gerar chave" })).not.toBeInTheDocument();
+    expect(printQueue.configuration).not.toHaveBeenCalled();
+    expect(printQueue.alerts).not.toHaveBeenCalled();
   });
 
   it("cada botão 'revogar' leva o nome da chave (leitor de tela distingue as linhas); revogada não tem botão", async () => {
@@ -114,4 +128,15 @@ describe("Impressoras: acessibilidade da lista (WEB-20b, A2–A4)", () => {
     expect(screen.getByRole("textbox", { name: "Identificação da chave" })).toBeInTheDocument();
     expect(await screen.findByRole("alert")).toHaveTextContent("Identificação inválida.");
   });
+});
+
+it("troca o modo somente depois da confirmação e apresenta o resultado da conciliação", async () => {
+  const { printQueue } = setup({});
+  await userEvent.click(await screen.findByRole("button", { name: "Ativar fila" }));
+  const dialog = await screen.findByRole("dialog");
+  expect(printQueue.setMode).not.toHaveBeenCalled();
+  await userEvent.click(within(dialog).getByRole("button", { name: "Confirmar modo" }));
+  expect(await screen.findByText("Modo de impressão atualizado")).toBeVisible();
+  expect(printQueue.setMode).toHaveBeenCalledWith("QUEUE");
+  expect(screen.getByRole("button", { name: "Voltar à impressão direta" })).toBeInTheDocument();
 });

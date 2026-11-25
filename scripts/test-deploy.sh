@@ -39,6 +39,16 @@ ACME_EMAIL=ops@exemplo.invalid
 APP_VERSION=abc1234
 MFA_ENFORCED=true
 RESEND_API_KEY=re_chave_ficticia_para_o_teste
+COMPOSE_PROFILES=offsite
+OFFSITE_S3_ENDPOINT=https://s3.backup.exemplo.invalid
+OFFSITE_S3_BUCKET=vitry-backup
+OFFSITE_S3_ACCESS_KEY_ID=KEYFICTICIA
+OFFSITE_S3_SECRET_ACCESS_KEY=segredo-offsite-ficticio
+OFFSITE_CRYPT_PASSWORD=senha-de-cifra-ficticia-0123456789abcdef
+OFFSITE_CRYPT_SALT=sal-ficticio-0123456789
+ALERT_TELEGRAM_BOT_TOKEN=123:abc
+ALERT_TELEGRAM_CHAT_ID=42
+ALERT_HEARTBEAT_URL=https://hc.exemplo.invalid/x
 WEB_ORIGIN=https://pedidos.exemplo.invalid
 NEXT_PUBLIC_API_URL=https://pedidos.exemplo.invalid
 EOF
@@ -60,6 +70,8 @@ envok; sed -i "/^MFA_ENFORCED=/d" "$TMP/infra/.env"; roda ok 0 0
 caso "deploy sem MFA_ENFORCED=true ABORTA (exit 1), sem chamar o docker" '[ "$RC" = 1 ] && [ -z "$LOG" ] && [[ "$OUT" == *"MFA_ENFORCED não é true"* ]] && [[ "$OUT" == *"ABORTADO"* ]]'
 envok; sed -i "s/^RESEND_API_KEY=.*/RESEND_API_KEY=/" "$TMP/infra/.env"; roda ok 0 0
 caso "deploy com RESEND_API_KEY vazia ABORTA (exit 1), sem chamar o docker" '[ "$RC" = 1 ] && [ -z "$LOG" ] && [[ "$OUT" == *"RESEND_API_KEY vazia"* ]]'
+envok; sed -i "/^COMPOSE_PROFILES=/d" "$TMP/infra/.env"; roda ok 0 0
+caso "deploy sem a cópia off-site ABORTA (exit 1), sem chamar o docker" '[ "$RC" = 1 ] && [ -z "$LOG" ] && [[ "$OUT" == *"cópia off-site DESLIGADA"* ]]'
 envok; sed -i "s/^APP_VERSION=.*/APP_VERSION=local/" "$TMP/infra/.env"; roda ok 0 0
 caso "deploy com APP_VERSION=local ABORTA (exit 1), sem chamar o docker" '[ "$RC" = 1 ] && [ -z "$LOG" ] && [[ "$OUT" == *"APP_VERSION=local"* ]]'
 echo "== deploy normal"

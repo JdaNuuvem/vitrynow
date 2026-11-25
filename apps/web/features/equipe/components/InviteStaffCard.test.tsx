@@ -10,7 +10,7 @@ function setup(error: string | null = null) {
   return { onInvite };
 }
 const fill = async (email: string, password: string) => {
-  await userEvent.type(screen.getByPlaceholderText("E-mail"), email);
+  await userEvent.type(screen.getByLabelText("E-mail"), email);
   await userEvent.type(screen.getByLabelText("Senha do funcionário"), password);
 };
 
@@ -24,7 +24,7 @@ describe("InviteStaffCard: senha mínima de 10 (SEC-29)", () => {
   it("UI-PW-04: 9 caracteres: erro junto do campo, ajuda visível, e NÃO convida", async () => {
     const { onInvite } = setup();
     await fill("ana@loja.com", "123456789");
-    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar funcionário" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(PASSWORD_TOO_SHORT_MESSAGE);
     expect(screen.getByText(PASSWORD_HELP_STAFF)).toBeInTheDocument();
     expect(onInvite).not.toHaveBeenCalled();
@@ -33,9 +33,12 @@ describe("InviteStaffCard: senha mínima de 10 (SEC-29)", () => {
   it("10 caracteres convida e limpa o formulário", async () => {
     const { onInvite } = setup();
     await fill("ana@loja.com", "1234567890");
-    await userEvent.click(screen.getByRole("button", { name: "Adicionar" }));
+    await userEvent.click(screen.getByRole("button", { name: "Adicionar funcionário" }));
     expect(onInvite).toHaveBeenCalledWith("ana@loja.com", "1234567890");
     expect((screen.getByLabelText("Senha do funcionário") as HTMLInputElement).value).toBe("");
+    // o campo limpo depois do sucesso NÃO vira erro de senha curta
+    expect(screen.queryByText(PASSWORD_TOO_SHORT_MESSAGE)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("recusa do servidor por tamanho: a mesma frase no campo, sem texto técnico, sem duplicar no cartão", () => {

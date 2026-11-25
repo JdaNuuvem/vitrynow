@@ -4,9 +4,6 @@ import { digitsToCents, maskMoneyInput } from "@/shared/format/money";
 // Campos como o formulário os edita: tudo texto (valores em R$ ficam mascarados, ex. "20,00").
 export type ContaForm = {
   name: string;
-  logoUrl: string;
-  coverImageUrl: string;
-  primaryColor: string;
   address: string;
   whatsapp: string;
   openingHours: string;
@@ -14,14 +11,12 @@ export type ContaForm = {
   deliveryFee: string;
   deliveryEnabled: boolean;
   pickupEnabled: boolean;
+  hideSoldOutProducts?: boolean;
 };
 
 export function toForm(store: StoreSettings): ContaForm {
   return {
     name: store.name,
-    logoUrl: store.logoUrl ?? "",
-    coverImageUrl: store.coverImageUrl ?? "",
-    primaryColor: store.primaryColor ?? "",
     address: store.address ?? "",
     whatsapp: store.whatsapp ?? "",
     openingHours: store.openingHours ?? "",
@@ -29,6 +24,7 @@ export function toForm(store: StoreSettings): ContaForm {
     deliveryFee: store.deliveryFeeCents > 0 ? maskMoneyInput(String(store.deliveryFeeCents)) : "",
     deliveryEnabled: store.deliveryEnabled,
     pickupEnabled: store.pickupEnabled,
+    hideSoldOutProducts: store.hideSoldOutProducts,
   };
 }
 

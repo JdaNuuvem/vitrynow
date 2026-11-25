@@ -65,14 +65,17 @@ export function Modal({ open, onClose, labelledBy, width = 480, sheetOnMobile = 
     }
     panelRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
+      const panel = panelRef.current;
+      const dialogs = Array.from(document.querySelectorAll('[role="dialog"][aria-modal="true"]'))
+        .filter((dialog) => !dialog.closest("[inert]"));
+      if (!panel || panel !== dialogs[dialogs.length - 1] || event.defaultPrevented) return;
       if (event.key === "Escape") {
+        event.preventDefault();
         onCloseRef.current();
         return;
       }
       if (event.key !== "Tab") return;
       // Foco preso na janela: Tab do último vai ao primeiro, Shift+Tab do primeiro vai ao último.
-      const panel = panelRef.current;
-      if (!panel) return;
       const items = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE));
       if (items.length === 0) {
         event.preventDefault();

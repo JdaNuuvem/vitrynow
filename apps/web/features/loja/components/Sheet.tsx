@@ -1,7 +1,12 @@
 "use client";
 
-import { useEffect, useId, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { prefersReducedMotion } from "@/lib/motion";
 import { CloseIcon } from "../icons";
+
+// Duração da saída (--loja-dur-2 = 200 ms, spec 12 §8 M-08: entra em 280 ms e sai MAIS RÁPIDO, em 200 ms). A folha só
+// some do DOM depois dela; o CSS (.loja__sheet--closing) faz a animação.
+const EXIT_MS = 200;
 
 const FOCUSABLE = [
   "a[href]",
@@ -22,11 +27,13 @@ export function Sheet({
   title,
   onClose,
   tall = false,
+  purchase = false,
   children,
 }: {
   title: string;
   onClose: () => void;
   tall?: boolean;
+  purchase?: boolean;
   children: ReactNode;
 }) {
   const titleId = useId();
@@ -34,6 +41,24 @@ export function Sheet({
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const [closing, setClosing] = useState(false);
+  const exitTimer = useRef<number | null>(null);
+
+  // Fechar (Esc, fundo, X): toca a saída e só então avisa quem abriu. Quem pediu menos movimento fecha na hora.
+  // Fechar por fora (ex.: "Continuar" no carrinho abre o checkout) desmonta direto, sem esta espera.
+  function requestClose() {
+    if (closing) return;
+    if (prefersReducedMotion()) return onCloseRef.current();
+    setClosing(true);
+    exitTimer.current = window.setTimeout(() => onCloseRef.current(), EXIT_MS);
+  }
+
+  useEffect(
+    () => () => {
+      if (exitTimer.current !== null) window.clearTimeout(exitTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     const root = rootRef.current;
@@ -68,7 +93,7 @@ export function Sheet({
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape") {
       event.stopPropagation();
-      onCloseRef.current();
+      requestClose();
       return;
     }
     if (event.key !== "Tab") return;
@@ -95,9 +120,9 @@ export function Sheet({
   return (
     <div
       ref={rootRef}
-      className="loja__sheet"
+      className={"loja__sheet" + (closing ? " loja__sheet--closing" : "")}
       onClick={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (event.target === event.currentTarget) requestClose();
       }}
     >
       <div
@@ -107,13 +132,13 @@ export function Sheet({
         aria-labelledby={titleId}
         tabIndex={-1}
         onKeyDown={onKeyDown}
-        className={`loja__sheet-panel${tall ? " loja__sheet-panel--tall" : ""}`}
+        className={`loja__sheet-panel${tall ? " loja__sheet-panel--tall" : ""}${purchase ? " loja__sheet-panel--purchase" : ""}`}
       >
         <div className="loja__sheet-head">
           <h2 id={titleId} className="loja__sheet-title">
             {title}
           </h2>
-          <button type="button" onClick={onClose} className="loja__sheet-close" aria-label="Fechar">
+          <button type="button" onClick={requestClose} className="loja__sheet-close" aria-label="Fechar">
             <CloseIcon />
           </button>
         </div>

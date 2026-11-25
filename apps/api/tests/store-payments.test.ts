@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore, productStore } from "./helpers";
 import { techCleanupJob } from "../src/jobs/techCleanup";
 import { JobRunner } from "../src/jobs/runner";
 import { activateSubscription } from "../src/lib/subscription";
@@ -221,7 +222,7 @@ describe("PIX por loja — conexão, estado e desconexão (HTTP)", () => {
     await connect();
     const account = await prisma.paymentAccount.findFirstOrThrow();
     const order = await prisma.order.create({ data: { storeId, code: "0002", type: "BALCAO", status: "PENDENTE", customerName: "C", totalCents: 1000, paymentMethod: "PIX" } });
-    await prisma.payment.create({ data: { orderId: order.id, amountCents: 1000, status: "PENDENTE", paymentAccountId: account.id } });
+    await prisma.payment.create({ data: { orderId: order.id, storeId: await orderStore(order.id), amountCents: 1000, status: "PENDENTE", paymentAccountId: account.id } });
     const blocked = await post("/api/store/payments/mercadopago/disconnect");
     expect(blocked.statusCode).toBe(409);
     expect(json(blocked)).toMatchObject({ code: "MP_HAS_PENDING_PAYMENTS", details: { pixPending: 1, refundPending: 0 } });
@@ -250,7 +251,7 @@ describe("PIX por loja — conexão, estado e desconexão (HTTP)", () => {
     const order = await prisma.order.create({
       data: { storeId, code: "0001", type: "BALCAO", status: "CONFIRMADO", customerName: "C", totalCents: 1000, paymentMethod: "PIX" },
     });
-    await prisma.payment.create({ data: { orderId: order.id, amountCents: 1000, status: "APROVADO", paymentAccountId: account.id } });
+    await prisma.payment.create({ data: { orderId: order.id, storeId: await orderStore(order.id), amountCents: 1000, status: "APROVADO", paymentAccountId: account.id } });
     const blocked = await post("/api/store/payments/mercadopago/disconnect");
     expect(blocked.statusCode).toBe(409);
     expect(json(blocked)).toMatchObject({ code: "MP_HAS_PENDING_PAYMENTS", details: { pixPending: 1, refundPending: 0 } });
@@ -262,7 +263,7 @@ describe("PIX por loja — conexão, estado e desconexão (HTTP)", () => {
 
   async function pendingOrder(accountId: string, status: "PENDENTE" | "APROVADO" | "ESTORNO_PENDENTE", orderStatus = "PENDENTE", code = "0100") {
     const order = await prisma.order.create({ data: { storeId, code, type: "BALCAO", status: orderStatus as never, customerName: "C", totalCents: 1000, paymentMethod: "PIX" } });
-    return prisma.payment.create({ data: { orderId: order.id, amountCents: 1000, status, paymentAccountId: accountId } });
+    return prisma.payment.create({ data: { orderId: order.id, storeId: await orderStore(order.id), amountCents: 1000, status, paymentAccountId: accountId } });
   }
 
   it("RN-B1-15: o bloqueio devolve SÓ o código e as contagens (o texto é da tela); a tela busca as contagens em GET /api/store/payments; nada é apagado", async () => {

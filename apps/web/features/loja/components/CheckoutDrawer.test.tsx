@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { StoreInfo } from "@/core/domain/storefront";
+import type { StorefrontGateway } from "@/core/gateways/StorefrontGateway";
 import { CheckoutDrawer } from "./CheckoutDrawer";
 
 const store: StoreInfo = {
@@ -21,6 +22,27 @@ async function fillValid() {
   await userEvent.type(screen.getByLabelText(/^Telefone/), "21999999999");
   await userEvent.type(screen.getByLabelText(/^Endereço de entrega/), "Rua A, 1");
 }
+
+it("reconfirma uma taxa alterada pelo servidor sem reenviar o pedido automaticamente", async () => {
+  const getDeliveryZones = vi.fn().mockResolvedValue({ ok: true, data: {
+    zones: [{ id: "centro", name: "Centro", feeCents: 300 }], outsideMode: "REFUSE",
+    defaultFeeCents: 500, freeShippingFromCents: null,
+  } });
+  const props = { store, subtotalCents: 5000, closed: false, submitting: false, error: null, onClose: vi.fn(), onSubmit: vi.fn(),
+    gateway: { getDeliveryZones } as unknown as StorefrontGateway };
+  const { rerender } = render(<CheckoutDrawer {...props} />);
+  await userEvent.selectOptions(await screen.findByRole("combobox", { name: "Bairro da entrega" }), "centro");
+  await fillValid();
+  await userEvent.click(screen.getByRole("button", { name: /Finalizar pedido/ }));
+  expect(props.onSubmit.mock.calls[0][0]).toMatchObject({ neighborhoodId: "centro", expectedDeliveryFeeCents: 300 });
+  rerender(<CheckoutDrawer {...props} error="A taxa mudou." errorCode="DELIVERY_FEE_CHANGED"
+    errorDetails={{ deliveryFeeCents: 600, totalCents: 5600 }} />);
+  const confirm = await screen.findByRole("button", { name: /Confirmar novo total/ });
+  expect(props.onSubmit).toHaveBeenCalledTimes(1);
+  expect(confirm).toHaveTextContent("56,00");
+  await userEvent.click(confirm);
+  expect(props.onSubmit.mock.calls[1][0].expectedDeliveryFeeCents).toBe(600);
+});
 
 describe("CheckoutDrawer: rótulos e campos (spec 09 §10.2)", () => {
   it("todo campo tem rótulo visível, com 'obrigatório' em texto", () => {
@@ -146,8 +168,19 @@ describe("CheckoutDrawer: validação (UI-V-05)", () => {
     await userEvent.click(screen.getByRole("button", { name: /Finalizar pedido/ }));
     expect(onSubmit).toHaveBeenCalledTimes(1);
     const [form, totals] = onSubmit.mock.calls[0];
-    expect(form).toMatchObject({ customerName: "Maria", customerPhone: "21999999999", address: "Rua A, 1", deliveryType: "DELIVERY" });
+    // o campo guarda o telefone já mascarado; a API aceita a pontuação e valida pela mesma regra
+    expect(form).toMatchObject({ customerName: "Maria", customerPhone: "(21) 99999-9999", address: "Rua A, 1", deliveryType: "DELIVERY" });
     expect(totals.totalCents).toBe(5500);
+  });
+
+  it("telefone: máscara na digitação, para em 11 dígitos e tem teto nos campos de texto", async () => {
+    setup();
+    const phone = screen.getByLabelText(/^Telefone/);
+    await userEvent.type(phone, "11948539593503953242");
+    expect(phone).toHaveValue("(11) 94853-9593");
+    expect(screen.getByLabelText(/^Nome/)).toHaveAttribute("maxlength", "80");
+    expect(screen.getByLabelText(/^Endereço de entrega/)).toHaveAttribute("maxlength", "280");
+    expect(screen.getByLabelText("Cupom de desconto (opcional)")).toHaveAttribute("maxlength", "50");
   });
 });
 

@@ -1,10 +1,17 @@
 import type { Option, OptionGroup, Prisma, prisma as prismaClient } from "@meucardapio/db";
 import type { GroupInput, GroupRow } from "./optionGroups.domain";
+import { effectivePriceCents, type PricedProduct } from "../../lib/productPrice";
+import { isSoldOutNow } from "../../lib/soldOut";
 
 type Db = typeof prismaClient;
 type Tx = Prisma.TransactionClient;
 
-export type GroupWithOptions = OptionGroup & { options: Option[] };
+// Produto ligado à opção (RN-PD-12): só o necessário para herdar nome/preço e saber se está disponível.
+const PRODUCT_SELECT = { name: true, priceCents: true, promoCents: true, promoStartsAt: true, promoEndsAt: true, saleUnit: true, minGrams: true, stepGrams: true, maxGrams: true, active: true, soldOut: true, soldOutUntil: true, kind: true } as const;
+const OPTIONS_INCLUDE = { orderBy: { position: "asc" }, include: { product: { select: PRODUCT_SELECT } } } as const;
+type LinkedOption = Option & { product: (PricedProduct & { name: string; active: boolean; soldOut: boolean; soldOutUntil: Date | null; kind: string }) | null };
+
+export type GroupWithOptions = OptionGroup & { options: LinkedOption[] };
 export type GroupWithUsage = GroupWithOptions & { productCount: number };
 
 /** Opção informada que não pertence ao grupo (id de outro grupo/loja ou inexistente). */
@@ -25,10 +32,14 @@ export interface OptionGroupsRepository {
   countProductsUsing(groupId: string): Promise<number>;
   /** Produtos que ficariam com mais de um grupo BASE se `groupId` virasse BASE (nomes). */
   productsWithAnotherBase(storeId: string, groupId: string): Promise<string[]>;
-  findProduct(storeId: string, productId: string): Promise<{ id: string; name: string; priceCents: number } | null>;
+  findProduct(storeId: string, productId: string): Promise<{ id: string; name: string; priceCents: number; kind: string; saleUnit: string; promoCents: number | null } | null>;
   listProductGroups(storeId: string, productId: string): Promise<GroupRow[]>;
-  groupsForProducts(storeId: string, productIds: string[]): Promise<Map<string, GroupRow[]>>;
+  groupsForProducts(storeId: string, productIds: string[], nativeOnly?: boolean): Promise<Map<string, GroupRow[]>>;
   setProductGroups(storeId: string, productId: string, groupIds: string[]): Promise<void>;
+  /** Produtos da LOJA (só os que existem nela) entre `ids`, com o tipo. Outra loja = ausente (mesma resposta de inexistente). */
+  findProductKinds(storeId: string, ids: string[]): Promise<Array<{ id: string; kind: string; saleUnit: string }>>;
+  /** Onde o adicional é usado: grupos e produtos que os têm (RN-PD-15). */
+  addonUsage(storeId: string, productId: string): Promise<{ groups: Array<{ id: string; name: string }>; products: number }>;
 }
 
 const toRow = (group: GroupWithOptions, position?: number): GroupRow => ({
@@ -41,8 +52,29 @@ const toRow = (group: GroupWithOptions, position?: number): GroupRow => ({
   priceMode: group.priceMode,
   source: group.source,
   position,
-  options: [...group.options].sort((a, b) => a.position - b.position).map((o) => ({ id: o.id, name: o.name, priceCents: o.priceCents, active: o.active, position: o.position })),
+  options: [...group.options].sort((a, b) => a.position - b.position).map((o) => resolveOption(o)),
 });
+
+/** Opção como o cliente a vê. Opção ligada a adicional: nome do adicional; preço do adicional (INHERIT) ou próprio (OWN); some se o adicional foi inativado ou esgotou (RN-PD-13). */
+export function resolveOption(o: LinkedOption, now: Date = new Date()) {
+  const base = { id: o.id, position: o.position };
+  if (!o.product) return { ...base, name: o.name, priceCents: o.priceCents, active: o.active };
+  const available = o.active && o.product.active && !isSoldOutNow(o.product, now);
+  return { ...base, name: o.product.name, priceCents: o.priceSource === "INHERIT" ? effectivePriceCents(o.product, now) : o.priceCents, active: available };
+}
+
+type OptionInput = GroupInput["options"][number];
+// Opção ligada a adicional: o nome gravado é só cópia de apoio (o que vale é o do produto); INHERIT guarda 0 e lê o preço do adicional.
+const optionData = (o: OptionInput) => {
+  const linked = Boolean(o.productId);
+  return {
+    name: o.name,
+    priceCents: linked && (o.priceSource ?? "INHERIT") === "INHERIT" ? 0 : o.priceCents,
+    active: o.active ?? true,
+    productId: o.productId ?? null,
+    priceSource: linked ? (o.priceSource ?? "INHERIT") : ("OWN" as const),
+  };
+};
 
 export class PrismaOptionGroupsRepository implements OptionGroupsRepository {
   constructor(private readonly db: Db) {}
@@ -51,17 +83,17 @@ export class PrismaOptionGroupsRepository implements OptionGroupsRepository {
     const groups = await this.db.optionGroup.findMany({
       where: { storeId },
       orderBy: { createdAt: "asc" },
-      include: { options: { orderBy: { position: "asc" } }, _count: { select: { products: true } } },
+      include: { options: OPTIONS_INCLUDE, _count: { select: { products: true } } },
     });
     return groups.map(({ _count, ...group }) => ({ ...group, productCount: _count.products }));
   }
 
   findGroup(storeId: string, id: string) {
-    return this.db.optionGroup.findFirst({ where: { id, storeId }, include: { options: { orderBy: { position: "asc" } } } });
+    return this.db.optionGroup.findFirst({ where: { id, storeId }, include: { options: OPTIONS_INCLUDE } });
   }
 
   findGroupsByIds(storeId: string, ids: string[]) {
-    return this.db.optionGroup.findMany({ where: { storeId, id: { in: ids } }, include: { options: { orderBy: { position: "asc" } } } });
+    return this.db.optionGroup.findMany({ where: { storeId, id: { in: ids } }, include: { options: OPTIONS_INCLUDE } });
   }
 
   // FK composta (groupId, storeId): as opções entram por createMany com o groupId explícito (create aninhado não alcança).
@@ -70,9 +102,9 @@ export class PrismaOptionGroupsRepository implements OptionGroupsRepository {
     return this.db.$transaction(async (tx: Tx) => {
       const group = await tx.optionGroup.create({ data: { ...data, storeId } });
       await tx.option.createMany({
-        data: options.map((o, position) => ({ storeId, groupId: group.id, name: o.name, priceCents: o.priceCents, active: o.active ?? true, position })),
+        data: options.map((o, position) => ({ storeId, groupId: group.id, ...optionData(o), position })),
       });
-      return tx.optionGroup.findFirstOrThrow({ where: { id: group.id, storeId }, include: { options: { orderBy: { position: "asc" } } } });
+      return tx.optionGroup.findFirstOrThrow({ where: { id: group.id, storeId }, include: { options: OPTIONS_INCLUDE } });
     });
   }
 
@@ -87,14 +119,14 @@ export class PrismaOptionGroupsRepository implements OptionGroupsRepository {
         if (option.id) {
           const result = await tx.option.updateMany({
             where: { id: option.id, groupId: id, storeId },
-            data: { name: option.name, priceCents: option.priceCents, active: option.active ?? true, position },
+            data: { ...optionData(option), position },
           });
           if (result.count !== 1) throw new OptionNotInGroupError(option.id);
         } else {
-          await tx.option.create({ data: { storeId, groupId: id, name: option.name, priceCents: option.priceCents, active: option.active ?? true, position } });
+          await tx.option.create({ data: { storeId, groupId: id, ...optionData(option), position } });
         }
       }
-      return tx.optionGroup.findFirstOrThrow({ where: { id, storeId }, include: { options: { orderBy: { position: "asc" } } } });
+      return tx.optionGroup.findFirstOrThrow({ where: { id, storeId }, include: { options: OPTIONS_INCLUDE } });
     });
   }
 
@@ -117,25 +149,25 @@ export class PrismaOptionGroupsRepository implements OptionGroupsRepository {
   }
 
   findProduct(storeId: string, productId: string) {
-    return this.db.product.findFirst({ where: { id: productId, storeId }, select: { id: true, name: true, priceCents: true } });
+    return this.db.product.findFirst({ where: { id: productId, storeId }, select: { id: true, name: true, priceCents: true, kind: true, saleUnit: true, promoCents: true } });
   }
 
   async listProductGroups(storeId: string, productId: string) {
     const links = await this.db.productOptionGroup.findMany({
-      where: { storeId, productId },
+      where: { storeId, productId, group: { source: "MANUAL" } },
       orderBy: { position: "asc" },
-      include: { group: { include: { options: { orderBy: { position: "asc" } } } } },
+      include: { group: { include: { options: OPTIONS_INCLUDE } } },
     });
     return links.map((link) => toRow(link.group, link.position));
   }
 
-  async groupsForProducts(storeId: string, productIds: string[]) {
+  async groupsForProducts(storeId: string, productIds: string[], nativeOnly = false) {
     const map = new Map<string, GroupRow[]>(productIds.map((id) => [id, []]));
     if (productIds.length === 0) return map;
     const links = await this.db.productOptionGroup.findMany({
-      where: { storeId, productId: { in: productIds } },
+      where: { storeId, productId: { in: productIds }, ...(nativeOnly ? { group: { source: "MANUAL" } } : {}) },
       orderBy: { position: "asc" },
-      include: { group: { include: { options: { orderBy: { position: "asc" } } } } },
+      include: { group: { include: { options: OPTIONS_INCLUDE } } },
     });
     for (const link of links) map.get(link.productId)?.push(toRow(link.group, link.position));
     return map;
@@ -143,8 +175,20 @@ export class PrismaOptionGroupsRepository implements OptionGroupsRepository {
 
   async setProductGroups(storeId: string, productId: string, groupIds: string[]) {
     await this.db.$transaction([
-      this.db.productOptionGroup.deleteMany({ where: { storeId, productId } }),
+      this.db.productOptionGroup.deleteMany({ where: { storeId, productId, group: { source: "MANUAL" } } }),
       this.db.productOptionGroup.createMany({ data: groupIds.map((groupId, position) => ({ storeId, productId, groupId, position })) }),
     ]);
+  }
+
+  async findProductKinds(storeId: string, ids: string[]) {
+    if (ids.length === 0) return [];
+    return this.db.product.findMany({ where: { storeId, id: { in: ids } }, select: { id: true, kind: true, saleUnit: true } });
+  }
+
+  async addonUsage(storeId: string, productId: string) {
+    const options = await this.db.option.findMany({ where: { storeId, productId }, select: { group: { select: { id: true, name: true, products: { select: { productId: true } } } } } });
+    const groups = new Map(options.map((o) => [o.group.id, { id: o.group.id, name: o.group.name }]));
+    const products = new Set(options.flatMap((o) => o.group.products.map((p) => p.productId)));
+    return { groups: [...groups.values()], products: products.size };
   }
 }

@@ -684,6 +684,16 @@ namespace MeuCardapio.PrintClient
                 }
             var mesa = ZeroTotal(); mesa.Type = "MESA"; mesa.TableLabel = "12";
             Check("total zero na MESA: tambem 'SEM COBRANÇA' (nao 'PAGAMENTO NA MESA')", pay(mesa) == Z);
+            // D10 (contrato v4): rodada e quem pediu na MESA; aviso LGPD quando os dados do cliente foram removidos
+            var v4 = Newtonsoft.Json.JsonConvert.DeserializeObject<PrintableOrder>("{\"type\":\"MESA\",\"tableLabel\":\"7\",\"round\":3,\"requestedBy\":\"Garçom Ana\",\"customerRemoved\":true,\"items\":[]}");
+            Check("v4: round/requestedBy/customerRemoved desserializam", v4.Round == 3 && v4.RequestedBy == "Garçom Ana" && v4.CustomerRemoved == true);
+            var v4t = ZeroTotal(); v4t.Type = "MESA"; v4t.TableLabel = "7"; v4t.Round = 3; v4t.RequestedBy = "Garçom Ana"; v4t.CustomerRemoved = true;
+            var v4txt = TextTicketWriter.RenderText(Build(v4t), 32);
+            Check("v4: MESA imprime 'RODADA 3' e 'Pedido por: Garçom Ana'", v4txt.Contains("RODADA 3") && v4txt.Contains("Pedido por: Garçom Ana"));
+            Check("v4: customerRemoved imprime 'Dados do cliente removidos'", v4txt.Contains("Dados do cliente removidos"));
+            var v4d = ZeroTotal(); v4d.Type = "DELIVERY"; v4d.Round = 3; v4d.RequestedBy = "X";
+            var v4dtxt = TextTicketWriter.RenderText(Build(v4d), 32);
+            Check("v4: fora da MESA nao imprime rodada nem 'Pedido por'", !v4dtxt.Contains("RODADA") && !v4dtxt.Contains("Pedido por"));
             var delivery = ZeroTotal(); delivery.Type = "DELIVERY";
             Check("total zero em ENTREGA: 'SEM COBRANÇA' (sem 'FORMA DE PAGAMENTO NAO INFORMADA')", pay(delivery) == Z);
             var re = ZeroTotalReprint();

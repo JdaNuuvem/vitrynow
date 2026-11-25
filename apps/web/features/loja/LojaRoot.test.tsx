@@ -73,8 +73,22 @@ describe("LojaRoot com o menu vindo do servidor (ADR-0013)", () => {
     const fetchMock = vi.fn().mockReturnValue(new Promise(() => {}));
     vi.stubGlobal("fetch", fetchMock);
     render(<LojaRoot slug="boa-massa" />);
-    expect(screen.getByText("Carregando...")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Carregando o cardápio…");
+    expect(screen.getByRole("status")).not.toHaveAttribute("aria-busy");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("indisponibilidade temporária oferece nova tentativa e recupera o cardápio", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({ error: "Indisponível" }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => menu });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<LojaRoot slug="boa-massa" />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível carregar o cardápio");
+    expect(screen.queryByText("Loja não encontrada.")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Tentar novamente" }));
+    expect(await screen.findByText("Calabresa Especial")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -302,6 +316,54 @@ describe("cardápio v2: estrutura e regras no fluxo completo (spec 12)", () => {
     act(() => fireAtEnd(false)); // subiu: saiu do fim, o pino cai
     // nenhuma seção sob a linha (topo): a leitura é null
     expect(current()).toContain("Lanches");
+  });
+
+  // M-07 (Fatia 2): a pílula do carrinho pulsa quando entra item ou o total muda, com ela já na tela; o total "rola".
+  describe("pílula do carrinho (M-07)", () => {
+    const animate = vi.fn();
+    const motion = (reduced: boolean) => vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: reduced, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    function openCart() {
+      animate.mockClear();
+      Element.prototype.animate = animate;
+      vi.stubGlobal("fetch", vi.fn());
+      vi.stubGlobal("scrollTo", vi.fn());
+      return render(<LojaRoot slug="boa-massa" initialMenu={rich} />);
+    }
+
+    it("a 1ª aparição não pulsa (tem animação própria); o 2º item pulsa (1 → 1,06 → 1, só transform)", async () => {
+      motion(false);
+      openCart();
+      await userEvent.click(screen.getByRole("button", { name: "Adicionar X-Burger" }));
+      expect(animate).not.toHaveBeenCalled();
+      await userEvent.click(screen.getByRole("button", { name: "Mais um X-Burger" }));
+      expect(animate).toHaveBeenCalledTimes(1);
+      const [keyframes, options] = animate.mock.calls[0];
+      expect(keyframes.map((frame: { transform: string }) => frame.transform)).toEqual(["translateX(-50%) scale(1)", "translateX(-50%) scale(1.06)", "translateX(-50%) scale(1)"]);
+      expect(options).toMatchObject({ duration: 300 });
+      expect(Object.keys(keyframes[0])).toEqual(["transform"]); // só transform (compositor)
+    });
+
+    it("menos movimento: sem pulso", async () => {
+      motion(true);
+      openCart();
+      await userEvent.click(screen.getByRole("button", { name: "Adicionar X-Burger" }));
+      await userEvent.click(screen.getByRole("button", { name: "Mais um X-Burger" }));
+      expect(animate).not.toHaveBeenCalled();
+    });
+
+    it("o trecho do total é refeito quando o valor muda (é isso que faz o total 'rolar') e o botão não perde o foco", async () => {
+      motion(false);
+      const { container } = openCart();
+      await userEvent.click(screen.getByRole("button", { name: "Adicionar X-Burger" }));
+      const bar = screen.getByRole("button", { name: /Ver carrinho/ });
+      const before = container.querySelector(".loja__roll");
+      bar.focus();
+      await userEvent.click(screen.getByRole("button", { name: "Mais um X-Burger" }));
+      const after = container.querySelector(".loja__roll");
+      expect(after).not.toBe(before);
+      expect(after).toHaveTextContent(/R\$\s?40,00/);
+      expect(screen.getByRole("button", { name: /Ver carrinho/ })).toBe(bar); // o mesmo botão: não foi remontado
+    });
   });
 
   it("o HTML do servidor já traz o cabeçalho, a barra de categorias e os cartões (SSR/ISR intacto)", () => {

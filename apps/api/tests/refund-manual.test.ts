@@ -1,6 +1,7 @@
 // API-65 — "Registrar estorno feito no Mercado Pago" (RN-B1-08, RN-B1-16, CA-B1-15): OWNER, motivo por código, sem chamar o provedor.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
+import { orderStore } from "./helpers";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
 vi.mock("../src/lib/mercadopago", async (importOriginal) => {
@@ -37,7 +38,7 @@ describe("API-65 — registrar estorno manual", () => {
     const orderId = json(res).orderId as string;
     await prisma.order.update({ where: { id: orderId }, data: { paymentMethod: "PIX", status: "CONFIRMADO", refundLockedAt: status === "ESTORNO_PENDENTE" ? new Date() : null } });
     const payment = await prisma.payment.create({
-      data: { orderId, providerPaymentId: `mp-${orderId}`, amountCents: 2500, status, refundAttempts: 5, refundContext: { source: "PANEL", userId: null, actor: "OWNER", reason: { code: "ITEM_EM_FALTA" } } },
+      data: { orderId, storeId: await orderStore(orderId), providerPaymentId: `mp-${orderId}`, amountCents: 2500, status, refundAttempts: 5, refundContext: { source: "PANEL", userId: null, actor: "OWNER", reason: { code: "ITEM_EM_FALTA" } } },
     });
     return { owner: cookie!, store, orderId, paymentId: payment.id, token: json(res).token as string };
   }

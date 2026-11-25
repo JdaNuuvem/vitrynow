@@ -1,23 +1,47 @@
 "use client";
 
+import { useState } from "react";
+import { auditActionLabel } from "@/core/domain/auditLabels";
+import { Button, DataTable, PageHeading, Panel, StateMessage } from "@/shared/design/components";
 import "./auditoria.css";
 import { LogRow } from "./components/LogRow";
 import { useAuditoria } from "./hooks/useAuditoria";
+import { useStoreTimezone } from "@/features/shell/useStoreTimezone";
+import { storeDateInput } from "@/shared/format/storeTime";
+
 
 export function AuditoriaPage() {
-  const { logs, forbidden } = useAuditoria();
+  const timeZone = useStoreTimezone();
+  const { logs, forbidden, error, reload } = useAuditoria();
+  const [action, setAction] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const actionTypes = [...new Set(logs?.map((log) => log.action))].sort((a, b) => auditActionLabel(a).localeCompare(auditActionLabel(b), "pt-BR"));
+  const datesInvalid = !!(from && to && from > to);
+  const filtered = logs?.filter((log) => {
+    const day = storeDateInput(new Date(log.createdAt), timeZone);
+    return (!action || log.action === action) && (!from || day >= from) && (!to || day <= to);
+  });
 
-  if (forbidden) return <main className="auditoria">Essa área é restrita ao dono da loja.</main>;
-
-  return (
-    <main className="auditoria">
-      <h1>Log de auditoria</h1>
-      <p className="auditoria__intro">Ações sensíveis da conta — útil para investigar quem fez o quê.</p>
-
-      <div className="auditoria__list">
-        {logs?.map((log) => <LogRow key={log.id} log={log} />)}
-        {logs?.length === 0 && <p className="auditoria__empty">Nenhuma ação registrada ainda.</p>}
+  return <main className="auditoria">
+    <PageHeading title="Auditoria" description="Consulte as últimas 200 ações registradas na loja." />
+    {forbidden && <StateMessage title="Acesso do dono da loja" tone="warning">Peça ao dono para consultar o histórico.</StateMessage>}
+    {error && <StateMessage title="Histórico indisponível" tone="danger" action={<Button onClick={() => void reload()}>Tentar novamente</Button>}>{error}</StateMessage>}
+    {!logs && !forbidden && !error && <StateMessage title="Carregando histórico" busy />}
+    {logs && !forbidden && <Panel title="Atividade recente" actions={<Button onClick={() => void reload()}>Atualizar</Button>}>
+      <div className="auditoria-filters">
+        <label>Ação<select value={action} onChange={(e) => setAction(e.target.value)}>
+          <option value="">Todas as ações</option>
+          {actionTypes.map((type) => <option key={type} value={type}>{auditActionLabel(type)}</option>)}
+        </select></label>
+        <label>De<input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
+        <label>Até<input type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} /></label>
+        <Button disabled={!action && !from && !to} onClick={() => { setAction(""); setFrom(""); setTo(""); }}>Limpar filtros</Button>
       </div>
-    </main>
-  );
+      {datesInvalid ? <StateMessage title="Período inválido" tone="warning">A data final deve ser igual ou posterior à inicial.</StateMessage>
+        : filtered?.length ? <DataTable label="Histórico de auditoria" headers={["Ação", "Origem", "Data e hora"]}>
+          {filtered.map((log) => <LogRow key={log.id} log={log} />)}
+        </DataTable> : <StateMessage title={logs.length ? "Nenhuma ação com esses filtros" : "Nenhuma ação registrada"} />}
+    </Panel>}
+  </main>;
 }

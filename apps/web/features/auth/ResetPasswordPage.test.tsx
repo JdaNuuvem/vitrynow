@@ -6,6 +6,7 @@ import type { AuthGateway } from "@/core/gateways/AuthGateway";
 import { AuthServicesProvider } from "@/core/services/AuthServices";
 import { PASSWORD_TOO_SHORT_MESSAGE } from "@/shared/auth/passwordPolicy";
 import { ResetPasswordPage } from "./ResetPasswordPage";
+import { LEGACY_QUERY_ACCEPTED_UNTIL } from "./resetToken";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
@@ -51,10 +52,16 @@ describe("ResetPasswordPage: token no fragmento (ST-56 / NG-17)", () => {
   });
 
   it("aceita a query legada (e-mails já enviados) e a apaga da barra", async () => {
-    setup("/reset-senha?token=segredo-da-query");
-    expect(window.location.search).toBe("");
-    expect(window.location.href).not.toContain("segredo-da-query");
-    expect(await field()).toBeInTheDocument();
+    // a query legada só vale até LEGACY_QUERY_ACCEPTED_UNTIL (19/11/2026): o teste fixa o relógio dentro da transição
+    const now = vi.spyOn(Date, "now").mockReturnValue(LEGACY_QUERY_ACCEPTED_UNTIL - 60_000);
+    try {
+      setup("/reset-senha?token=segredo-da-query");
+      expect(window.location.search).toBe("");
+      expect(window.location.href).not.toContain("segredo-da-query");
+      expect(await field()).toBeInTheDocument();
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("com fragmento e query, vale o fragmento e os dois somem da barra", async () => {
@@ -90,7 +97,7 @@ describe("ResetPasswordPage: token no fragmento (ST-56 / NG-17)", () => {
   it("DOM-XSS: #token=<script>… vira 'Link inválido', não injeta nada, não chama a API", () => {
     const { resetPassword, inspectResetToken } = setup("/reset-senha#token=%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E");
     expect(screen.getByText(/Link inválido/)).toBeInTheDocument();
-    expect(document.querySelector("img, script, svg")).toBeNull();
+    expect(document.querySelector('img:not([src="/vitry-mark.svg"]), script, svg:not(.ds-theme-control svg)')).toBeNull();
     expect(document.body.innerHTML).not.toMatch(/onerror|<script/i);
     expect(window.location.href).not.toContain("onerror");
     expect(resetPassword).not.toHaveBeenCalled();
@@ -212,7 +219,7 @@ describe("ResetPasswordPage: conferência da conta antes da senha (SEC-29 / ST-6
     // o filtro de forma da tela recusa e-mail com < > " ' &, então vira falha fechada; o que passa nunca é interpretado
     setup("/reset-senha#token=abc123", { inspect: { ok: true, data: { valid: true, email: "<img src=x onerror=alert(1)>@x.com" } } });
     expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível confirmar a conta deste link");
-    expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelector('img:not([src="/vitry-mark.svg"])')).toBeNull();
     expect(document.body.innerHTML).not.toMatch(/onerror/i);
   });
 

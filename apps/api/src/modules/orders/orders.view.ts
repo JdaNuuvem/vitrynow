@@ -1,4 +1,5 @@
-import type { Order, OrderItem, Payment, Deliverer } from "@meucardapio/db";
+import type { Order, OrderItem, OrderItemAdditional, OrderItemOption, Payment, Deliverer } from "@meucardapio/db";
+import { panelRoleSchema, type PanelRole } from "@meucardapio/shared-types";
 import { MAX_REFUND_AUTO_ATTEMPTS } from "../../lib/refundPolicy";
 
 // Visão do pedido para o PAINEL (PRD-15, Nightingale API-54a). Regra geral: resposta de pedido SEMPRE por allowlist —
@@ -29,8 +30,8 @@ export function maskPhone(phone: string | null | undefined): string | null {
 }
 
 // OWNER vê contato completo; STAFF vê completo em pedido aberto ou encerrado há < 24 h e mascarado depois.
-export function contactAccessFor(role: "OWNER" | "STAFF", order: { status: string }, closedAt: Date | null, now: Date): ContactAccess {
-  if (role === "OWNER") return "FULL";
+export function contactAccessFor(role: PanelRole, order: { status: string }, closedAt: Date | null, now: Date): ContactAccess {
+  if (role === panelRoleSchema.enum.OWNER) return "FULL";
   const final = order.status === "CONCLUIDO" || order.status === "CANCELADO";
   if (!final) return "FULL";
   if (!closedAt) return "MASKED"; // sem data de encerramento confiável: o mais restritivo
@@ -39,7 +40,7 @@ export function contactAccessFor(role: "OWNER" | "STAFF", order: { status: strin
 
 // A fonte é a linha completa; o que SAI é decidido campo a campo em toPanelOrder (a allowlist é a barreira).
 export type PanelOrderSource = Order & {
-  items: OrderItem[];
+  items: (OrderItem & { additionals?: OrderItemAdditional[]; options?: OrderItemOption[] })[];
   deliverer: Deliverer | null;
   payment: Payment | null;
 };
@@ -106,6 +107,14 @@ export function toPanelOrder(
       quantity: item.quantity,
       unitPriceCents: item.unitPriceCents,
       notes: item.notes,
+      ...(opts.detail ? {
+        // Produto detalhado: o painel mostra "400 g × R$ 49,90/kg" e o preço normal quando houve promoção (cópias do momento do pedido)
+        weightGrams: item.weightGrams,
+        pricePerKgCents: item.pricePerKgCents,
+        listPriceCents: item.listPriceCents,
+        additionals: (item.additionals ?? []).map(({ name, priceCents }) => ({ name, priceCents })),
+        options: (item.options ?? []).map(({ groupName, name, priceCents, quantity, priceMode }) => ({ groupName, name, priceCents, quantity, priceMode })),
+      } : {}),
     })),
     // Pagamento: só o que a tela precisa. Nada de id do provedor, QR, chave de idempotência nem contexto de estorno.
     payment: order.payment && {

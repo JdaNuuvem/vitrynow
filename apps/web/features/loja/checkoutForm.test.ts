@@ -4,6 +4,7 @@ import {
   ADDRESS_REQUIRED_MESSAGE,
   CHANGE_TOO_LOW_MESSAGE,
   NAME_REQUIRED_MESSAGE,
+  NAME_TOO_LONG_MESSAGE,
   PAYMENT_GROUPS,
   PHONE_INVALID_MESSAGE,
   buildOrderSummary,
@@ -92,14 +93,18 @@ describe("validateCheckout (espelha o servidor)", () => {
   it("nome vazio ou só espaços é erro", () => {
     expect(validateCheckout({ ...ok, customerName: "" }, 5000).customerName).toBe(NAME_REQUIRED_MESSAGE);
     expect(validateCheckout({ ...ok, customerName: "   " }, 5000).customerName).toBe(NAME_REQUIRED_MESSAGE);
-    expect(validateCheckout({ ...ok, customerName: "x".repeat(151) }, 5000).customerName).toBe(NAME_REQUIRED_MESSAGE);
   });
 
-  it("telefone: 8 a 20 caracteres, só dígitos e + ( ) espaço -", () => {
-    for (const bad of ["", "1234567", "abcdefghij", "21 99999-9999 ramal 2", "1".repeat(21)]) {
+  it("nome passa do limite do servidor (80) → erro de tamanho, não some em silêncio", () => {
+    expect(validateCheckout({ ...ok, customerName: "x".repeat(80) }, 5000).customerName).toBeUndefined();
+    expect(validateCheckout({ ...ok, customerName: "x".repeat(81) }, 5000).customerName).toBe(NAME_TOO_LONG_MESSAGE);
+  });
+
+  it("telefone: regra única do Brasil (DDD + 10/11 dígitos), a mesma da API", () => {
+    for (const bad of ["", "1234567", "12345678", "abcdefghij", "21 99999-9999 ramal 2", "1".repeat(21), "11948539593503953242", "21899999999"]) {
       expect(validateCheckout({ ...ok, customerPhone: bad }, 5000).customerPhone).toBe(PHONE_INVALID_MESSAGE);
     }
-    for (const good of ["12345678", "+55 (21) 99999-9999", "21999999999"]) {
+    for (const good of ["+55 (21) 99999-9999", "21999999999", "(21) 99999-9999", "(21) 3456-7890"]) {
       expect(validateCheckout({ ...ok, customerPhone: good }, 5000).customerPhone).toBeUndefined();
     }
   });

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { statusLabel, TYPE_LABELS } from "@/core/domain/orderLabels";
-import type { OrderDetail } from "@/core/domain/orderDetail";
+import { detailItemTotal, type OrderDetail } from "@/core/domain/orderDetail";
 import type { Deliverer, Order } from "@/core/domain/orders";
 import { formatCents } from "@/shared/format/money";
 import { CANCEL_REASONS } from "../cancelReasons";
@@ -11,9 +11,10 @@ import { ageText, orderAgeMinutes } from "../orderAge";
 import { OrderActions } from "../components/OrderActions";
 import { paymentBadges } from "../components/OrderCard";
 import { actorText, canContact, mapsHref, paymentView, telHref, valueRows, whatsappHref } from "./detailFormat";
+import { useStoreTimezone } from "@/features/shell/useStoreTimezone";
+import { formatInStoreTimezone } from "@/shared/format/storeTime";
 
-const STORE_TIMEZONE = "America/Sao_Paulo";
-const timeOf = (iso: string) => new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: STORE_TIMEZONE });
+const timeOfIn = (timeZone: string) => (iso: string) => formatInStoreTimezone(iso, timeZone, { hour: "2-digit", minute: "2-digit" });
 const reasonLabel = (code: string | null) => CANCEL_REASONS.find((reason) => reason.code === code)?.label ?? null;
 
 export type DetailHandlers = {
@@ -39,6 +40,7 @@ type Props = {
 // Conteúdo do detalhe (spec 11 §3), na ordem fixa: cliente, entrega, observação, itens, valores, pagamento, entregador,
 // impressão, cancelamento. O servidor decide o que cada papel recebe; aqui só se mostra o que chegou.
 export function OrderDetailView({ order, deliverers, nowMs, busy, canRetryRefund, onRetryContact, retryingContact = false, ...handlers }: Props) {
+  const timeOf = timeOfIn(useStoreTimezone());
   const [copied, setCopied] = useState(false);
   const [contactLoaded, setContactLoaded] = useState(false);
   const retryButton = useRef<HTMLButtonElement>(null);
@@ -180,7 +182,15 @@ export function OrderDetailView({ order, deliverers, nowMs, busy, canRetryRefund
               <span>
                 {item.quantity}× {item.productName}
               </span>
-              <span>{formatCents(item.unitPriceCents * item.quantity)}</span>
+              <span>{formatCents(detailItemTotal(item))}</span>
+              {Boolean(item.options?.length || item.additionals?.length) && (
+                <span className="pedido-detalhe__item-note">
+                  {[
+                    ...(item.options ?? []).map((option) => `${option.groupName}: ${option.quantity > 1 ? `${option.quantity}× ` : ""}${option.name}`),
+                    ...(item.additionals ?? []).map((entry) => entry.name),
+                  ].join(" · ")}
+                </span>
+              )}
               {item.notes && <span className="pedido-detalhe__item-note">Obs.: {item.notes}</span>}
             </li>
           ))}

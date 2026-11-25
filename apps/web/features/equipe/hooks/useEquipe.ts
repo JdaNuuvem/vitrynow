@@ -17,14 +17,18 @@ export function useEquipe() {
   const [users, setUsers] = useState<TeamUser[] | null>(null);
   const [forbidden, setForbidden] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
+    setLoadError(null);
     const result = await usersGateway.list();
     if (!result.ok) {
       if (result.status === 401) router.push("/login");
       if (result.status === 403) setForbidden(true);
+      else setLoadError(result.error);
       return;
     }
+    setForbidden(false);
     setUsers(result.data.users);
   }, [usersGateway, router]);
 
@@ -39,7 +43,7 @@ export function useEquipe() {
       const result = await usersGateway.inviteStaff(email, password);
       if (!result.ok) {
         // Plano sem "multi_user": em vez de erro seco, oferece a assinatura.
-        if (result.code === FEATURE_LOCKED_CODE) openUpgrade();
+        if (result.code === FEATURE_LOCKED_CODE) openUpgrade("multi_user");
         else setError(result.error);
         return false;
       }
@@ -51,14 +55,14 @@ export function useEquipe() {
 
   // Remover usuário é ação sensível: com MFA ligado pede o código antes de repetir a chamada.
   const remove = useCallback(
-    async (id: string) => {
-      setError(null);
+    async (id: string): Promise<string | null> => {
       const result = await runProtected("delete_user", (options) => usersGateway.remove(id, options));
-      if (!result.ok) return setError(result.error);
-      reload();
+      if (!result.ok) return result.error;
+      await reload();
+      return null;
     },
     [usersGateway, reload, runProtected],
   );
 
-  return { users, forbidden, error, invite, remove };
+  return { users, forbidden, error, loadError, reload, invite, remove };
 }

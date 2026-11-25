@@ -6,6 +6,12 @@ const orders = [{ code: "0123", totalCents: 4500, placedAt: "2026-11-17T14:32:00
 const future = Date.now() + 10 * 60_000;
 
 describe("OrdersScreen: pedidos depois de recarregar (WEB-33b, UI-V-24/25)", () => {
+  it("SSOT D1: a hora do pedido sai no fuso da LOJA, não no do celular do cliente", () => {
+    const { rerender } = render(<OrdersScreen orders={[{ code: "0777", totalCents: 1000, placedAt: "2026-11-25T03:30:00.000Z" }]} storeName="Boa" timeZone="America/Manaus" />);
+    expect(screen.getByText("24/11/2026, 23:30")).toBeInTheDocument(); // 23:30 de 24/11 em Manaus
+    rerender(<OrdersScreen orders={[{ code: "0777", totalCents: 1000, placedAt: "2026-11-25T03:30:00.000Z" }]} storeName="Boa" />);
+    expect(screen.getByText("25/11/2026, 00:30")).toBeInTheDocument(); // sem fuso informado: o padrão da operação
+  });
   it("mostra código, hora e total, e diz que não dá para acompanhar, sem 'pedido não existe'", () => {
     render(<OrdersScreen orders={orders} storeName="Boa" />);
     expect(screen.getByText("Pedido #0123")).toBeInTheDocument();

@@ -12,7 +12,7 @@ export type Schedule = {
 };
 
 export type StoreState = "ABERTO" | "FECHADO" | "PAUSADO";
-export type ClosedReason = "SWITCHED_OFF" | "PAUSED" | "CLOSED_TODAY" | "OUTSIDE_HOURS";
+export type ClosedReason = "SWITCHED_OFF" | "PAUSED" | "CLOSED_TODAY" | "OUTSIDE_HOURS" | "BUSY";
 
 export type StoreStatus = {
   status: StoreState;
@@ -32,6 +32,8 @@ export type StatusInput = {
   acceptingOrders: boolean;
   pausedUntil: Date | null;
   closedUntil: Date | null;
+  /** Modo ocupado (g1): comparado com `now`; vencido = ignorado (sem job). */
+  busyUntil?: Date | null;
 };
 
 const MIN_MS = 60_000;
@@ -215,6 +217,40 @@ export function acceptingWindows(schedule: Schedule, timeZone: string, now: Date
     .filter((w) => w.end > w.start);
 }
 
+/** Aberto AGORA = há uma janela de ACEITAR pedido que contém `now` (o MESMO cálculo de `computeStoreStatus`; pausa e interruptor ficam fora daqui). */
+export function isOpenAt(schedule: Schedule, timeZone: string, now: Date): boolean {
+  return acceptingWindows(schedule, timeZone, now).some((w) => w.start <= now && now < w.end);
+}
+
+const DISPLAY_DAYS = [1, 2, 3, 4, 5, 6, 0]; // segunda a domingo (o índice 0 da grade é domingo)
+const DAY_TITLES = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+
+/**
+ * Texto de horário GERADO da grade (fonte única, SSOT D2): "Seg a sáb 09:00–17:00" ou "Seg a sex 09:00–17:00; Sáb 09:00–13:00". Dias com o mesmo horário e
+ * seguidos viram faixa ("Seg a qua"; 2 dias = "Seg e ter"). Sem nenhum dia aberto: "Fechado". Não usa exceções (feriado muda o dia, não a grade semanal).
+ */
+export function hoursText(schedule: Schedule): string {
+  const label = (intervals: Interval[]) => intervals.map((i) => `${i.start}–${i.end}`).join(", ");
+  const groups: Array<{ days: number[]; text: string }> = [];
+  for (const day of DISPLAY_DAYS) {
+    const intervals = [...(schedule.week[day] ?? [])].sort((a, b) => toMinutes(a.start) - toMinutes(b.start));
+    if (intervals.length === 0) continue;
+    const text = label(intervals);
+    const last = groups[groups.length - 1];
+    const previous = last ? DISPLAY_DAYS.indexOf(last.days[last.days.length - 1]) : -2;
+    if (last && last.text === text && previous === DISPLAY_DAYS.indexOf(day) - 1) last.days.push(day);
+    else groups.push({ days: [day], text });
+  }
+  if (groups.length === 0) return "Fechado";
+  const name = (d: number, first: boolean) => (first ? DAY_TITLES[d] : DAY_TITLES[d].toLowerCase());
+  return groups
+    .map(({ days, text }) => {
+      const range = days.length === 1 ? name(days[0], true) : days.length === 2 ? `${name(days[0], true)} e ${name(days[1], false)}` : `${name(days[0], true)} a ${name(days[days.length - 1], false)}`;
+      return `${range} ${text}`;
+    })
+    .join("; ");
+}
+
 /** Próxima abertura estritamente depois de `after`. */
 export function nextOpening(schedule: Schedule, timeZone: string, after: Date): Date | null {
   return acceptingWindows(schedule, timeZone, after).find((w) => w.start > after)?.start ?? null;
@@ -239,6 +275,22 @@ function opensMessage(next: Date, now: Date, timeZone: string): string {
 
 /** Estado da loja agora (RN-B5-01: a assinatura é decidida ANTES, pelo portão da assinatura). */
 export function computeStoreStatus(input: StatusInput): StoreStatus {
+  const base = computeBaseStatus(input);
+  // g1: o modo ocupado só pesa quando a loja estaria ABERTA (fechada/pausada/desligada vence: mensagem mais clara, sem confundir).
+  const { busyUntil, now, timezone } = input;
+  if (base.status === "ABERTO" && busyUntil && busyUntil > now) {
+    return {
+      status: "PAUSADO",
+      reason: "BUSY",
+      nextOpenAt: busyUntil.toISOString(),
+      closesAt: null,
+      message: `Estamos com muitos pedidos agora. Voltamos a receber às ${timeLabel(busyUntil, timezone)}.`,
+    };
+  }
+  return base;
+}
+
+function computeBaseStatus(input: StatusInput): StoreStatus {
   const { schedule, timezone, now, acceptingOrders, pausedUntil, closedUntil } = input;
 
   if (!acceptingOrders) {

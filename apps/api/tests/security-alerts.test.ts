@@ -110,3 +110,14 @@ describe("NG-12: eventos de reset de senha e do back-office nas rotas reais", ()
     spy.mockRestore();
   }, 60000);
 });
+
+describe("SEC-34b: SERVER_BUSY_RATE", () => {
+  beforeEach(() => resetSecurityAlerts());
+  it("abaixo do limiar nada; no limiar UM alerta global por janela; depois da janela alerta de novo", () => {
+    const r = rule("SERVER_BUSY_RATE");
+    expect(feed("server_busy", r.threshold - 1, { ipKey: "1.1.1.1" })).toHaveLength(0);
+    expect(feed("server_busy", 1, { ipKey: "2.2.2.2" }, 1_000_000 + r.threshold * 1000)).toHaveLength(1); // IPs diferentes somam (escopo global)
+    expect(feed("server_busy", 30, { ipKey: "3.3.3.3" }, 1_000_000 + 40_000)).toHaveLength(0);
+    expect(feed("server_busy", r.threshold, { ipKey: "3.3.3.3" }, 1_000_000 + 10 * MIN)).toHaveLength(1);
+  });
+});

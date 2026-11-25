@@ -1,37 +1,43 @@
 .home {
-  box-sizing: border-box;
+  min-height: 100svh;
+  width: min(100%, 1240px);
+  margin-inline: auto;
+  padding: var(--ds-space-6) var(--ds-page-gutter);
+}
+
+.home__nav {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
-  gap: 16px;
-  min-height: 100vh;
-  padding: 32px;
-  background: var(--surface-soft);
-  color: var(--ink);
-  text-align: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-block-end: 16px;
+  border-bottom: 1px solid var(--line);
 }
 
+.home__layout {
+  display: grid;
+  gap: clamp(22px, 5vw, 64px);
+  align-items: center;
+  align-content: center;
+  min-height: min(74vh, 640px);
+  padding-block: 32px;
+}
+
+.home__layout--demo { grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); }
 .home__title {
-  margin: 0;
-  font-size: 30px;
-  font-weight: 700;
-  line-height: 36px;
+  max-width: 14ch;
+  color: var(--ink);
+  font: 800 clamp(2.75rem, 6vw, 5rem)/.98 var(--ds-font-display);
+  letter-spacing: -.055em;
 }
+.home__text { margin-block-start: 16px; max-width: 43ch; color: var(--ink-soft); line-height: 1.65; }
+.home__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-block-start: 22px; }
+.home__demo { align-self: center; display: grid; overflow: hidden; border: 1px solid var(--line); border-radius: var(--ds-radius-lg); background: var(--surface); color: var(--ink); }
+.home__demo img { display: block; width: 100%; height: auto; aspect-ratio: 1.28; object-fit: cover; }
+.home__demo span { display: block; padding: 12px 16px; font-size: var(--ds-text-sm); font-weight: 700; }
 
-.home__text {
-  margin: 0;
-  max-width: 448px;
-  color: var(--ink-soft);
-  line-height: 24px;
-}
-
-.home__cta {
-  padding: 12px 24px;
-  border-radius: 12px;
-  background: var(--color-primary);
-  color: #ffffff;
-  font-size: 14px;
-  font-weight: 600;
-  text-decoration: none;
+@media (max-width: 720px) {
+  .home__layout--demo { grid-template-columns: minmax(0, 1fr); }
+  .home__demo img { aspect-ratio: 1.68; }
 }

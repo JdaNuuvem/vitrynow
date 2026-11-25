@@ -1,65 +1,74 @@
-import type { Order } from "@/core/domain/orders";
 import type { ReportDay, ReportRange, ReportSummary, ReportTopProduct } from "@/core/domain/reports";
+import type { Order } from "@/core/domain/orders";
 import { applySaleDefinition, awaitingInRange } from "./salesDefinition";
+import { toDateInput, toReportRange } from "@/features/relatorios/dateRange";
 
-export type DayPoint = { day: number; revenueCents: number };
+export type DayPoint = { date: string; orderCount: number | null; revenueCents: number | null };
 
 export type InicioMetrics = {
-  // Faturamento e vendas pela definição única do B14.1 (ver salesDefinition.ts): sem gorjeta, sem "Aguardando aceite".
-  revenueCents: number;
-  tipCents: number;
-  awaiting: { count: number; cents: number };
+  revenueCents?: number;
+  tipCents?: number;
+  awaiting: { count: number; cents?: number };
   awaitingKnown: boolean;
   chartExact: boolean;
   orderCount: number;
   customerCount: number;
-  averageTicketCents: number;
-  week: { orderCount: number; revenueCents: number };
+  averageTicketCents?: number;
+  week: { orderCount: number; revenueCents?: number };
   orderTypes: { delivery: number; table: number; pickup: number };
   topProducts: ReportTopProduct[];
   monthSeries: DayPoint[];
 };
 
-export function monthRange(now: Date): ReportRange {
-  return { from: new Date(now.getFullYear(), now.getMonth(), 1), to: now };
+// SSOT D1: períodos e séries no calendário da LOJA (`timeZone`; sem ele, o fuso padrão).
+export function monthRange(now: Date, timeZone?: string): ReportRange {
+  const today = toDateInput(now, timeZone);
+  return toReportRange({ from: today.slice(0, 8) + "01", to: today }, timeZone);
 }
 
-export function weekRange(now: Date): ReportRange {
-  return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6), to: now };
+export function weekRange(now: Date, timeZone?: string): ReportRange {
+  return toReportRange({ from: toDateInput(new Date(now.getTime() - 6 * 86_400_000), timeZone), to: toDateInput(now, timeZone) }, timeZone);
 }
 
-function dayKey(year: number, month: number, day: number): string {
-  return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+export function buildMonthSeries(byDay: ReportDay[], now: Date, timeZone?: string): DayPoint[] {
+  // A API agrupa pelo calendário da LOJA, independente do aparelho de quem olha.
+  const today = toDateInput(now, timeZone);
+  const points = new Map<string, DayPoint>(byDay.map((entry) => [entry.date, { ...entry, revenueCents: entry.revenueCents ?? null }]));
+  for (let day = 1; day <= Number(today.slice(8)); day += 1) {
+    const date = today.slice(0, 8) + String(day).padStart(2, "0");
+    if (!points.has(date)) points.set(date, { date, orderCount: null, revenueCents: null });
+  }
+  return [...points.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
-export function buildMonthSeries(byDay: ReportDay[], now: Date): DayPoint[] {
-  const revenueByKey = new Map(byDay.map((entry) => [entry.date, entry.revenueCents]));
-  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  return Array.from({ length: daysInMonth }, (_, index) => {
-    const day = index + 1;
-    return { day, revenueCents: revenueByKey.get(dayKey(now.getFullYear(), now.getMonth(), day)) ?? 0 };
-  });
-}
-
-// `orders` = lista de pedidos do painel (para separar o "Aguardando aceite"); null se não carregou.
-export function buildInicioMetrics(month: ReportSummary, week: ReportSummary, now: Date, orders: Order[] | null = null): InicioMetrics {
-  const monthAwaiting = orders && awaitingInRange(orders, monthRange(now));
-  const monthSales = applySaleDefinition(month, monthAwaiting);
-  const weekSales = applySaleDefinition(week, orders && awaitingInRange(orders, weekRange(now)));
-  // Por tipo, só vendas: o "Aguardando aceite" sai da contagem como saiu do total.
-  const countOf = (type: string) => Math.max(0, (month.byType[type]?.count ?? 0) - (monthAwaiting?.filter((order) => order.type === type).length ?? 0));
+export function buildPeriodMetrics(summary: ReportSummary, range: ReportRange, orders: Order[] | null, timeZone?: string) {
+  const current = summary.openCount !== undefined || summary.ruleChangedAt !== undefined;
+  const awaiting = !current && orders ? awaitingInRange(orders, range) : null;
+  const legacy = !current && summary.revenueCents !== undefined
+    ? applySaleDefinition({ ...summary, revenueCents: summary.revenueCents }, awaiting, timeZone)
+    : undefined;
+  const countOf = (type: string) => Math.max(0, (summary.byType[type]?.count ?? 0) - (legacy && awaiting ? awaiting.filter((order) => order.type === type).length : 0));
   return {
-    revenueCents: monthSales.revenueCents,
-    tipCents: monthSales.tipCents,
-    awaiting: monthSales.awaiting,
-    awaitingKnown: monthSales.awaitingKnown,
-    chartExact: monthSales.chartExact,
-    orderCount: monthSales.salesCount,
-    customerCount: month.customerCount,
-    averageTicketCents: monthSales.averageTicketCents,
-    week: { orderCount: weekSales.salesCount, revenueCents: weekSales.revenueCents },
+    revenueCents: legacy?.revenueCents ?? summary.revenueCents,
+    tipCents: legacy?.tipCents ?? summary.tipCents,
+    orderCount: legacy?.salesCount ?? summary.orderCount,
+    averageTicketCents: legacy?.averageTicketCents ?? summary.averageTicketCents,
+    awaiting: legacy?.awaiting ?? { count: summary.openCount ?? 0, cents: summary.openCents },
+    awaitingKnown: legacy?.awaitingKnown ?? (summary.openCount !== undefined),
+    chartExact: legacy?.chartExact ?? true,
+    byDay: legacy?.byDay ?? summary.byDay,
     orderTypes: { delivery: countOf("DELIVERY"), table: countOf("MESA"), pickup: countOf("BALCAO") },
+  };
+}
+
+export function buildInicioMetrics(month: ReportSummary, week: ReportSummary, now: Date, orders: Order[] | null = null, timeZone?: string): InicioMetrics {
+  const monthSales = buildPeriodMetrics(month, monthRange(now, timeZone), orders, timeZone);
+  const weekSales = buildPeriodMetrics(week, weekRange(now, timeZone), orders, timeZone);
+  return {
+    ...monthSales,
+    customerCount: month.customerCount,
+    week: { orderCount: weekSales.orderCount, revenueCents: weekSales.revenueCents },
     topProducts: month.topProducts,
-    monthSeries: buildMonthSeries(monthSales.byDay, now),
+    monthSeries: buildMonthSeries(monthSales.byDay, now, timeZone),
   };
 }
