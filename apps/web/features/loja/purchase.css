@@ -25,7 +25,7 @@
   pointer-events: auto;
 }
 .loja__purchase-detail .loja__detail-logo {
-  border: 2px solid #fff;
+  border: 2px solid var(--loja-glass-solid);
   background: var(--loja-glass-solid);
 }
 .loja__purchase-detail .loja__hero {

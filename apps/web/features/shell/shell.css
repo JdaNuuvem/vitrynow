@@ -1,6 +1,6 @@
 .panel-root {
   min-height: 100vh;
-  background: var(--panel-canvas, #fff);
+  background: var(--panel-canvas);
   color: var(--ink);
 }
 

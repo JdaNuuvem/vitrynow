@@ -1,9 +1,9 @@
 .manual-page, .manual-options {
-  --manual-ink: var(--ink, #252b25);
-  --manual-muted: var(--ink-soft, #60695f);
-  --manual-line: var(--line, #dedfd7);
-  --manual-brand: var(--color-primary, #b7472a);
-  --manual-soft: var(--color-primary-ten, #fbede7);
+  --manual-ink: var(--ink);
+  --manual-muted: var(--ink-soft);
+  --manual-line: var(--line);
+  --manual-brand: var(--color-primary);
+  --manual-soft: var(--color-primary-ten);
   color: var(--manual-ink);
   font-family: "Open Sans", "Segoe UI", Arial, sans-serif;
 }

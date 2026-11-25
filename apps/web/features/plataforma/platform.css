@@ -1,7 +1,7 @@
 .platform-layout, .platform-auth {
   min-height: 100svh;
   color: var(--ink);
-  background: var(--panel-canvas, #f5f3ed);
+  background: var(--panel-canvas);
 }
 
 .platform-topbar {

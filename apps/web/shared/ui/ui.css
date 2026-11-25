@@ -296,7 +296,7 @@
 /* Só contorno: a ação irreversível não pode ser tão chamativa quanto a segura. O seletor tem 2 classes porque
    `.confirm-dialog__actions button` (border: none) teria a mesma força que uma classe só. */
 .confirm-dialog__actions .confirm-dialog__confirm--danger-outline {
-  border: 1px solid #fca5a5;
+  border: 1px solid var(--danger-line);
   background: var(--surface);
   color: var(--danger);
 }

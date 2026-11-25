@@ -67,7 +67,7 @@
   width: 100%;
   min-height: 44px;
   padding: 12px;
-  border: 1px solid var(--line, #e5e7eb);
+  border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
   color: var(--ink);
@@ -168,7 +168,7 @@
   display: inline-flex;
   align-items: center;
   padding: 1px 8px;
-  border: 1px solid #94a3b8;
+  border: 1px solid var(--line-strong);
   border-radius: 999px;
   background: var(--surface);
   color: var(--ink-soft);

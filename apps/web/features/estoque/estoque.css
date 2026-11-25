@@ -1,8 +1,8 @@
 .estoque { max-width: 1380px; margin-inline: auto; padding: clamp(22px, 3vw, 44px) clamp(16px, 3vw, 40px) 90px; color: var(--ink); display: grid; gap: 16px; }
 .estoque > .ds-state { margin: 0; }
 .estoque__hint, .estoque__muted { color: var(--ink-soft); font-size: .8125rem; }
-.estoque__negative { color: var(--danger, #b42318); font-weight: 650; }
-.estoque__positive { color: var(--success, #067647); font-weight: 650; }
+.estoque__negative { color: var(--danger); font-weight: 650; }
+.estoque__positive { color: var(--ok); font-weight: 650; }
 .estoque__inactive td { opacity: .6; }
 .estoque__value { font-size: .875rem; }
 
@@ -37,9 +37,9 @@
 .estoque__card span { color: var(--ink-soft); font-size: .8125rem; font-weight: 650; }
 .estoque__card strong { font-size: 1.375rem; font-weight: 750; }
 .estoque__card small { color: var(--ink-soft); font-size: .75rem; }
-.estoque__card--success strong { color: var(--success, #067647); }
-.estoque__card--warning strong { color: var(--warning, #b54708); }
-.estoque__card--danger strong { color: var(--danger, #b42318); }
+.estoque__card--success strong { color: var(--ok); }
+.estoque__card--warning strong { color: var(--warn); }
+.estoque__card--danger strong { color: var(--danger); }
 .estoque__card--strong { border-width: 2px; }
 .estoque__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
 

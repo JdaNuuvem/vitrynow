@@ -1,5 +1,5 @@
 .daily-chart {
-  --chart-accent: var(--color-primary, #b7472a);
+  --chart-accent: var(--color-primary);
   --chart-baseline: color-mix(in srgb, var(--ink) 16%, var(--surface));
   display: grid;
   grid-template-columns: minmax(0, auto) minmax(0, 1fr);

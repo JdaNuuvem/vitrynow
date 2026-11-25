@@ -382,7 +382,7 @@
   background: var(--loja-glass-solid);
   padding: 14px 16px;
 }
-.loja__status--closed { border-color: #fecaca; }
+.loja__status--closed { border-color: var(--loja-danger-line); }
 
 .loja__status-head {
   display: flex;
@@ -408,7 +408,7 @@
   height: 8px;
   width: 8px;
   border-radius: 50%;
-  background: #157a3b;
+  background: var(--loja-ok);
 }
 
 .loja__dot--closed {

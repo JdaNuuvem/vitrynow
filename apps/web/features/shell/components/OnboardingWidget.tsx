@@ -13,13 +13,13 @@ export function OnboardingWidget({ progress, href }: { progress: OnboardingProgr
     <Link href={progress.nextHref ?? href} className="onboarding-widget">
       <span className="onboarding-widget__ring" aria-hidden="true">
         <svg width="36" height="36" viewBox="0 0 36 36">
-          <circle cx="18" cy="18" r={RADIUS} fill="none" stroke="#dddddd" strokeWidth="3" />
+          <circle cx="18" cy="18" r={RADIUS} fill="none" style={{ stroke: "var(--line)" }} strokeWidth="3" />
           <circle
             cx="18"
             cy="18"
             r={RADIUS}
             fill="none"
-            stroke="#25a65b"
+            style={{ stroke: "var(--ok)" }}
             strokeWidth="3"
             strokeLinecap="round"
             strokeDasharray={CIRCUMFERENCE}
