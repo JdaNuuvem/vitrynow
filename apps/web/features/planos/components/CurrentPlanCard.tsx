@@ -21,8 +21,8 @@ export function CurrentPlanCard({ subscription, onCancel }: CurrentPlanCardProps
       <p>{description.detail}</p>
       {subscription.features.length > 0 && (
         <ul className="planos-current__features">
-          {subscription.features.map((feature) => (
-            <li key={feature}>{featureLabel(feature)}</li>
+          {[...new Set(subscription.features.map(featureLabel))].map((label) => (
+            <li key={label}>{label}</li>
           ))}
         </ul>
       )}

@@ -36,6 +36,9 @@ describe("InviteStaffCard: senha mínima de 10 (SEC-29)", () => {
     await userEvent.click(screen.getByRole("button", { name: "Adicionar funcionário" }));
     expect(onInvite).toHaveBeenCalledWith("ana@loja.com", "1234567890");
     expect((screen.getByLabelText("Senha do funcionário") as HTMLInputElement).value).toBe("");
+    // o campo limpo depois do sucesso NÃO vira erro de senha curta
+    expect(screen.queryByText(PASSWORD_TOO_SHORT_MESSAGE)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("recusa do servidor por tamanho: a mesma frase no campo, sem texto técnico, sem duplicar no cartão", () => {

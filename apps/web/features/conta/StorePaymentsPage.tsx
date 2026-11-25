@@ -35,6 +35,7 @@ export function StorePaymentsPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState<{ text: string; tone: "success" | "danger" } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [forbidden, setForbidden] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const version = useRef(0);
   const running = useRef(false);
@@ -44,7 +45,9 @@ export function StorePaymentsPage() {
     const result = await store.payments();
     if (attempt !== version.current) return;
     setSettings(result.ok ? result.data : null);
-    setError(result.ok ? "" : result.status === 403 ? "Apenas o dono da loja pode gerenciar a conta de pagamentos." : result.error);
+    // 403 = falta de permissão (funcionário), não falha: aviso de "só o dono", como nas outras telas restritas, sem "Consultar novamente".
+    setForbidden(!result.ok && result.status === 403);
+    setError(result.ok || result.status === 403 ? "" : result.error);
   }, [store]);
   useEffect(() => {
     void reload();
@@ -94,8 +97,9 @@ export function StorePaymentsPage() {
     <main className="conta">
       <PageHeading title="Recebimento por Pix" description="Gerencie a conta que recebe os pagamentos dos pedidos do cardápio."
         actions={<Link href="/dashboard/conta" className="ds-button ds-button--quiet">Voltar à minha loja</Link>} />
+      {forbidden && <StateMessage title="Acesso do dono da loja" tone="warning">Peça ao dono para gerenciar a conta de pagamentos.</StateMessage>}
       {error && <StateMessage title="Não foi possível carregar a conta" tone="danger" action={<Button onClick={reload}>Consultar novamente</Button>}>{error}</StateMessage>}
-      {!settings && !error && <StateMessage title="Consultando a conta da loja" busy />}
+      {!settings && !error && !forbidden && <StateMessage title="Consultando a conta da loja" busy />}
       {notice && <StateMessage title={notice.text} tone={notice.tone} />}
       {settings && status && <Panel title="Mercado Pago" className="conta-payments" actions={<StatusBadge tone={status === "CONNECTED" ? "success" : status === "NEEDS_RECONNECT" ? "warning" : "neutral"}>{accountLabel[status]}</StatusBadge>}>
         {settings.mercadopago.sellerMasked && <p className="conta__meta">Conta {settings.mercadopago.sellerMasked}</p>}

@@ -14,7 +14,7 @@ type PlanOfferCardProps = {
 };
 
 export function PlanOfferCard({ plan, isCurrent, busy, onSubscribe }: PlanOfferCardProps) {
-  const features = [...BASELINE_FEATURES, ...plan.features.map(featureLabel)];
+  const features = [...new Set([...BASELINE_FEATURES, ...plan.features.map(featureLabel)])];
   const maxUsers = plan.limits?.maxUsers;
   const maxPrinters = plan.limits?.maxPrinters;
 
