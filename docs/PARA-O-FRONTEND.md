@@ -100,10 +100,10 @@ Exceção à regra acima, pedida pelo dono do produto depois de um telefone de 2
 
 **API (mesmo pacote):** textos do pedido do painel, da mesa, de grupos/opções, bairro, chave de impressora e insumo agora passam pelo `textField` (limpa controles invisíveis); cupom do pedido sem espaços nas pontas; `maxUses` ≤ 1.000.000; ids do item ≤ 100; motivo de cancelamento "OUTRO" limpo e com teto de 500 (antes sem limite).
 
-**Achados da rodada de testes por tela (ainda NÃO corrigidos):**
-1. `features/planos/planPresentation.ts`: `FEATURE_LABELS` só traduz `multi_user`; a tela Planos mostra `table_qr · tab_service · scheduled_orders · advanced_reports` crus.
-2. Pagamentos vista por FUNCIONÁRIO mostra "Não foi possível carregar a conta" + "Consultar novamente" (é falta de permissão, as outras telas dizem "Peça ao dono").
-3. Equipe: logo depois de adicionar um funcionário com sucesso aparece "A senha precisa ter pelo menos 10 caracteres" (o campo limpo dispara a validação).
+**Achados da rodada de testes por tela — CORRIGIDOS (25/11/2026, autorizado):**
+1. Planos mostrava códigos crus (`table_qr · tab_service …`). `planPresentation.ts`: `FEATURE_LABELS` com os 6 recursos; código sem nome vira "Outros recursos do plano" (nunca o código); `CurrentPlanCard`/`PlanOfferCard` sem itens repetidos. Teste: `planPresentation.test.ts`.
+2. Pagamentos vista por FUNCIONÁRIO mostrava erro + "Consultar novamente". `StorePaymentsPage.tsx`: 403 vira o aviso "Acesso do dono da loja · Peça ao dono…", como Auditoria/Equipe.
+3. Equipe mostrava "A senha precisa ter pelo menos 10 caracteres" depois de um cadastro com sucesso. `usePasswordRule` ganhou `reset()`; `InviteStaffCard` chama depois de limpar. Teste em `InviteStaffCard.test.tsx`.
 
 ---
 

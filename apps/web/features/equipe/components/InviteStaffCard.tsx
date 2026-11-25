@@ -28,6 +28,7 @@ export function InviteStaffCard({
       if (!(await onInvite(email.trim(), password))) return;
       setEmail("");
       setPassword("");
+      rule.reset(); // senão o campo limpo mostra "A senha precisa ter pelo menos 10 caracteres" depois do sucesso
     } finally {
       running.current = false;
       setBusy(false);

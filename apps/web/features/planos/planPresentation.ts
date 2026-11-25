@@ -1,9 +1,17 @@
 import type { Subscription } from "@/core/domain/subscription";
 import { activeStoreTimezone, formatInStoreTimezone } from "@/shared/format/storeTime";
 
+// Nome de cada recurso de plano (códigos de apps/api/src/lib/features.ts). Código sem nome aqui NÃO aparece cru na tela:
+// vira "Outros recursos do plano" (ver featureLabel).
 export const FEATURE_LABELS: Record<string, string> = {
   multi_user: "Usuários da equipe com acesso limitado",
+  table_qr: "Pedidos pelo QR Code da mesa",
+  tab_service: "Conta da mesa com pagamento dividido",
+  scheduled_orders: "Pedidos agendados",
+  advanced_reports: "Relatórios avançados",
+  whatsapp_auto: "Mensagens automáticas no WhatsApp",
 };
+export const UNKNOWN_FEATURE_LABEL = "Outros recursos do plano";
 
 export const BASELINE_FEATURES = ["Cardápio online e pedidos", "Painel de pedidos em tempo real", "Controle de caixa e relatórios"];
 
@@ -66,5 +74,5 @@ export function describeSubscription(subscription: Subscription): SubscriptionDe
 }
 
 export function featureLabel(feature: string): string {
-  return FEATURE_LABELS[feature] ?? feature;
+  return Object.prototype.hasOwnProperty.call(FEATURE_LABELS, feature) ? FEATURE_LABELS[feature] : UNKNOWN_FEATURE_LABEL;
 }
