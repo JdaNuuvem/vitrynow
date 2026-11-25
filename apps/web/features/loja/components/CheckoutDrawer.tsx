@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { TurnstileWidget } from "./TurnstileWidget";
 import type { PaymentMethod, StoreInfo } from "@/core/domain/storefront";
 import { formatCents, maskMoneyInput } from "@/shared/format/money";
+import { maskPhoneInput, PHONE_INPUT_PROPS } from "@/shared/format/phone";
 import { Icon } from "@/shared/icons/Icon";
 import type { StorefrontGateway } from "@/core/gateways/StorefrontGateway";
 import { useDeliveryZones } from "../hooks/useDeliveryZones";
 import {
+  CHECKOUT_LIMITS,
   PAYMENT_GROUPS,
   STORE_CLOSED_MESSAGE,
   TIP_OPTIONS_CENTS,
@@ -294,6 +296,7 @@ export function CheckoutDrawer({
             {...fieldProps("customerName")}
             className="loja__field"
             autoComplete="name"
+            maxLength={CHECKOUT_LIMITS.customerName}
             value={form.customerName}
             onChange={(e) => update("customerName", e.target.value)}
           />
@@ -310,8 +313,10 @@ export function CheckoutDrawer({
             type="tel"
             inputMode="tel"
             autoComplete="tel"
+            maxLength={PHONE_INPUT_PROPS.maxLength}
+            placeholder={PHONE_INPUT_PROPS.placeholder}
             value={form.customerPhone}
-            onChange={(e) => update("customerPhone", e.target.value)}
+            onChange={(e) => update("customerPhone", maskPhoneInput(e.target.value))}
           />
           {fieldError("customerPhone")}
         </div>
@@ -325,6 +330,7 @@ export function CheckoutDrawer({
               {...fieldProps("address")}
               className="loja__field"
               autoComplete="street-address"
+              maxLength={CHECKOUT_LIMITS.address}
               value={form.address}
               onChange={(e) => update("address", e.target.value)}
             />
@@ -343,6 +349,7 @@ export function CheckoutDrawer({
             autoComplete="off"
             aria-invalid={couponError ? true : undefined}
             aria-describedby={couponError ? "loja-cupom-erro" : undefined}
+            maxLength={CHECKOUT_LIMITS.couponCode}
             value={form.couponCode}
             onChange={(e) => update("couponCode", e.target.value)}
           />

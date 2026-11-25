@@ -2,14 +2,17 @@ import { z } from "zod";
 import { textField } from "./text";
 export * from "./text";
 
-// Telefone tolerante (BR ou genérico): dígitos, espaços, parênteses, hífen, "+", 8-20 chars.
-// Não valida DDD/formato exato — só rejeita lixo claramente não-telefone.
+import { PHONE_INVALID_MESSAGE, PHONE_MAX_INPUT, isValidBrPhone } from "./phone";
+export * from "./phone";
+
+// Telefone do Brasil (SSOT D9, regra em ./phone): DDD + 10/11 dígitos, DDI 55 opcional, pontuação comum aceita.
+// Antes só contava caracteres (8-20) e "11948539593503953242" (20 dígitos) passava.
 export const phoneSchema = z
   .string()
   .trim()
-  .min(8)
-  .max(20)
-  .regex(/^[0-9+()\s-]+$/, "telefone inválido");
+  .min(8, PHONE_INVALID_MESSAGE)
+  .max(PHONE_MAX_INPUT, PHONE_INVALID_MESSAGE)
+  .refine(isValidBrPhone, PHONE_INVALID_MESSAGE);
 
 export const orderTypeSchema = z.enum(["MESA", "DELIVERY", "BALCAO"]);
 
@@ -35,10 +38,10 @@ export function minOrderMessage(minOrderCents: number): string {
 export const orderStatusSchema = z.enum(ORDER_STATUSES);
 
 export const createOrderItemSchema = z.object({
-  productId: z.string().min(1),
+  productId: z.string().min(1).max(100),
   quantity: z.number().int().positive().max(100),
   notes: textField({ max: 150, multiline: true }).optional(), // RN-TXT-02: observação do item
-  additionalIds: z.array(z.string().min(1)).max(50).optional(),
+  additionalIds: z.array(z.string().min(1).max(100)).max(50).optional(),
   optionSelections: z.array(z.object({ optionId: z.string().min(1).max(150), quantity: z.number().int().min(1).max(99) })).max(300).optional(),
   expectedUnitPriceCents: z.number().int().nonnegative().max(2_147_483_647).optional(),
   // Produto detalhado (venda por peso): peso ESCOLHIDO em gramas inteiras; o servidor valida minimo/passo/maximo e calcula o valor da linha (quantity tem de ser 1).
@@ -50,6 +53,8 @@ export type CreateOrderItem = z.infer<typeof createOrderItemSchema>;
 
 // "CARTAO" é o valor legado do checkout antigo e vale como CREDITO.
 export const paymentMethodSchema = z.enum(["PIX", "DINHEIRO", "CARTAO", "CREDITO", "DEBITO", "VR", "VA"]);
+// Cupom digitado no pedido: sem espaços nas pontas (o código salvo nunca tem espaço), 1 a 50 caracteres.
+export const couponCodeInput = z.string().trim().min(1).max(50);
 export type PaymentMethod = z.infer<typeof paymentMethodSchema>;
 
 export const createOrderSchema = z.object({
@@ -59,7 +64,7 @@ export const createOrderSchema = z.object({
   address: textField({ max: 280, multiline: true }).optional(), // rua+número 200 e complemento 80 (RN-TXT-02)
   notes: textField({ max: 300, multiline: true }).optional(), // observação do pedido
   items: z.array(createOrderItemSchema).min(1).max(100),
-  couponCode: z.string().min(1).max(50).optional(),
+  couponCode: couponCodeInput.optional(),
   paymentMethod: paymentMethodSchema.optional(),
   changeForCents: z.number().int().positive().max(100_000_000).optional(),
   tipCents: z.number().int().nonnegative().max(10_000_000).optional(),
@@ -71,8 +76,8 @@ export type CreateOrderInput = z.infer<typeof createOrderSchema>;
 
 // API-22 — mesa e pedido pelo QR (ADR-0002 nível 1). O cliente não manda preço, telefone nem forma de pagamento: paga ao receber a mesa (API-24).
 export const createTableOrderSchema = z.object({
-  customerName: z.string().trim().min(1).max(60).optional(),
-  notes: z.string().max(500).optional(),
+  customerName: textField({ max: 60, min: 1 }).optional(),
+  notes: textField({ max: 500, multiline: true }).optional(),
   items: z.array(createOrderItemSchema).min(1).max(100),
 });
 export type CreateTableOrderInput = z.infer<typeof createTableOrderSchema>;
@@ -110,12 +115,12 @@ export const MANUAL_DISCOUNT_REASONS = ["CORTESIA", "ERRO_DO_PEDIDO", "CLIENTE_F
 export const manualOrderChannelSchema = z.enum(["TELEFONE", "WHATSAPP", "BALCAO", "OUTRO"]);
 export const createManualOrderSchema = z.object({
   type: z.enum(["DELIVERY", "BALCAO"]),
-  customerName: z.string().trim().min(1).max(150).optional(),
+  customerName: textField({ max: 150, min: 1 }).optional(),
   customerPhone: phoneSchema.optional(),
-  address: z.string().max(500).optional(),
-  notes: z.string().max(500).optional(),
+  address: textField({ max: 500, multiline: true }).optional(),
+  notes: textField({ max: 500, multiline: true }).optional(),
   items: z.array(createOrderItemSchema).min(1).max(100),
-  couponCode: z.string().min(1).max(50).optional(),
+  couponCode: couponCodeInput.optional(),
   forceCoupon: z.boolean().optional(), // só OWNER: aceita cupom esgotado (RN-B2-05)
   paymentMethod: paymentMethodSchema.optional(),
   alreadyPaid: z.boolean().optional(), // "já pago": o dinheiro foi recebido agora (em dinheiro exige caixa aberto, RN-B2-07)
@@ -449,7 +454,7 @@ export const orderInternalNoteSchema = z.object({ note: textField({ max: 500, mu
 
 export const optionInputSchema = z.object({
   id: z.string().min(1).optional(), // presente ao editar uma opção existente
-  name: z.string().trim().min(1).max(150),
+  name: textField({ max: 150, min: 1 }),
   priceCents: z.number().int().min(0).max(100_000_000),
   active: z.boolean().optional(),
   // RN-PD-12: aponta para um produto ADICIONAL da mesma loja. INHERIT (padrão ao ligar) = nome e preço do adicional; OWN = preço próprio só aqui.
@@ -458,8 +463,8 @@ export const optionInputSchema = z.object({
 });
 
 export const optionGroupInputSchema = z.object({
-  name: z.string().trim().min(1).max(150),
-  helpText: z.string().trim().max(300).nullish().transform((v) => (v ? v : null)),
+  name: textField({ max: 150, min: 1 }),
+  helpText: textField({ max: 300, multiline: true }).nullish().transform((v) => (v ? v : null)),
   minSelect: z.number().int().min(0).max(100).default(0),
   maxSelect: z.number().int().min(1).max(100).nullable().default(1), // null = sem limite
   maxPerOption: z.number().int().min(1).max(99).default(1),
@@ -516,7 +521,7 @@ export const createCouponSchema = z.object({
   discountType: couponDiscountTypeSchema,
   discountValue: z.number().int().positive().max(100_000_000),
   active: z.boolean().optional(),
-  maxUses: z.number().int().positive().optional(),
+  maxUses: z.number().int().positive().max(1_000_000).optional(),
   minOrderCents: z.number().int().nonnegative().max(100_000_000).optional(),
   // Validade: "AAAA-MM-DD" (vale até 23:59 desse dia, no fuso da loja) ou um instante ISO. Que não seja passado é regra do servidor.
   expiresAt: z
@@ -578,7 +583,7 @@ export type AssignDelivererInput = z.infer<typeof assignDelivererSchema>;
 // ---- Chaves de impressora (device tokens) ----
 
 export const createDeviceTokenSchema = z.object({
-  label: z.string().max(100).optional(),
+  label: textField({ max: 100 }).optional(),
 });
 export type CreateDeviceTokenInput = z.infer<typeof createDeviceTokenSchema>;
 
@@ -719,7 +724,7 @@ export const setPrintModeSchema = z.object({ mode: printModeSchema });
 export const DELIVERY_ZONE_LIMIT = 300; // RN-B9-09
 const zoneMinutes = z.number().int().min(1).max(1440);
 export const deliveryZoneFieldsSchema = z.object({
-  name: z.string().trim().min(1).max(100),
+  name: textField({ max: 100, min: 1 }),
   feeCents: z.number().int().nonnegative().max(10_000_000),
   etaMinMinutes: zoneMinutes.nullable().optional(),
   etaMaxMinutes: zoneMinutes.nullable().optional(),

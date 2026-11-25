@@ -168,8 +168,19 @@ describe("CheckoutDrawer: validação (UI-V-05)", () => {
     await userEvent.click(screen.getByRole("button", { name: /Finalizar pedido/ }));
     expect(onSubmit).toHaveBeenCalledTimes(1);
     const [form, totals] = onSubmit.mock.calls[0];
-    expect(form).toMatchObject({ customerName: "Maria", customerPhone: "21999999999", address: "Rua A, 1", deliveryType: "DELIVERY" });
+    // o campo guarda o telefone já mascarado; a API aceita a pontuação e valida pela mesma regra
+    expect(form).toMatchObject({ customerName: "Maria", customerPhone: "(21) 99999-9999", address: "Rua A, 1", deliveryType: "DELIVERY" });
     expect(totals.totalCents).toBe(5500);
+  });
+
+  it("telefone: máscara na digitação, para em 11 dígitos e tem teto nos campos de texto", async () => {
+    setup();
+    const phone = screen.getByLabelText(/^Telefone/);
+    await userEvent.type(phone, "11948539593503953242");
+    expect(phone).toHaveValue("(11) 94853-9593");
+    expect(screen.getByLabelText(/^Nome/)).toHaveAttribute("maxlength", "80");
+    expect(screen.getByLabelText(/^Endereço de entrega/)).toHaveAttribute("maxlength", "280");
+    expect(screen.getByLabelText("Cupom de desconto (opcional)")).toHaveAttribute("maxlength", "50");
   });
 });
 

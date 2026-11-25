@@ -42,6 +42,7 @@ export function PasswordField({
         id={inputId}
         className={inputClassName ?? "pw-field__input"}
         type={visible ? "text" : "password"}
+        maxLength={200} /* teto do servidor para senha (changePasswordSchema/registro) */
         autoComplete="new-password"
         value={value}
         disabled={disabled}

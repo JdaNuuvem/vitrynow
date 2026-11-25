@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import type { StoreSettings, StoreSettingsInput } from "@/core/domain/store";
 import { MoneyInput } from "@/shared/ui/MoneyInput";
+import { phoneDigits } from "@/shared/format/phone";
 import { Switch } from "@/shared/ui/Switch";
 import { toForm, toPayload, type ContaForm } from "../contaForm";
 import type { SaveMessage } from "../hooks/useConta";
@@ -53,10 +54,12 @@ export function StoreSettingsCard({
         {!editable && <p className="conta__meta">A edição dos dados da loja está disponível para o dono.</p>}
 
         <fieldset className="conta__fields" disabled={!editable || saving}>
-        <Field label="Nome da loja" {...bind("name")} />
-        <Field label="Endereço (exibido no cardápio público)" placeholder="Rua Exemplo, 123, Centro, Cidade - UF" {...bind("address")} />
-        <Field label="WhatsApp (só números com DDI, ex. 5521999999999)" placeholder="5521999999999" {...bind("whatsapp")} />
-        <Field label="Horário de funcionamento (texto livre)" placeholder="Seg a sáb, 09:00 às 17:00" {...bind("openingHours")} />
+        {/* Limites = updateStoreSettingsSchema (nome 150, endereço 300, WhatsApp 10-15 dígitos, horário 200). */}
+        <Field label="Nome da loja" maxLength={150} {...bind("name")} />
+        <Field label="Endereço (exibido no cardápio público)" maxLength={300} placeholder="Rua Exemplo, 123, Centro, Cidade - UF" {...bind("address")} />
+        <Field label="WhatsApp (só números com DDI, ex. 5521999999999)" placeholder="5521999999999" maxLength={15} inputMode="numeric"
+          value={form.whatsapp} onChange={(value) => setForm((previous) => ({ ...previous, whatsapp: phoneDigits(value).slice(0, 15) }))} />
+        <Field label="Horário de funcionamento (texto livre)" maxLength={200} placeholder="Seg a sáb, 09:00 às 17:00" {...bind("openingHours")} />
 
         <label className="conta__field conta__money">
           Pedido mínimo em R$ (opcional)

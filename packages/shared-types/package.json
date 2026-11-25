@@ -20,6 +20,11 @@
       "types": "./dist/quote.d.ts",
       "default": "./dist/quote.js"
     },
+    "./phone": {
+      "development": "./src/phone.ts",
+      "types": "./dist/phone.d.ts",
+      "default": "./dist/phone.js"
+    },
     "./errors": {
       "development": "./src/errorMessages.ts",
       "types": "./dist/errorMessages.d.ts",

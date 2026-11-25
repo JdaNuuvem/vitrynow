@@ -72,7 +72,7 @@ export function RegisterPage() {
           <Button variant="quiet" type="button" disabled={!/^[a-z0-9-]{1,80}$/.test(slug) || pending || availability?.state === "checking"} onClick={() => void checkSlug()}>Verificar endereço</Button>
           <span id="register-slug-status" className={"auth__path-status auth__path-status--" + (availability?.state ?? "idle")} role="status">{availability?.message}</span>
         </div>
-        <label className="auth__field">E-mail<input className="auth__input" name="email" type="email" autoComplete="email" required /></label>
+        <label className="auth__field">E-mail<input className="auth__input" name="email" type="email" maxLength={200} autoComplete="email" required /></label>
         <PasswordField label="Senha" value={password} onChange={(value) => { setPassword(value); setPasswordError(null); }} help={PASSWORD_HELP} error={passwordError} disabled={pending} inputClassName="auth__input" />
         {error && <p className="auth__error" role="alert">{error}</p>}
         <Button className="auth__button" variant="primary" type="submit" busy={pending}>{pending ? "Criando loja…" : "Criar loja"}</Button>
