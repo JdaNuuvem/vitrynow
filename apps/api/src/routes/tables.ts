@@ -5,7 +5,7 @@ import { quoteOrder } from "../lib/quoteOrder";
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { Prisma, prisma } from "@meucardapio/db";
-import { createTableOrderSchema, createTableSchema, panelRoleSchema, qrSettingsSchema, receiveTableSchema, floorLayoutSchema, tableAlertClearSchema, tableStatusOf, updateTableSchema } from "@meucardapio/shared-types";
+import { createTableOrderSchema, createTableSchema, panelRoleSchema, qrSettingsSchema, receiveTableSchema, floorLayoutSchema, RESERVATION_SOON_AFTER_MIN, RESERVATION_SOON_BEFORE_MIN, tableAlertClearSchema, tableGuestsSchema, tableStatusOf, tableWaiterSchema, updateTableSchema } from "@meucardapio/shared-types";
 import { getRequestEntitlements, requireFeature } from "../lib/subscription";
 import { logAudit } from "../lib/audit";
 import { buildMenuView } from "../lib/menuView";
@@ -59,7 +59,7 @@ const RECEIVES_PER_MINUTE = 60;
 // Conta da mesa (RN-MB-02, virtual): pedidos ACEITOS (CONFIRMADO em diante), não cancelados, ainda não recebidos.
 const accountWhere = (storeId: string, tableId: string) => ({ storeId, tableId, receiptId: null, paidAt: null, awaitingPayment: false, status: { in: [...SALE_STATUSES] } });
 
-type TableRow = { id: string; label: string; qrToken: string; active: boolean; position: number; posX: number; posZ: number; rotation: number; shape: string; seats: number; area: string | null; callWaiterAt: Date | null; askBillAt: Date | null };
+type TableRow = { id: string; label: string; qrToken: string; active: boolean; position: number; posX: number; posZ: number; rotation: number; shape: string; seats: number; area: string | null; callWaiterAt: Date | null; askBillAt: Date | null; guests?: number | null; waiterUserId?: string | null; waiter?: { id: string; email: string } | null };
 const tableView = (t: TableRow, slug: string) => ({
   id: t.id,
   label: t.label,
@@ -71,6 +71,8 @@ const tableView = (t: TableRow, slug: string) => ({
   layout: { posX: t.posX, posZ: t.posZ, rotation: t.rotation, shape: t.shape, seats: t.seats, area: t.area },
   callWaiterAt: t.callWaiterAt?.toISOString() ?? null,
   askBillAt: t.askBillAt?.toISOString() ?? null,
+  guests: t.guests ?? null,
+  waiter: t.waiter ? { id: t.waiter.id, name: t.waiter.email.split("@")[0] } : null, // usuário não tem nome: mostra a parte antes do @
 });
 
 const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
@@ -81,10 +83,19 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const { storeId } = request.user;
     const [store, tables, pending, account] = await Promise.all([
       prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { slug: true, qrOrderingEnabled: true, qrOrdersNeedApproval: true, serviceFeePercent: true } }),
-      prisma.table.findMany({ where: { storeId }, orderBy: [{ position: "asc" }, { label: "asc" }] }),
+      prisma.table.findMany({ where: { storeId }, orderBy: [{ position: "asc" }, { label: "asc" }], include: { waiter: { select: { id: true, email: true } } } }),
       prisma.order.groupBy({ by: ["tableId"], where: { storeId, tableId: { not: null }, receiptId: null, status: "PENDENTE" }, _count: { _all: true } }),
       prisma.order.groupBy({ by: ["tableId"], where: { storeId, tableId: { not: null }, receiptId: null, paidAt: null, awaitingPayment: false, status: { in: [...SALE_STATUSES] } }, _count: { _all: true }, _sum: { totalCents: true }, _min: { createdAt: true } }),
     ]);
+    // próxima reserva de cada mesa (de 15 min atrás até as próximas 24 h)
+    const now = Date.now();
+    const upcoming = await prisma.reservation.findMany({
+      where: { storeId, status: "BOOKED", tableId: { not: null }, startsAt: { gte: new Date(now - RESERVATION_SOON_AFTER_MIN * 60_000), lte: new Date(now + 24 * 3600_000) } },
+      orderBy: { startsAt: "asc" },
+      select: { id: true, tableId: true, customerName: true, partySize: true, startsAt: true },
+    });
+    const nextBy = new Map<string, (typeof upcoming)[number]>();
+    for (const r of upcoming) if (r.tableId && !nextBy.has(r.tableId)) nextBy.set(r.tableId, r);
     const pendingBy = new Map(pending.map((p) => [p.tableId, p._count._all]));
     const accountBy = new Map(account.map((a) => [a.tableId, { count: a._count._all, totalCents: a._sum.totalCents ?? 0, openedAt: a._min.createdAt }]));
     return {
@@ -95,8 +106,10 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         // RN-MB-02: livre = sem pedido aceito a receber e sem pedido PENDENTE.
         const accountOrders = acc?.count ?? 0;
         // SALÃO 3D: status calculado AQUI (fonte única, shared-types) e "aberta desde" = 1º pedido da conta
-        const status = tableStatusOf({ active: t.active, pendingOrders, accountOrders, callWaiterAt: t.callWaiterAt, askBillAt: t.askBillAt });
-        return { ...tableView(t, store.slug), pendingOrders, accountOrders, accountCents: acc?.totalCents ?? 0, free: pendingOrders === 0 && !acc, status, openedAt: acc?.openedAt?.toISOString() ?? null };
+        const next = nextBy.get(t.id);
+        const reservedSoon = !!next && next.startsAt.getTime() - now <= RESERVATION_SOON_BEFORE_MIN * 60_000;
+        const status = tableStatusOf({ active: t.active, pendingOrders, accountOrders, callWaiterAt: t.callWaiterAt, askBillAt: t.askBillAt, reservedSoon, guests: t.guests });
+        return { ...tableView(t, store.slug), pendingOrders, accountOrders, accountCents: acc?.totalCents ?? 0, free: pendingOrders === 0 && !acc, status, openedAt: acc?.openedAt?.toISOString() ?? null, nextReservation: next ? { id: next.id, customerName: next.customerName, partySize: next.partySize, startsAt: next.startsAt.toISOString() } : null };
       }),
     };
   });
@@ -285,7 +298,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
       const marked = await tx.order.updateMany({ where: { id: { in: orders.map((o) => o.id) }, storeId, receiptId: null }, data: { receiptId: created.id, paidAt: receivedAt } });
       if (marked.count !== orders.length) throw new CodedError(409, "ORDER_STATE_CHANGED", "A conta da mesa mudou enquanto você agia. Atualize a tela.");
-      await tx.table.updateMany({ where: { id, storeId }, data: { callWaiterAt: null, askBillAt: null } }); // mesa recebida: avisos encerrados
+      await tx.table.updateMany({ where: { id, storeId }, data: { callWaiterAt: null, askBillAt: null, guests: null } }); // mesa recebida: avisos e pessoas encerrados
       return { ...created, orderIds: orders.map((o) => o.id) };
     }, ORDER_TX_OPTIONS);
 
@@ -325,6 +338,41 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const result = await prisma.table.updateMany({ where: { id, storeId }, data });
     if (result.count === 0) return notFound(reply);
     logAudit({ storeId, userId, action: "table.alert_clear", targetType: "Table", targetId: id, metadata: { kind } });
+    publishToStore(storeId, { type: "table.updated", tableId: id });
+    return { ok: true };
+  });
+
+  // Garçom responsável: o dono escolhe qualquer pessoa da equipe; o garçom só assume a mesa para si (ou larga a que é dele).
+  app.post("/api/tables/:id/waiter", { preHandler: app.requirePanelAuth }, async (request, reply) => {
+    const { storeId, userId, role } = request.user;
+    const { id } = request.params as { id: string };
+    const parsed = tableWaiterSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Corpo inválido.", code: "VALIDATION_ERROR", fields: parsed.error.flatten().fieldErrors });
+    const target = parsed.data.userId;
+    const table = await prisma.table.findFirst({ where: { id, storeId }, select: { waiterUserId: true } });
+    if (!table) return notFound(reply);
+    if (role !== panelRoleSchema.enum.OWNER) {
+      const allowed = target === userId || (target === null && table.waiterUserId === userId);
+      if (!allowed) throw new CodedError(403, "FORBIDDEN_ROLE", "Você só pode assumir a mesa para você. Peça ao dono para trocar o garçom.");
+    }
+    if (target && !(await prisma.user.findFirst({ where: { id: target, storeId }, select: { id: true } }))) {
+      throw new CodedError(404, "USER_NOT_FOUND", "Pessoa da equipe não encontrada.");
+    }
+    await prisma.table.updateMany({ where: { id, storeId }, data: { waiterUserId: target } });
+    logAudit({ storeId, userId, action: "table.waiter", targetType: "Table", targetId: id, metadata: { waiterUserId: target } });
+    publishToStore(storeId, { type: "table.updated", tableId: id });
+    return { ok: true };
+  });
+
+  // Pessoas sentadas agora (qualquer pessoa da equipe). Zera ao receber a mesa.
+  app.post("/api/tables/:id/guests", { preHandler: app.requirePanelAuth }, async (request, reply) => {
+    const { storeId, userId } = request.user;
+    const { id } = request.params as { id: string };
+    const parsed = tableGuestsSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Corpo inválido.", code: "VALIDATION_ERROR", fields: parsed.error.flatten().fieldErrors });
+    const result = await prisma.table.updateMany({ where: { id, storeId }, data: { guests: parsed.data.guests } });
+    if (result.count === 0) return notFound(reply);
+    logAudit({ storeId, userId, action: "table.guests", targetType: "Table", targetId: id, metadata: { guests: parsed.data.guests } });
     publishToStore(storeId, { type: "table.updated", tableId: id });
     return { ok: true };
   });

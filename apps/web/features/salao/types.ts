@@ -18,7 +18,17 @@ export type SalaoTable = {
   openedAt: string | null;
   callWaiterAt: string | null;
   askBillAt: string | null;
+  guests: number | null;
+  waiter: { id: string; name: string } | null;
+  nextReservation: { id: string; customerName: string; partySize: number; startsAt: string } | null;
 };
+
+export type Reservation = {
+  id: string; tableId: string | null; tableLabel: string | null; customerName: string; customerPhone: string | null;
+  partySize: number; startsAt: string; durationMin: number; status: "BOOKED" | "SEATED" | "CANCELED" | "NO_SHOW"; notes: string | null;
+};
+
+export type TeamMember = { id: string; email: string; role: string };
 
 export type FloorElement = { id?: string; kind: FloorElementKind; posX: number; posZ: number; width: number; depth: number; rotation: number; area?: string | null };
 

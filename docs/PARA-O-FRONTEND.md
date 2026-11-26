@@ -143,6 +143,11 @@ Sugestão: botão "Importar planilha" no Catálogo → enviar arquivo → prévi
 - **Tocado no existente:** `core/navigation/panelNavigation.ts` (item "Salão 3D"); `features/operacao/MesasPage.tsx` (+5 linhas: abre já com a mesa de `?mesa=<id>`, usado pelo "Fechar conta" do salão); `shared/design/no-loose-colors.test.ts` (teto 8 para `features/salao/scene/palette.ts`, paleta dos materiais 3D).
 - **API nova para você usar na tela de Mesas, se quiser:** `GET /api/tables` agora traz `status` (INACTIVE/ASK_BILL/CALL_WAITER/WAITING/OCCUPIED/FREE, rótulos em `TABLE_STATUS_LABEL` do shared-types), `openedAt`, `layout`, `callWaiterAt`, `askBillAt`; "chamou garçom"/"pediu a conta" ficam guardados até `POST /api/tables/:id/alerts/clear` ou o recebimento; evento de tempo real novo `table.updated`.
 
+### 3e.1 Salão 3D — opcionais (26/11/2026)
+- No painel da mesa: garçom responsável (dono escolhe; garçom assume/larga a própria), pessoas na mesa (mesa com pessoas e sem pedido = Ocupada; zera ao receber), próxima reserva e **Adicionar pedido** (lança na conta da mesa pela MESMA rota do pedido do painel: `POST /api/orders` com `type: "MESA"` e `tableId`; sem pagamento, que fica para o fechamento).
+- Gaveta **Reservas** (`/api/reservations`): nova reserva, Chegou (põe as pessoas na mesa), Não veio, Cancelar; a mesa aparece **Reservada** (amarelo) de 30 min antes a 15 min depois do horário; horário sobreposto na mesma mesa = 409.
+- Para a sua tela de Pedidos: `createManualOrderSchema.type` agora aceita `MESA` (com `tableId`). Nada mudou para DELIVERY/BALCAO.
+
 ## 4. Mudanças do backend desde a última sincronização (para saber o que a API já oferece)
 - **Tíquete v4** (`printableOrderSchema`): `round`, `requestedBy`, `customerRemoved` — impressos pelo print-client; nada a fazer no web.
 - **Catálogo de erros** (§2) e `docs/textos-de-erro-para-revisar.md`.

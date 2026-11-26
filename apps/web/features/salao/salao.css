@@ -31,7 +31,8 @@
 .salao-tag__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
 .salao-tag[data-status="OCCUPIED"] .salao-tag__dot { background: var(--danger); }
 .salao-tag[data-status="WAITING"] .salao-tag__dot { background: var(--info-ink); }
-.salao-tag[data-status="CALL_WAITER"] .salao-tag__dot { background: var(--warn); }
+.salao-tag[data-status="CALL_WAITER"] .salao-tag__dot { background: var(--ink); }
+.salao-tag[data-status="RESERVED"] .salao-tag__dot { background: var(--warn); }
 .salao-tag[data-status="ASK_BILL"] .salao-tag__dot { background: var(--color-primary); }
 .salao-tag[data-status="INACTIVE"] .salao-tag__dot { background: var(--line-strong); }
 
@@ -58,3 +59,29 @@
 .salao-panel__form { display: grid; gap: var(--ds-space-3); }
 .salao-panel__form label { display: grid; gap: 4px; font-size: var(--ds-text-sm); font-weight: 650; }
 .salao-panel__row { display: flex; align-items: center; gap: 6px; font-size: var(--ds-text-sm); font-weight: 650; }
+
+/* opcionais: diálogo de pedido, gaveta de reservas, campos em linha */
+.salao-panel--wide { width: min(560px, calc(100% - 24px)); }
+.salao-panel__row--wrap { flex-wrap: wrap; }
+.salao-panel__row select { width: auto; min-width: 160px; }
+.salao-panel__inline { display: inline-flex; align-items: center; gap: 6px; font-size: var(--ds-text-sm); font-weight: 650; }
+.salao-panel__inline input { width: 90px; }
+.salao-panel__inline--block { display: grid; }
+.salao-panel__inline--block input { width: 100%; }
+.salao-overlay { position: fixed; inset: 0; z-index: 60; background: var(--ds-scrim); display: grid; place-items: center; padding: var(--ds-space-4); }
+.salao-dialog { width: min(100%, 640px); max-height: calc(100dvh - 32px); overflow: auto; display: grid; gap: var(--ds-space-3); padding: clamp(16px, 3vw, 24px); border-radius: var(--ds-radius-lg); background: var(--surface); box-shadow: var(--shadow-float); }
+.salao-dialog__head { display: flex; align-items: center; justify-content: space-between; gap: var(--ds-space-3); }
+.salao-dialog__head h2 { margin: 0; font-size: var(--ds-text-lg); }
+.salao-dialog input[type="search"], .salao-dialog input[type="text"] { box-sizing: border-box; min-height: 40px; width: 100%; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--ds-radius-sm); background: var(--surface); color: var(--ink); font: inherit; }
+.salao-dialog__products { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 45vh; overflow: auto; }
+.salao-dialog__products li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--ds-radius-sm); }
+.salao-dialog__products li > div:first-child { display: grid; gap: 2px; min-width: 0; }
+.salao-dialog__qty { display: inline-flex; align-items: center; gap: 4px; }
+.salao-dialog__qty span { min-width: 2ch; text-align: center; font-weight: 700; }
+.salao-dialog__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.salao-res__form { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); align-items: end; }
+.salao-res__form label { display: grid; gap: 4px; font-size: var(--ds-text-sm); font-weight: 650; }
+.salao-res__wide { grid-column: 1 / -1; }
+.salao-res__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.salao-res__list li { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--ds-radius-sm); font-size: var(--ds-text-sm); }
+.salao-res__list .salao-panel__actions { grid-column: 1 / -1; }

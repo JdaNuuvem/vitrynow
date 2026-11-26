@@ -17,7 +17,8 @@ const STATUS_TOKEN: Record<TableStatus, string> = {
   FREE: "--ok",
   OCCUPIED: "--danger",
   WAITING: "--info-ink",
-  CALL_WAITER: "--warn",
+  RESERVED: "--warn", // amarelo
+  CALL_WAITER: "--ink", // escuro e pulsando
   ASK_BILL: "--color-primary",
   INACTIVE: "--line-strong",
 };
