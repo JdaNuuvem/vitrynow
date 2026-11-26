@@ -111,6 +111,11 @@ Exceção à regra acima, pedida pelo dono do produto depois de um telefone de 2
 2. Pagamentos vista por FUNCIONÁRIO mostrava erro + "Consultar novamente". `StorePaymentsPage.tsx`: 403 vira o aviso "Acesso do dono da loja · Peça ao dono…", como Auditoria/Equipe.
 3. Equipe mostrava "A senha precisa ter pelo menos 10 caracteres" depois de um cadastro com sucesso. `usePasswordRule` ganhou `reset()`; `InviteStaffCard` chama depois de limpar. Teste em `InviteStaffCard.test.tsx`.
 
+**Desperdício (aplicado com autorização):**
+1. Cancelar pedido aceito JÁ PREPARADO: `CancelOrderDialog` ganhou a caixa "O pedido já foi preparado" (só em cancelamento, não em recusa). `CancelDraft.stockWasted` → `buildCancelBody` manda `stockWasted: true`. API: a venda é estornada, mas os insumos saem como desperdício com motivo `PEDIDO_CANCELADO` (não voltam ao estoque). Sem a marca, nada muda.
+2. Perda de PRATO PRONTO: componente NOVO `estoque/components/ProductLossForm.tsx`, aberto pelo botão "Perda de prato" no topo de Estoque (equipe e dono). Rota `POST /api/stock/products/:id/loss` `{ quantity 1–100, reason (WASTE_REASONS), weightGrams? }`; baixa pela ficha técnica; prato sem ficha = 409 `PRODUCT_NO_RECIPE`. `StockGateway.productLoss`.
+3. `SYSTEM_WASTE_REASONS` (domain/stock.ts) entrou nos rótulos de motivo de Estoque e Lucro.
+
 ---
 
 ## 3c. Tela NOVA a fazer: importação de produtos por planilha (API pronta, PR #154)

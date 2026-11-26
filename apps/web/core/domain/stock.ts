@@ -56,6 +56,8 @@ export type ProfitReport = {
 
 export const WASTE_REASONS = { PREPARO: "Sobra do preparo", QUEIMOU: "Queimou", CAIU: "Caiu / derramou", ERRO_PEDIDO: "Erro no pedido", DEVOLUCAO_CLIENTE: "Devolução do cliente", AMOSTRA: "Amostra / degustação", OUTRO: "Outro" } as const;
 export const SPOILAGE_REASONS = { VENCIDO: "Venceu", ESTRAGOU: "Estragou", ARMAZENAMENTO: "Armazenamento", OUTRO: "Outro" } as const;
+// Motivo só do sistema: pedido aceito, já preparado, cancelado (os insumos viram desperdício em vez de voltar ao estoque).
+export const SYSTEM_WASTE_REASONS = { PEDIDO_CANCELADO: "Pedido cancelado já preparado" } as const;
 export const MOVEMENT_LABEL: Record<StockMovementType, string> = {
   PURCHASE: "Compra", SALE: "Venda", SALE_REVERSAL: "Estorno de venda", WASTE: "Desperdício", SPOILAGE: "Estragado/vencido", ADJUSTMENT: "Ajuste de contagem",
 };

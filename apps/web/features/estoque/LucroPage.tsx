@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { formatQty, MOVEMENT_LABEL, SPOILAGE_REASONS, WASTE_REASONS, type MenuMargin, type ProfitReport } from "@/core/domain/stock";
+import { formatQty, MOVEMENT_LABEL, SPOILAGE_REASONS, SYSTEM_WASTE_REASONS, WASTE_REASONS, type MenuMargin, type ProfitReport } from "@/core/domain/stock";
 import { extractErrorMessage } from "@/core/http/FetchHttpClient";
 import { usePanelServices } from "@/core/services/PanelServices";
 import { useCurrentRole } from "@/core/session/useCurrentRole";
@@ -14,7 +14,7 @@ import { useMoney } from "./useMoney";
 import "./estoque.css";
 import { useStoreTimezone } from "@/features/shell/useStoreTimezone";
 
-const REASON_LABEL: Record<string, string> = { ...WASTE_REASONS, ...SPOILAGE_REASONS };
+const REASON_LABEL: Record<string, string> = { ...WASTE_REASONS, ...SPOILAGE_REASONS, ...SYSTEM_WASTE_REASONS };
 const pct = (value: number | null) => (value === null ? "—" : `${value.toLocaleString("pt-BR")}%`);
 const CSV_TABLES = [{ id: "summary", label: "Resumo (DRE)" }, { id: "products", label: "Margem por prato" }, { id: "losses", label: "Perdas por motivo" }, { id: "movements", label: "Movimentações" }] as const;
 

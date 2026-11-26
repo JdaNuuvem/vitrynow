@@ -2,6 +2,9 @@ import type { HttpResult } from "../http/HttpClient";
 import type { Ingredient, IngredientList, MenuMargin, ProfitReport, Recipe, StockMovement, StockMovementType, StockUnit } from "../domain/stock";
 
 export type LossInput = { type: "WASTE" | "SPOILAGE"; quantity: number; reason: string };
+// Perda de prato pronto: a API baixa pela ficha técnica. `weightGrams` = peso de cada unidade (produto por peso).
+export type ProductLossInput = { quantity: number; reason: string; weightGrams?: number };
+export type ProductLossReply = { movementIds: string[]; ingredients: number; costCents?: number };
 export type MovementsQuery = { ingredientId?: string; type?: StockMovementType; from?: string; to?: string; cursor?: string };
 type IngredientReply = { ingredient: Ingredient };
 
@@ -11,6 +14,7 @@ export interface StockGateway {
   update(id: string, input: { name?: string; minStockQty?: number | null; active?: boolean }): Promise<HttpResult<IngredientReply>>;
   purchase(id: string, input: { quantity: number; totalCostCents: number }): Promise<HttpResult<IngredientReply>>;
   loss(id: string, input: LossInput): Promise<HttpResult<IngredientReply>>;
+  productLoss(productId: string, input: ProductLossInput): Promise<HttpResult<ProductLossReply>>;
   count(id: string, countedQty: number): Promise<HttpResult<IngredientReply & { diff: number }>>;
   movements(query?: MovementsQuery): Promise<HttpResult<{ movements: StockMovement[]; nextCursor: string | null }>>;
   productRecipe(productId: string): Promise<HttpResult<Recipe>>;
