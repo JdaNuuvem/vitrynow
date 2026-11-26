@@ -122,7 +122,11 @@ Exceção à regra acima, pedida pelo dono do produto depois de um telefone de 2
 
 ---
 
-## 3c. Tela NOVA a fazer: importação de produtos por planilha (API pronta, PR #154)
+## 3c. Importação de produtos por planilha — tela FEITA (26/11/2026)
+- **Novo:** `/dashboard/catalogo/importar` (`features/importacao/`): modelo CSV/JSON, texto para IA ler a foto do cardápio, enviar ou colar, prévia (OK / revisar / ignoradas, avisos por linha), opções de duplicados e "publicar só as prontas", resultado.
+- **Tocado no existente:** `features/catalogo/CatalogoPage.tsx` (botão "Importar planilha" no cabeçalho, só para o dono).
+
+### (referência) API
 Só OWNER; escrita bloqueada em loja só-leitura/suspensa. Sem tela no web ainda. Rotas:
 - `GET /api/catalog/import/template?format=csv|json` (modelo) e `GET /api/catalog/import/guide` (instruções)
 - `POST /api/catalog/import/preview` (até 2 MB, até 500 linhas) → lote com linhas OK / REVISAR e avisos por linha
