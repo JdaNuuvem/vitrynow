@@ -54,7 +54,10 @@ export function CatalogoPage() {
   return (
     <main className="catalogo">
       <PageHeading title="Catálogo" description="Organize seus produtos, categorias e opções do cardápio."
-        actions={<Link className="ds-button ds-button--secondary" href="/dashboard/catalogo/opcoes"><Icon name="products" size={18} /> Grupos de opções</Link>} />
+        actions={<>
+          {role === "OWNER" && <Link className="ds-button ds-button--secondary" href="/dashboard/catalogo/importar">Importar planilha</Link>}
+          <Link className="ds-button ds-button--secondary" href="/dashboard/catalogo/opcoes"><Icon name="products" size={18} /> Grupos de opções</Link>
+        </>} />
 
       <div className="catalogo__tools">
         <NewCategoryForm onCreate={catalogo.createCategory} />
