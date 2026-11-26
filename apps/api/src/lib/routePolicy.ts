@@ -143,6 +143,10 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/products/:id/3d/publish": "blocked",
   "POST /api/products/:id/3d/unpublish": "blocked",
   "POST /api/products/:id/3d/remove": "blocked",
+  "POST /api/reels/:id/publish": "blocked", // REEL-2: publicar no cardápio
+  "POST /api/reels/:id/unpublish": "allowed", // REEL-2: tirar do cardápio (sempre pode, mesmo na Consulta)
+  "POST /api/reels/:id/remove": "allowed", // REEL-2: remover libera espaço (sempre pode)
+  "POST /api/reels": "blocked", // REEL-1 (d1): enviar vídeo é cadastro; Consulta e Suspensão não aceitam envio novo (RN-REEL-11)
   "POST /api/catalog/option-groups": "blocked", // API-15
   "POST /api/catalog/option-groups/:id": "blocked",
   "POST /api/catalog/option-groups/:id/delete": "blocked",

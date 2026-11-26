@@ -39,7 +39,7 @@ RUN corepack enable
 # Sem isso, o Prisma não consegue detectar a versão do OpenSSL em runtime (comando
 # `openssl` ausente) e cai no engine errado mesmo com o binaryTarget certo gerado — ver
 # packages/db/prisma/schema.prisma.
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl ffmpeg # ffmpeg/ffprobe: conversão dos Reels (ADR-0021)
 ENV NODE_ENV=production
 COPY --from=build /repo /repo
 WORKDIR /repo/apps/api

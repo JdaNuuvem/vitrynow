@@ -16,6 +16,7 @@ export const PANEL_ROUTES: readonly PanelRoute[] = [
   { id: "mesas", label: "Mesas e QR", tooltip: "Gerenciar mesas e códigos QR", href: "/dashboard/mesas", icon: "mesa", keywords: ["salão", "qr code", "atendimento à mesa"] },
   { id: "salao", label: "Salão 3D", tooltip: "Mapa 3D das mesas com status em tempo real", href: "/dashboard/salao", icon: "mesa", keywords: ["mapa", "mesas", "3d", "planta", "garçom", "conta"] },
   { id: "catalogo", label: "Produtos", tooltip: "Produtos", href: "/dashboard/catalogo", icon: "products", keywords: ["cardápio", "categoria", "preço", "item", "adicionais"] },
+  { id: "reels", label: "Reels", tooltip: "Vídeos curtos dos pratos no cardápio", href: "/dashboard/reels", icon: "image", keywords: ["vídeo", "video", "reels", "stories", "instagram", "tiktok"] },
   { id: "pratos-3d", label: "Pratos 3D", tooltip: "Modelo 3D do prato a partir de fotos", href: "/dashboard/pratos-3d", icon: "image", keywords: ["3d", "realidade aumentada", "ar", "foto", "modelo", "girar prato"] },
   { id: "estoque", label: "Estoque", tooltip: "Insumos, fichas técnicas, compras e perdas", href: "/dashboard/estoque", icon: "stock", keywords: ["insumo", "ficha técnica", "compra", "perda", "desperdício", "estragado", "contagem", "carne"] },
   { id: "lucro", label: "Lucro e margens", tooltip: "Lucro real, CMV e margem por prato", href: "/dashboard/lucro", icon: "profit", keywords: ["lucro", "cmv", "margem", "custo", "dre", "prejuízo"] },

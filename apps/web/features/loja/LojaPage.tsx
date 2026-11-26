@@ -24,6 +24,8 @@ import { orderNeedsUpdatedCatalog } from "./productOptions";
 import { buildOrderSummary, type CheckoutForm, type CheckoutTotals } from "./checkoutForm";
 import { restoreReturnPoint, type ReturnPoint } from "./focusReturn";
 import { useCart } from "./hooks/useCart";
+import { ReelsStrip, ReelsViewer } from "./reels/ReelsFeed";
+import { useReels } from "./reels/useReels";
 import { useInView } from "./hooks/useInView";
 import { useRevealOnEnter } from "./hooks/useRevealOnEnter";
 import { useScrolledPast } from "./hooks/useScrolledPast";
@@ -68,6 +70,12 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
     [menu],
   );
   const cart = useCart(productsById);
+  // REELS (cardápio estilo Reels): abre POR CIMA do cardápio; "Pedir" abre o produto aqui mesmo (o carrinho é este). ?reels=1 abre direto.
+  const reels = useReels(slug, menu?.store.hasReels === true);
+  const [reelsAt, setReelsAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (reels.length && new URLSearchParams(window.location.search).get("reels") === "1") setReelsAt(0);
+  }, [reels.length]);
   const unavailableInCart = cart.cart.some((line) => cartLineMustBeReviewed(line, productsById.get(line.productId)));
 
   useEffect(() => {
@@ -305,6 +313,7 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
                 onSelectCategory={(id) => scrollToCategory(id, true)}
                 onOpenProduct={(product) => openProduct(product, banner?.id)}
               />
+              {tab === "itens" ? <ReelsStrip reels={reels} onOpen={setReelsAt} /> : null}
             </div>
             <div ref={setIdentityMarker} className="loja__marker" aria-hidden="true" />
             {/* Filha da página inteira (não da folha da identidade): é o que a deixa fixa até o fim da rolagem. */}
@@ -464,6 +473,10 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
         Ir para o cardápio
       </a>
       {renderScreen()}
+      {reelsAt !== null && reels.length > 0 ? (
+        <ReelsViewer reels={reels} startIndex={reelsAt} closed={false} onClose={() => setReelsAt(null)}
+          onOrder={(productId) => { setReelsAt(null); const product = productsById.get(productId); if (product) openProduct(product); }} />
+      ) : null}
     </div>
   );
 }
