@@ -23,6 +23,7 @@ import realtimeRoutes from "./routes/realtime";
 import catalogRoutes from "./modules/catalog/catalog.module";
 import catalogImportRoutes from "./modules/catalogImport/catalogImport.module";
 import mediaRoutes from "./modules/media/media.module";
+import dish3dRoutes from "./routes/dish3d";
 import cashierRoutes from "./routes/cashier";
 import couponRoutes from "./modules/coupons/coupons.module";
 import paymentRoutes from "./modules/payments/payments.module";
@@ -173,6 +174,7 @@ export function buildApp(options: { logger?: FastifyServerOptions["logger"] } = 
   app.register(catalogRoutes);
   app.register(catalogImportRoutes);
   app.register(mediaRoutes);
+  app.register(dish3dRoutes);
   app.register(optionGroupRoutes);
   app.register(cashierRoutes);
   app.register(couponRoutes);

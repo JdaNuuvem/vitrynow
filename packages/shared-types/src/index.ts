@@ -834,3 +834,4 @@ export const campaignSaveSchema = z.object({ revision: z.number().int().nonnegat
 
 export * from "./errorMessages";
 export * from "./stock";
+export * from "./dish3d";

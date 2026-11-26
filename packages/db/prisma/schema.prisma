@@ -187,6 +187,7 @@ model Store {
   platformSuspendedAt     DateTime?
   platformSuspendedReason String?
   aiCreditLedger AiCreditLedger[]
+  dish3dJobs     Dish3dJob[]
 }
 
 // API-22 (ADR-0002 nível 1): mesa física com QR próprio. `qrToken` é opaco (256 bits), nunca derivado de id/slug, e regenerável.
@@ -326,6 +327,10 @@ model Product {
   optionGroups ProductOptionGroup[]
   addonOptions Option[] @relation("AddonOptions")
   recipeItems  RecipeItem[] // ESTOQUE: ficha técnica
+  // PRATO 3D: modelo GLB gerado (rascunho até o dono publicar; o cardápio só mostra com model3dPublished)
+  model3dUrl       String?
+  model3dPublished Boolean @default(false)
+  dish3dJobs       Dish3dJob[]
   orderItems  OrderItem[]
   createdAt   DateTime     @default(now())
 
@@ -1276,6 +1281,38 @@ model AiCreditLedger {
 
   @@unique([storeId, idempotencyKey])
   @@index([storeId, createdAt])
+}
+
+// PRATO 3D: uma geração de modelo 3D a partir de 1–4 fotos do prato (provedor externo, ex.: Rodin via fal.ai).
+// Créditos: RESERVE na criação; RELEASE se falhar (o livro-razão AiCreditLedger guarda o jobId).
+enum Dish3dStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+model Dish3dJob {
+  id                String       @id @default(cuid())
+  storeId           String
+  store             Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  productId         String
+  product           Product      @relation(fields: [productId, storeId], references: [id, storeId], onDelete: Cascade)
+  status            Dish3dStatus @default(RUNNING)
+  provider          String
+  providerRequestId String
+  credits           Int
+  photoCount        Int
+  attempts          Int          @default(0) // consultas de status feitas
+  nextCheckAt       DateTime     @default(now())
+  error             String?      // código curto (nunca texto do provedor cru)
+  modelKey          String?      // chave no armazenamento (stores/<loja>/3d/<id>.glb)
+  modelBytes        Int?
+  createdByUserId   String
+  createdAt         DateTime     @default(now())
+  finishedAt        DateTime?
+
+  @@index([status, nextCheckAt])
+  @@index([storeId, productId, createdAt])
 }
 
 // API-10 (RN-A-06, ADR-0003 §2.4): aviso de assinatura JÁ enviado ao dono. A chave única (assinatura, tipo, `dueAt` = o vencimento a que o aviso se

@@ -133,6 +133,10 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/catalog/products/reorder": "blocked",
   "POST /api/media/images": "blocked", // API-18: upload e cadastro
   "POST /api/media/images/:id/delete": "blocked",
+  "POST /api/products/:id/3d": "blocked", // PRATO 3D: gerar (gasta créditos)
+  "POST /api/products/:id/3d/publish": "blocked",
+  "POST /api/products/:id/3d/unpublish": "blocked",
+  "POST /api/products/:id/3d/remove": "blocked",
   "POST /api/catalog/option-groups": "blocked", // API-15
   "POST /api/catalog/option-groups/:id": "blocked",
   "POST /api/catalog/option-groups/:id/delete": "blocked",
