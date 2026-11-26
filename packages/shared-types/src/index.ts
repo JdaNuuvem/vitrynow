@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { textField } from "./text";
+import { tableLayoutSchema } from "./floor";
 export * from "./text";
 export * from "./importProducts";
 
@@ -84,7 +85,7 @@ export const createTableOrderSchema = z.object({
 export type CreateTableOrderInput = z.infer<typeof createTableOrderSchema>;
 export const tableLabelSchema = z.string().trim().min(1).max(40);
 export const createTableSchema = z.object({ label: tableLabelSchema, position: z.number().int().min(0).max(10_000).optional() });
-export const updateTableSchema = z.object({ label: tableLabelSchema.optional(), active: z.boolean().optional(), position: z.number().int().min(0).max(10_000).optional() }).refine((v) => Object.keys(v).length > 0, "nada para alterar");
+export const updateTableSchema = z.object({ label: tableLabelSchema.optional(), active: z.boolean().optional(), position: z.number().int().min(0).max(10_000).optional(), ...tableLayoutSchema.shape }).refine((v) => Object.keys(v).length > 0, "nada para alterar");
 export const qrSettingsSchema = z.object({
   qrOrderingEnabled: z.boolean().optional(),
   qrOrdersNeedApproval: z.boolean().optional(),
@@ -214,6 +215,7 @@ export const wsServerMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("device.alert"), code: z.string() }),
   // API-22 (mesa): chamar garçom / pedir a conta / rajada de pedidos do QR. Só ids e o tipo; nada de dado do cliente. Painel (ADR-0002 D2-5).
   z.object({ type: z.literal("table.alert"), tableId: z.string(), kind: z.enum(["CALL_WAITER", "ASK_BILL", "BURST"]) }),
+  z.object({ type: z.literal("table.updated"), tableId: z.string() }), // SALÃO 3D: aviso atendido, planta ou mesa alterada
   // Estoque: o saldo do insumo CRUZOU o mínimo (LOW) ou ficou negativo (NEGATIVE). Só o id e o tipo; o painel busca o resto. Uma vez por cruzamento.
   z.object({ type: z.literal("stock.low"), ingredientId: z.string(), kind: z.enum(["LOW", "NEGATIVE"]) }),
   z.object({ type: z.literal("ping") }),
@@ -230,6 +232,7 @@ export const WS_AUDIENCE: Record<WsServerMessage["type"], WsAudience> = {
   "payment.refund_pending": "panel",
   "payment.refund_done": "panel",
   "payment.refund_stuck": "panel", // API-69 x API-47 (lote 1): so orderId; o hub o entrega SO ao OWNER (OWNER_ONLY_TYPES)
+  "table.updated": "panel",
   "table.alert": "panel", // API-22 x API-47 (lote 2): chamar atendente/pedir conta; sem dado pessoal; so o painel (nunca o aparelho)
   "payment.reconcile_needed": "panel",
   "print.available": "both",
@@ -835,3 +838,4 @@ export const campaignSaveSchema = z.object({ revision: z.number().int().nonnegat
 export * from "./errorMessages";
 export * from "./stock";
 export * from "./dish3d";
+export * from "./floor";

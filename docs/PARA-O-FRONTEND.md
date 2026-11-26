@@ -138,6 +138,11 @@ Sugestão: botão "Importar planilha" no Catálogo → enviar arquivo → prévi
 - **Proposta para você (cardápio público):** o produto público agora tem `model3dUrl` (null se não publicado). Sugestão: no detalhe do produto, quando houver `model3dUrl`, mostrar `<Dish3dViewer src={model3dUrl} alt={nome} poster={imageUrl} />` com o botão "Ver na mesa" (AR). Não apliquei no cardápio.
 - Fluxo: dono envia 1–4 fotos → gera em 2–5 min (créditos de IA da loja; devolve se falhar) → rascunho → "Publicar no cardápio".
 
+## 3e. Salão 3D (26/11/2026, autorizado): tela NOVA + 3 toques no existente
+- **Novo:** `/dashboard/salao` (`features/salao/`): mapa 3D das mesas (three + @react-three/fiber 8 + drei 9, só nesta tela, sem SSR), status por cor vindo da API (`status` em `GET /api/tables`), etiqueta sobre cada mesa, painel da mesa (pedidos, total parcial, "Atendido" para os avisos, "Fechar conta"), resumo por status e filtro por setor; modo "Organizar salão" (dono): arrastar mesas/elementos, girar, formato, lugares, setor, adicionar parede/balcão/planta/porta, salvar (`PUT /api/floor`).
+- **Tocado no existente:** `core/navigation/panelNavigation.ts` (item "Salão 3D"); `features/operacao/MesasPage.tsx` (+5 linhas: abre já com a mesa de `?mesa=<id>`, usado pelo "Fechar conta" do salão); `shared/design/no-loose-colors.test.ts` (teto 8 para `features/salao/scene/palette.ts`, paleta dos materiais 3D).
+- **API nova para você usar na tela de Mesas, se quiser:** `GET /api/tables` agora traz `status` (INACTIVE/ASK_BILL/CALL_WAITER/WAITING/OCCUPIED/FREE, rótulos em `TABLE_STATUS_LABEL` do shared-types), `openedAt`, `layout`, `callWaiterAt`, `askBillAt`; "chamou garçom"/"pediu a conta" ficam guardados até `POST /api/tables/:id/alerts/clear` ou o recebimento; evento de tempo real novo `table.updated`.
+
 ## 4. Mudanças do backend desde a última sincronização (para saber o que a API já oferece)
 - **Tíquete v4** (`printableOrderSchema`): `round`, `requestedBy`, `customerRemoved` — impressos pelo print-client; nada a fazer no web.
 - **Catálogo de erros** (§2) e `docs/textos-de-erro-para-revisar.md`.

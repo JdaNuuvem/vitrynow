@@ -188,6 +188,36 @@ model Store {
   platformSuspendedReason String?
   aiCreditLedger AiCreditLedger[]
   dish3dJobs     Dish3dJob[]
+  floorElements  FloorElement[]
+}
+
+enum TableShape {
+  SQUARE
+  ROUND
+  RECT
+}
+
+enum FloorElementKind {
+  WALL
+  COUNTER
+  PLANT
+  DOOR
+}
+
+// SALÃO 3D: elementos fixos do salão (parede, balcão, planta, porta). A disposição é dado da loja, nunca código.
+model FloorElement {
+  id       String           @id @default(cuid())
+  storeId  String
+  store    Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  kind     FloorElementKind
+  posX     Float
+  posZ     Float
+  width    Float            @default(1)
+  depth    Float            @default(0.15)
+  rotation Int              @default(0)
+  area     String?
+
+  @@index([storeId])
 }
 
 // API-22 (ADR-0002 nível 1): mesa física com QR próprio. `qrToken` é opaco (256 bits), nunca derivado de id/slug, e regenerável.
@@ -199,6 +229,16 @@ model Table {
   qrToken   String   @unique
   active    Boolean  @default(true)
   position  Int      @default(0)
+  // SALÃO 3D: planta (metros no plano do piso; rotação em graus), formato, lugares e setor.
+  posX      Float      @default(0)
+  posZ      Float      @default(0)
+  rotation  Int        @default(0)
+  shape     TableShape @default(SQUARE)
+  seats     Int        @default(4)
+  area      String?
+  // Avisos do QR guardados até a equipe marcar como atendido (ou a mesa ser recebida).
+  callWaiterAt DateTime?
+  askBillAt    DateTime?
   createdAt DateTime @default(now())
   orders    Order[]
   receipts  Receipt[]

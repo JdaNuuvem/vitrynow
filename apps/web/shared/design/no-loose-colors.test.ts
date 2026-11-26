@@ -12,6 +12,7 @@ const HEX_CEILING: Record<string, number> = {
   "features/loja/theme.ts": 10, // cor da loja e contraste (cálculo)
   "features/conta/aparencia/AppearanceEditor.tsx": 7, // opções de cor que o lojista escolhe (dado)
   "features/conta/campanha/CampaignPages.tsx": 1, // cor de demonstração
+  "features/salao/scene/palette.ts": 8, // materiais da maquete 3D (o WebGL precisa de cor concreta; status vem dos tokens)
   "features/loja/cardapio.css": 1, // color-mix(..., #24251e) do banner
 };
 
