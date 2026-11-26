@@ -12,6 +12,7 @@ export const JOB_LOCK_KEYS = {
   "message.outbox": 7008n,
   "tech.cleanup": 7009n,
   "print.queue_watch": 7010n,
+  "dish3d.poll": 7012n, // PRATO 3D
   "menu.revalidate": 7011n, // API-58 (lote 2): 7010 e do print.queue_watch (PC-24); o runner recusa lockKey repetido
 } as const;
 

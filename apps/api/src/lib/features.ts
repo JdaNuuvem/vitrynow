@@ -13,6 +13,7 @@ export const FEATURE_REGISTRY = {
   tab_service: { released: true, tier: "PRO" }, // comanda (conta da mesa) com pagamento dividido — API-42/43 (routes/tables.ts /receive)
   scheduled_orders: { released: true, tier: "PRO" }, // pedido agendado — API-40 (storefront scheduledFor + job schedule.release)
   whatsapp_auto: { released: false, tier: "PRO" }, // WhatsApp automático — API-41
+  dish_3d: { released: true, tier: "PRO" }, // PRATO 3D (routes/dish3d.ts); sem DISH3D_PROVIDER configurado a rota responde 503 DISH3D_UNAVAILABLE
   advanced_reports: { released: true, tier: "PRO" }, // relatórios avançados — API-45 (GET /api/reports/advanced)
 } as const satisfies Record<string, { released: boolean; tier: "BASICO" | "PRO" }>;
 

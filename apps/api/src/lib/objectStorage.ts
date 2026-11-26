@@ -17,7 +17,8 @@ export interface ObjectStorage {
 
 // Chaves aceitas: sempre sob o prefixo da loja e sem segmentos perigosos. Defesa em profundidade:
 // as chaves são geradas pelo servidor (uuid), nunca derivadas de nome enviado.
-const KEY_RE = /^stores\/[A-Za-z0-9_-]{1,64}\/[a-f0-9-]{36}-\d{2,5}\.webp$/;
+// Prato 3D: stores/<loja>/3d-<uuid>.glb
+const KEY_RE = /^stores\/[A-Za-z0-9_-]{1,64}\/(?:[a-f0-9-]{36}-\d{2,5}\.webp|3d-[a-f0-9-]{36}\.glb)$/;
 export function assertSafeKey(key: string): void {
   if (!KEY_RE.test(key)) throw new Error("chave de objeto inválida");
 }

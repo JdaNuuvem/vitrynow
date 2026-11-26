@@ -1,0 +1,7 @@
+.dish3d-viewer { display: block; width: 100%; aspect-ratio: 1 / 1; max-height: 70vh; border-radius: var(--ds-radius-md); background: var(--surface-soft); position: relative; }
+.dish3d-viewer--loading { display: grid; place-items: center; color: var(--ink-soft); font-size: var(--ds-text-sm); }
+.dish3d-viewer__fallback { color: var(--ink-soft); font-size: var(--ds-text-sm); }
+.dish3d-viewer__ar {
+  position: absolute; inset-block-end: var(--ds-space-3); inset-inline-end: var(--ds-space-3); min-height: 44px; padding: 0 var(--ds-space-4);
+  border: 0; border-radius: 999px; background: var(--color-primary); color: var(--on-primary); font: inherit; font-weight: 650; cursor: pointer;
+}
