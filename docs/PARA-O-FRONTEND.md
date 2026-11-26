@@ -148,6 +148,12 @@ Sugestão: botão "Importar planilha" no Catálogo → enviar arquivo → prévi
 - Gaveta **Reservas** (`/api/reservations`): nova reserva, Chegou (põe as pessoas na mesa), Não veio, Cancelar; a mesa aparece **Reservada** (amarelo) de 30 min antes a 15 min depois do horário; horário sobreposto na mesma mesa = 409.
 - Para a sua tela de Pedidos: `createManualOrderSchema.type` agora aceita `MESA` (com `tableId`). Nada mudou para DELIVERY/BALCAO.
 
+## 3f. Reels — cardápio estilo Reels (26/11/2026, autorizado)
+- **Novo no painel:** `/dashboard/reels` (`features/reels/`): um vídeo vertical ≤ 30 s por produto; enviar → preparando → conferir → **Publicar no cardápio** / Tirar / Remover. Limites: 10 vídeos e 300 MB por loja, upload ≤ 50 MB. Item "Reels" no menu (`panelNavigation.ts`).
+- **Novo no cardápio:** `features/loja/reels/` — faixa "Veja em vídeo" (capas estilo stories) e o feed vertical em tela cheia (um vídeo toca por vez, mudo até tocar no som, botão **Pedir** abre o produto no MESMO cardápio: o carrinho não se perde). `?reels=1` no link da loja abre direto nos vídeos.
+- **Tocado no existente:** `features/loja/LojaPage.tsx` (+13 linhas: hook `useReels`, a faixa abaixo do `MenuBanner` e o visualizador por cima); proxy de DEV `app/media/stores/[storeId]/reels/[file]` (repassa Range).
+- **API:** `GET /stores/:slug/reels` (público, lista vazia se a loja não tem o recurso); `POST /api/reels/:id/publish|unpublish|remove` (só o dono). Liga com `REELS_ENABLED=true` + recurso `reels` (PRO).
+
 ## 4. Mudanças do backend desde a última sincronização (para saber o que a API já oferece)
 - **Tíquete v4** (`printableOrderSchema`): `round`, `requestedBy`, `customerRemoved` — impressos pelo print-client; nada a fazer no web.
 - **Catálogo de erros** (§2) e `docs/textos-de-erro-para-revisar.md`.

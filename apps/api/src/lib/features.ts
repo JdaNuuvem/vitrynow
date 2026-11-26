@@ -15,6 +15,7 @@ export const FEATURE_REGISTRY = {
   whatsapp_auto: { released: false, tier: "PRO" }, // WhatsApp automático — API-41
   dish_3d: { released: true, tier: "PRO" }, // PRATO 3D (routes/dish3d.ts); sem DISH3D_PROVIDER configurado a rota responde 503 DISH3D_UNAVAILABLE
   floor_3d: { released: true, tier: "PRO" }, // SALÃO 3D: mapa e planta (GET/PUT /api/floor em routes/tables.ts)
+  reels: { released: true, tier: "PRO" }, // Reels de até 30 s (ADR-0021); além do plano, a chave geral REELS_ENABLED (desligada por padrão)
   advanced_reports: { released: true, tier: "PRO" }, // relatórios avançados — API-45 (GET /api/reports/advanced)
 } as const satisfies Record<string, { released: boolean; tier: "BASICO" | "PRO" }>;
 

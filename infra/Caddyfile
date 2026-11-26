@@ -98,6 +98,16 @@
 			root * /srv/uploads
 			file_server
 		}
+		# Reels (ADR-0021): stores/<loja>/reels/<uuid>.mp4 e <uuid>-poster.webp. O file_server atende Range (o vídeo começa sem baixar tudo).
+		@reel path_regexp reel ^/media/(stores/[A-Za-z0-9_-]{1,64}/reels/[a-f0-9-]{36}(\.mp4|-poster\.webp))$
+		handle @reel {
+			rewrite * /{re.reel.1}
+			header Cache-Control "public, max-age=31536000, immutable"
+			header X-Content-Type-Options "nosniff"
+			header Content-Security-Policy "default-src 'none'; sandbox"
+			root * /srv/uploads
+			file_server
+		}
 		# Prato 3D: stores/<loja>/3d-<uuid>.glb (nome aleatório e imutável, como a foto).
 		@modelo path_regexp modelo ^/media/(stores/[A-Za-z0-9_-]{1,64}/3d-[a-f0-9-]{36}\.glb)$
 		handle @modelo {

@@ -11,6 +11,7 @@ import { paymentReconcileJob } from "./paymentReconcile";
 import { scheduleReleaseJob } from "./scheduleRelease";
 import { subscriptionTransitionJob } from "./subscriptionTransition";
 import { dish3dPollJob } from "./dish3dPoll";
+import { reelsConvertJob } from "./reelsConvert";
 import type { Job } from "./types";
 
 /**
@@ -18,7 +19,7 @@ import type { Job } from "./types";
  * chave em `lockKeys.ts`; o teste de contrato (tests/jobs/registry.test.ts) confere nome, lock
  * único, intervalo e limite.
  */
-export const registeredJobs: Job[] = [techCleanupJob, queueWatchJob, paymentExpireJob, paymentReconcileJob, refundRetryJob, mpTokenRefreshJob, menuRevalidateJob, subscriptionNoticesJob, scheduleReleaseJob, subscriptionTransitionJob, dish3dPollJob];
+export const registeredJobs: Job[] = [techCleanupJob, queueWatchJob, paymentExpireJob, paymentReconcileJob, refundRetryJob, mpTokenRefreshJob, menuRevalidateJob, subscriptionNoticesJob, scheduleReleaseJob, subscriptionTransitionJob, dish3dPollJob, reelsConvertJob];
 
 export function createJobRunner(options: JobRunnerOptions & { db: PrismaClient }, jobs: Job[] = registeredJobs): JobRunner {
   const runner = new JobRunner(options);

@@ -38,7 +38,7 @@ describe("SEC-18 - respostas das rotas publicas so com campos permitidos", { tim
     expect(res.statusCode).toBe(200);
     const body = json(res);
     expect(keys(body)).toEqual(["categories", "store"]);
-    expect(keys(body.store)).toEqual(sorted([...PUBLIC_STORE_KEYS, "payment", "accepting", "hours", "campaign", "scheduling", ...PUBLIC_STORE_HOURS_KEYS, ...PUBLIC_STORE_BUSY_KEYS])); // `payment.pixAvailable` vem do plugin do PIX; `accepting` (loja recebe pedido AGORA) vem do portao de assinatura (API-09)
+    expect(keys(body.store)).toEqual(sorted([...PUBLIC_STORE_KEYS, "payment", "accepting", "hours", "campaign", "scheduling", "hasReels", ...PUBLIC_STORE_HOURS_KEYS, ...PUBLIC_STORE_BUSY_KEYS])); // `payment.pixAvailable` vem do plugin do PIX; `accepting` (loja recebe pedido AGORA) vem do portao de assinatura (API-09)
     expect(keys(body.categories[0])).toEqual(sorted(PUBLIC_CATEGORY_KEYS));
     expect(keys(body.categories[0].products[0])).toEqual(sorted(PUBLIC_PRODUCT_KEYS));
     expect(keys(body.categories[0].products[0].additionals[0])).toEqual(sorted(PUBLIC_ADDITIONAL_KEYS));

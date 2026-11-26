@@ -14,6 +14,7 @@ export const JOB_LOCK_KEYS = {
   "print.queue_watch": 7010n,
   "dish3d.poll": 7012n, // PRATO 3D
   "menu.revalidate": 7011n, // API-58 (lote 2): 7010 e do print.queue_watch (PC-24); o runner recusa lockKey repetido
+  "reels.convert": 7013n, // ADR-0021: fila de mídia dos Reels
 } as const;
 
 export type JobName = keyof typeof JOB_LOCK_KEYS;

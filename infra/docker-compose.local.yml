@@ -64,6 +64,8 @@ services:
       STORAGE_PUBLIC_BASE_URL: /media
       # Prato 3D local: fake (sem custo) por padrão; para o Rodin real, VITRY_LOCAL_DISH3D=fal e VITRY_LOCAL_FAL_KEY no infra/.env.vitry.local
       DISH3D_PROVIDER: ${VITRY_LOCAL_DISH3D:-fake}
+      # Reels local: ligado (precisa do ffmpeg, que vai na imagem da API)
+      REELS_ENABLED: "true"
       FAL_KEY: ${VITRY_LOCAL_FAL_KEY:-}
     depends_on:
       init:
