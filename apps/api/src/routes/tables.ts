@@ -5,8 +5,8 @@ import { quoteOrder } from "../lib/quoteOrder";
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { Prisma, prisma } from "@meucardapio/db";
-import { createTableOrderSchema, createTableSchema, panelRoleSchema, qrSettingsSchema, receiveTableSchema, updateTableSchema } from "@meucardapio/shared-types";
-import { getRequestEntitlements } from "../lib/subscription";
+import { createTableOrderSchema, createTableSchema, panelRoleSchema, qrSettingsSchema, receiveTableSchema, floorLayoutSchema, tableAlertClearSchema, tableStatusOf, updateTableSchema } from "@meucardapio/shared-types";
+import { getRequestEntitlements, requireFeature } from "../lib/subscription";
 import { logAudit } from "../lib/audit";
 import { buildMenuView } from "../lib/menuView";
 import { clientKey } from "../lib/clientKey";
@@ -59,13 +59,18 @@ const RECEIVES_PER_MINUTE = 60;
 // Conta da mesa (RN-MB-02, virtual): pedidos ACEITOS (CONFIRMADO em diante), não cancelados, ainda não recebidos.
 const accountWhere = (storeId: string, tableId: string) => ({ storeId, tableId, receiptId: null, paidAt: null, awaitingPayment: false, status: { in: [...SALE_STATUSES] } });
 
-const tableView = (t: { id: string; label: string; qrToken: string; active: boolean; position: number }, slug: string) => ({
+type TableRow = { id: string; label: string; qrToken: string; active: boolean; position: number; posX: number; posZ: number; rotation: number; shape: string; seats: number; area: string | null; callWaiterAt: Date | null; askBillAt: Date | null };
+const tableView = (t: TableRow, slug: string) => ({
   id: t.id,
   label: t.label,
   active: t.active,
   position: t.position,
   qrToken: t.qrToken,
   qrPath: `/loja/${slug}/m/${t.qrToken}`,
+  // SALÃO 3D: planta e avisos guardados
+  layout: { posX: t.posX, posZ: t.posZ, rotation: t.rotation, shape: t.shape, seats: t.seats, area: t.area },
+  callWaiterAt: t.callWaiterAt?.toISOString() ?? null,
+  askBillAt: t.askBillAt?.toISOString() ?? null,
 });
 
 const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
@@ -78,17 +83,20 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { slug: true, qrOrderingEnabled: true, qrOrdersNeedApproval: true, serviceFeePercent: true } }),
       prisma.table.findMany({ where: { storeId }, orderBy: [{ position: "asc" }, { label: "asc" }] }),
       prisma.order.groupBy({ by: ["tableId"], where: { storeId, tableId: { not: null }, receiptId: null, status: "PENDENTE" }, _count: { _all: true } }),
-      prisma.order.groupBy({ by: ["tableId"], where: { storeId, tableId: { not: null }, receiptId: null, paidAt: null, awaitingPayment: false, status: { in: [...SALE_STATUSES] } }, _count: { _all: true }, _sum: { totalCents: true } }),
+      prisma.order.groupBy({ by: ["tableId"], where: { storeId, tableId: { not: null }, receiptId: null, paidAt: null, awaitingPayment: false, status: { in: [...SALE_STATUSES] } }, _count: { _all: true }, _sum: { totalCents: true }, _min: { createdAt: true } }),
     ]);
     const pendingBy = new Map(pending.map((p) => [p.tableId, p._count._all]));
-    const accountBy = new Map(account.map((a) => [a.tableId, { count: a._count._all, totalCents: a._sum.totalCents ?? 0 }]));
+    const accountBy = new Map(account.map((a) => [a.tableId, { count: a._count._all, totalCents: a._sum.totalCents ?? 0, openedAt: a._min.createdAt }]));
     return {
       settings: { qrOrderingEnabled: store.qrOrderingEnabled, qrOrdersNeedApproval: store.qrOrdersNeedApproval, serviceFeePercent: store.serviceFeePercent },
       tables: tables.map((t) => {
         const acc = accountBy.get(t.id);
         const pendingOrders = pendingBy.get(t.id) ?? 0;
         // RN-MB-02: livre = sem pedido aceito a receber e sem pedido PENDENTE.
-        return { ...tableView(t, store.slug), pendingOrders, accountOrders: acc?.count ?? 0, accountCents: acc?.totalCents ?? 0, free: pendingOrders === 0 && !acc };
+        const accountOrders = acc?.count ?? 0;
+        // SALÃO 3D: status calculado AQUI (fonte única, shared-types) e "aberta desde" = 1º pedido da conta
+        const status = tableStatusOf({ active: t.active, pendingOrders, accountOrders, callWaiterAt: t.callWaiterAt, askBillAt: t.askBillAt });
+        return { ...tableView(t, store.slug), pendingOrders, accountOrders, accountCents: acc?.totalCents ?? 0, free: pendingOrders === 0 && !acc, status, openedAt: acc?.openedAt?.toISOString() ?? null };
       }),
     };
   });
@@ -99,7 +107,9 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     if (!parsed.success) return reply.code(400).send({ error: "Corpo inválido.", code: "VALIDATION_ERROR", fields: parsed.error.flatten().fieldErrors });
     const store = await prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { slug: true } });
     try {
-      const table = await prisma.table.create({ data: { storeId, label: parsed.data.label, position: parsed.data.position ?? 0, qrToken: newQrToken() } });
+      // SALÃO 3D: mesa nova entra na próxima vaga da grade (6 por fileira, 2,5 m); o dono arruma no modo edição.
+      const n = await prisma.table.count({ where: { storeId } });
+      const table = await prisma.table.create({ data: { storeId, label: parsed.data.label, position: parsed.data.position ?? 0, qrToken: newQrToken(), posX: (n % 6) * 2.5, posZ: Math.floor(n / 6) * 2.5 } });
       logAudit({ storeId, userId, action: "table.create", targetType: "Table", targetId: table.id, metadata: { label: table.label } });
       return reply.code(201).send({ table: tableView(table, store.slug) });
     } catch (error) {
@@ -120,6 +130,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       if (result.count === 0) return notFound(reply);
       const table = await prisma.table.findFirstOrThrow({ where: { id, storeId } });
       logAudit({ storeId, userId, action: "table.update", targetType: "Table", targetId: id, metadata: parsed.data });
+      publishToStore(storeId, { type: "table.updated", tableId: id });
       return { table: tableView(table, store.slug) };
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") throw new CodedError(409, "TABLE_LABEL_TAKEN", "Já existe uma mesa com esse nome.");
@@ -274,6 +285,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       });
       const marked = await tx.order.updateMany({ where: { id: { in: orders.map((o) => o.id) }, storeId, receiptId: null }, data: { receiptId: created.id, paidAt: receivedAt } });
       if (marked.count !== orders.length) throw new CodedError(409, "ORDER_STATE_CHANGED", "A conta da mesa mudou enquanto você agia. Atualize a tela.");
+      await tx.table.updateMany({ where: { id, storeId }, data: { callWaiterAt: null, askBillAt: null } }); // mesa recebida: avisos encerrados
       return { ...created, orderIds: orders.map((o) => o.id) };
     }, ORDER_TX_OPTIONS);
 
@@ -282,6 +294,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       metadata: { tableId: id, method, methods: parts.map((p) => p.method), subtotalCents: receipt.subtotalCents, serviceFeeCents: receipt.serviceFeeCents, discountCents: receipt.discountCents, totalCents: receipt.totalCents, orders: receipt.orderIds.length },
     });
     for (const orderId of receipt.orderIds) publishToStore(storeId, { type: "order.updated", orderId });
+    publishToStore(storeId, { type: "table.updated", tableId: id });
     const single = parts.length === 1 ? parts[0] : null;
     return reply.code(201).send({
       receipt: {
@@ -298,6 +311,46 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
         orderIds: receipt.orderIds,
       },
     });
+  });
+
+  // ---------- SALÃO 3D ----------
+  // Aviso do QR atendido (qualquer pessoa da equipe): some do mapa e da lista.
+  app.post("/api/tables/:id/alerts/clear", { preHandler: app.requirePanelAuth }, async (request, reply) => {
+    const { storeId, userId } = request.user;
+    const { id } = request.params as { id: string };
+    const parsed = tableAlertClearSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Corpo inválido.", code: "VALIDATION_ERROR", fields: parsed.error.flatten().fieldErrors });
+    const { kind } = parsed.data;
+    const data = kind === "ALL" ? { callWaiterAt: null, askBillAt: null } : kind === "ASK_BILL" ? { askBillAt: null } : { callWaiterAt: null };
+    const result = await prisma.table.updateMany({ where: { id, storeId }, data });
+    if (result.count === 0) return notFound(reply);
+    logAudit({ storeId, userId, action: "table.alert_clear", targetType: "Table", targetId: id, metadata: { kind } });
+    publishToStore(storeId, { type: "table.updated", tableId: id });
+    return { ok: true };
+  });
+
+  // Planta: elementos fixos do salão (as mesas e seus status vêm de GET /api/tables).
+  app.get("/api/floor", { preHandler: [app.requirePanelAuth, requireFeature("floor_3d")] }, async (request) => {
+    const elements = await prisma.floorElement.findMany({ where: { storeId: request.user.storeId }, orderBy: { id: "asc" } });
+    return { elements: elements.map(({ storeId: _s, ...e }) => e) };
+  });
+
+  // Salvar a planta (modo edição, só o dono): posição/formato/lugares/setor das mesas e a lista COMPLETA de elementos, numa transação.
+  app.put("/api/floor", { preHandler: [app.requirePanelAuth, app.requireOwner, requireFeature("floor_3d")] }, async (request, reply) => {
+    const { storeId, userId } = request.user;
+    const parsed = floorLayoutSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Corpo inválido.", code: "VALIDATION_ERROR", fields: parsed.error.flatten().fieldErrors });
+    const { tables, elements } = parsed.data;
+    const owned = await prisma.table.count({ where: { storeId, id: { in: tables.map((t) => t.id) } } });
+    if (owned !== tables.length) return notFound(reply);
+    await prisma.$transaction(async (tx) => {
+      for (const { id, ...layout } of tables) await tx.table.updateMany({ where: { id, storeId }, data: layout });
+      await tx.floorElement.deleteMany({ where: { storeId } });
+      if (elements.length) await tx.floorElement.createMany({ data: elements.map((e) => ({ ...e, storeId })) });
+    });
+    logAudit({ storeId, userId, action: "floor.save", targetType: "Store", targetId: storeId, metadata: { tables: tables.length, elements: elements.length } });
+    publishToStore(storeId, { type: "table.updated", tableId: "*" });
+    return { ok: true };
   });
 
   // ---------- Público (QR) ----------
@@ -428,6 +481,8 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const found = await resolveTable(slug, qrToken);
       if (!found) return notFound(reply);
       if (limited(`qr-alert:${found.table.id}:${kind}`, 1)) return reply.code(200).send({ notified: false, throttled: true });
+      // SALÃO 3D: o aviso fica guardado até a equipe marcar como atendido (só grava a 1ª vez: mantém a hora original)
+      await prisma.table.updateMany({ where: { id: found.table.id, ...(kind === "ASK_BILL" ? { askBillAt: null } : { callWaiterAt: null }) }, data: kind === "ASK_BILL" ? { askBillAt: new Date() } : { callWaiterAt: new Date() } });
       publishToStore(found.store.id, { type: "table.alert", tableId: found.table.id, kind });
       return reply.code(200).send({ notified: true });
     });

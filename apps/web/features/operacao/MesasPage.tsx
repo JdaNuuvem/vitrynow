@@ -78,6 +78,11 @@ export function MesasPage() {
     void reload();
     return () => { listRequest.current += 1; };
   }, [reload]);
+  // Salão 3D: "Fechar conta" abre esta tela já com a mesa escolhida (?mesa=<id>).
+  useEffect(() => {
+    const fromUrl = new URLSearchParams(window.location.search).get("mesa");
+    if (fromUrl) setTableId(fromUrl);
+  }, []);
   useEffect(() => {
     void loadAccount();
     return () => { accountRequest.current += 1; };

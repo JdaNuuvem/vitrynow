@@ -14,6 +14,7 @@ export const PANEL_ROUTES: readonly PanelRoute[] = [
   { id: "inicio", label: "Início", tooltip: "Início", href: "/dashboard", icon: "home", exact: true, keywords: ["resumo", "home", "faturamento", "painel"] },
   { id: "pedidos", label: "Pedidos", tooltip: "Pedidos", href: "/dashboard/pedidos", icon: "orders", keywords: ["kanban", "vendas", "pedido", "cozinha"] },
   { id: "mesas", label: "Mesas e QR", tooltip: "Gerenciar mesas e códigos QR", href: "/dashboard/mesas", icon: "mesa", keywords: ["salão", "qr code", "atendimento à mesa"] },
+  { id: "salao", label: "Salão 3D", tooltip: "Mapa 3D das mesas com status em tempo real", href: "/dashboard/salao", icon: "mesa", keywords: ["mapa", "mesas", "3d", "planta", "garçom", "conta"] },
   { id: "catalogo", label: "Produtos", tooltip: "Produtos", href: "/dashboard/catalogo", icon: "products", keywords: ["cardápio", "categoria", "preço", "item", "adicionais"] },
   { id: "pratos-3d", label: "Pratos 3D", tooltip: "Modelo 3D do prato a partir de fotos", href: "/dashboard/pratos-3d", icon: "image", keywords: ["3d", "realidade aumentada", "ar", "foto", "modelo", "girar prato"] },
   { id: "estoque", label: "Estoque", tooltip: "Insumos, fichas técnicas, compras e perdas", href: "/dashboard/estoque", icon: "stock", keywords: ["insumo", "ficha técnica", "compra", "perda", "desperdício", "estragado", "contagem", "carne"] },
