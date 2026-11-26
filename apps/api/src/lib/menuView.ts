@@ -7,6 +7,7 @@ import { PrismaOptionGroupsRepository } from "../modules/optionGroups/optionGrou
 import { publicCampaign } from "../modules/campaign/campaign.service";
 import { publicCategory, publicStore } from "./publicDto";
 import { getEntitlements } from "./subscription";
+import { reelsEnabled } from "./reelConfig";
 
 // Cardapio publico da loja (mesmo formato no link da loja e no QR da mesa). So produto ATIVO e DESTA loja (SEC-11).
 // Lote 2: junta API-22 (builder unico para o link e o QR), API-17 (`soldOut` EFETIVO agora; com "esconder esgotados" o produto
@@ -38,8 +39,10 @@ export async function buildMenuView(store: Store) {
   }));
   // API-40: `scheduling` diz só se a loja ACEITA pedido agendado (a vitrine mostra o seletor); nunca cita plano (RN-A-02).
   const { features } = await getEntitlements(store.id, now);
+  // REELS: só diz SE há vídeo publicado (a vitrine busca a lista à parte, e só quando há). Sem chave geral ou sem plano = false.
+  const hasReels = reelsEnabled() && features.includes("reels") && (await prisma.reel.count({ where: { storeId: store.id, status: "PUBLISHED", takedownAt: null } })) > 0;
   return {
-    store: { ...publicStore(store), campaign: await publicCampaign(store.id), scheduling: features.includes("scheduled_orders") },
+    store: { ...publicStore(store), campaign: await publicCampaign(store.id), scheduling: features.includes("scheduled_orders"), hasReels },
     categories: visibleCategories.map(publicCategory),
   };
 }

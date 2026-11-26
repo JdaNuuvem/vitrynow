@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 // API-18 / ADR-0010: interface de armazenamento de objetos. O domínio só conhece isto; o provedor
 // (MinIO no dev, Cloudflare R2/Backblaze no futuro, ainda NÃO contratado) fica atrás de S3ObjectStorage.
@@ -11,16 +11,27 @@ export type PutOptions = { contentType: string; cacheControl: string };
 export interface ObjectStorage {
   put(key: string, body: Buffer, options: PutOptions): Promise<void>;
   delete(key: string): Promise<void>;
+  /** Lê um objeto inteiro (o worker lê o original da quarentena). Chave inexistente lança. */
+  get(key: string): Promise<Buffer>;
   /** URL pública de leitura de uma chave (só chaves do prefixo público). */
   publicUrl(key: string): string;
 }
 
 // Chaves aceitas: sempre sob o prefixo da loja e sem segmentos perigosos. Defesa em profundidade:
 // as chaves são geradas pelo servidor (uuid), nunca derivadas de nome enviado.
+// Imagens: stores/<loja>/<uuid>-<largura>.webp. Reels (ADR-0021): stores/<loja>/reels/<uuid>.mp4 e <uuid>-poster.webp (o padrão fechado do Caddy
+// só serve estes). Quarentena do original: quarantine/reels/<loja>/<uuid>.upload, FORA de stores/ e nunca servida pelo proxy.
 // Prato 3D: stores/<loja>/3d-<uuid>.glb
 const KEY_RE = /^stores\/[A-Za-z0-9_-]{1,64}\/(?:[a-f0-9-]{36}-\d{2,5}\.webp|3d-[a-f0-9-]{36}\.glb)$/;
+const REEL_KEY_RE = /^stores\/[A-Za-z0-9_-]{1,64}\/reels\/[a-f0-9-]{36}(\.mp4|-poster\.webp)$/;
+const QUARANTINE_KEY_RE = /^quarantine\/reels\/[A-Za-z0-9_-]{1,64}\/[a-f0-9-]{36}\.upload$/;
 export function assertSafeKey(key: string): void {
-  if (!KEY_RE.test(key)) throw new Error("chave de objeto inválida");
+  if (!KEY_RE.test(key) && !REEL_KEY_RE.test(key) && !QUARANTINE_KEY_RE.test(key)) throw new Error("chave de objeto inválida");
+}
+
+/** Chave PRIVADA do original enviado (quarentena). */
+export function quarantineKey(storeId: string, uuid: string): string {
+  return `quarantine/reels/${storeId}/${uuid}.upload`;
 }
 
 export function storeKeyPrefix(storeId: string): string {
@@ -46,6 +57,13 @@ export class InMemoryObjectStorage implements ObjectStorage {
   async delete(key: string): Promise<void> {
     assertSafeKey(key);
     this.objects.delete(key);
+  }
+
+  async get(key: string): Promise<Buffer> {
+    assertSafeKey(key);
+    const found = this.objects.get(key);
+    if (!found) throw new Error("objeto não encontrado");
+    return found.body;
   }
 
   publicUrl(key: string): string {
@@ -110,6 +128,12 @@ export class LocalDiskStorage implements ObjectStorage {
     await rm(file, { force: true }); // já não existir não é erro
   }
 
+  async get(key: string): Promise<Buffer> {
+    const file = this.fileOf(key);
+    await this.assertInsideRoot(path.dirname(file));
+    return readFile(file);
+  }
+
   publicUrl(key: string): string {
     assertSafeKey(key);
     return `${this.publicBaseUrl.replace(/\/+$/, "")}/${key}`;
@@ -148,6 +172,13 @@ export class S3ObjectStorage implements ObjectStorage {
   async delete(key: string): Promise<void> {
     assertSafeKey(key);
     await this.client.send(new DeleteObjectCommand({ Bucket: this.config.bucket, Key: key }));
+  }
+
+  async get(key: string): Promise<Buffer> {
+    assertSafeKey(key);
+    const out = await this.client.send(new GetObjectCommand({ Bucket: this.config.bucket, Key: key }));
+    if (!out.Body) throw new Error("objeto vazio");
+    return Buffer.from(await out.Body.transformToByteArray());
   }
 
   publicUrl(key: string): string {
