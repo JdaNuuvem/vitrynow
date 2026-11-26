@@ -22,6 +22,9 @@ type Tab = "insumos" | "fichas" | "movimentos";
 const TABS = [{ id: "insumos", label: "Insumos" }, { id: "fichas", label: "Fichas técnicas" }, { id: "movimentos", label: "Movimentações" }] as const;
 const REASON_LABEL: Record<string, string> = { ...WASTE_REASONS, ...SPOILAGE_REASONS, ...SYSTEM_WASTE_REASONS, CONTAGEM_SOBRA: "Sobra na contagem", CONTAGEM_FALTA: "Falta na contagem" };
 
+// "2026-11-28" -> "28/11" (data de calendário, sem fuso).
+const shortDate = (isoDate: string) => `${isoDate.slice(8, 10)}/${isoDate.slice(5, 7)}`;
+
 type RecipeTarget = { kind: "product" | "option"; id: string; title: string; subtitle?: string; priceCents?: number };
 
 export function EstoquePage() {
@@ -45,6 +48,10 @@ export function EstoquePage() {
       </>} />
     {error && <StateMessage title="Estoque indisponível" tone="danger" action={<Button onClick={() => void reload()}>Tentar novamente</Button>}>{error}</StateMessage>}
     {!data && !error && <StateMessage title="Carregando estoque" busy />}
+    {data && ((data.alerts.expired ?? 0) > 0 || (data.alerts.expiringSoon ?? 0) > 0) && <StateMessage tone={(data.alerts.expired ?? 0) > 0 ? "danger" : "warning"} title="Validade">
+      {(data.alerts.expired ?? 0) > 0 && <>{data.alerts.expired} insumo(s) com lote VENCIDO: separe e lance a perda como "Venceu". </>}
+      {(data.alerts.expiringSoon ?? 0) > 0 && <>{data.alerts.expiringSoon} insumo(s) vencem nos próximos dias: use primeiro.</>}
+    </StateMessage>}
     {data && (data.alerts.negative > 0 || data.alerts.lowStock > 0) && <StateMessage tone={data.alerts.negative > 0 ? "danger" : "warning"} title="Atenção ao estoque">
       {data.alerts.negative > 0 && <>{data.alerts.negative} insumo(s) com saldo NEGATIVO: confira a contagem ou registre a compra. </>}
       {data.alerts.lowStock > 0 && <>{data.alerts.lowStock} insumo(s) abaixo do mínimo.</>}
@@ -53,7 +60,7 @@ export function EstoquePage() {
       {tab === "insumos" && <IngredientsTab ingredients={ingredients} owner={owner} stockValueCents={data.stockValueCents}
         onEdit={setEditing} onMove={(kind, ingredient) => setMoving({ kind, ingredient })} />}
       {tab === "fichas" && <RecipesTab owner={owner} onOpen={setRecipe} />}
-      {tab === "movimentos" && <MovementsTab ingredients={ingredients} owner={owner} />}
+      {tab === "movimentos" && <MovementsTab ingredients={ingredients} owner={owner} onChanged={reload} />}
     </Tabs>}
 
     {editing && <IngredientForm initial={editing === "new" ? undefined : editing} onClose={() => setEditing(null)}
@@ -90,6 +97,7 @@ function IngredientsTab({ ingredients, owner, stockValueCents, onEdit, onMove }:
         <td>
           {formatQty(i.stockQty, i.unit)}{" "}
           {i.negative ? <StatusBadge tone="danger">Negativo</StatusBadge> : i.lowStock ? <StatusBadge tone="warning">Abaixo do mínimo</StatusBadge> : null}
+          {i.expiry === "EXPIRED" ? <> <StatusBadge tone="danger">Vencido</StatusBadge></> : i.expiry === "SOON" && i.nextExpiresOn ? <> <StatusBadge tone="warning">Vence {shortDate(i.nextExpiresOn)}</StatusBadge></> : null}
         </td>
         <td>{i.minStockQty !== null ? formatQty(i.minStockQty, i.unit) : "—"}</td>
         {owner && <td>{i.unitCostMillicents ? unitCostLabel(i.unitCostMillicents, i.unit) : "—"}</td>}
@@ -160,7 +168,7 @@ function RecipesTab({ owner, onOpen }: { owner: boolean; onOpen: (target: Recipe
   </>;
 }
 
-function MovementsTab({ ingredients, owner }: { ingredients: Ingredient[]; owner: boolean }) {
+function MovementsTab({ ingredients, owner, onChanged }: { ingredients: Ingredient[]; owner: boolean; onChanged: () => unknown }) {
   const { stock } = usePanelServices();
   const { money } = useMoney();
   const [ingredientId, setIngredientId] = useState("");
@@ -168,6 +176,8 @@ function MovementsTab({ ingredients, owner }: { ingredients: Ingredient[]; owner
   const [rows, setRows] = useState<StockMovement[] | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [undoing, setUndoing] = useState<string | null>(null);
+  const [undoError, setUndoError] = useState<string | null>(null);
 
   const load = useCallback(async (after?: string) => {
     setError(null);
@@ -178,26 +188,42 @@ function MovementsTab({ ingredients, owner }: { ingredients: Ingredient[]; owner
   }, [stock, ingredientId, type]);
   useEffect(() => { void load(); }, [load]);
 
+  async function undo(m: StockMovement) {
+    if (undoing) return;
+    setUndoing(m.id);
+    setUndoError(null);
+    const result = await stock.undoMovement(m.id);
+    setUndoing(null);
+    if (!result.ok) return setUndoError(result.error);
+    await load();
+    await onChanged();
+  }
+  const losses = type === "LOSS";
+
   return <Panel title="Movimentações">
     <div className="estoque__filters">
       <label>Insumo<select value={ingredientId} onChange={(event) => setIngredientId(event.target.value)}>
         <option value="">Todos</option>{ingredients.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
       </select></label>
       <label>Tipo<select value={type} onChange={(event) => setType(event.target.value)}>
-        <option value="">Todos</option>{Object.entries(MOVEMENT_LABEL).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+        <option value="">Todos</option><option value="LOSS">Só perdas (desperdício e estragado)</option>{Object.entries(MOVEMENT_LABEL).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
       </select></label>
     </div>
     {error && <StateMessage tone="danger" title="Movimentações indisponíveis">{error}</StateMessage>}
     {!rows && !error && <StateMessage title="Carregando" busy />}
     {rows && rows.length === 0 && <StateMessage title="Nenhuma movimentação" />}
-    {rows && rows.length > 0 && <DataTable label="Movimentações" headers={owner ? ["Quando", "Insumo", "Tipo", "Motivo", "Quantidade", "Custo"] : ["Quando", "Insumo", "Tipo", "Motivo", "Quantidade"]}>
+    {undoError && <StateMessage tone="danger" title="Não foi possível desfazer">{undoError}</StateMessage>}
+    {losses && <p className="estoque__hint">Lançou errado? “Desfazer” devolve o saldo (perda de prato desfaz o prato todo). A equipe desfaz só a própria perda, até 30 minutos depois.</p>}
+    {rows && rows.length > 0 && <DataTable label="Movimentações" headers={[ "Quando", "Insumo", "Tipo", "Motivo", "Quantidade", ...(owner ? ["Custo"] : []), "Quem", ""]}>
       {rows.map((m) => <tr key={m.id}>
         <td>{formatInStoreTimezone(m.createdAt, activeStoreTimezone(), { dateStyle: "short", timeStyle: "short" })}</td>
         <td>{m.ingredient.name}</td>
         <td>{MOVEMENT_LABEL[m.type]}</td>
-        <td>{m.reason ? REASON_LABEL[m.reason] ?? m.reason : "—"}</td>
+        <td>{m.reversalOfId ? "Desfeito: " : ""}{m.reason ? REASON_LABEL[m.reason] ?? m.reason : "—"}{m.note && <span className="estoque__muted"> · {m.note}</span>}{m.expiresOn && <span className="estoque__muted"> · validade {shortDate(m.expiresOn)}</span>}</td>
         <td className={m.quantity < 0 ? "estoque__negative" : "estoque__positive"}>{m.quantity > 0 ? "+" : ""}{formatQty(m.quantity, m.ingredient.unit)}</td>
         {owner && <td>{money(m.costCents ?? 0)}</td>}
+        <td className="estoque__muted">{m.userEmail ?? (m.orderId ? "Pedido" : "Sistema")}</td>
+        <td>{m.undone ? <StatusBadge>Desfeito</StatusBadge> : m.canUndo ? <Button variant="quiet" busy={undoing === m.id} onClick={() => void undo(m)}>Desfazer</Button> : null}</td>
       </tr>)}
     </DataTable>}
     {cursor && <Button onClick={() => void load(cursor)}>Carregar mais</Button>}

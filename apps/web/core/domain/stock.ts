@@ -17,9 +17,12 @@ export type Ingredient = {
   negative: boolean;
   unitCostMillicents?: number;
   stockValueCents?: number;
+  // Validade estimada por PEPS (lote em uso). null = sem validade informada ou sem saldo.
+  nextExpiresOn?: string | null;
+  expiry?: "EXPIRED" | "SOON" | "OK" | null;
 };
 
-export type IngredientList = { ingredients: Ingredient[]; alerts: { lowStock: number; negative: number }; stockValueCents?: number };
+export type IngredientList = { ingredients: Ingredient[]; alerts: { lowStock: number; negative: number; expired?: number; expiringSoon?: number }; stockValueCents?: number };
 
 export type StockMovement = {
   id: string;
@@ -31,6 +34,13 @@ export type StockMovement = {
   ingredient: { id: string; name: string; unit: StockUnit };
   unitCostMillicents?: number;
   costCents?: number;
+  userEmail?: string | null;
+  note?: string | null;
+  groupId?: string | null;
+  reversalOfId?: string | null;
+  undone?: boolean;
+  canUndo?: boolean;
+  expiresOn?: string | null;
 };
 
 export type RecipeLine = { ingredientId: string; name: string; unit: StockUnit; quantity: number; costCents?: number };
@@ -48,6 +58,8 @@ export type ProfitReport = {
   grossProfitCents: number; grossMarginPercent: number | null;
   losses: { wasteCents: number; spoilageCents: number; adjustmentCents: number; totalCents: number; percentOfRevenue: number | null };
   resultAfterLossesCents: number;
+  lossAlert?: { thresholdPercent: number; exceeded: boolean };
+  lossesByUser?: { userId: string | null; email: string | null; count: number; costCents: number }[];
   purchasesCents: number;
   lossesByReason: { type: string; reason: string; count: number; costCents: number }[];
   topWastedIngredients: { id: string; name: string; unit: StockUnit; quantity: number; costCents: number }[];
@@ -61,6 +73,7 @@ export const SYSTEM_WASTE_REASONS = { PEDIDO_CANCELADO: "Pedido cancelado já pr
 export const MOVEMENT_LABEL: Record<StockMovementType, string> = {
   PURCHASE: "Compra", SALE: "Venda", SALE_REVERSAL: "Estorno de venda", WASTE: "Desperdício", SPOILAGE: "Estragado/vencido", ADJUSTMENT: "Ajuste de contagem",
 };
+export const LOSS_NOTE_MAX = 200;
 export const UNIT_LABEL: Record<StockUnit, string> = { G: "g", ML: "ml", UN: "un" };
 
 /** Unidade "grande" da tela (kg, L) para gramas e mililitros; unidade fica como está. */

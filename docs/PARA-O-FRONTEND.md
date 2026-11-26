@@ -115,6 +115,10 @@ Exceção à regra acima, pedida pelo dono do produto depois de um telefone de 2
 1. Cancelar pedido aceito JÁ PREPARADO: `CancelOrderDialog` ganhou a caixa "O pedido já foi preparado" (só em cancelamento, não em recusa). `CancelDraft.stockWasted` → `buildCancelBody` manda `stockWasted: true`. API: a venda é estornada, mas os insumos saem como desperdício com motivo `PEDIDO_CANCELADO` (não voltam ao estoque). Sem a marca, nada muda.
 2. Perda de PRATO PRONTO: componente NOVO `estoque/components/ProductLossForm.tsx`, aberto pelo botão "Perda de prato" no topo de Estoque (equipe e dono). Rota `POST /api/stock/products/:id/loss` `{ quantity 1–100, reason (WASTE_REASONS), weightGrams? }`; baixa pela ficha técnica; prato sem ficha = 409 `PRODUCT_NO_RECIPE`. `StockGateway.productLoss`.
 3. `SYSTEM_WASTE_REASONS` (domain/stock.ts) entrou nos rótulos de motivo de Estoque e Lucro.
+4. Desfazer perda: Estoque › Movimentações ganhou o filtro "Só perdas", as colunas "Quem" e o botão "Desfazer" (`POST /api/stock/movements/:id/undo`; a API devolve `canUndo` por linha: dono qualquer perda manual, equipe só a própria até 30 min; perda de prato desfaz o prato todo). Linha desfeita mostra "Desfeito".
+5. Observação: campo em `MovementForm` e `ProductLossForm` (até 200), obrigatório no motivo "Outro" (a API recusa sem).
+6. Perda alta: `LucroPage` mostra aviso quando `lossAlert.exceeded` (perdas > 5% do faturamento) e o painel "Perdas por quem lançou" (`lossesByUser`).
+7. Validade: `MovementForm` (compra) tem "Validade do lote"; a lista de insumos traz `expiry` (EXPIRED/SOON/OK) e `nextExpiresOn` estimados por PEPS; Estoque mostra o selo "Vencido"/"Vence dd/mm" e o aviso de validade.
 
 ---
 

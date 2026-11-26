@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useRef, useState } from "react";
-import { formatQty, SPOILAGE_REASONS, WASTE_REASONS, type Ingredient } from "@/core/domain/stock";
+import { formatQty, LOSS_NOTE_MAX, SPOILAGE_REASONS, WASTE_REASONS, type Ingredient } from "@/core/domain/stock";
 import type { StockGateway } from "@/core/gateways/StockGateway";
 import type { HttpResult } from "@/core/http/HttpClient";
 import { Button, StateMessage } from "@/shared/design/components";
@@ -30,6 +30,8 @@ export function MovementForm({ kind, ingredient, gateway, run, onClose }: {
   const [total, setTotal] = useState(maskMoneyInput(""));
   const [lossType, setLossType] = useState<"WASTE" | "SPOILAGE">("WASTE");
   const [reason, setReason] = useState<string>("PREPARO");
+  const [note, setNote] = useState("");
+  const [expiresOn, setExpiresOn] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
@@ -39,13 +41,14 @@ export function MovementForm({ kind, ingredient, gateway, run, onClose }: {
     if (inFlight.current) return;
     const quantity = toBaseQty(qty, ingredient.unit, qtyUnit);
     if (quantity === null || (kind !== "count" && quantity <= 0)) return setError("Informe uma quantidade válida.");
+    if (kind === "loss" && reason === "OUTRO" && !note.trim()) return setError("Escreva a observação do motivo Outro.");
     inFlight.current = true;
     setBusy(true);
     setError(null);
     try {
       const failure = await run(() =>
-        kind === "purchase" ? gateway.purchase(ingredient.id, { quantity, totalCostCents: digitsToCents(total) })
-          : kind === "loss" ? gateway.loss(ingredient.id, { type: lossType, quantity, reason })
+        kind === "purchase" ? gateway.purchase(ingredient.id, { quantity, totalCostCents: digitsToCents(total), ...(expiresOn ? { expiresOn } : {}) })
+          : kind === "loss" ? gateway.loss(ingredient.id, { type: lossType, quantity, reason, ...(note.trim() ? { note: note.trim() } : {}) })
             : gateway.count(ingredient.id, quantity));
       if (failure) setError(failure);
       else onClose();
@@ -70,6 +73,9 @@ export function MovementForm({ kind, ingredient, gateway, run, onClose }: {
             {Object.entries(reasons).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
           </select>
         </label>
+        <label>Observação{reason === "OUTRO" ? "" : " (opcional)"}
+          <input value={note} maxLength={LOSS_NOTE_MAX} required={reason === "OUTRO"} disabled={busy} onChange={(event) => setNote(event.target.value)} />
+        </label>
       </>}
       <div className="estoque__qty">
         <label>{kind === "count" ? "Quantidade contada" : kind === "purchase" ? "Quantidade comprada" : "Quantidade perdida"}
@@ -80,6 +86,7 @@ export function MovementForm({ kind, ingredient, gateway, run, onClose }: {
         </select>
       </div>
       {kind === "purchase" && <label>Valor total pago<MoneyInput name="total" value={total} onChange={setTotal} /></label>}
+      {kind === "purchase" && <label>Validade do lote (opcional)<input type="date" value={expiresOn} disabled={busy} onChange={(event) => setExpiresOn(event.target.value)} /></label>}
       {kind === "purchase" && <p className="estoque__hint">O custo do insumo é recalculado pela média ponderada com o estoque atual.</p>}
       {kind === "count" && <p className="estoque__hint">O saldo passa a ser o contado. Sobra ou falta fica registrada como ajuste de contagem.</p>}
       {error && <StateMessage tone="danger" title="Lançamento não registrado">{error}</StateMessage>}
