@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import type { Category } from "@/core/domain/catalog";
-import { WASTE_REASONS } from "@/core/domain/stock";
+import { LOSS_NOTE_MAX, WASTE_REASONS } from "@/core/domain/stock";
 import type { StockGateway } from "@/core/gateways/StockGateway";
 import type { HttpResult } from "@/core/http/HttpClient";
 import { usePanelServices } from "@/core/services/PanelServices";
@@ -25,6 +25,7 @@ export function ProductLossForm({ gateway, run, onClose }: {
   const [productId, setProductId] = useState("");
   const [qty, setQty] = useState("1");
   const [reason, setReason] = useState<keyof typeof WASTE_REASONS>("CAIU");
+  const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
@@ -44,11 +45,12 @@ export function ProductLossForm({ gateway, run, onClose }: {
     const quantity = Number(qty);
     if (!productId) return setError("Escolha o prato.");
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > PRODUCT_LOSS_MAX) return setError(`Informe uma quantidade de 1 a ${PRODUCT_LOSS_MAX}.`);
+    if (reason === "OUTRO" && !note.trim()) return setError("Escreva a observação do motivo Outro.");
     inFlight.current = true;
     setBusy(true);
     setError(null);
     try {
-      const failure = await run(() => gateway.productLoss(productId, { quantity, reason }));
+      const failure = await run(() => gateway.productLoss(productId, { quantity, reason, ...(note.trim() ? { note: note.trim() } : {}) }));
       if (failure) setError(failure);
       else onClose();
     } finally {
@@ -76,6 +78,9 @@ export function ProductLossForm({ gateway, run, onClose }: {
           <select value={reason} disabled={busy} onChange={(event) => setReason(event.target.value as keyof typeof WASTE_REASONS)}>
             {Object.entries(WASTE_REASONS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
           </select>
+        </label>
+        <label>Observação{reason === "OUTRO" ? "" : " (opcional)"}
+          <input value={note} maxLength={LOSS_NOTE_MAX} required={reason === "OUTRO"} disabled={busy} onChange={(event) => setNote(event.target.value)} />
         </label>
         <label>Quantidade de pratos
           <input required type="number" inputMode="numeric" min={1} max={PRODUCT_LOSS_MAX} value={qty} disabled={busy} onChange={(event) => setQty(event.target.value)} />

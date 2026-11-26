@@ -160,6 +160,85 @@ describe("estoque — integração", () => {
     expect(await prisma.auditLog.count({ where: { action: "stock.product_loss" } })).toBe(2);
   });
 
+  it("desfazer perda: volta o saldo; uma vez só; prato desfaz todas as linhas; equipe só a própria; venda não se desfaz", async () => {
+    const l = await loja();
+    const { carne, pao } = await montar(l);
+    const perda = await l.call("POST", `/api/stock/ingredients/${carne}/loss`, { type: "WASTE", quantity: 500, reason: "QUEIMOU" }, l.staff);
+    const id = json(perda).movementId as string;
+    expect(await saldo(carne)).toBe(9500);
+    const u = await l.call("POST", `/api/stock/movements/${id}/undo`, undefined, l.staff);
+    expect(u.statusCode, u.body).toBe(201);
+    expect(await saldo(carne)).toBe(10_000);
+    const again = await l.call("POST", `/api/stock/movements/${id}/undo`);
+    expect([again.statusCode, json(again).code]).toEqual([409, "LOSS_ALREADY_UNDONE"]);
+    // perda de prato: desfazer uma linha desfaz o prato inteiro
+    await l.call("POST", `/api/stock/products/${l.burger}/loss`, { quantity: 1, reason: "CAIU" });
+    const lista = json(await l.call("GET", "/api/stock/movements?type=LOSS"));
+    const linha = lista.movements.find((m: { reason: string; groupId: string | null }) => m.reason === "CAIU");
+    expect(linha.canUndo).toBe(true);
+    expect((await l.call("POST", `/api/stock/movements/${linha.id}/undo`)).statusCode).toBe(201);
+    expect([await saldo(carne), await saldo(pao)]).toEqual([10_000, 50]);
+    // a equipe não desfaz perda do dono
+    const doDono = json(await l.call("POST", `/api/stock/ingredients/${carne}/loss`, { type: "SPOILAGE", quantity: 100, reason: "VENCIDO" })).movementId;
+    const f = await l.call("POST", `/api/stock/movements/${doDono}/undo`, undefined, l.staff);
+    expect([f.statusCode, json(f).code]).toEqual([403, "LOSS_UNDO_FORBIDDEN"]);
+    // venda não é perda
+    const pedido = await pedir(l);
+    await mover(l, pedido, "CONFIRMADO");
+    const venda = await prisma.stockMovement.findFirstOrThrow({ where: { orderId: pedido } });
+    expect(json(await l.call("POST", `/api/stock/movements/${venda.id}/undo`)).code).toBe("LOSS_NOT_UNDOABLE");
+    // o lucro não conta o par desfeito na lista por motivo
+    const p = json(await l.call("GET", "/api/stock/profit"));
+    expect(p.lossesByReason).toEqual([{ type: "SPOILAGE", reason: "VENCIDO", count: 1, costCents: 400 }]);
+    expect(p.losses.totalCents).toBe(400);
+    expect(await prisma.auditLog.count({ where: { action: "stock.loss_undo" } })).toBeGreaterThanOrEqual(1);
+  });
+
+  it("observação: obrigatória no motivo Outro; aparece no histórico de perdas com quem lançou", async () => {
+    const l = await loja();
+    const { carne } = await montar(l);
+    expect((await l.call("POST", `/api/stock/ingredients/${carne}/loss`, { type: "WASTE", quantity: 10, reason: "OUTRO" }, l.staff)).statusCode).toBe(400);
+    expect((await l.call("POST", `/api/stock/products/${l.burger}/loss`, { quantity: 1, reason: "OUTRO" })).statusCode).toBe(400);
+    const r = await l.call("POST", `/api/stock/ingredients/${carne}/loss`, { type: "WASTE", quantity: 10, reason: "OUTRO", note: "  rato na despensa  " }, l.staff);
+    expect(r.statusCode, r.body).toBe(201);
+    expect((await l.call("POST", `/api/stock/ingredients/${carne}/loss`, { type: "WASTE", quantity: 10, reason: "OUTRO", note: "x".repeat(201) })).statusCode).toBe(400);
+    const lista = json(await l.call("GET", "/api/stock/movements?type=LOSS", undefined, l.staff));
+    expect(lista.movements).toHaveLength(1);
+    expect(lista.movements[0]).toMatchObject({ reason: "OUTRO", note: "rato na despensa", canUndo: true });
+    expect(lista.movements[0].userEmail).toMatch(/@t\.com$/);
+    const p = json(await l.call("GET", "/api/stock/profit"));
+    expect(p.lossesByUser).toHaveLength(1);
+    expect(p.lossesByUser[0]).toMatchObject({ count: 1, costCents: 40 });
+  });
+
+  it("alerta de perda alta: passa de 5% do faturamento", async () => {
+    const l = await loja();
+    const { carne } = await montar(l);
+    const id = await pedir(l); // 30,00
+    await mover(l, id, "CONFIRMADO");
+    await l.call("POST", `/api/stock/ingredients/${carne}/loss`, { type: "WASTE", quantity: 30, reason: "PREPARO" }); // 1,20 = 4%
+    expect(json(await l.call("GET", "/api/stock/profit")).lossAlert).toEqual({ thresholdPercent: 5, exceeded: false });
+    await l.call("POST", `/api/stock/ingredients/${carne}/loss`, { type: "WASTE", quantity: 30, reason: "PREPARO" }); // 8%
+    expect(json(await l.call("GET", "/api/stock/profit")).lossAlert.exceeded).toBe(true);
+  });
+
+  it("validade por PEPS: o lote em uso define a data; vencido e vence logo viram alerta", async () => {
+    const l = await loja();
+    const leite = await l.insumo("Leite", "ML");
+    const dia = (delta: number) => new Date(Date.now() + delta * 86_400_000).toISOString().slice(0, 10);
+    expect((await l.call("POST", `/api/stock/ingredients/${leite}/purchase`, { quantity: 1000, totalCostCents: 500, expiresOn: dia(-2) })).statusCode).toBe(201);
+    let i = json(await l.call("GET", "/api/stock/ingredients"));
+    expect(i.ingredients[0]).toMatchObject({ expiry: "EXPIRED", nextExpiresOn: dia(-2) });
+    expect(i.alerts).toMatchObject({ expired: 1, expiringSoon: 0 });
+    // lote novo maior que o saldo: o vencido sai da conta (PEPS); consumir até caber só no novo
+    await l.call("POST", `/api/stock/ingredients/${leite}/purchase`, { quantity: 1000, totalCostCents: 500, expiresOn: dia(2) });
+    await l.call("POST", `/api/stock/ingredients/${leite}/loss`, { type: "SPOILAGE", quantity: 1000, reason: "VENCIDO" });
+    i = json(await l.call("GET", "/api/stock/ingredients"));
+    expect(i.ingredients[0]).toMatchObject({ expiry: "SOON", nextExpiresOn: dia(2) });
+    expect(i.alerts).toMatchObject({ expired: 0, expiringSoon: 1 });
+    expect((await l.call("POST", `/api/stock/ingredients/${leite}/purchase`, { quantity: 1, totalCostCents: 1, expiresOn: "2026-02-31" })).statusCode).toBe(400);
+  });
+
   it("desfazer o aceite devolve; aceitar de novo baixa UMA vez (idempotente)", async () => {
     const l = await loja();
     const { carne } = await montar(l);
@@ -182,7 +261,7 @@ describe("estoque — integração", () => {
     expect(await saldo(carne)).toBe(-180);
     const lista = json(await l.call("GET", "/api/stock/ingredients"));
     expect(lista.ingredients[0]).toMatchObject({ negative: true, lowStock: true });
-    expect(lista.alerts).toEqual({ lowStock: 1, negative: 1 });
+    expect(lista.alerts).toEqual({ lowStock: 1, negative: 1, expired: 0, expiringSoon: 0 });
   });
 
   it("opção com ficha (bacon extra 30 g × 2) baixa junto do prato", async () => {

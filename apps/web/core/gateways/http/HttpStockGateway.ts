@@ -18,8 +18,11 @@ export class HttpStockGateway implements StockGateway {
   update(id: string, input: { name?: string; minStockQty?: number | null; active?: boolean }) {
     return this.http.patch<IngredientReply>(`/api/stock/ingredients/${enc(id)}`, input);
   }
-  purchase(id: string, input: { quantity: number; totalCostCents: number }) {
+  purchase(id: string, input: { quantity: number; totalCostCents: number; expiresOn?: string }) {
     return this.http.post<IngredientReply>(`/api/stock/ingredients/${enc(id)}/purchase`, input);
+  }
+  undoMovement(movementId: string) {
+    return this.http.post<{ undone: number }>(`/api/stock/movements/${enc(movementId)}/undo`, {});
   }
   loss(id: string, input: LossInput) {
     return this.http.post<IngredientReply>(`/api/stock/ingredients/${enc(id)}/loss`, input);

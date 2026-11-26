@@ -85,6 +85,9 @@ export function LucroPage() {
     {error && <StateMessage tone="danger" title="Relatório indisponível">{error}</StateMessage>}
     {!report && !error && <StateMessage title="Calculando" busy />}
     {report && losses && <>
+      {report.lossAlert?.exceeded && <StateMessage tone="warning" title="Perdas acima do normal">
+        As perdas do período passaram de {report.lossAlert.thresholdPercent}% do faturamento. Veja abaixo os motivos, os insumos e quem lançou.
+      </StateMessage>}
       <section className="estoque__cards" aria-label="Resultado do período">
         <Card label="Faturamento" value={money(report.revenueCents)} note={`${report.orderCount} vendas`} />
         <Card label="Custo dos pratos (CMV)" value={money(report.cogsCents)} note={`${pct(report.cogsPercent)} do faturamento`} />
@@ -130,6 +133,11 @@ export function LucroPage() {
             {report.topWastedIngredients.map((i) => <tr key={i.id}><td>{i.name}</td><td>{formatQty(i.quantity, i.unit as never)}</td><td>{money(i.costCents)}</td></tr>)}
           </DataTable>}
         </Panel>
+        {report.lossesByUser && report.lossesByUser.length > 0 && <Panel title="Perdas por quem lançou">
+          <DataTable label="Perdas por quem lançou" headers={["Quem", "Lançamentos", "Custo"]}>
+            {report.lossesByUser.map((u) => <tr key={u.userId ?? "sistema"}><td>{u.email ?? "Sistema (pedido cancelado já preparado)"}</td><td>{u.count}</td><td>{money(u.costCents)}</td></tr>)}
+          </DataTable>
+        </Panel>}
       </div>
     </>}
 

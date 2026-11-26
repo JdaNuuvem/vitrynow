@@ -700,9 +700,14 @@ model StockMovement {
   orderId            String? // SALE / SALE_REVERSAL
   reason             String? // WASTE/SPOILAGE/ADJUSTMENT: motivo em lista fechada (sem texto livre)
   userId             String? // quem lançou (null = sistema)
+  note               String? // observação da perda (obrigatória no motivo OUTRO)
+  groupId            String? // perda de prato pronto: as linhas de um mesmo lançamento (desfazer desfaz todas)
+  reversalOfId       String?           @unique // "desfazer": esta linha anula a movimentação indicada (uma vez só)
+  expiresOn          DateTime?         @db.Date // compra: validade do lote
   createdAt          DateTime          @default(now())
 
   @@index([storeId, createdAt])
+  @@index([groupId])
   @@index([storeId, type, createdAt])
   @@index([ingredientId, createdAt])
   @@index([orderId])

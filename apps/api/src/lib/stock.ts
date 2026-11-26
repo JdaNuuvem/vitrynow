@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Prisma, StockMovementType } from "@meucardapio/db";
 import { ORDER_CANCELED_WASTE_REASON } from "@meucardapio/shared-types";
 
@@ -55,7 +56,7 @@ export function consumptionOf(lines: ConsumptionLine[], recipes: Recipes): Map<s
 
 export type StockAlert = { ingredientId: string; kind: "LOW" | "NEGATIVE" };
 
-type MovementInput = { storeId: string; ingredientId: string; type: StockMovementType; quantity: number; unitCostMillicents?: number; orderId?: string; reason?: string; userId?: string | null; now: Date };
+type MovementInput = { storeId: string; ingredientId: string; type: StockMovementType; quantity: number; unitCostMillicents?: number; orderId?: string; reason?: string; userId?: string | null; note?: string; groupId?: string; reversalOfId?: string; expiresOn?: Date; now: Date };
 
 /**
  * Aplica UMA movimentação com a linha do insumo já travada: grava a movimentação e atualiza saldo (e custo médio nas entradas).
@@ -87,6 +88,10 @@ export async function applyMovement(tx: Tx, input: MovementInput) {
       orderId: input.orderId ?? null,
       reason: input.reason ?? null,
       userId: input.userId ?? null,
+      note: input.note ?? null,
+      groupId: input.groupId ?? null,
+      reversalOfId: input.reversalOfId ?? null,
+      expiresOn: input.expiresOn ?? null,
       createdAt: input.now,
     },
   });
@@ -168,12 +173,34 @@ export async function reverseStockForOrder(tx: Tx, order: { id: string; storeId:
 }
 
 /**
+ * Desfaz um lançamento de PERDA manual (e, se for perda de prato, todas as linhas do prato): cada linha ganha uma contrapartida
+ * do mesmo tipo e motivo, com a quantidade ao contrário e o MESMO custo unitário (o saldo e o custo médio voltam). Idempotente pelo
+ * `reversalOfId` único. Devolve as linhas desfeitas, ou um código de recusa.
+ */
+export async function undoLoss(tx: Tx, input: { storeId: string; movementId: string; userId: string | null; now: Date }): Promise<
+  { ok: true; undone: { id: string; ingredientId: string; quantity: number; createdAt: Date; userId: string | null }[] } | { ok: false; code: "STOCK_MOVEMENT_NOT_FOUND" | "LOSS_NOT_UNDOABLE" | "LOSS_ALREADY_UNDONE" }
+> {
+  const target = await tx.stockMovement.findFirst({ where: { id: input.movementId, storeId: input.storeId } });
+  if (!target) return { ok: false, code: "STOCK_MOVEMENT_NOT_FOUND" };
+  const rows = target.groupId ? await tx.stockMovement.findMany({ where: { storeId: input.storeId, groupId: target.groupId, reversalOfId: null } }) : [target];
+  if (rows.some((m) => (m.type !== "WASTE" && m.type !== "SPOILAGE") || m.orderId !== null || m.reversalOfId !== null)) return { ok: false, code: "LOSS_NOT_UNDOABLE" };
+  if (await tx.stockMovement.count({ where: { reversalOfId: { in: rows.map((m) => m.id) } } })) return { ok: false, code: "LOSS_ALREADY_UNDONE" };
+  for (const m of [...rows].sort((a, b) => a.ingredientId.localeCompare(b.ingredientId))) {
+    await applyMovement(tx, {
+      storeId: input.storeId, ingredientId: m.ingredientId, type: m.type, quantity: -m.quantity, unitCostMillicents: m.unitCostMillicents,
+      reason: m.reason ?? undefined, groupId: m.groupId ?? undefined, reversalOfId: m.id, userId: input.userId, now: input.now,
+    });
+  }
+  return { ok: true, undone: rows.map((m) => ({ id: m.id, ingredientId: m.ingredientId, quantity: m.quantity, createdAt: m.createdAt, userId: m.userId })) };
+}
+
+/**
  * Perda de PRATO PRONTO: a baixa sai pela ficha técnica do produto (como uma venda), mas como DESPERDÍCIO com motivo.
  * Insumos em ordem de id (mesma ordem de trava da venda). Produto sem ficha => null (quem chama responde PRODUCT_NO_RECIPE).
  */
 export async function wasteProduct(
   tx: Tx,
-  input: { storeId: string; productId: string; quantity: number; weightGrams?: number; reason: string; userId: string | null; now: Date },
+  input: { storeId: string; productId: string; quantity: number; weightGrams?: number; reason: string; note?: string; userId: string | null; now: Date },
 ): Promise<{ costCents: number; movementIds: string[]; alerts: StockAlert[] } | null> {
   const recipes = await loadRecipes(tx, input.storeId, [input.productId], []);
   // Por peso: a ficha é por 1 kg; `weightGrams` é o peso de CADA unidade perdida.
@@ -182,9 +209,10 @@ export async function wasteProduct(
   if (usage.size === 0) return null;
   let costCents = 0;
   const movementIds: string[] = [];
+  const groupId = randomUUID(); // "desfazer" uma linha desfaz o prato inteiro
   const alerts: StockAlert[] = [];
   for (const ingredientId of [...usage.keys()].sort()) {
-    const movement = await applyMovement(tx, { storeId: input.storeId, ingredientId, type: "WASTE", quantity: -usage.get(ingredientId)!, reason: input.reason, userId: input.userId, now: input.now });
+    const movement = await applyMovement(tx, { storeId: input.storeId, ingredientId, type: "WASTE", quantity: -usage.get(ingredientId)!, reason: input.reason, note: input.note, groupId, userId: input.userId, now: input.now });
     costCents += -movement.costCents;
     movementIds.push(movement.id);
     if (movement.alert) alerts.push(movement.alert);

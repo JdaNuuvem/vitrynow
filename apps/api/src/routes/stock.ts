@@ -1,12 +1,12 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
-import { Prisma, prisma } from "@meucardapio/db";
+import { Prisma, prisma, type StockMovementType } from "@meucardapio/db";
 import {
-  createIngredientSchema, panelRoleSchema, productLossSchema, recipeSchema, stockCountSchema, stockLossSchema, stockMovementsQuerySchema, stockPurchaseSchema, updateIngredientSchema,
+  createIngredientSchema, EXPIRY_SOON_DAYS, LOSS_ALERT_PERCENT, LOSS_UNDO_STAFF_MINUTES, panelRoleSchema, productLossSchema, recipeSchema, stockCountSchema, stockLossSchema, stockMovementsQuerySchema, stockPurchaseSchema, updateIngredientSchema,
 } from "@meucardapio/shared-types";
 import { logAudit } from "../lib/audit";
 import { buildReport, resolveRange } from "../lib/reports";
 import { utc } from "../lib/sqlTime";
-import { applyMovement, costCentsOf, MILLI, unitCostFromTotal, wasteProduct } from "../lib/stock";
+import { applyMovement, costCentsOf, MILLI, undoLoss, unitCostFromTotal, wasteProduct } from "../lib/stock";
 import { storeTimeZone } from "../lib/storeTz";
 import { CodedError, useDomainErrors } from "../shared/errors";
 import { publishToStore } from "../realtime/hub";
@@ -53,10 +53,14 @@ const stockRoutes: FastifyPluginAsync = async (app) => {
   app.get("/api/stock/ingredients", panel, async (request) => {
     const { storeId } = request.user;
     const rows = await prisma.ingredient.findMany({ where: { storeId }, orderBy: [{ active: "desc" }, { name: "asc" }] });
-    const view = rows.map((i) => ingredientView(i, isOwner(request)));
+    const expiry = await nextExpiries(storeId);
+    const view = rows.map((i) => ({ ...ingredientView(i, isOwner(request)), ...expiryView(i.stockQty > 0 ? expiry.dates.get(i.id) ?? null : null, expiry.today) }));
     return {
       ingredients: view,
-      alerts: { lowStock: view.filter((i) => i.active && i.lowStock).length, negative: view.filter((i) => i.active && i.negative).length },
+      alerts: {
+        lowStock: view.filter((i) => i.active && i.lowStock).length, negative: view.filter((i) => i.active && i.negative).length,
+        expired: view.filter((i) => i.active && i.expiry === "EXPIRED").length, expiringSoon: view.filter((i) => i.active && i.expiry === "SOON").length,
+      },
       ...(isOwner(request) ? { stockValueCents: view.reduce((sum, i) => sum + (i.active ? (i as { stockValueCents?: number }).stockValueCents ?? 0 : 0), 0) } : {}),
     };
   });
@@ -101,8 +105,8 @@ const stockRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return bad(reply, parsed.error);
     await requireIngredient(storeId, id);
     const unitCost = unitCostFromTotal(parsed.data.totalCostCents, parsed.data.quantity);
-    const movement = await prisma.$transaction((tx) => applyMovement(tx, { storeId, ingredientId: id, type: "PURCHASE", quantity: parsed.data.quantity, unitCostMillicents: unitCost, userId, now: new Date() }));
-    logAudit({ storeId, userId, action: "stock.purchase", targetType: "Ingredient", targetId: id, metadata: { quantity: parsed.data.quantity, totalCostCents: parsed.data.totalCostCents } });
+    const movement = await prisma.$transaction((tx) => applyMovement(tx, { storeId, ingredientId: id, type: "PURCHASE", quantity: parsed.data.quantity, unitCostMillicents: unitCost, expiresOn: parsed.data.expiresOn ? new Date(`${parsed.data.expiresOn}T00:00:00Z`) : undefined, userId, now: new Date() }));
+    logAudit({ storeId, userId, action: "stock.purchase", targetType: "Ingredient", targetId: id, metadata: { quantity: parsed.data.quantity, totalCostCents: parsed.data.totalCostCents, expiresOn: parsed.data.expiresOn ?? null } });
     const ingredient = await prisma.ingredient.findUniqueOrThrow({ where: { id } });
     return reply.code(201).send({ movementId: movement.id, ingredient: ingredientView(ingredient, isOwner(request)) });
   });
@@ -114,9 +118,9 @@ const stockRoutes: FastifyPluginAsync = async (app) => {
     const parsed = stockLossSchema.safeParse(request.body);
     if (!parsed.success) return bad(reply, parsed.error);
     await requireIngredient(storeId, id);
-    const movement = await prisma.$transaction((tx) => applyMovement(tx, { storeId, ingredientId: id, type: parsed.data.type, quantity: -parsed.data.quantity, reason: parsed.data.reason, userId, now: new Date() }));
+    const movement = await prisma.$transaction((tx) => applyMovement(tx, { storeId, ingredientId: id, type: parsed.data.type, quantity: -parsed.data.quantity, reason: parsed.data.reason, note: parsed.data.note, userId, now: new Date() }));
     if (movement.alert) publishToStore(storeId, { type: "stock.low", ...movement.alert });
-    logAudit({ storeId, userId, action: "stock.loss", targetType: "Ingredient", targetId: id, metadata: { type: parsed.data.type, reason: parsed.data.reason, quantity: parsed.data.quantity } });
+    logAudit({ storeId, userId, action: "stock.loss", targetType: "Ingredient", targetId: id, metadata: { type: parsed.data.type, reason: parsed.data.reason, quantity: parsed.data.quantity, note: parsed.data.note ?? null } });
     const ingredient = await prisma.ingredient.findUniqueOrThrow({ where: { id } });
     return reply.code(201).send({ movementId: movement.id, ingredient: ingredientView(ingredient, isOwner(request)) });
   });
@@ -130,7 +134,7 @@ const stockRoutes: FastifyPluginAsync = async (app) => {
     const product = await prisma.product.findFirst({ where: { id, storeId }, select: { id: true, name: true } });
     if (!product) throw new CodedError(404, "PRODUCT_NOT_FOUND", "Produto não encontrado.");
     const result = await prisma.$transaction((tx) =>
-      wasteProduct(tx, { storeId, productId: id, quantity: parsed.data.quantity, weightGrams: parsed.data.weightGrams, reason: parsed.data.reason, userId, now: new Date() }));
+      wasteProduct(tx, { storeId, productId: id, quantity: parsed.data.quantity, weightGrams: parsed.data.weightGrams, reason: parsed.data.reason, note: parsed.data.note, userId, now: new Date() }));
     if (!result) throw new CodedError(409, "PRODUCT_NO_RECIPE", "Este produto não tem ficha técnica. Monte a ficha ou lance a perda por insumo.");
     for (const alert of result.alerts) publishToStore(storeId, { type: "stock.low", ...alert });
     logAudit({ storeId, userId, action: "stock.product_loss", targetType: "Product", targetId: id, metadata: { quantity: parsed.data.quantity, weightGrams: parsed.data.weightGrams ?? null, reason: parsed.data.reason, costCents: result.costCents } });
@@ -168,7 +172,7 @@ const stockRoutes: FastifyPluginAsync = async (app) => {
       where: {
         storeId,
         ...(q.ingredientId ? { ingredientId: q.ingredientId } : {}),
-        ...(q.type ? { type: q.type } : {}),
+        ...(q.type === "LOSS" ? { type: { in: ["WASTE", "SPOILAGE"] as StockMovementType[] } } : q.type ? { type: q.type } : {}),
         ...(range ? { createdAt: { gte: range.fromUtc, lt: range.toExclusiveUtc } } : {}),
         ...(q.cursor ? { id: { lt: q.cursor } } : {}),
       },
@@ -178,14 +182,47 @@ const stockRoutes: FastifyPluginAsync = async (app) => {
     });
     const page = rows.slice(0, MOVEMENTS_PAGE);
     const owner = isOwner(request);
+    // Quem lançou (e-mail da conta) e o que já foi desfeito, para o histórico de perdas.
+    const userIds = [...new Set(page.map((m) => m.userId).filter((id): id is string => !!id))];
+    const users = new Map(userIds.length ? (await prisma.user.findMany({ where: { storeId, id: { in: userIds } }, select: { id: true, email: true } })).map((u) => [u.id, u.email]) : []);
+    const undoneIds = new Set((await prisma.stockMovement.findMany({ where: { storeId, reversalOfId: { in: page.map((m) => m.id) } }, select: { reversalOfId: true } })).map((r) => r.reversalOfId));
+    const now = Date.now();
     return {
       movements: page.map((m) => ({
         id: m.id, type: m.type, quantity: m.quantity, reason: m.reason, orderId: m.orderId, userId: m.userId, createdAt: m.createdAt,
+        userEmail: m.userId ? users.get(m.userId) ?? null : null,
+        note: m.note, groupId: m.groupId, reversalOfId: m.reversalOfId, undone: undoneIds.has(m.id),
+        expiresOn: m.expiresOn ? m.expiresOn.toISOString().slice(0, 10) : null,
+        canUndo: canUndoLoss(m, undoneIds.has(m.id), { owner, userId: request.user.userId, now }),
         ingredient: { id: m.ingredientId, ...m.ingredient },
         ...(owner ? { unitCostMillicents: m.unitCostMillicents, costCents: m.costCents } : {}),
       })),
       nextCursor: rows.length > MOVEMENTS_PAGE ? page[page.length - 1].id : null,
     };
+  });
+
+  // Desfazer perda (lançou errado): dono qualquer perda manual; equipe só a própria, até 30 min. Perda de prato desfaz o prato todo.
+  app.post("/api/stock/movements/:id/undo", panel, async (request, reply) => {
+    const { storeId, userId } = request.user;
+    const { id } = request.params as { id: string };
+    const target = await prisma.stockMovement.findFirst({ where: { id, storeId } });
+    if (!target) throw new CodedError(404, "STOCK_MOVEMENT_NOT_FOUND", "Lançamento não encontrado.");
+    const now = Date.now();
+    if (!canUndoLoss(target, false, { owner: true, userId, now })) throw new CodedError(409, "LOSS_NOT_UNDOABLE", "Só uma perda lançada à mão pode ser desfeita.");
+    if (!canUndoLoss(target, false, { owner: isOwner(request), userId, now })) throw new CodedError(403, "LOSS_UNDO_FORBIDDEN", `A equipe só desfaz a própria perda, até ${LOSS_UNDO_STAFF_MINUTES} minutos depois. Peça ao dono.`);
+    let result: Awaited<ReturnType<typeof undoLoss>>;
+    try {
+      result = await prisma.$transaction((tx) => undoLoss(tx, { storeId, movementId: id, userId, now: new Date() }));
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") throw new CodedError(409, "LOSS_ALREADY_UNDONE", "Este lançamento já foi desfeito.");
+      throw error;
+    }
+    if (!result.ok) {
+      if (result.code === "LOSS_ALREADY_UNDONE") throw new CodedError(409, "LOSS_ALREADY_UNDONE", "Este lançamento já foi desfeito.");
+      throw new CodedError(409, "LOSS_NOT_UNDOABLE", "Só uma perda lançada à mão pode ser desfeita.");
+    }
+    logAudit({ storeId, userId, action: "stock.loss_undo", targetType: "StockMovement", targetId: id, metadata: { lines: result.undone.length, groupId: target.groupId, originalUserId: target.userId } });
+    return reply.code(201).send({ undone: result.undone.length });
   });
 
   // ---------- Ficha técnica (só o dono) ----------
@@ -331,22 +368,54 @@ const stockRoutes: FastifyPluginAsync = async (app) => {
   });
 };
 
+// Perda manual (sem pedido, não é contrapartida) ainda não desfeita; a equipe só a própria e dentro do prazo.
+function canUndoLoss(m: { type: string; orderId: string | null; reversalOfId: string | null; userId: string | null; createdAt: Date }, undone: boolean, who: { owner: boolean; userId: string; now: number }) {
+  if ((m.type !== "WASTE" && m.type !== "SPOILAGE") || m.orderId !== null || m.reversalOfId !== null || undone) return false;
+  if (who.owner) return true;
+  return m.userId === who.userId && who.now - m.createdAt.getTime() <= LOSS_UNDO_STAFF_MINUTES * 60_000;
+}
+
+// Validade estimada por PEPS: o saldo atual é formado pelas compras MAIS RECENTES; entre elas, a validade mais próxima é a do
+// lote em uso. Compra sem validade conta para o saldo, mas não dá data.
+async function nextExpiries(storeId: string) {
+  const tz = await storeTimeZone(storeId);
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const rows = await prisma.$queryRaw<{ ingredientId: string; expiresOn: string }[]>(Prisma.sql`
+    SELECT p."ingredientId", to_char(min(p."expiresOn"), 'YYYY-MM-DD') AS "expiresOn"
+    FROM (
+      SELECT m."ingredientId", m."quantity", m."expiresOn",
+             sum(m."quantity") OVER (PARTITION BY m."ingredientId" ORDER BY m."createdAt" DESC, m."id" DESC) AS "cum"
+      FROM "StockMovement" m WHERE m."storeId" = ${storeId} AND m."type" = 'PURCHASE'
+    ) p JOIN "Ingredient" i ON i."id" = p."ingredientId"
+    WHERE p."cum" - p."quantity" < i."stockQty" AND p."expiresOn" IS NOT NULL
+    GROUP BY p."ingredientId"`);
+  return { today, dates: new Map(rows.map((r) => [r.ingredientId, r.expiresOn])) };
+}
+type ExpiryState = "EXPIRED" | "SOON" | "OK";
+function expiryView(expiresOn: string | null, today: string): { nextExpiresOn: string | null; expiry: ExpiryState | null } {
+  if (!expiresOn) return { nextExpiresOn: null, expiry: null };
+  const days = Math.round((Date.parse(`${expiresOn}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
+  return { nextExpiresOn: expiresOn, expiry: days < 0 ? "EXPIRED" : days <= EXPIRY_SOON_DAYS ? "SOON" : "OK" };
+}
+
 const MOVEMENT_LABEL = { PURCHASE: "Compra", SALE: "Venda", SALE_REVERSAL: "Estorno de venda", WASTE: "Desperdício", SPOILAGE: "Estragado/vencido", ADJUSTMENT: "Ajuste de contagem" } as const;
 
 // DRE simplificado do período (usado pela tela e pelo CSV).
 async function buildProfit(storeId: string, range: ReportRange) {
     const window = Prisma.sql`m."storeId" = ${storeId} AND m."createdAt" >= ${utc(range.fromUtc)} AND m."createdAt" < ${utc(range.toExclusiveUtc)}`;
 
-    const [report, byType, byReason, wastedIngredients, products, purchases] = await Promise.all([
+    const [report, byType, byReason, wastedIngredients, products, purchases, byUser] = await Promise.all([
       buildReport(storeId, range),
       prisma.$queryRaw<{ type: string; cost: bigint }[]>(Prisma.sql`SELECT m."type"::text AS "type", coalesce(sum(m."costCents"), 0)::bigint AS "cost" FROM "StockMovement" m WHERE ${window} GROUP BY 1`),
       prisma.$queryRaw<{ type: string; reason: string; cost: bigint; count: bigint }[]>(Prisma.sql`
         SELECT m."type"::text AS "type", coalesce(m."reason", 'OUTRO') AS "reason", (-sum(m."costCents"))::bigint AS "cost", count(*) AS "count"
-        FROM "StockMovement" m WHERE ${window} AND m."type" IN ('WASTE', 'SPOILAGE') GROUP BY 1, 2 ORDER BY 3 DESC`),
+        FROM "StockMovement" m WHERE ${window} AND m."type" IN ('WASTE', 'SPOILAGE') AND m."reversalOfId" IS NULL AND NOT EXISTS (SELECT 1 FROM "StockMovement" r WHERE r."reversalOfId" = m."id") GROUP BY 1, 2 ORDER BY 3 DESC`),
+
       prisma.$queryRaw<{ id: string; name: string; unit: string; quantity: bigint; cost: bigint }[]>(Prisma.sql`
         SELECT i."id", i."name", i."unit"::text AS "unit", (-sum(m."quantity"))::bigint AS "quantity", (-sum(m."costCents"))::bigint AS "cost"
         FROM "StockMovement" m JOIN "Ingredient" i ON i."id" = m."ingredientId"
-        WHERE ${window} AND m."type" IN ('WASTE', 'SPOILAGE') GROUP BY i."id", i."name", i."unit" ORDER BY 5 DESC LIMIT 10`),
+        WHERE ${window} AND m."type" IN ('WASTE', 'SPOILAGE') AND m."reversalOfId" IS NULL AND NOT EXISTS (SELECT 1 FROM "StockMovement" r WHERE r."reversalOfId" = m."id") GROUP BY i."id", i."name", i."unit" ORDER BY 5 DESC LIMIT 10`),
+
       // Margem real por prato: pedidos com baixa ativa (aceitos e não cancelados) cuja baixa caiu no período.
       prisma.$queryRaw<{ key: string; name: string; quantity: bigint; revenue: bigint; cost: bigint; costed: bigint }[]>(Prisma.sql`
         SELECT coalesce(i."productId", i."productName") AS "key", max(i."productName") AS "name", sum(i."quantity") AS "quantity",
@@ -358,6 +427,11 @@ async function buildProfit(storeId: string, range: ReportRange) {
           AND o."stockDeductedAt" >= ${utc(range.fromUtc)} AND o."stockDeductedAt" < ${utc(range.toExclusiveUtc)}
         GROUP BY 1 ORDER BY 4 DESC LIMIT 100`),
       prisma.$queryRaw<{ cost: bigint }[]>(Prisma.sql`SELECT coalesce(sum(m."costCents"), 0)::bigint AS "cost" FROM "StockMovement" m WHERE ${window} AND m."type" = 'PURCHASE'`),
+      // Perdas por quem lançou (sem conta = sistema, ex.: pedido cancelado já preparado).
+      prisma.$queryRaw<{ userId: string | null; email: string | null; cost: bigint; count: bigint }[]>(Prisma.sql`
+        SELECT m."userId", max(u."email") AS "email", (-sum(m."costCents"))::bigint AS "cost", count(*) AS "count"
+        FROM "StockMovement" m LEFT JOIN "User" u ON u."id" = m."userId"
+        WHERE ${window} AND m."type" IN ('WASTE', 'SPOILAGE') AND m."reversalOfId" IS NULL AND NOT EXISTS (SELECT 1 FROM "StockMovement" r WHERE r."reversalOfId" = m."id") GROUP BY 1 ORDER BY 3 DESC LIMIT 20`),
     ]);
     const sum = (types: string[]) => byType.filter((r) => types.includes(r.type)).reduce((s, r) => s + Number(r.cost), 0);
     const cogsCents = -sum(["SALE", "SALE_REVERSAL"]); // saídas são negativas
@@ -380,6 +454,8 @@ async function buildProfit(storeId: string, range: ReportRange) {
       grossMarginPercent: pct(grossProfitCents),
       losses: { wasteCents, spoilageCents, adjustmentCents, totalCents: lossesCents, percentOfRevenue: pct(lossesCents) },
       resultAfterLossesCents: grossProfitCents - lossesCents,
+      lossAlert: { thresholdPercent: LOSS_ALERT_PERCENT, exceeded: revenueCents > 0 ? (lossesCents * 100) / revenueCents > LOSS_ALERT_PERCENT : lossesCents > 0 },
+      lossesByUser: byUser.map((r) => ({ userId: r.userId, email: r.email, count: Number(r.count), costCents: Number(r.cost) })),
       purchasesCents: Number(purchases[0].cost),
       lossesByReason: byReason.map((r) => ({ type: r.type, reason: r.reason, count: Number(r.count), costCents: Number(r.cost) })),
       topWastedIngredients: wastedIngredients.map((r) => ({ id: r.id, name: r.name, unit: r.unit, quantity: Number(r.quantity), costCents: Number(r.cost) })),
