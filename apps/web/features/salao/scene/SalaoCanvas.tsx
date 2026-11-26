@@ -141,7 +141,7 @@ const TableObject = memo(function TableObject({ table, selected, editing, onPick
         <div className={`salao-tag${selected ? " salao-tag--selected" : ""}`} data-status={table.status}>
           <span className="salao-tag__dot" />
           <strong>{table.label}</strong>
-          {!editing && table.status !== "FREE" && table.status !== "INACTIVE" ? <span>{TABLE_STATUS_LABEL[table.status]}{time ? ` · ${time}` : ""}</span> : null}
+          {!editing && table.status !== "FREE" && table.status !== "INACTIVE" ? <span>{TABLE_STATUS_LABEL[table.status]}{table.guests ? ` · ${table.guests}p` : ""}{time ? ` · ${time}` : ""}</span> : null}
         </div>
       </Html>
     </group>

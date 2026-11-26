@@ -61,6 +61,17 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
       if (!input.address?.trim()) return reply.code(400).send({ error: "Informe o endereço de entrega.", code: "ADDRESS_REQUIRED" });
       if (!input.customerPhone) return reply.code(400).send({ error: "Informe um telefone para contato da entrega.", code: "PHONE_REQUIRED" });
     }
+    // SALÃO 3D: pedido lançado NA MESA entra na conta dela (paga no fechamento da mesa, nunca aqui).
+    if ((input.type === "MESA") !== !!input.tableId) {
+      return reply.code(400).send({ error: "Pedido de mesa precisa da mesa (e só ele leva mesa).", code: "TABLE_REQUIRED" });
+    }
+    if (input.type === "MESA") {
+      if (input.alreadyPaid || input.paymentMethod || input.changeForCents !== undefined) {
+        return reply.code(400).send({ error: "O pedido da mesa é pago no fechamento da mesa.", code: "TABLE_PAYS_AT_CLOSE" });
+      }
+      const table = await prisma.table.findFirst({ where: { id: input.tableId, storeId, active: true }, select: { id: true } });
+      if (!table) return reply.code(404).send({ error: "Mesa não encontrada.", code: "TABLE_NOT_FOUND" });
+    }
     if (input.alreadyPaid && !input.paymentMethod) {
       return reply.code(400).send({ error: "Informe a forma de pagamento de um pedido já pago.", code: "PAYMENT_METHOD_REQUIRED" });
     }
@@ -116,7 +127,7 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
     const tipCents = input.tipCents ?? 0;
     assertOrderMoneyFits(totalCents);
     const zeroTotal = totalCents === 0;
-    const paymentMethod = zeroTotal ? null : toOrderPaymentMethod(input.paymentMethod);
+    const paymentMethod = zeroTotal || input.type === "MESA" ? null : toOrderPaymentMethod(input.paymentMethod);
     if (!zeroTotal && input.changeForCents !== undefined) {
       if (paymentMethod !== "DINHEIRO") return reply.code(400).send({ error: "troco só se aplica a pagamento em dinheiro", code: "CHANGE_ONLY_CASH" });
       if (input.changeForCents < totalCents) return reply.code(400).send({ error: "o valor para troco deve cobrir o total do pedido", code: "CHANGE_TOO_LOW" });
@@ -141,6 +152,7 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
         release: true,
         fields: (code) => ({
           type: input.type,
+          tableId: input.type === "MESA" ? input.tableId : null,
           status: "CONFIRMADO", // o atendente já aceitou ao lançar
           channel: input.channel ?? null,
           createdByUserId: userId,

@@ -116,7 +116,8 @@ export type ReceiveTableInput = z.infer<typeof receiveTableSchema>;
 export const MANUAL_DISCOUNT_REASONS = ["CORTESIA", "ERRO_DO_PEDIDO", "CLIENTE_FREQUENTE", "PROMOCAO_DO_DIA", "OUTRO"] as const;
 export const manualOrderChannelSchema = z.enum(["TELEFONE", "WHATSAPP", "BALCAO", "OUTRO"]);
 export const createManualOrderSchema = z.object({
-  type: z.enum(["DELIVERY", "BALCAO"]),
+  type: z.enum(["DELIVERY", "BALCAO", "MESA"]), // MESA (salão 3D): lança na conta da mesa; paga no fechamento
+  tableId: z.string().min(1).max(50).optional(),
   customerName: textField({ max: 150, min: 1 }).optional(),
   customerPhone: phoneSchema.optional(),
   address: textField({ max: 500, multiline: true }).optional(),

@@ -10,13 +10,16 @@ import { formatCents } from "@/shared/format/money";
 import { STATUS_TOKEN_VAR } from "./scene/palette";
 import type { FloorElement, FloorElementKind, SalaoTable, Selection, TableAccount, TableShape } from "./types";
 import { clearAlert, loadAccount, saveFloor, useSalao } from "./useSalao";
+import { AddOrderDialog, ReservationsDrawer, TableCrew, timeOf } from "./SalaoExtras";
+import { operationRequest } from "@/features/operacao/storeOperations";
+import type { TeamMember } from "./types";
 import "./salao.css";
 
 // SALÃO 3D (tela nova). A biblioteca 3D só carrega nesta tela e só no navegador.
 const SalaoCanvas = dynamic(() => import("./scene/SalaoCanvas"), { ssr: false, loading: () => <div className="salao-canvas salao-canvas--loading">Montando o salão…</div> });
 
 const STATUS_TONE: Record<TableStatus, "neutral" | "success" | "warning" | "danger" | "info"> = {
-  FREE: "success", OCCUPIED: "danger", WAITING: "info", CALL_WAITER: "warning", ASK_BILL: "warning", INACTIVE: "neutral",
+  FREE: "success", OCCUPIED: "danger", WAITING: "info", RESERVED: "warning", CALL_WAITER: "warning", ASK_BILL: "warning", INACTIVE: "neutral",
 };
 const SHAPE_LABEL: Record<TableShape, string> = { SQUARE: "Quadrada", ROUND: "Redonda", RECT: "Retangular" };
 const ELEMENT_LABEL: Record<FloorElementKind, string> = { WALL: "Parede", COUNTER: "Balcão", PLANT: "Planta", DOOR: "Porta" };
@@ -43,6 +46,15 @@ export function SalaoPage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [area, setArea] = useState<string>("");
+  const [showReservations, setShowReservations] = useState(false);
+  const [me, setMe] = useState<string | null>(null);
+  const [team, setTeam] = useState<TeamMember[]>([]);
+  useEffect(() => {
+    void operationRequest<{ user: { userId: string } }>("/auth/me").then((r) => r.ok && setMe(r.data.user.userId));
+  }, []);
+  useEffect(() => {
+    if (owner) void operationRequest<{ users: TeamMember[] }>("/api/users").then((r) => r.ok && setTeam(r.data.users));
+  }, [owner]);
 
   const areas = useMemo(() => [...new Set((tables ?? []).map((t) => t.layout.area).filter((a): a is string => !!a))].sort(), [tables]);
   const visibleTables = useMemo(() => (tables ?? []).filter((t) => !area || t.layout.area === area), [tables, area]);
@@ -107,9 +119,11 @@ export function SalaoPage() {
                 <Button variant="primary" busy={saving} disabled={!dirty} onClick={() => void save()}>Salvar salão</Button>
               </div>
             ) : (
-              <Button onClick={() => { setEditing(true); setMessage(null); }}>Organizar salão</Button>
+              <div className="salao__toolbar"><Button onClick={() => setShowReservations(true)}>Reservas</Button><Button onClick={() => { setEditing(true); setMessage(null); }}>Organizar salão</Button></div>
             )
-          ) : null
+          ) : (
+            <Button onClick={() => setShowReservations(true)}>Reservas</Button>
+          )
         }
       />
 
@@ -117,7 +131,7 @@ export function SalaoPage() {
       {message ? <StateMessage tone="success" title={message} /> : null}
 
       <div className="salao__summary" aria-label="Resumo do salão">
-        {(["FREE", "OCCUPIED", "WAITING", "CALL_WAITER", "ASK_BILL"] as TableStatus[]).map((s) => (
+        {(["FREE", "OCCUPIED", "RESERVED", "WAITING", "CALL_WAITER", "ASK_BILL"] as TableStatus[]).map((s) => (
           <span key={s} className="salao__chip" style={{ ["--chip" as string]: `var(${STATUS_TOKEN_VAR[s]})` }}>
             <span className="salao__chip-dot" />
             {TABLE_STATUS_LABEL[s]}: <strong>{counts[s]}</strong>
@@ -173,9 +187,10 @@ export function SalaoPage() {
           editing ? (
             <TableEditor table={selectedTable} onChange={(patch) => updateTable(selectedTable.id, patch)} onClose={() => setSelection(null)} />
           ) : (
-            <TablePanel table={selectedTable} onClose={() => setSelection(null)} onChanged={() => void reloadTables()} />
+            <TablePanel table={selectedTable} owner={owner} me={me} team={team} onClose={() => setSelection(null)} onChanged={() => void reloadTables()} />
           )
         ) : null}
+        {showReservations && tables ? <ReservationsDrawer tables={tables} onClose={() => setShowReservations(false)} onChanged={() => void reloadTables()} /> : null}
         {selectedElement && editing && selection?.kind === "element" ? (
           <ElementEditor
             element={selectedElement}
@@ -193,7 +208,8 @@ export function SalaoPage() {
   );
 }
 
-function TablePanel({ table, onClose, onChanged }: { table: SalaoTable; onClose: () => void; onChanged: () => void }) {
+function TablePanel({ table, owner, me, team, onClose, onChanged }: { table: SalaoTable; owner: boolean; me: string | null; team: TeamMember[]; onClose: () => void; onChanged: () => void }) {
+  const [adding, setAdding] = useState(false);
   const [account, setAccount] = useState<TableAccount | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -247,6 +263,8 @@ function TablePanel({ table, onClose, onChanged }: { table: SalaoTable; onClose:
         </div>
       ) : null}
       {error ? <StateMessage tone="danger" title="Algo deu errado">{error}</StateMessage> : null}
+      <TableCrew table={table} owner={owner} me={me} team={team} onChanged={onChanged} />
+      {table.nextReservation ? <p className="salao__muted">Próxima reserva: {timeOf(table.nextReservation.startsAt)} · {table.nextReservation.customerName} · {table.nextReservation.partySize}p</p> : null}
 
       <h3 className="salao-panel__section">Pedidos da conta</h3>
       {!account ? (
@@ -279,8 +297,10 @@ function TablePanel({ table, onClose, onChanged }: { table: SalaoTable; onClose:
       </div>
       <div className="salao-panel__actions">
         {account?.pendingOrders ? <Link className="ds-button ds-button--secondary" href="/dashboard/pedidos">Aceitar pedidos</Link> : null}
+        {table.active ? <Button onClick={() => setAdding(true)}>Adicionar pedido</Button> : null}
         <Link className="ds-button ds-button--primary" href={`/dashboard/mesas?mesa=${encodeURIComponent(table.id)}`}>Fechar conta</Link>
       </div>
+      {adding ? <AddOrderDialog table={table} onClose={() => setAdding(false)} onDone={() => { setAdding(false); onChanged(); }} /> : null}
     </aside>
   );
 }

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { textField } from "./text";
+import { PHONE_INVALID_MESSAGE, PHONE_MAX_INPUT, isValidBrPhone } from "./phone";
 
 // SALÃO 3D: planta do salão (mesas + elementos fixos) e o STATUS operacional da mesa. Fonte única: a API calcula
 // o status com `tableStatusOf` e a tela só desenha; ninguém repete a regra.
@@ -44,7 +45,7 @@ export type FloorLayoutInput = z.infer<typeof floorLayoutSchema>;
 export const tableAlertClearSchema = z.object({ kind: z.enum(["CALL_WAITER", "ASK_BILL", "ALL"]) }).strict();
 
 // Status operacional, do mais urgente para o menos.
-export const TABLE_STATUSES = ["INACTIVE", "ASK_BILL", "CALL_WAITER", "WAITING", "OCCUPIED", "FREE"] as const;
+export const TABLE_STATUSES = ["INACTIVE", "ASK_BILL", "CALL_WAITER", "WAITING", "OCCUPIED", "RESERVED", "FREE"] as const;
 export type TableStatus = (typeof TABLE_STATUSES)[number];
 
 export const TABLE_STATUS_LABEL: Record<TableStatus, string> = {
@@ -53,14 +54,45 @@ export const TABLE_STATUS_LABEL: Record<TableStatus, string> = {
   CALL_WAITER: "Chamou o garçom",
   WAITING: "Aguardando atendimento",
   OCCUPIED: "Ocupada",
+  RESERVED: "Reservada",
   FREE: "Livre",
 };
 
-export function tableStatusOf(t: { active: boolean; pendingOrders: number; accountOrders: number; callWaiterAt: Date | string | null; askBillAt: Date | string | null }): TableStatus {
+export function tableStatusOf(t: { active: boolean; pendingOrders: number; accountOrders: number; callWaiterAt: Date | string | null; askBillAt: Date | string | null; reservedSoon?: boolean; guests?: number | null }): TableStatus {
   if (!t.active) return "INACTIVE";
   if (t.askBillAt) return "ASK_BILL";
   if (t.callWaiterAt) return "CALL_WAITER";
   if (t.pendingOrders > 0) return "WAITING";
-  if (t.accountOrders > 0) return "OCCUPIED";
+  if (t.accountOrders > 0 || (t.guests ?? 0) > 0) return "OCCUPIED"; // pessoas sentadas sem pedido ainda = ocupada
+  if (t.reservedSoon) return "RESERVED";
   return "FREE";
 }
+
+// ---------- Opcionais do salão ----------
+// Reserva "logo": de 30 min antes até 15 min depois do horário (a mesa aparece como Reservada no mapa).
+export const RESERVATION_SOON_BEFORE_MIN = 30;
+export const RESERVATION_SOON_AFTER_MIN = 15;
+export const RESERVATION_STATUSES = ["BOOKED", "SEATED", "CANCELED", "NO_SHOW"] as const;
+export const RESERVATION_STATUS_LABEL: Record<(typeof RESERVATION_STATUSES)[number], string> = { BOOKED: "Reservada", SEATED: "Chegou", CANCELED: "Cancelada", NO_SHOW: "Não veio" };
+
+const isoInstant = z.string().max(40).refine((v) => !Number.isNaN(new Date(v).getTime()), "data inválida");
+
+export const createReservationSchema = z.object({
+  tableId: z.string().min(1).max(50).nullable().optional(),
+  customerName: textField({ max: 80, min: 1 }),
+  customerPhone: z.string().trim().max(PHONE_MAX_INPUT, PHONE_INVALID_MESSAGE).refine(isValidBrPhone, PHONE_INVALID_MESSAGE).optional(), // regra única do telefone (./phone)
+  partySize: z.number().int().min(1).max(100),
+  startsAt: isoInstant,
+  durationMin: z.number().int().min(15).max(720).optional(),
+  notes: textField({ max: 300, multiline: true }).optional(),
+}).strict();
+export type CreateReservationInput = z.infer<typeof createReservationSchema>;
+
+export const updateReservationSchema = createReservationSchema.partial().extend({ status: z.enum(RESERVATION_STATUSES).optional() }).strict()
+  .refine((v) => Object.keys(v).length > 0, "nada para alterar");
+
+export const reservationsQuerySchema = z.object({ from: isoInstant.optional(), to: isoInstant.optional() });
+
+// Garçom responsável (null = ninguém) e pessoas na mesa (null = não informado).
+export const tableWaiterSchema = z.object({ userId: z.string().min(1).max(50).nullable() }).strict();
+export const tableGuestsSchema = z.object({ guests: z.number().int().min(1).max(50).nullable() }).strict();

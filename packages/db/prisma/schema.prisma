@@ -189,6 +189,7 @@ model Store {
   aiCreditLedger AiCreditLedger[]
   dish3dJobs     Dish3dJob[]
   floorElements  FloorElement[]
+  reservations   Reservation[]
 }
 
 enum TableShape {
@@ -220,6 +221,34 @@ model FloorElement {
   @@index([storeId])
 }
 
+enum ReservationStatus {
+  BOOKED   // reservada
+  SEATED   // cliente chegou e sentou
+  CANCELED
+  NO_SHOW  // não apareceu
+}
+
+// SALÃO 3D (opcional): reserva de mesa. Dado pessoal mínimo (nome e telefone opcional), só no painel.
+model Reservation {
+  id              String            @id @default(cuid())
+  storeId         String
+  store           Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  tableId         String?
+  table           Table?            @relation(fields: [tableId, storeId], references: [id, storeId], onDelete: NoAction)
+  customerName    String
+  customerPhone   String?
+  partySize       Int
+  startsAt        DateTime
+  durationMin     Int               @default(90)
+  status          ReservationStatus @default(BOOKED)
+  notes           String?
+  createdByUserId String
+  createdAt       DateTime          @default(now())
+
+  @@index([storeId, startsAt])
+  @@index([tableId, startsAt])
+}
+
 // API-22 (ADR-0002 nível 1): mesa física com QR próprio. `qrToken` é opaco (256 bits), nunca derivado de id/slug, e regenerável.
 model Table {
   id        String   @id @default(cuid())
@@ -239,6 +268,11 @@ model Table {
   // Avisos do QR guardados até a equipe marcar como atendido (ou a mesa ser recebida).
   callWaiterAt DateTime?
   askBillAt    DateTime?
+  // SALÃO 3D (opcionais): garçom responsável (usuário da loja) e pessoas sentadas agora (zera ao receber a mesa).
+  waiterUserId String?
+  waiter       User?    @relation("TableWaiter", fields: [waiterUserId], references: [id], onDelete: SetNull)
+  guests       Int?
+  reservations Reservation[]
   createdAt DateTime @default(now())
   orders    Order[]
   receipts  Receipt[]
@@ -269,6 +303,7 @@ model User {
   noticeDismissals UserNoticeDismissal[]
   emailVerifiedAt DateTime? // API-26: e-mail confirmado (RN-ONB-03); nulo = ainda não verificado
   emailVerificationTokens EmailVerificationToken[]
+  waiterTables Table[] @relation("TableWaiter")
 
   @@index([storeId])
 }
