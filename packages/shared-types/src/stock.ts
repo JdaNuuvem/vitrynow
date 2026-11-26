@@ -38,6 +38,17 @@ export const stockLossSchema = z.discriminatedUnion("type", [
 ]);
 export type StockLossInput = z.infer<typeof stockLossSchema>;
 
+// Perda de PRATO PRONTO (caiu, queimou, erro): a baixa sai pela ficha técnica do produto. Produto por peso: `weightGrams` por unidade.
+export const productLossSchema = z.object({
+  quantity: z.number().int().positive().max(100),
+  weightGrams: z.number().int().positive().max(100_000).optional(),
+  reason: z.enum(WASTE_REASONS),
+}).strict();
+export type ProductLossInput = z.infer<typeof productLossSchema>;
+
+// Motivo só do SISTEMA: pedido aceito, já preparado, e cancelado (os insumos não voltam ao estoque, viram desperdício).
+export const ORDER_CANCELED_WASTE_REASON = "PEDIDO_CANCELADO";
+
 // Contagem (só o dono): o saldo vira o contado; a diferença vira um ajuste registrado.
 export const stockCountSchema = z.object({ countedQty: z.number().int().min(0).max(100_000_000) }).strict();
 

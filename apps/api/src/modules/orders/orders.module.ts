@@ -85,9 +85,9 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/api/orders/:id/cancel", auth, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const body = (request.body ?? {}) as { reason?: CancelReason; acknowledgeClosedCash?: unknown };
+    const body = (request.body ?? {}) as { reason?: CancelReason; acknowledgeClosedCash?: unknown; stockWasted?: unknown };
     if (!(await guardRefund(request, reply, id))) return reply; // SEC-40: o helper ja enviou o 403: devolver `reply` (nao `undefined`)
-    const result = await orderService.cancelByPanel(actorOf(request), id, body.reason, body.acknowledgeClosedCash === true);
+    const result = await orderService.cancelByPanel(actorOf(request), id, body.reason, body.acknowledgeClosedCash === true, body.stockWasted === true);
     return reply.code(result.refund === "PENDING" ? 202 : 200).send(result.refund === "NONE" ? { order: result.order } : result);
   });
 

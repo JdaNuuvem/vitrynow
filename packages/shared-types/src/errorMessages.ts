@@ -38,6 +38,7 @@ export const errorMessages = {
   TOO_MANY_ROWS: e("A planilha tem mais de 500 linhas. Divida em duas.", "painel"),
   UNKNOWN_FIELD: e("Coluna não reconhecida: foi ignorada.", "painel"),
   INGREDIENT_NOT_FOUND: e("Insumo não encontrado.", "painel"),
+  PRODUCT_NO_RECIPE: e("Este produto não tem ficha técnica. Monte a ficha ou lance a perda por insumo.", "painel"),
   CASH_ALREADY_OPEN: e("Já existe um caixa aberto.", "painel"),
   CASH_COUNTED_REQUIRED: e("Informe o valor contado no caixa.", "painel"),
   CASH_REQUIRED: e("Abra o caixa para continuar.", "painel"),

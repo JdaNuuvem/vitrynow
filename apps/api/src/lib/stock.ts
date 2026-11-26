@@ -1,4 +1,5 @@
 import type { Prisma, StockMovementType } from "@meucardapio/db";
+import { ORDER_CANCELED_WASTE_REASON } from "@meucardapio/shared-types";
 
 // ESTOQUE E LUCRO — núcleo. Regras:
 // - Saldo e custo em UNIDADE BASE inteira (g, ml, un); custo em milésimos de centavo por unidade (R$ 40,00/kg = 4000).
@@ -144,8 +145,13 @@ export async function deductStockForOrder(tx: Tx, order: { id: string; storeId: 
   return { cogsCents: cogs, alerts };
 }
 
-/** Estorno da baixa (cancelamento ou "desfazer aceite"): devolve o saldo LÍQUIDO do pedido ao custo da baixa. Idempotente. */
-export async function reverseStockForOrder(tx: Tx, order: { id: string; storeId: string }, now: Date): Promise<void> {
+/**
+ * Estorno da baixa (cancelamento ou "desfazer aceite"): devolve o saldo LÍQUIDO do pedido ao custo da baixa. Idempotente.
+ * `asWaste` (cancelamento de pedido JÁ PREPARADO): a comida foi feita e jogada fora; o estorno da VENDA acontece (o pedido não
+ * vendeu, sai do CMV), mas cada insumo sai de novo como DESPERDÍCIO (motivo PEDIDO_CANCELADO): o saldo fica como estava e o custo
+ * vai para as perdas do DRE.
+ */
+export async function reverseStockForOrder(tx: Tx, order: { id: string; storeId: string }, now: Date, asWaste?: { userId: string | null }): Promise<void> {
   const released = await tx.order.updateMany({ where: { id: order.id, storeId: order.storeId, stockDeductedAt: { not: null } }, data: { stockDeductedAt: null, stockReversedAt: now, cogsCents: null } });
   if (released.count !== 1) return;
   await tx.orderItem.updateMany({ where: { orderId: order.id }, data: { cogsCents: null } });
@@ -155,5 +161,33 @@ export async function reverseStockForOrder(tx: Tx, order: { id: string; storeId:
     if (qty <= 0) continue;
     const unitCost = Math.round((-(row._sum.costCents ?? 0) * MILLI) / qty);
     await applyMovement(tx, { storeId: order.storeId, ingredientId: row.ingredientId, type: "SALE_REVERSAL", quantity: qty, unitCostMillicents: Math.max(0, unitCost), orderId: order.id, now });
+    if (asWaste) {
+      await applyMovement(tx, { storeId: order.storeId, ingredientId: row.ingredientId, type: "WASTE", quantity: -qty, reason: ORDER_CANCELED_WASTE_REASON, orderId: order.id, userId: asWaste.userId, now });
+    }
   }
+}
+
+/**
+ * Perda de PRATO PRONTO: a baixa sai pela ficha técnica do produto (como uma venda), mas como DESPERDÍCIO com motivo.
+ * Insumos em ordem de id (mesma ordem de trava da venda). Produto sem ficha => null (quem chama responde PRODUCT_NO_RECIPE).
+ */
+export async function wasteProduct(
+  tx: Tx,
+  input: { storeId: string; productId: string; quantity: number; weightGrams?: number; reason: string; userId: string | null; now: Date },
+): Promise<{ costCents: number; movementIds: string[]; alerts: StockAlert[] } | null> {
+  const recipes = await loadRecipes(tx, input.storeId, [input.productId], []);
+  // Por peso: a ficha é por 1 kg; `weightGrams` é o peso de CADA unidade perdida.
+  const line: ConsumptionLine = { productId: input.productId, quantity: input.quantity, weightGrams: input.weightGrams !== undefined ? input.weightGrams * input.quantity : null, options: [] };
+  const usage = consumptionOf([line], recipes);
+  if (usage.size === 0) return null;
+  let costCents = 0;
+  const movementIds: string[] = [];
+  const alerts: StockAlert[] = [];
+  for (const ingredientId of [...usage.keys()].sort()) {
+    const movement = await applyMovement(tx, { storeId: input.storeId, ingredientId, type: "WASTE", quantity: -usage.get(ingredientId)!, reason: input.reason, userId: input.userId, now: input.now });
+    costCents += -movement.costCents;
+    movementIds.push(movement.id);
+    if (movement.alert) alerts.push(movement.alert);
+  }
+  return { costCents, movementIds, alerts };
 }

@@ -39,7 +39,8 @@ export const CANCEL_REASONS: readonly CancelReason[] = [
 ];
 
 // Escolha do dono na folha. Só o motivo e, em "Outro", a nota INTERNA (nunca vai ao cliente).
-export type CancelDraft = { code: CancelReasonCode | null; text: string };
+// `stockWasted`: pedido já aceito e JÁ PREPARADO; os insumos não voltam ao estoque, viram desperdício (só se marcado).
+export type CancelDraft = { code: CancelReasonCode | null; text: string; stockWasted?: boolean };
 
 export type CancelValidation = { ok: true } | { ok: false; hint: string };
 
@@ -73,5 +74,6 @@ export function buildCancelBody(draft: CancelDraft, acknowledgeClosedCash = fals
       customerMessage: customerPhraseFor(draft.code) as string,
     },
     acknowledgeClosedCash,
+    ...(draft.stockWasted ? { stockWasted: true } : {}),
   };
 }

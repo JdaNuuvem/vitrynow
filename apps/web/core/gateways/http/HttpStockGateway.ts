@@ -1,6 +1,6 @@
 import type { HttpClient } from "../../http/HttpClient";
 import type { Ingredient, IngredientList, MenuMargin, ProfitReport, Recipe, StockMovement, StockUnit } from "../../domain/stock";
-import type { LossInput, MovementsQuery, StockGateway } from "../StockGateway";
+import type { LossInput, MovementsQuery, ProductLossInput, ProductLossReply, StockGateway } from "../StockGateway";
 
 const enc = encodeURIComponent;
 type IngredientReply = { ingredient: Ingredient };
@@ -23,6 +23,9 @@ export class HttpStockGateway implements StockGateway {
   }
   loss(id: string, input: LossInput) {
     return this.http.post<IngredientReply>(`/api/stock/ingredients/${enc(id)}/loss`, input);
+  }
+  productLoss(productId: string, input: ProductLossInput) {
+    return this.http.post<ProductLossReply>(`/api/stock/products/${enc(productId)}/loss`, input);
   }
   count(id: string, countedQty: number) {
     return this.http.post<IngredientReply & { diff: number }>(`/api/stock/ingredients/${enc(id)}/count`, { countedQty });

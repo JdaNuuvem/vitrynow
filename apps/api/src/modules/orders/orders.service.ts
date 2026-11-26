@@ -58,6 +58,8 @@ type CancelOrigin = {
   providerRefundedAt?: string;
   // Expiração do PIX (API-06): se o pagamento aparecer APROVADO (webhook que chegou no meio), NÃO cancela nem estorna: o pedido segue pago.
   skipIfPaid?: boolean;
+  // Painel: o pedido aceito JÁ FOI PREPARADO. Os insumos não voltam ao estoque: viram desperdício (PEDIDO_CANCELADO).
+  stockWasted?: boolean;
 };
 
 // Teto de tentativas AUTOMÁTICAS de estorno (o job de conciliação da API-06 para aqui; o "Tentar estorno" manual do dono segue valendo).
@@ -376,7 +378,7 @@ export class OrderService {
     });
   }
 
-  async cancelByPanel(actor: PanelActor, orderId: string, reason: CancelReason | undefined, acknowledgeClosedCash = false) {
+  async cancelByPanel(actor: PanelActor, orderId: string, reason: CancelReason | undefined, acknowledgeClosedCash = false, stockWasted = false) {
     const valid = this.validateReason(reason);
     const order = await this.load(actor.storeId, orderId);
     if (FINAL_STATUSES.includes(order.status)) throw err(409, "INVALID_TRANSITION", "Este pedido já foi finalizado ou cancelado.");
@@ -384,17 +386,17 @@ export class OrderService {
     if (await this.closedCashSessionOf(order)) {
       if (actor.role !== panelRoleSchema.enum.OWNER) throw err(403, "CASH_CLOSED_OWNER_ONLY", "Esse pedido é de um caixa já fechado. Só o dono pode cancelar.");
       if (!acknowledgeClosedCash) throw err(409, "CASH_CLOSED_ACK_REQUIRED", "Confirme que entende que isso afeta o caixa já fechado.");
-      return this.cancelClosedCashOrder(actor, order, valid);
+      return this.cancelClosedCashOrder(actor, order, valid, stockWasted);
     }
     if (!canCancel(order, actor.role)) throw err(403, "FORBIDDEN_ROLE", "Só o dono da loja pode cancelar este pedido.");
-    const refund = await this.cancelOrder(order, { source: "PANEL", userId: actor.userId, actor: actor.role, reason: valid });
+    const refund = await this.cancelOrder(order, { source: "PANEL", userId: actor.userId, actor: actor.role, reason: valid, ...(stockWasted ? { stockWasted: true } : {}) });
     return { order: await this.get(actor, orderId), refund };
   }
 
   // Cancela pedido de caixa JÁ FECHADO: cria a DEVOLUCAO no caixa ATUAL (o fechado não muda: RN-B3-07). Sem caixa aberto => 409 CASH_REQUIRED.
   // Uma transação: loja -> pedido -> caixa aberto. `Order.cashRefundMovementId` é único (idempotência). Auditoria na mesma transação.
-  private async cancelClosedCashOrder(actor: PanelActor, order: OrderWithPayment, reason: CancelReason) {
-    const origin: CancelOrigin = { source: "PANEL", userId: actor.userId, actor: panelRoleSchema.enum.OWNER, reason };
+  private async cancelClosedCashOrder(actor: PanelActor, order: OrderWithPayment, reason: CancelReason, stockWasted = false) {
+    const origin: CancelOrigin = { source: "PANEL", userId: actor.userId, actor: panelRoleSchema.enum.OWNER, reason, ...(stockWasted ? { stockWasted: true } : {}) };
     const sink = { noticeQueued: false };
     const result = await this.runTx(async (tx) => {
       await lockPrintMode(tx, actor.storeId);
@@ -516,8 +518,9 @@ export class OrderService {
       data: { status: "CANCELADO", canceledAt: now, delivererId: null },
     });
     if (moved.count !== 1) return false;
-    // ESTOQUE: pedido aceito e cancelado devolve os insumos (não é perda: o que estragou se lança à parte, como SPOILAGE/WASTE).
-    await reverseStockForOrder(tx, { id: order.id, storeId: order.storeId }, now);
+    // ESTOQUE: pedido aceito e cancelado devolve os insumos. Se a loja disse que JÁ FOI PREPARADO, a venda é estornada mas os
+    // insumos saem de novo como desperdício (PEDIDO_CANCELADO): o saldo não infla e o custo aparece nas perdas.
+    await reverseStockForOrder(tx, { id: order.id, storeId: order.storeId }, now, origin.stockWasted ? { userId: origin.userId } : undefined);
     await tx.orderStatusHistory.create({
       data: {
         orderId: order.id,

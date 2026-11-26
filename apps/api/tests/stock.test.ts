@@ -118,6 +118,48 @@ describe("estoque — integração", () => {
     expect((await prisma.order.findUniqueOrThrow({ where: { id: aceito } })).cogsCents).toBeNull();
   });
 
+  it("cancelar pedido JÁ PREPARADO (stockWasted): a venda é estornada, mas os insumos saem como desperdício PEDIDO_CANCELADO", async () => {
+    const l = await loja();
+    const { carne, pao } = await montar(l);
+    const id = await pedir(l, 2);
+    await mover(l, id, "CONFIRMADO");
+    const c = await l.call("POST", `/api/orders/${id}/cancel`, { reason: { code: "CLIENTE_DESISTIU" }, stockWasted: true });
+    expect(c.statusCode, c.body).toBe(200);
+    expect([await saldo(carne), await saldo(pao)]).toEqual([10_000 - 360, 48]); // não volta ao estoque
+    const waste = await prisma.stockMovement.findMany({ where: { orderId: id, type: "WASTE" }, orderBy: { ingredientId: "asc" } });
+    expect(waste).toHaveLength(2);
+    expect(waste.every((m) => m.reason === "PEDIDO_CANCELADO" && m.quantity < 0 && m.userId)).toBe(true);
+    const p = json(await l.call("GET", "/api/stock/profit"));
+    expect(p).toMatchObject({ revenueCents: 0, cogsCents: 0, losses: { wasteCents: 1640 } });
+    expect(p.lossesByReason).toEqual([{ type: "WASTE", reason: "PEDIDO_CANCELADO", count: 2, costCents: 1640 }]);
+    // sem a marca (padrão), o cancelamento continua devolvendo o estoque
+    const outro = await pedir(l);
+    await mover(l, outro, "CONFIRMADO");
+    await l.call("POST", `/api/orders/${outro}/cancel`, { reason: { code: "CLIENTE_DESISTIU" } });
+    expect(await saldo(carne)).toBe(10_000 - 360);
+  });
+
+  it("perda de PRATO PRONTO: baixa pela ficha como desperdício; equipe pode; sem ficha = 409; custo só para o dono", async () => {
+    const l = await loja();
+    const { carne, pao } = await montar(l);
+    const r = await l.call("POST", `/api/stock/products/${l.burger}/loss`, { quantity: 2, reason: "CAIU" }, l.staff);
+    expect(r.statusCode, r.body).toBe(201);
+    expect(json(r)).toMatchObject({ ingredients: 2 });
+    expect(json(r).costCents).toBeUndefined();
+    expect([await saldo(carne), await saldo(pao)]).toEqual([10_000 - 360, 48]);
+    const own = await l.call("POST", `/api/stock/products/${l.burger}/loss`, { quantity: 1, reason: "QUEIMOU" });
+    expect(json(own).costCents).toBe(820);
+    expect((await l.call("POST", `/api/stock/products/${l.burger}/loss`, { quantity: 1, reason: "texto livre" })).statusCode).toBe(400);
+    expect((await l.call("POST", `/api/stock/products/${l.burger}/loss`, { quantity: 0, reason: "CAIU" })).statusCode).toBe(400);
+    expect((await l.call("POST", `/api/stock/products/nao-existe/loss`, { quantity: 1, reason: "CAIU" })).statusCode).toBe(404);
+    const semFicha = json(await l.call("POST", "/api/catalog/products", { categoryId: l.categoryId, name: "Água", priceCents: 500 })).product.id;
+    const s = await l.call("POST", `/api/stock/products/${semFicha}/loss`, { quantity: 1, reason: "CAIU" });
+    expect([s.statusCode, json(s).code]).toEqual([409, "PRODUCT_NO_RECIPE"]);
+    const p = json(await l.call("GET", "/api/stock/profit"));
+    expect(p.losses.wasteCents).toBe(3 * 820);
+    expect(await prisma.auditLog.count({ where: { action: "stock.product_loss" } })).toBe(2);
+  });
+
   it("desfazer o aceite devolve; aceitar de novo baixa UMA vez (idempotente)", async () => {
     const l = await loja();
     const { carne } = await montar(l);

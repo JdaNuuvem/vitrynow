@@ -1,12 +1,12 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { Prisma, prisma } from "@meucardapio/db";
 import {
-  createIngredientSchema, panelRoleSchema, recipeSchema, stockCountSchema, stockLossSchema, stockMovementsQuerySchema, stockPurchaseSchema, updateIngredientSchema,
+  createIngredientSchema, panelRoleSchema, productLossSchema, recipeSchema, stockCountSchema, stockLossSchema, stockMovementsQuerySchema, stockPurchaseSchema, updateIngredientSchema,
 } from "@meucardapio/shared-types";
 import { logAudit } from "../lib/audit";
 import { buildReport, resolveRange } from "../lib/reports";
 import { utc } from "../lib/sqlTime";
-import { applyMovement, costCentsOf, MILLI, unitCostFromTotal } from "../lib/stock";
+import { applyMovement, costCentsOf, MILLI, unitCostFromTotal, wasteProduct } from "../lib/stock";
 import { storeTimeZone } from "../lib/storeTz";
 import { CodedError, useDomainErrors } from "../shared/errors";
 import { publishToStore } from "../realtime/hub";
@@ -119,6 +119,22 @@ const stockRoutes: FastifyPluginAsync = async (app) => {
     logAudit({ storeId, userId, action: "stock.loss", targetType: "Ingredient", targetId: id, metadata: { type: parsed.data.type, reason: parsed.data.reason, quantity: parsed.data.quantity } });
     const ingredient = await prisma.ingredient.findUniqueOrThrow({ where: { id } });
     return reply.code(201).send({ movementId: movement.id, ingredient: ingredientView(ingredient, isOwner(request)) });
+  });
+
+  // Perda de PRATO PRONTO (equipe e dono): "caiu um ramen" vira a baixa de todos os insumos da ficha, como desperdício com motivo.
+  app.post("/api/stock/products/:id/loss", panel, async (request, reply) => {
+    const { storeId, userId } = request.user;
+    const { id } = request.params as { id: string };
+    const parsed = productLossSchema.safeParse(request.body);
+    if (!parsed.success) return bad(reply, parsed.error);
+    const product = await prisma.product.findFirst({ where: { id, storeId }, select: { id: true, name: true } });
+    if (!product) throw new CodedError(404, "PRODUCT_NOT_FOUND", "Produto não encontrado.");
+    const result = await prisma.$transaction((tx) =>
+      wasteProduct(tx, { storeId, productId: id, quantity: parsed.data.quantity, weightGrams: parsed.data.weightGrams, reason: parsed.data.reason, userId, now: new Date() }));
+    if (!result) throw new CodedError(409, "PRODUCT_NO_RECIPE", "Este produto não tem ficha técnica. Monte a ficha ou lance a perda por insumo.");
+    for (const alert of result.alerts) publishToStore(storeId, { type: "stock.low", ...alert });
+    logAudit({ storeId, userId, action: "stock.product_loss", targetType: "Product", targetId: id, metadata: { quantity: parsed.data.quantity, weightGrams: parsed.data.weightGrams ?? null, reason: parsed.data.reason, costCents: result.costCents } });
+    return reply.code(201).send({ movementIds: result.movementIds, ingredients: result.movementIds.length, ...(isOwner(request) ? { costCents: result.costCents } : {}) });
   });
 
   // Contagem (só o dono): o saldo vira o contado; a diferença é um AJUSTE (sobra entra, falta sai pelo custo médio).

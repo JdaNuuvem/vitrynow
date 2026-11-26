@@ -85,6 +85,11 @@ describe("buildCancelBody (POST /api/orders/:id/cancel)", () => {
     expect(body.reason.customerMessage).not.toContain("99999");
   });
 
+  it("pedido já preparado manda stockWasted; desmarcado não manda nada", () => {
+    expect(buildCancelBody({ code: "CLIENTE_DESISTIU", text: "", stockWasted: true })).toMatchObject({ stockWasted: true });
+    expect(buildCancelBody({ code: "CLIENTE_DESISTIU", text: "", stockWasted: false })).not.toHaveProperty("stockWasted");
+  });
+
   it("sem motivo não monta corpo", () => {
     expect(() => buildCancelBody({ code: null, text: "" })).toThrow();
   });

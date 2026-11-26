@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import type { Category } from "@/core/domain/catalog";
 import type { OptionGroup } from "@/core/domain/optionGroups";
-import { formatQty, MOVEMENT_LABEL, SPOILAGE_REASONS, unitCostLabel, WASTE_REASONS, type Ingredient, type MenuMargin, type StockMovement } from "@/core/domain/stock";
+import { formatQty, MOVEMENT_LABEL, SPOILAGE_REASONS, SYSTEM_WASTE_REASONS, unitCostLabel, WASTE_REASONS, type Ingredient, type MenuMargin, type StockMovement } from "@/core/domain/stock";
 import { usePanelServices } from "@/core/services/PanelServices";
 import { useCurrentRole } from "@/core/session/useCurrentRole";
 import { Button, DataTable, PageHeading, Panel, StateMessage, StatusBadge } from "@/shared/design/components";
@@ -12,6 +12,7 @@ import { Tabs } from "@/shared/design/Tabs";
 import { useMoney } from "./useMoney";
 import { IngredientForm } from "./components/IngredientForm";
 import { MovementForm, type MovementKind } from "./components/MovementForm";
+import { ProductLossForm } from "./components/ProductLossForm";
 import { RecipeEditor } from "./components/RecipeEditor";
 import { useEstoque } from "./hooks/useEstoque";
 import "./estoque.css";
@@ -19,7 +20,7 @@ import { activeStoreTimezone, formatInStoreTimezone } from "@/shared/format/stor
 
 type Tab = "insumos" | "fichas" | "movimentos";
 const TABS = [{ id: "insumos", label: "Insumos" }, { id: "fichas", label: "Fichas técnicas" }, { id: "movimentos", label: "Movimentações" }] as const;
-const REASON_LABEL: Record<string, string> = { ...WASTE_REASONS, ...SPOILAGE_REASONS, CONTAGEM_SOBRA: "Sobra na contagem", CONTAGEM_FALTA: "Falta na contagem" };
+const REASON_LABEL: Record<string, string> = { ...WASTE_REASONS, ...SPOILAGE_REASONS, ...SYSTEM_WASTE_REASONS, CONTAGEM_SOBRA: "Sobra na contagem", CONTAGEM_FALTA: "Falta na contagem" };
 
 type RecipeTarget = { kind: "product" | "option"; id: string; title: string; subtitle?: string; priceCents?: number };
 
@@ -31,6 +32,7 @@ export function EstoquePage() {
   const [editing, setEditing] = useState<Ingredient | "new" | null>(null);
   const [moving, setMoving] = useState<{ kind: MovementKind; ingredient: Ingredient } | null>(null);
   const [recipe, setRecipe] = useState<RecipeTarget | null>(null);
+  const [dishLoss, setDishLoss] = useState(false);
   const ingredients = data?.ingredients ?? [];
 
   return <main className="estoque">
@@ -38,6 +40,7 @@ export function EstoquePage() {
       actions={<>
         {owner && <Button icon={hidden ? "eyeOff" : "eye"} aria-pressed={hidden} onClick={toggle}>{hidden ? "Mostrar valores" : "Ocultar valores"}</Button>}
         {owner && <Link className="ds-button ds-button--secondary" href="/dashboard/lucro">Ver lucro e margens</Link>}
+        {data && ingredients.length > 0 && <Button onClick={() => setDishLoss(true)}>Perda de prato</Button>}
         {owner && tab === "insumos" && <Button variant="primary" icon="stock" onClick={() => setEditing("new")}>Novo insumo</Button>}
       </>} />
     {error && <StateMessage title="Estoque indisponível" tone="danger" action={<Button onClick={() => void reload()}>Tentar novamente</Button>}>{error}</StateMessage>}
@@ -55,6 +58,7 @@ export function EstoquePage() {
 
     {editing && <IngredientForm initial={editing === "new" ? undefined : editing} onClose={() => setEditing(null)}
       onSave={(input) => run(() => editing === "new" ? gateway.create(input) : gateway.update(editing.id, { name: input.name, minStockQty: input.minStockQty, active: input.active }))} />}
+    {dishLoss && <ProductLossForm gateway={gateway} run={run} onClose={() => setDishLoss(false)} />}
     {moving && <MovementForm kind={moving.kind} ingredient={moving.ingredient} gateway={gateway} run={run} onClose={() => setMoving(null)} />}
     {recipe && <RecipeEditor title={recipe.title} subtitle={recipe.subtitle} priceCents={recipe.priceCents} ingredients={ingredients} owner={owner} onClose={() => setRecipe(null)}
       load={recipe.kind === "product" ? () => gateway.productRecipe(recipe.id) : () => gateway.optionRecipe(recipe.id)}
@@ -125,7 +129,7 @@ function RecipesTab({ owner, onOpen }: { owner: boolean; onOpen: (target: Recipe
 
   return <>
     <Panel title="Pratos">
-      <p className="estoque__hint">Cada pedido ACEITO baixa do estoque o que está na ficha. Cancelar o pedido devolve. Pratos sem ficha não mexem no estoque.</p>
+      <p className="estoque__hint">Cada pedido ACEITO baixa do estoque o que está na ficha. Cancelar o pedido devolve (se já foi preparado, vira desperdício). Pratos sem ficha não mexem no estoque.</p>
       <DataTable label="Fichas dos pratos" headers={owner ? ["Prato", "Preço", "Custo da ficha", "CMV", "Margem", ""] : ["Prato", "Preço", ""]}>
         {categories.flatMap((c) => c.products.map((p) => {
           const m = margins.get(p.id);

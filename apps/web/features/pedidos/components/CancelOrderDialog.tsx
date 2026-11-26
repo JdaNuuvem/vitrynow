@@ -127,6 +127,15 @@ export function CancelOrderDialog({ order, refund, onConfirm, onRetryRefund, onC
           </div>
         )}
 
+        {/* Estoque: pedido aceito já preparado não devolve os insumos (viram desperdício no relatório de lucro). */}
+        {!refusing && !refundPending && (
+          <label className="cancel-dialog__label">
+            <input type="checkbox" checked={draft.stockWasted === true} disabled={busy}
+              onChange={(event) => setDraft((previous) => ({ ...previous, stockWasted: event.target.checked }))} />{" "}
+            O pedido já foi preparado (os insumos não voltam ao estoque e contam como desperdício)
+          </label>
+        )}
+
         {/* GRW-15: a frase é fixa por motivo e o dono não edita; aqui ele só vê o que o cliente verá. */}
         {phrase && (
           <p className="cancel-dialog__customer">

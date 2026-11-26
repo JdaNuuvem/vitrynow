@@ -117,6 +117,7 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "PATCH /api/stock/ingredients/:id": "blocked",
   "POST /api/stock/ingredients/:id/purchase": "blocked",
   "POST /api/stock/ingredients/:id/loss": "blocked",
+  "POST /api/stock/products/:id/loss": "blocked",
   "POST /api/stock/ingredients/:id/count": "blocked",
   "PUT /api/stock/products/:id/recipe": "blocked",
   "PUT /api/stock/options/:id/recipe": "blocked",
