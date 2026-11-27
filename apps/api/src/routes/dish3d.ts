@@ -22,11 +22,11 @@ const dish3dRoutes: FastifyPluginAsync = async (app) => {
   // multipart com 1 a 4 fotos (campo "photos"); 202: a geração continua em segundo plano.
   app.post("/api/products/:id/3d", { ...owner, config: { rateLimit: { max: 6, timeWindow: "1 minute" } } }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (!request.isMultipart()) throw new CodedError(415, "UNSUPPORTED_TYPE", "envie multipart/form-data");
+    if (!request.isMultipart()) throw new CodedError(415, "UNSUPPORTED_TYPE", "Envie o arquivo pelo formulário de envio.");
     const files: Buffer[] = [];
     for await (const part of request.files()) {
       const body = await part.toBuffer();
-      if (part.file.truncated) throw new CodedError(413, "FILE_TOO_LARGE", "arquivo acima do limite de 8 MB");
+      if (part.file.truncated) throw new CodedError(413, "FILE_TOO_LARGE", "O arquivo passa de 8 MB. Envie um arquivo menor.");
       files.push(body);
     }
     const result = await startDish3d(actorOf(request.user), id, files);

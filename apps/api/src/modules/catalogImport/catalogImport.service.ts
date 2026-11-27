@@ -136,7 +136,7 @@ export class CatalogImportService {
 
   private async require(storeId: string, id: string) {
     const batch = await this.repo.find(storeId, id); // sempre por loja: lote de outra loja = 404
-    if (!batch) throw new NotFoundError("importação não encontrada");
+    if (!batch) throw new NotFoundError("Importação não encontrada.");
     return batch;
   }
 

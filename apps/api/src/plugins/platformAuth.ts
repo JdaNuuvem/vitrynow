@@ -32,7 +32,7 @@ export function platformCookieOptions() {
 
 export function requirePlatformRole(role: "ADMIN") {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    if (request.platformAdmin?.role !== role) return reply.code(403).send({ error: "ação restrita a administradores da plataforma", code: "PLATFORM_ROLE_REQUIRED" });
+    if (request.platformAdmin?.role !== role) return reply.code(403).send({ error: "Só a equipe da plataforma pode fazer isso.", code: "PLATFORM_ROLE_REQUIRED" });
   };
 }
 
@@ -44,7 +44,7 @@ const platformAuthPlugin: FastifyPluginAsync = async (app) => {
     const method = request.method;
     const origin = request.headers.origin;
     if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS" && origin && origin !== allowedOrigin()) {
-      return reply.code(403).send({ error: "origem não permitida", code: "ORIGIN_MISMATCH" });
+      return reply.code(403).send({ error: "Não foi possível confirmar a origem do acesso. Atualize a página.", code: "ORIGIN_MISMATCH" });
     }
 
     const token = request.cookies?.[PLATFORM_COOKIE];

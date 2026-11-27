@@ -22,7 +22,7 @@ const realtimeRoutes: FastifyPluginAsync = async (app) => {
         async (request, reply) => {
           const origin = request.headers.origin;
           if (origin && origin !== allowedOrigin()) {
-            return reply.code(403).send({ error: "origem não permitida", code: "ORIGIN_MISMATCH" });
+            return reply.code(403).send({ error: "Não foi possível confirmar a origem do acesso. Atualize a página.", code: "ORIGIN_MISMATCH" });
           }
         },
         app.requirePanelAuth,

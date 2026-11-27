@@ -114,7 +114,7 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
   // Dispensar o aviso de mudança de regra (por usuário; idempotente). Só existe o aviso conhecido; qualquer outro id é 404.
   app.post("/api/cashier/notices/:id/dismiss", { preHandler: app.requirePanelAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (id !== CASH_RULE_NOTICE.id) return reply.code(404).send({ error: "aviso não encontrado", code: "NOT_FOUND" });
+    if (id !== CASH_RULE_NOTICE.id) return reply.code(404).send({ error: "Aviso não encontrado.", code: "NOT_FOUND" });
     await prisma.userNoticeDismissal.createMany({ data: [{ userId: request.user.userId, noticeId: id }], skipDuplicates: true });
     return { ok: true };
   });
@@ -126,7 +126,7 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
     const counted = raw === undefined || raw === "" ? NaN : Number(raw);
     if (!Number.isInteger(counted) || counted < 0 || counted > 100_000_000) return reply.code(400).send({ error: "Informe o valor contado.", code: "CASH_COUNTED_REQUIRED" });
     const session = await prisma.cashSession.findFirst({ where: { storeId, closedAt: null }, include: { movements: true } });
-    if (!session) return reply.code(404).send({ error: "não há caixa aberto", code: "CASH_REQUIRED" });
+    if (!session) return reply.code(404).send({ error: "Não há caixa aberto. Abra o caixa para continuar.", code: "CASH_REQUIRED" });
     const summary = await summarizeSession(prisma, storeId, session);
     return { ...closePreview(summary.expectedCents, counted), sessionId: session.id };
   });
@@ -173,7 +173,7 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(201).send({ session: withoutInternals(session) });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-        return reply.code(409).send({ error: "já existe um caixa aberto", code: "CASH_ALREADY_OPEN" });
+        return reply.code(409).send({ error: "Já existe um caixa aberto.", code: "CASH_ALREADY_OPEN" });
       }
       throw error;
     }
@@ -196,7 +196,7 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
     const result = await prisma.$transaction(
       async (tx) => {
         const rows = await tx.$queryRaw<{ id: string; closedAt: Date | null }[]>`SELECT "id", "closedAt" FROM "CashSession" WHERE "storeId" = ${storeId} ORDER BY "openedAt" DESC, "id" DESC LIMIT 1 FOR UPDATE`;
-        if (!rows[0]) throw new CodedError(404, "CASH_REQUIRED", "não há caixa aberto");
+        if (!rows[0]) throw new CodedError(404, "CASH_REQUIRED", "Não há caixa aberto. Abra o caixa para continuar.");
         if (parsed.data.sessionId !== undefined && rows[0].id !== parsed.data.sessionId) {
           throw new CodedError(409, "CASH_SESSION_CHANGED", "O caixa em atividade mudou. Confira o novo caixa antes de fechar.");
         }
@@ -264,14 +264,14 @@ const cashierRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const open = await prisma.cashSession.findFirst({ where: { storeId, closedAt: null }, select: { id: true } });
-    if (!open) return reply.code(409).send({ error: "não há caixa aberto", code: "CASH_REQUIRED" });
+    if (!open) return reply.code(409).send({ error: "Não há caixa aberto. Abra o caixa para continuar.", code: "CASH_REQUIRED" });
     let replayed = false;
 
     const movement = await prisma.$transaction(
       async (tx) => {
         // Trava o caixa: duas sangrias simultâneas se enfileiram e a segunda enxerga o saldo já reduzido (RN-CX-10).
         const rows = await tx.$queryRaw<{ closedAt: Date | null }[]>`SELECT "closedAt" FROM "CashSession" WHERE "id" = ${open.id} AND "storeId" = ${storeId} FOR UPDATE`;
-        if (!rows[0] || rows[0].closedAt) throw new CodedError(409, "CASH_REQUIRED", "não há caixa aberto");
+        if (!rows[0] || rows[0].closedAt) throw new CodedError(409, "CASH_REQUIRED", "Não há caixa aberto. Abra o caixa para continuar.");
         if (idempotencyKey) {
           const previous = await tx.cashMovement.findUnique({ where: { cashSessionId_idempotencyKey: { cashSessionId: open.id, idempotencyKey } } });
           if (previous) {

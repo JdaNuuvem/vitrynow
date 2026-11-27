@@ -186,7 +186,7 @@ export const registerStoreSchema = z.object({
     .string()
     .min(1)
     .max(80)
-    .regex(/^[a-z0-9-]+$/, "use apenas letras minúsculas, números e hífen"),
+    .regex(/^[a-z0-9-]+$/, "Use só letras minúsculas, números e hífen no endereço da loja."),
   code: z.string().min(1).max(30).optional(), // RN-ONB-01: não é pedido ao usuário; o servidor gera quando ausente
   email: emailField,
   password: newPasswordField,

@@ -46,7 +46,7 @@ const mfaRoutes: FastifyPluginAsync = async (app) => {
       if (outcome === "ok") return { ok: true };
       if (outcome === "locked") return reply.code(429).send({ error: "muitas tentativas — peça um novo código" });
       if (outcome === "expired") return reply.code(400).send({ error: "código expirado — peça um novo código" });
-      return reply.code(400).send({ error: "código inválido" });
+      return reply.code(400).send({ error: "Código incorreto. Confira e tente de novo." });
     },
   );
 };

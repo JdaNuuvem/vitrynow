@@ -46,7 +46,7 @@ export class DeviceTokensService {
 
   async revoke(actor: Actor, id: string) {
     const token = await this.repo.find(actor.storeId, id);
-    if (!token) throw new NotFoundError("token não encontrado");
+    if (!token) throw new NotFoundError("Dispositivo não encontrado.");
     await this.repo.revoke(id, this.clock.now());
     this.onRevoked(id);
     this.audit.log({ ...actor, action: "device_token.revoke", targetType: "DeviceToken", targetId: id });

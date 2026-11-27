@@ -325,7 +325,7 @@ const stockRoutes: FastifyPluginAsync = async (app) => {
   app.get("/api/stock/profit", owner, async (request, reply) => {
     const { storeId } = request.user;
     const query = request.query as { from?: unknown; to?: unknown };
-    if ((query.from !== undefined && typeof query.from !== "string") || (query.to !== undefined && typeof query.to !== "string")) return reply.code(400).send({ error: "datas inválidas" });
+    if ((query.from !== undefined && typeof query.from !== "string") || (query.to !== undefined && typeof query.to !== "string")) return reply.code(400).send({ error: "Datas inválidas. Confira o período." });
     const range = resolveRange({ from: query.from as string | undefined, to: query.to as string | undefined }, new Date(), await storeTimeZone(storeId));
     if ("error" in range) return reply.code(400).send({ error: "Período inválido.", code: "REPORT_RANGE_INVALID" });
     return buildProfit(storeId, range);
@@ -338,7 +338,7 @@ const stockRoutes: FastifyPluginAsync = async (app) => {
     const query = request.query as { from?: unknown; to?: unknown; table?: string };
     const table = (query.table ?? "summary") as (typeof PROFIT_TABLES)[number];
     if (!(PROFIT_TABLES as readonly string[]).includes(table)) return reply.code(400).send({ error: "Tabela inválida.", code: "INVALID_TABLE", tables: PROFIT_TABLES });
-    if ((query.from !== undefined && typeof query.from !== "string") || (query.to !== undefined && typeof query.to !== "string")) return reply.code(400).send({ error: "datas inválidas" });
+    if ((query.from !== undefined && typeof query.from !== "string") || (query.to !== undefined && typeof query.to !== "string")) return reply.code(400).send({ error: "Datas inválidas. Confira o período." });
     const range = resolveRange({ from: query.from as string | undefined, to: query.to as string | undefined }, new Date(), await storeTimeZone(storeId));
     if ("error" in range) return reply.code(400).send({ error: "Período inválido.", code: "REPORT_RANGE_INVALID" });
     let rows: (string | number)[][];

@@ -122,7 +122,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       include: { additionals: true },
     });
     if (products.length !== new Set(input.items.map((i) => i.productId)).size) {
-      return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja", code: "PRODUCT_NOT_FOUND" });
+      return reply.code(400).send({ error: "Um ou mais produtos não estão mais no cardápio. Atualize a página.", code: "PRODUCT_NOT_FOUND" });
     }
     // Produto pausado some do cardápio e não pode ser pedido por chamada direta (B08).
     // API-17: esgotado hoje também é recusado (RN-B11-04), mesmo se escondido ou enviado direto à API.
@@ -154,10 +154,10 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
         where: { storeId_code: { storeId: store.id, code: input.couponCode.trim().toUpperCase() } },
       });
       if (!coupon || !coupon.active) {
-        return reply.code(400).send({ error: "cupom inválido" });
+        return reply.code(400).send({ error: "Este cupom não existe ou não vale nesta loja." });
       }
       if (coupon.expiresAt && coupon.expiresAt < new Date()) {
-        return reply.code(400).send({ error: "cupom expirado" });
+        return reply.code(400).send({ error: "Este cupom expirou." });
       }
       if (coupon.maxUses !== null && coupon.usedCount >= coupon.maxUses) {
         return reply.code(400).send({ error: COUPON_EXHAUSTED_MESSAGE, code: "COUPON_EXHAUSTED" });
@@ -211,10 +211,10 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     const paymentMethod = zeroTotal ? null : toOrderPaymentMethod(input.paymentMethod);
     if (!zeroTotal && input.changeForCents !== undefined) {
       if (paymentMethod !== "DINHEIRO") {
-        return reply.code(400).send({ error: "troco só se aplica a pagamento em dinheiro" });
+        return reply.code(400).send({ error: "Troco só vale para pagamento em dinheiro." });
       }
       if (input.changeForCents < totalCents) {
-        return reply.code(400).send({ error: "o valor para troco deve cobrir o total do pedido" });
+        return reply.code(400).send({ error: "O valor para troco precisa cobrir o total do pedido." });
       }
     }
     const usePix = paymentMethod === "PIX";
@@ -318,7 +318,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     });
     // NG-16: sem o token certo a resposta é IGUAL à de pedido inexistente (não confirma que o pedido existe).
     if (!order || !orderTokenMatches(request.headers[ORDER_TOKEN_HEADER], order.publicTokenHash)) {
-      return reply.code(404).send({ error: "pedido não encontrado" });
+      return reply.code(404).send({ error: "Pedido não encontrado." });
     }
 
     // `terminal`: o polling do checkout para (pedido cancelado ou pagamento em estado final).
@@ -357,7 +357,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
       ? await prisma.order.findFirst({ where: { id: orderId, storeId: store.id }, include: { payment: { select: { status: true, amountCents: true, refundAbandonedAt: true } } } })
       : null;
     if (!store || !order || !orderTokenMatches(request.headers[ORDER_TOKEN_HEADER], order.publicTokenHash)) {
-      return reply.code(404).send({ error: "pedido não encontrado" });
+      return reply.code(404).send({ error: "Pedido não encontrado." });
     }
     const history = await prisma.orderStatusHistory.findMany({
       where: { orderId: order.id, kind: { in: ["ADVANCE", "CANCEL"] } },
@@ -384,7 +384,7 @@ const storefrontRoutes: FastifyPluginAsync = async (app) => {
     // NG-16: o cliente só cancela o PRÓPRIO pedido (token do pedido); falha ⇒ mesmo 404 de pedido inexistente.
     const owned = await prisma.order.findFirst({ where: { id: orderId, storeId: store.id }, select: { publicTokenHash: true } });
     if (!owned || !orderTokenMatches(request.headers[ORDER_TOKEN_HEADER], owned.publicTokenHash)) {
-      return reply.code(404).send({ error: "pedido não encontrado" });
+      return reply.code(404).send({ error: "Pedido não encontrado." });
     }
     try {
       return await orderService.cancelByCustomer(store.id, orderId);

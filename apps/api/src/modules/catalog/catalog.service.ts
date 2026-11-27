@@ -151,7 +151,7 @@ export class CatalogService {
       product = await this.repo.updateProduct(id, data, additionals);
     } catch (error) {
       // SEC-10: adicional que não é deste produto (inclusive de outra loja) => 404, nada alterado.
-      if (error instanceof AdditionalNotInProductError) throw new NotFoundError("adicional não encontrado neste produto");
+      if (error instanceof AdditionalNotInProductError) throw new NotFoundError("Este adicional não pertence a este produto.");
       if (isSkuTaken(error)) throw skuTaken();
       throw error;
     }
@@ -241,13 +241,13 @@ export class CatalogService {
   private assertAllOwned(ids: string[], ownedIds: string[]) {
     const owned = new Set(ownedIds);
     if (new Set(ids).size !== ids.length || ids.some((id) => !owned.has(id))) {
-      throw new NotFoundError("item não encontrado na ordem enviada");
+      throw new NotFoundError("Um item da nova ordem não existe mais. Atualize a página.");
     }
   }
 
   private async requireCategory(storeId: string, id: string) {
     const category = await this.repo.findCategory(storeId, id);
-    if (!category) throw new NotFoundError("categoria não encontrada");
+    if (!category) throw new NotFoundError("Categoria não encontrada.");
     return category;
   }
 
@@ -344,7 +344,7 @@ export class CatalogService {
 
   private async requireProduct(storeId: string, id: string) {
     const product = await this.repo.findProduct(storeId, id);
-    if (!product) throw new NotFoundError("produto não encontrado");
+    if (!product) throw new NotFoundError("Produto não encontrado.");
     return product;
   }
 }

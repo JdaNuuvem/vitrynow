@@ -21,15 +21,15 @@ export function buildMediaRoutes(service: MediaService): FastifyPluginAsync {
       { ...auth, config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
       async (request, reply) => {
         const kind = (request.query as { kind?: string }).kind as Kind;
-        if (!KINDS.includes(kind)) return reply.code(400).send({ error: "kind deve ser PRODUCT, LOGO ou COVER", code: "INVALID_KIND" });
+        if (!KINDS.includes(kind)) return reply.code(400).send({ error: "Tipo de imagem não aceito. Use foto de produto, logo ou capa.", code: "INVALID_KIND" });
         // Logo e capa mudam a identidade da loja: só o dono (foto de produto: OWNER ou STAFF).
-        if (kind !== "PRODUCT" && request.user.role !== panelRoleSchema.enum.OWNER) return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
-        if (!request.isMultipart()) return reply.code(415).send({ error: "envie multipart/form-data", code: "UNSUPPORTED_TYPE" });
+        if (kind !== "PRODUCT" && request.user.role !== panelRoleSchema.enum.OWNER) return reply.code(403).send({ error: "Só o dono da loja pode fazer isso.", code: "FORBIDDEN_ROLE" });
+        if (!request.isMultipart()) return reply.code(415).send({ error: "Envie o arquivo pelo formulário de envio.", code: "UNSUPPORTED_TYPE" });
 
         const file = await request.file();
-        if (!file) return reply.code(400).send({ error: "arquivo ausente", code: "FILE_REQUIRED" });
+        if (!file) return reply.code(400).send({ error: "Escolha um arquivo para enviar.", code: "FILE_REQUIRED" });
         const body = await file.toBuffer(); // respeita limits.fileSize
-        if (file.file.truncated) return reply.code(413).send({ error: "arquivo acima do limite de 8 MB", code: "FILE_TOO_LARGE" });
+        if (file.file.truncated) return reply.code(413).send({ error: "O arquivo passa de 8 MB. Envie um arquivo menor.", code: "FILE_TOO_LARGE" });
 
         const image = await service.upload(request.user.storeId, kind, body);
         return reply.code(201).send({ image });

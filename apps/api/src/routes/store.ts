@@ -125,7 +125,7 @@ const storeRoutes: FastifyPluginAsync = async (app) => {
       if (known.code === "P2002" && target.includes("customDomain")) return null;
       throw error;
     });
-    if (!store) return reply.code(409).send({ error: "este domínio já está em uso por outra loja", code: "CUSTOM_DOMAIN_TAKEN" });
+    if (!store) return reply.code(409).send({ error: "Este domínio já está ligado a outra loja.", code: "CUSTOM_DOMAIN_TAKEN" });
     logAudit({ storeId, userId: request.user.userId, action: "store.settings_update", targetType: "Store", targetId: storeId, metadata: { fields: Object.keys(parsed.data).filter((key) => !(hasGrid && key === "openingHours")), ...(parsed.data.timezone && timezoneBefore !== parsed.data.timezone ? { timezone: { from: timezoneBefore ?? null, to: parsed.data.timezone } } : {}) } }); // só QUAIS campos mudaram, nunca os valores (endereço, telefone, textos; ADR-0014 §3.4)
     return {
       store: await withDerivedHours(storeId, store),

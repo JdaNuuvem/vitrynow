@@ -134,7 +134,7 @@ export class CouponsService {
 
   private async require(storeId: string, id: string) {
     const coupon = await this.repo.find(storeId, id);
-    if (!coupon) throw new NotFoundError("cupom não encontrado");
+    if (!coupon) throw new NotFoundError("Cupom não encontrado.");
     return coupon;
   }
 }

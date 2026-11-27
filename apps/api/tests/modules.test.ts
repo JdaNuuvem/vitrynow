@@ -52,7 +52,7 @@ describe("módulos em camadas — contrato HTTP", () => {
     expect(cleared.icon).toBeNull();
     const missing = await call("POST", "/api/catalog/products/nao-existe", { name: "x" });
     expect(missing.statusCode).toBe(404);
-    expect(json(missing).error).toBe("produto não encontrado");
+    expect(json(missing).error).toBe("Produto não encontrado.");
   });
 
   it("produto: edita preço e adicionais na mesma chamada", async () => {
@@ -83,7 +83,7 @@ describe("módulos em camadas — contrato HTTP", () => {
     const deliverer = json(await call("POST", "/api/deliverers", { name: "João", phone: "21999999999" })).deliverer;
     const response = await call("POST", "/api/orders/nao-existe/deliverer", { delivererId: deliverer.id });
     expect(response.statusCode).toBe(404);
-    expect(json(response).error).toBe("pedido não encontrado");
+    expect(json(response).error).toBe("Pedido não encontrado.");
   });
 
   it("chave de impressora: cria, aparece offline, revoga; revogar inexistente é 404", async () => {
@@ -99,7 +99,7 @@ describe("módulos em camadas — contrato HTTP", () => {
 
     const missing = await call("POST", "/api/device-tokens/nao-existe/revoke");
     expect(missing.statusCode).toBe(404);
-    expect(json(missing).error).toBe("token não encontrado");
+    expect(json(missing).error).toBe("Dispositivo não encontrado.");
   });
 
   it("ações sensíveis aparecem no log de auditoria do dono", async () => {
@@ -125,7 +125,7 @@ describe("módulos em camadas — contrato HTTP", () => {
 
     const duplicate = await call("POST", "/api/users", { email: "func@teste.com", password: "provisoria1" });
     expect(duplicate.statusCode).toBe(409);
-    expect(json(duplicate).error).toBe("já existe um usuário com este e-mail");
+    expect(json(duplicate).error).toBe("Já existe alguém da equipe com este e-mail.");
 
     const users = json(await call("GET", "/api/users")).users;
     expect(users.map((u: { role: string }) => u.role).sort()).toEqual(["OWNER", "STAFF"]);
@@ -133,7 +133,7 @@ describe("módulos em camadas — contrato HTTP", () => {
 
     const self = await call("POST", `/api/users/${ownerId}/delete`);
     expect(self.statusCode).toBe(400);
-    expect(json(self).error).toBe("você não pode remover a si mesmo");
+    expect(json(self).error).toBe("Você não pode remover o seu próprio acesso.");
 
     expect((await call("POST", `/api/users/${staffId}/delete`)).statusCode).toBe(200);
     const gone = await call("POST", `/api/users/${staffId}/delete`);

@@ -89,7 +89,7 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
     // Produtos SÓ desta loja (CA-B2-10); inativo não entra nem pelo painel (RN-B2-02).
     const products = await prisma.product.findMany({ where: { storeId, id: { in: input.items.map((i) => i.productId) } }, include: { additionals: true } });
     if (products.length !== new Set(input.items.map((i) => i.productId)).size) {
-      return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja", code: "PRODUCT_NOT_FOUND" });
+      return reply.code(400).send({ error: "Um ou mais produtos não estão mais no cardápio. Atualize a página.", code: "PRODUCT_NOT_FOUND" });
     }
     const unavailable = products.filter((p) => !p.active);
     if (unavailable.length > 0) {
@@ -108,8 +108,8 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
     let coupon = null;
     if (input.couponCode) {
       coupon = await prisma.coupon.findUnique({ where: { storeId_code: { storeId, code: input.couponCode.trim().toUpperCase() } } });
-      if (!coupon || !coupon.active) return reply.code(400).send({ error: "cupom inválido", code: "COUPON_INVALID" });
-      if (coupon.expiresAt && coupon.expiresAt < new Date()) return reply.code(400).send({ error: "cupom expirado", code: "COUPON_EXPIRED" });
+      if (!coupon || !coupon.active) return reply.code(400).send({ error: "Este cupom não existe ou não vale nesta loja.", code: "COUPON_INVALID" });
+      if (coupon.expiresAt && coupon.expiresAt < new Date()) return reply.code(400).send({ error: "Este cupom expirou.", code: "COUPON_EXPIRED" });
       if (coupon.minOrderCents !== null && subtotalCents < coupon.minOrderCents) {
         return reply.code(400).send({ error: couponMinOrderMessage(coupon.minOrderCents), code: "COUPON_MIN_ORDER" });
       }
@@ -129,8 +129,8 @@ const manualOrderRoutes: FastifyPluginAsync = async (app) => {
     const zeroTotal = totalCents === 0;
     const paymentMethod = zeroTotal || input.type === "MESA" ? null : toOrderPaymentMethod(input.paymentMethod);
     if (!zeroTotal && input.changeForCents !== undefined) {
-      if (paymentMethod !== "DINHEIRO") return reply.code(400).send({ error: "troco só se aplica a pagamento em dinheiro", code: "CHANGE_ONLY_CASH" });
-      if (input.changeForCents < totalCents) return reply.code(400).send({ error: "o valor para troco deve cobrir o total do pedido", code: "CHANGE_TOO_LOW" });
+      if (paymentMethod !== "DINHEIRO") return reply.code(400).send({ error: "Troco só vale para pagamento em dinheiro.", code: "CHANGE_ONLY_CASH" });
+      if (input.changeForCents < totalCents) return reply.code(400).send({ error: "O valor para troco precisa cobrir o total do pedido.", code: "CHANGE_TOO_LOW" });
     }
     const receivedNow = !!input.alreadyPaid && !zeroTotal;
     const accessToken = newOrderToken();

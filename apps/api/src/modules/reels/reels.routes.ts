@@ -32,14 +32,14 @@ export function buildReelsRoutes(service: ReelsService): FastifyPluginAsync {
 
     app.post("/api/reels", { ...auth, config: { rateLimit: { max: 10, timeWindow: "1 hour" } } }, async (request, reply) => {
       const parsed = reelUploadSchema.safeParse(request.query);
-      if (!parsed.success) return reply.code(400).send({ error: "informe o produto", code: "INVALID_PRODUCT" });
-      if (!request.isMultipart()) return reply.code(415).send({ error: "envie multipart/form-data", code: "UNSUPPORTED_TYPE" });
+      if (!parsed.success) return reply.code(400).send({ error: "Escolha o produto do vídeo.", code: "INVALID_PRODUCT" });
+      if (!request.isMultipart()) return reply.code(415).send({ error: "Envie o arquivo pelo formulário de envio.", code: "UNSUPPORTED_TYPE" });
       // Recusa ANTES de ler o corpo quando o tamanho declarado já passa do limite (CA-REEL-01: nada é gravado).
       const declared = Number(request.headers["content-length"]);
       if (Number.isFinite(declared) && declared > REEL_LIMITS.maxUploadBytes + MULTIPART_OVERHEAD) throw reelError("VIDEO_TOO_LARGE");
 
       const file = await request.file();
-      if (!file) return reply.code(400).send({ error: "arquivo ausente", code: "FILE_REQUIRED" });
+      if (!file) return reply.code(400).send({ error: "Escolha um arquivo para enviar.", code: "FILE_REQUIRED" });
       const body = await file.toBuffer().catch((error: { code?: string }) => {
         if (error?.code === "FST_REQ_FILE_TOO_LARGE") throw reelError("VIDEO_TOO_LARGE"); // respeita limits.fileSize
         throw error;

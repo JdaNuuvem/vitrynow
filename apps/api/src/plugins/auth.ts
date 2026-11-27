@@ -71,7 +71,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     const origin = request.headers.origin;
     if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS" && origin && origin !== allowedOrigin()) {
       securityEvent(request, "origin_mismatch");
-      return reply.code(403).send({ error: "origem não permitida", code: "ORIGIN_MISMATCH" });
+      return reply.code(403).send({ error: "Não foi possível confirmar a origem do acesso. Atualize a página.", code: "ORIGIN_MISMATCH" });
     }
 
     let payload: PanelJwtPayload;
@@ -118,7 +118,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
   // Encadear depois de requirePanelAuth: `{ preHandler: [app.requirePanelAuth, app.requireOwner] }`.
   app.decorate("requireOwner", async (request: FastifyRequest, reply: FastifyReply) => {
     if (request.user.role !== panelRoleSchema.enum.OWNER) {
-      return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
+      return reply.code(403).send({ error: "Só o dono da loja pode fazer isso.", code: "FORBIDDEN_ROLE" });
     }
   });
 
