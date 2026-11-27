@@ -180,6 +180,7 @@ model Store {
   qrOrdersNeedApproval Boolean @default(true)
   // Taxa de serviço sugerida no fechamento da mesa (0 a 30 %; 0 = a loja não cobra). Opcional em cada recebimento. Todos os planos.
   serviceFeePercent    Int     @default(10)
+  menuLayout           MenuLayout @default(CLASSIC) // modelo do cardápio público: lista clássica ou feed estilo Reels
   lossAlertPercent     Int     @default(5) // ESTOQUE: alerta de perda alta no Lucro (perdas acima deste % do faturamento)
   ingredients          Ingredient[]
   stockMovements       StockMovement[]
@@ -192,6 +193,11 @@ model Store {
   dish3dJobs     Dish3dJob[]
   floorElements  FloorElement[]
   reservations   Reservation[]
+}
+
+enum MenuLayout {
+  CLASSIC
+  REELS
 }
 
 enum TableShape {

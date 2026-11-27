@@ -1,5 +1,6 @@
 export type StoreSettings = {
   id: string;
+  menuLayout?: "CLASSIC" | "REELS"; // modelo do cardápio público
   /** SSOT D1: fuso IANA da loja (ex.: America/Manaus). Toda data do painel usa este, nunca o do aparelho. */
   timezone?: string;
   name: string;
@@ -30,6 +31,7 @@ export type PlanStatus = {
 
 // Payload de POST /api/store/settings: campos de texto vazios limpam o valor no servidor.
 export type StoreSettingsInput = {
+  menuLayout?: "CLASSIC" | "REELS";
   hideSoldOutProducts?: boolean;
   name?: string;
   logoUrl?: string;

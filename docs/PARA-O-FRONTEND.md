@@ -166,6 +166,12 @@ Sugestão: botão "Importar planilha" no Catálogo → enviar arquivo → prévi
 - **Importação:** aceita Excel .xlsx (lido no navegador com `read-excel-file@5.8.6` e enviado como CSV).
 - **Prato 3D:** qualidade do Rodin configurável no servidor (`DISH3D_QUALITY`, padrão high; `DISH3D_HIGHPACK`).
 
+## 3h. Cardápio modelo Reels (27/11/2026, autorizado)
+- **Novo:** `features/loja/reels/ReelsMenu.tsx` (+ `reels-menu.css`): com `store.menuLayout === "REELS"` a aba Cardápio vira feed vertical em tela cheia (um prato por tela; vídeo quando há Reel, foto com movimento suave quando não; abas de categoria; Detalhes/Adicionar usam o MESMO carrinho/detalhe; "Ver em lista" volta ao clássico na visita).
+- **Tocado no existente:** `LojaPage.tsx` (troca a lista pelo `ReelsMenu` só na aba Cardápio quando o modelo é Reels; guarda o prato onde o cliente estava); `conta/aparencia/AppearancePage.tsx` (+ `MenuLayoutSetting.tsx`: escolha Clássico/Reels); `reels/ReelsFeed.tsx` (barra de progresso, próximo vídeo pré-carregado, "Toque para ouvir", dica de deslizar).
+- **API:** `Store.menuLayout` (CLASSIC|REELS) em `POST /api/store/settings` e no cardápio público (`store.menuLayout`). Migração `20261127200000_cardapio_reels`.
+- **Sugestão para você:** a prévia da Aparência ainda mostra só o modelo clássico.
+
 ## 4. Mudanças do backend desde a última sincronização (para saber o que a API já oferece)
 - **Tíquete v4** (`printableOrderSchema`): `round`, `requestedBy`, `customerRemoved` — impressos pelo print-client; nada a fazer no web.
 - **Catálogo de erros** (§2) e `docs/textos-de-erro-para-revisar.md`.

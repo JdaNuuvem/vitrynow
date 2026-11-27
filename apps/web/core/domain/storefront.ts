@@ -72,6 +72,7 @@ export type StoreInfo = {
   campaign?: MenuBannerConfig | null;
   // API-40: a loja aceita pedido agendado (a vitrine mostra "Agendar"). Fuso da loja: datas e horários do agendamento.
   scheduling?: boolean;
+  menuLayout?: "CLASSIC" | "REELS"; // modelo do cardápio escolhido pelo dono
   hasReels?: boolean; // REELS: a loja tem vídeo publicado (a vitrine só busca a lista quando true)
   timezone?: string;
 };
