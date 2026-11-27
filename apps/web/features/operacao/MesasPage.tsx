@@ -201,9 +201,9 @@ export function MesasPage() {
     {notice && <p className="operacao__message" role="status">{notice}</p>}
     {request && <div className="operacao__message operacao__row operacao__row--spread" role="status">
       <span>{data?.tables.find(table => table.id === request.tableId)?.label ?? "Uma mesa"} {request.text}.</span>
-      <button type="button" onClick={() => setRequest(null)}>Dispensar</button>
+      <button className="ds-button ds-button--quiet" type="button" onClick={() => setRequest(null)}>Dispensar</button>
     </div>}
-    {!data ? error ? <button type="button" onClick={reload}>Tentar novamente</button> : <p role="status">Carregando mesas…</p> : <div className="operacao__grid">
+    {!data ? error ? <button className="ds-button" type="button" onClick={reload}>Tentar novamente</button> : <p role="status">Carregando mesas…</p> : <div className="operacao__grid">
       <div>
         {owner && <form className="operacao__card" onSubmit={event => {
           event.preventDefault();
@@ -212,15 +212,15 @@ export function MesasPage() {
           <h2>Adicionar mesa</h2>
           <div className="operacao__row">
             <label>Nome da mesa<input required maxLength={40} value={label} placeholder="Ex. Mesa 01" onChange={event => setLabel(event.target.value)} /></label>
-            <button type="submit" className="operacao__primary" disabled={busy || !label.trim()}>Adicionar</button>
+            <button type="submit" className="ds-button ds-button--primary" disabled={busy || !label.trim()}>Adicionar</button>
           </div>
         </form>}
         <section className="operacao__card">
-          <div className="operacao__row operacao__row--spread"><h2>Mesas cadastradas</h2><button type="button" onClick={reload}>Atualizar</button></div>
+          <div className="operacao__row operacao__row--spread"><h2>Mesas cadastradas</h2><button className="ds-button" type="button" onClick={reload}>Atualizar</button></div>
           {!data.tables.length ? <p className="operacao__muted">Nenhuma mesa cadastrada.</p> : <ul className="operacao__list">
             {data.tables.map(table => <li key={table.id} className="operacao__row operacao__row--spread">
               <div><strong>{table.label}</strong><br /><StatusBadge tone={!table.active ? "neutral" : table.free ? "success" : "warning"}>{!table.active ? "Inativa" : table.free ? "Livre" : `${table.pendingOrders} pendente(s) · ${formatCents(table.accountCents)} em aberto`}</StatusBadge></div>
-              <button type="button" disabled={busy || table.id === tableId} onClick={() => select(table)}>Ver mesa</button>
+              <button className="ds-button" type="button" disabled={busy || table.id === tableId} onClick={() => select(table)}>Ver mesa</button>
             </li>)}
           </ul>}
         </section>
@@ -241,25 +241,25 @@ export function MesasPage() {
             void mutate("/api/store/qr-settings", "POST", { serviceFeePercent: percent }, "Taxa de serviço salva.").then(ok => { if (ok) setFeeInput(null); });
           }}>
             <label>Taxa de serviço sugerida (%)<input type="number" min={0} max={30} step={1} value={feeInput ?? String(feePercent)} disabled={busy} onChange={event => setFeeInput(event.target.value)} /></label>
-            <button type="submit" disabled={busy || feeInput === null || feeInput === String(feePercent)}>Salvar</button>
+            <button className="ds-button ds-button--primary" type="submit" disabled={busy || feeInput === null || feeInput === String(feePercent)}>Salvar</button>
           </form>
           <p className="operacao__muted">Vem marcada no fechamento da mesa e pode ser tirada em cada conta. 0 = a loja não cobra.</p>
         </section>}
         {selected && accountPath && <section className="operacao__card">
-          <div className="operacao__row operacao__row--spread"><h2>{selected.label}</h2><button type="button" disabled={busy} onClick={loadAccount}>Atualizar conta</button></div>
+          <div className="operacao__row operacao__row--spread"><h2>{selected.label}</h2><button className="ds-button" type="button" disabled={busy} onClick={loadAccount}>Atualizar conta</button></div>
           <div className="operacao__row">
-            {selected.active && <button type="button" onClick={() => setPrintedQr({ label: selected.label, href: new URL(selected.qrPath, window.location.origin).href })}>Ver código QR</button>}
-            <button type="button" onClick={() => copyLink(selected.qrPath)}>Copiar link</button>
-            {selected.active && <Link className="operacao__button" href={selected.qrPath} target="_blank" rel="noreferrer">Abrir cardápio</Link>}
+            {selected.active && <button className="ds-button" type="button" onClick={() => setPrintedQr({ label: selected.label, href: new URL(selected.qrPath, window.location.origin).href })}>Ver código QR</button>}
+            <button className="ds-button" type="button" onClick={() => copyLink(selected.qrPath)}>Copiar link</button>
+            {selected.active && <Link className="ds-button" href={selected.qrPath} target="_blank" rel="noreferrer">Abrir cardápio</Link>}
           </div>
           {owner && <>
             <form className="operacao__row" onSubmit={event => { event.preventDefault(); void mutate(accountPath, "PATCH", { label: rename.trim() }, "Nome da mesa atualizado."); }}>
               <label>Nome<input required maxLength={40} value={rename} onChange={event => setRename(event.target.value)} /></label>
-              <button type="submit" disabled={busy || !rename.trim() || rename.trim() === selected.label}>Renomear</button>
+              <button className="ds-button" type="submit" disabled={busy || !rename.trim() || rename.trim() === selected.label}>Renomear</button>
             </form>
             <div className="operacao__row">
-              <button type="button" disabled={busy} onClick={() => mutate(accountPath, "PATCH", { active: !selected.active }, selected.active ? "Mesa desativada." : "Mesa ativada.")}>{selected.active ? "Desativar" : "Ativar"}</button>
-              <button type="button" disabled={busy} onClick={() => confirm({ kind: "rotate", table: selected })}>Trocar QR</button>
+              <button className="ds-button" type="button" disabled={busy} onClick={() => mutate(accountPath, "PATCH", { active: !selected.active }, selected.active ? "Mesa desativada." : "Mesa ativada.")}>{selected.active ? "Desativar" : "Ativar"}</button>
+              <button className="ds-button" type="button" disabled={busy} onClick={() => confirm({ kind: "rotate", table: selected })}>Trocar QR</button>
             </div>
           </>}
           {account?.table.id === tableId ? <>
@@ -287,18 +287,18 @@ export function MesasPage() {
                   </select></label>
                   {parts.length > 1 && <label>Valor (R$)<input inputMode="decimal" placeholder="0,00" required value={part.amount} disabled={busy} onChange={event => updatePart(part.key, { amount: event.target.value })} /></label>}
                   {part.method === "DINHEIRO" && <label>Troco para (opcional)<input inputMode="decimal" placeholder="0,00" value={part.changeFor} disabled={busy} onChange={event => updatePart(part.key, { changeFor: event.target.value })} /></label>}
-                  {parts.length > 1 && <button type="button" disabled={busy} onClick={() => removePart(part.key)}>Remover</button>}
+                  {parts.length > 1 && <button className="ds-button ds-button--quiet" type="button" disabled={busy} onClick={() => removePart(part.key)}>Remover</button>}
                 </div>
               </fieldset>)}
               <div className="operacao__row operacao__row--spread">
-                <button type="button" disabled={busy || parts.length >= 10} onClick={() => addPart(totals.totalCents)}>{parts.length > 1 ? "Adicionar forma" : "Dividir a conta"}</button>
+                <button className="ds-button" type="button" disabled={busy || parts.length >= 10} onClick={() => addPart(totals.totalCents)}>{parts.length > 1 ? "Adicionar forma" : "Dividir a conta"}</button>
                 {parts.length > 1 && (() => {
                   const rest = remainingCents(totals.totalCents, parts);
                   return <span className={rest === 0 ? "operacao__muted" : "operacao__warning"} role="status">{rest === 0 ? "Divisão fechada" : rest > 0 ? `Faltam ${formatCents(rest)}` : `Sobram ${formatCents(-rest)}`}</span>;
                 })()}
               </div>
               {parts.length > 1 && <p className="operacao__muted">Dividir a conta é do plano PRO. Dinheiro em qualquer parte exige o caixa aberto.</p>}
-              <button className="operacao__primary" type="submit" disabled={busy || account.pendingOrders > 0 || totals.totalCents <= 0 || (parts.length > 1 && remainingCents(totals.totalCents, parts) !== 0)}>Receber {formatCents(totals.totalCents)}</button>
+              <button className="ds-button ds-button--primary" type="submit" disabled={busy || account.pendingOrders > 0 || totals.totalCents <= 0 || (parts.length > 1 && remainingCents(totals.totalCents, parts) !== 0)}>Receber {formatCents(totals.totalCents)}</button>
             </form> : <strong>Total {formatCents(account.totalCents)}</strong>}
           </> : <p role="status">Carregando conta…</p>}
         </section>}

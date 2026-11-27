@@ -5,11 +5,11 @@
 **Regra combinada:** o backend não altera o que já existe no `apps/web`, EXCETO quando o dono do produto autoriza. Em 25/11 ele autorizou: sanitização dos campos (§3b), 3 telas corrigidas (§3b) e as cores do §1 — **tudo isso JÁ ESTÁ APLICADO no main**; revise e ajuste o visual se quiser.
 
 ## O QUE FICOU PARA VOCÊ (resumo)
-1. **Tela nova: importação de produtos por planilha** (§3c) — a API está pronta no main.
+1. ~~Tela nova: importação de produtos por planilha~~ — **FEITO** (§3c, PR #178).
 2. **Ligar o catálogo de erros** (§2) — **textos revisados em 27/11/2026**: 240 aprovados (`ok`), 55 ficam com a frase da API (`api`, mais específica), 0 rascunhos (`docs/textos-de-erro-para-revisar.md`). **LIGADO em 27/11/2026 (autorizado):** `shared/errors/catalogMessage.ts` (+ teste) e `extractErrorMessage` em `core/http/FetchHttpClient.ts` consulta o catálogo pelo `code` antes de usar o texto da API. Ficou em `extractErrorMessage` (e não só em `toResult`) para valer também nos 5 lugares que a chamam direto (campanha, sangria, lucro, operação, relatórios). O 5xx genérico do Fastify continua com a frase padrão. Teste ajustado em `FetchHttpClient.test.ts` (STORE_UNAVAILABLE agora tem texto aprovado). Conferido no navegador: cadastro com e-mail já usado mostra "Este e-mail já tem cadastro. Entre com ele ou use outro." no lugar de "este e-mail já está cadastrado".
 3. **z-index e breakpoints** (§3) — **APLICADO em 27/11/2026 (autorizado)**: revisar.
 4. **Revisar o que foi aplicado nas suas telas**: §1 (cores), §3b (máscaras/limites e 3 telas).
-5. Opcional: conferir se as telas criadas pelo backend antes da regra (estoque/lucro, mesas, pedidos agendados, relatórios avançados) seguem o seu padrão.
+5. ~~Conferir se as telas criadas pelo backend seguem o seu padrão~~ — **CONFERIDO em 27/11/2026**: estoque/lucro, relatórios, salão, prato 3D, Reels, importação, equipe e caixa já usam `PageHeading`, `StateMessage` e `ds-button`. A exceção era `operacao/` (Mesas, Horários, QR da mesa), com um estilo de botão próprio (`.operacao button`, `operacao__primary`, `operacao__button`): **trocado** por `ds-button` / `--primary` / `--quiet` em `MesasPage.tsx`, `HorariosPage.tsx` e `TableQr.tsx`; `operacao.css` agora só estiliza botão SEM `ds-button`. `MesaCardapioPage` (tela do cliente, estilo da loja) não mudou. Espaçamento em px é o mesmo padrão das suas telas (catálogo, início), então ficou.
 
 ---
 

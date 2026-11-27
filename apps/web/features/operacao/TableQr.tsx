@@ -28,8 +28,8 @@ export function TableQr({ label, href, onClose }: { label: string; href: string;
         </svg>
       </div>
       <div className="operacao__row">
-        <button type="button" onClick={onClose}>Voltar</button>
-        <button type="button" className="operacao__primary" onClick={() => window.print()}>Imprimir QR</button>
+        <button className="ds-button" type="button" onClick={onClose}>Voltar</button>
+        <button type="button" className="ds-button ds-button--primary" onClick={() => window.print()}>Imprimir QR</button>
       </div>
     </div>
   </Modal>;
