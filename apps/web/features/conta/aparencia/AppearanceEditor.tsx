@@ -39,11 +39,14 @@ export function AppearanceEditor({
   canEdit,
   readOnly,
   onSave,
+  layout = "CLASSIC",
 }: {
   store: StoreSettings;
   canEdit: boolean;
   readOnly: boolean;
   onSave: (input: StoreSettingsInput) => Promise<SaveMessage>;
+  /** modelo do cardápio mostrado na prévia (o escolhido acima, mesmo antes de salvar) */
+  layout?: "CLASSIC" | "REELS";
 }) {
   const [draft, setDraft] = useState(() => draftFrom(store));
   const [errors, setErrors] = useState<Errors>({});
@@ -179,7 +182,7 @@ export function AppearanceEditor({
           </p>
         )}
       </form>
-      <StoreIdentityPreview store={store} primaryColor={color} logo={draft.logoUrl} cover={draft.coverImageUrl} />
+      <StoreIdentityPreview store={store} primaryColor={color} logo={draft.logoUrl} cover={draft.coverImageUrl} layout={layout} />
     </div>
   );
 }

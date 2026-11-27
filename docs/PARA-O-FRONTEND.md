@@ -170,7 +170,7 @@ Sugestão: botão "Importar planilha" no Catálogo → enviar arquivo → prévi
 - **Novo:** `features/loja/reels/ReelsMenu.tsx` (+ `reels-menu.css`): com `store.menuLayout === "REELS"` a aba Cardápio vira feed vertical em tela cheia (um prato por tela; vídeo quando há Reel, foto com movimento suave quando não; abas de categoria; Detalhes/Adicionar usam o MESMO carrinho/detalhe; "Ver em lista" volta ao clássico na visita).
 - **Tocado no existente:** `LojaPage.tsx` (troca a lista pelo `ReelsMenu` só na aba Cardápio quando o modelo é Reels; guarda o prato onde o cliente estava); `conta/aparencia/AppearancePage.tsx` (+ `MenuLayoutSetting.tsx`: escolha Clássico/Reels); `reels/ReelsFeed.tsx` (barra de progresso, próximo vídeo pré-carregado, "Toque para ouvir", dica de deslizar).
 - **API:** `Store.menuLayout` (CLASSIC|REELS) em `POST /api/store/settings` e no cardápio público (`store.menuLayout`). Migração `20261127200000_cardapio_reels`.
-- **Sugestão para você:** a prévia da Aparência ainda mostra só o modelo clássico.
+- **Prévia da Aparência no modelo Reels (feito, autorizado):** `AppearancePage.tsx` guarda o modelo escolhido (mesmo antes de salvar) e passa `layout` para `AppearanceEditor.tsx` → `components/StoreIdentityPreview.tsx`, que no modelo Reels mostra o próprio `ReelsMenu` com os pratos ativos (fotos; vídeos só no cardápio). `MenuLayoutSetting.tsx` ganhou `onChange`; `appearance.css` ganhou `.appearance-preview__reels` (prende o feed, que é `position: fixed`, dentro da moldura). Teste: `StoreIdentityPreview.test.tsx`.
 
 ## 4. Mudanças do backend desde a última sincronização (para saber o que a API já oferece)
 - **Tíquete v4** (`printableOrderSchema`): `round`, `requestedBy`, `customerRemoved` — impressos pelo print-client; nada a fazer no web.

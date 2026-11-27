@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { StoreSettings } from "@/core/domain/store";
 import { StoreHeader } from "@/features/loja/components/StoreHeader";
+import { ReelsMenu } from "@/features/loja/reels/ReelsMenu";
 import { lojaThemeStyle } from "@/features/loja/theme";
 import { useStoreCatalog } from "@/features/shell/StoreProvider";
 import { validateStoreImageUrl } from "@/shared/format/imageUrl";
@@ -27,14 +28,19 @@ function usePreviewUrl({ url, file }: ImageDraft, saved: string | null) {
   return src;
 }
 
-export function StoreIdentityPreview({ store, primaryColor, logo, cover }: {
+export function StoreIdentityPreview({ store, primaryColor, logo, cover, layout = "CLASSIC" }: {
   store: StoreSettings;
   primaryColor: string;
   logo: ImageDraft;
   cover: ImageDraft;
+  layout?: "CLASSIC" | "REELS";
 }) {
   const [wide, setWide] = useState(false);
   const { categories } = useStoreCatalog();
+  const reelsCategories = useMemo(() => (categories ?? [])
+    // adicionais não aparecem no feed; o tipo do catálogo do painel permite adicional ainda sem id
+    .map((c) => ({ ...c, products: c.products.filter((p) => p.active).map((p) => ({ ...p, additionals: [] })) }))
+    .filter((c) => c.products.length > 0), [categories]);
   const visibleCategories = categories?.filter(({ products }) => products.length > 0).slice(0, 3) ?? [];
   const logoUrl = usePreviewUrl(logo, store.logoUrl);
   const coverUrl = usePreviewUrl(cover, store.coverImageUrl);
@@ -57,17 +63,28 @@ export function StoreIdentityPreview({ store, primaryColor, logo, cover }: {
             const url = event.target.getAttribute("src");
             if (url) setImageFailure((current) => current.includes(url) ? current : [...current, url]);
           }}>
-          <StoreHeader preview store={previewStore} showCategoriesHead={false} onOpenSearch={() => {}} onViewAllCategories={() => {}} />
-          <div className="appearance-preview__sample" aria-hidden="true">
-            <div className="appearance-preview__categories">
-              {visibleCategories.length > 0
-                ? visibleCategories.map(({ id, name }) => <span key={id}>{name}</span>)
-                : <span>Categorias</span>}
+          {layout === "REELS" ? (
+            // MODELO REELS: o mesmo feed do cardápio público, com os pratos ativos (desliza dentro da prévia; botões não fazem nada aqui)
+            <div className="appearance-preview__reels">
+              <ReelsMenu storeName={store.name} logoUrl={logoUrl || null} categories={reelsCategories} reels={[]} quantityByProduct={{}} closed={false}
+                onAdd={() => {}} onOpen={() => {}} onShowList={() => {}} />
             </div>
-            <div className="appearance-preview__cart">Ver carrinho</div>
-          </div>
+          ) : (
+            <>
+              <StoreHeader preview store={previewStore} showCategoriesHead={false} onOpenSearch={() => {}} onViewAllCategories={() => {}} />
+              <div className="appearance-preview__sample" aria-hidden="true">
+                <div className="appearance-preview__categories">
+                  {visibleCategories.length > 0
+                    ? visibleCategories.map(({ id, name }) => <span key={id}>{name}</span>)
+                    : <span>Categorias</span>}
+                </div>
+                <div className="appearance-preview__cart">Ver carrinho</div>
+              </div>
+            </>
+          )}
         </div>
       </div>
+      {layout === "REELS" ? <p className="appearance-preview__note">Na prévia aparecem as fotos; os vídeos publicados em Reels entram no lugar delas no cardápio.</p> : null}
       {(imageFailure.includes(logoUrl) || imageFailure.includes(coverUrl)) && (
         <p className="appearance-preview__note" role="status">Uma das imagens não carregou. Confira o endereço ou escolha outro arquivo.</p>
       )}
