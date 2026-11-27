@@ -38,9 +38,9 @@ function Intervals({ intervals, label, change }: { intervals: Interval[]; label:
       <input aria-label={`Abertura de ${label} ${index + 1}`} required pattern="([01][0-9]|2[0-3]):[0-5][0-9]" placeholder="09:00" value={interval.start} onChange={event => change(intervals.map((value, i) => i === index ? { ...value, start: event.target.value } : value))} />
       <span>até</span>
       <input aria-label={`Fechamento de ${label} ${index + 1}`} required pattern="([01][0-9]|2[0-3]):[0-5][0-9]|24:00" placeholder="18:00" value={interval.end} onChange={event => change(intervals.map((value, i) => i === index ? { ...value, end: event.target.value } : value))} />
-      <button type="button" aria-label={`Remover horário de ${label} ${index + 1}`} onClick={() => change(intervals.filter((_, i) => i !== index))}>Remover</button>
+      <button className="ds-button ds-button--quiet" type="button" aria-label={`Remover horário de ${label} ${index + 1}`} onClick={() => change(intervals.filter((_, i) => i !== index))}>Remover</button>
     </div>)}
-    <div><button type="button" disabled={intervals.length >= 6} onClick={() => change([...intervals, NEW_INTERVAL])}>Adicionar horário</button></div>
+    <div><button className="ds-button" type="button" disabled={intervals.length >= 6} onClick={() => change([...intervals, NEW_INTERVAL])}>Adicionar horário</button></div>
   </div>;
 }
 
@@ -166,7 +166,7 @@ export function HorariosPage() {
           <label>Escreva os horários como você divulga (vazio = usa o texto antigo da loja)
             <textarea rows={2} maxLength={500} value={suggestText} placeholder="Ex.: seg a sex 11h às 15h e 18h às 23h; sáb 18h às 00h" onChange={event => setSuggestText(event.target.value)} />
           </label>
-          <div><button type="button" onClick={() => void suggest()}>Sugerir horários</button></div>
+          <div><button className="ds-button" type="button" onClick={() => void suggest()}>Sugerir horários</button></div>
           {suggestion && <div role="status" className="operacao__muted">
             {suggestion.schedule ? <>Grade preenchida{suggestion.summary ? `: ${suggestion.summary}` : ""}. Confira e clique em <strong>Salvar horários</strong>.</> : "Não consegui entender os horários. Preencha a grade abaixo."}
             {suggestion.doubts.length > 0 && <ul>{suggestion.doubts.map((doubt, index) => <li key={index}>“{doubt.text}”: {doubt.reason}</li>)}</ul>}
@@ -185,14 +185,14 @@ export function HorariosPage() {
             <div className="operacao__row">
               <input aria-label={`Data da exceção ${index + 1}`} type="date" required value={exception.date} onChange={event => editException(index, { date: event.target.value })} />
               <label className="operacao__check"><input type="checkbox" checked={exception.closed} onChange={event => editException(index, { closed: event.target.checked })} /> Fechado</label>
-              <button type="button" onClick={() => setSchedule(current => ({ ...current, exceptions: current.exceptions.filter((_, i) => i !== index) }))}>Remover data</button>
+              <button className="ds-button ds-button--quiet" type="button" onClick={() => setSchedule(current => ({ ...current, exceptions: current.exceptions.filter((_, i) => i !== index) }))}>Remover data</button>
             </div>
             {!exception.closed && <Intervals label={`exceção ${index + 1}`} intervals={exception.intervals ?? []} change={intervals => editException(index, { intervals })} />}
           </fieldset>)}
-          <div><button type="button" disabled={schedule.exceptions.length >= 200} onClick={() => setSchedule(current => ({ ...current, exceptions: [...current.exceptions, { date: "", closed: true }] }))}>Adicionar data</button></div>
+          <div><button className="ds-button" type="button" disabled={schedule.exceptions.length >= 200} onClick={() => setSchedule(current => ({ ...current, exceptions: [...current.exceptions, { date: "", closed: true }] }))}>Adicionar data</button></div>
         </>}
         </fieldset>
-        <div><button className="operacao__primary" type="submit" disabled={busy}>Salvar horários</button></div>
+        <div><button className="ds-button ds-button--primary" type="submit" disabled={busy}>Salvar horários</button></div>
       </form>}
       <div>
         <section className="operacao__card">
@@ -203,21 +203,21 @@ export function HorariosPage() {
           </div>
           <p role="status">{hours.status.message}</p>
           <div className="operacao__row">
-            {([15, 30, 60] as const).map(minutes => <button type="button" key={minutes} disabled={busy} onClick={() => saveStatus({ action: "PAUSE", minutes })}>Pausar {minutes} min</button>)}
-            <button type="button" disabled={busy || !!hours.closedUntil} onClick={() => { setCloseError(null); setConfirmingClose(true); }}>Fechar por hoje</button>
-            {(hours.pausedUntil || hours.closedUntil) && <button type="button" className="operacao__primary" disabled={busy} onClick={() => saveStatus({ action: "RESUME" })}>Encerrar pausa</button>}
+            {([15, 30, 60] as const).map(minutes => <button className="ds-button" type="button" key={minutes} disabled={busy} onClick={() => saveStatus({ action: "PAUSE", minutes })}>Pausar {minutes} min</button>)}
+            <button className="ds-button" type="button" disabled={busy || !!hours.closedUntil} onClick={() => { setCloseError(null); setConfirmingClose(true); }}>Fechar por hoje</button>
+            {(hours.pausedUntil || hours.closedUntil) && <button type="button" className="ds-button ds-button--primary" disabled={busy} onClick={() => saveStatus({ action: "RESUME" })}>Encerrar pausa</button>}
           </div>
           <h3>Modo ocupado</h3>
           {busyActive && hours.busyUntil ? <div className="operacao__row operacao__row--spread">
             <span role="status"><StatusBadge tone="warning">Ocupado até {clock(hours.busyUntil, hours.timezone)}</StatusBadge>{hours.busyExtraMinutes ? ` · o cliente vê +${hours.busyExtraMinutes} min no preparo` : ""}</span>
-            <button type="button" className="operacao__primary" disabled={busy} onClick={() => void setBusyMode(null)}>Encerrar modo ocupado</button>
+            <button type="button" className="ds-button ds-button--primary" disabled={busy} onClick={() => void setBusyMode(null)}>Encerrar modo ocupado</button>
           </div> : <>
             <p className="operacao__muted">Cozinha cheia? Continue recebendo pedidos e avise ao cliente um tempo de preparo maior.</p>
             <label>Tempo a mais no preparo<select value={busyExtra} disabled={busy} onChange={event => setBusyExtra(Number(event.target.value) as (typeof BUSY_EXTRA)[number])}>
               {BUSY_EXTRA.map(extra => <option key={extra} value={extra}>+{extra} min</option>)}
             </select></label>
             <div className="operacao__row">
-              {BUSY_MINUTES.map(minutes => <button type="button" key={minutes} disabled={busy} onClick={() => void setBusyMode(minutes)}>Ocupado por {minutes < 60 ? `${minutes} min` : `${minutes / 60} h`}</button>)}
+              {BUSY_MINUTES.map(minutes => <button className="ds-button" type="button" key={minutes} disabled={busy} onClick={() => void setBusyMode(minutes)}>Ocupado por {minutes < 60 ? `${minutes} min` : `${minutes / 60} h`}</button>)}
             </div>
           </>}
         </section>
@@ -226,7 +226,7 @@ export function HorariosPage() {
           <small>Deixe em branco quando a loja não fornecer uma previsão.</small>
           <label>Entrega (minutos)<input type="number" min={5} max={240} disabled={busy} value={prep.deliveryMinutes ?? ""} onChange={event => setPrep(current => ({ ...current, deliveryMinutes: event.target.value ? event.target.valueAsNumber : null }))} /></label>
           <label>Retirada (minutos)<input type="number" min={5} max={240} disabled={busy} value={prep.pickupMinutes ?? ""} onChange={event => setPrep(current => ({ ...current, pickupMinutes: event.target.value ? event.target.valueAsNumber : null }))} /></label>
-          <div><button className="operacao__primary" disabled={busy}>Salvar previsões</button></div>
+          <div><button className="ds-button ds-button--primary" disabled={busy}>Salvar previsões</button></div>
         </form>}
       </div>
     </div>}
