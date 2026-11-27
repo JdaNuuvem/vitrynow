@@ -562,6 +562,7 @@ export const updateStoreSettingsSchema = z.object({
   deliveryEnabled: z.boolean().optional(),
   pickupEnabled: z.boolean().optional(),
   hideSoldOutProducts: z.boolean().optional(),
+  menuLayout: z.enum(["CLASSIC", "REELS"]).optional(), // modelo do cardápio público
   deliveryFeeCents: z.number().int().nonnegative().max(10_000_000).optional(),
   timezone: z.enum(STORE_TIMEZONES).optional(), // SSOT D1: lista fechada; fora dela a rota responde TIMEZONE_INVALID
 });

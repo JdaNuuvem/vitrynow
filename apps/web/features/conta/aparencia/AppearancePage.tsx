@@ -6,6 +6,7 @@ import { Button, PageHeading, StateMessage } from "@/shared/design/components";
 import { Icon } from "@/shared/icons/Icon";
 import { useConta } from "../hooks/useConta";
 import { AppearanceEditor } from "./AppearanceEditor";
+import { MenuLayoutSetting } from "./MenuLayoutSetting";
 import "./appearance.css";
 
 export function AppearancePage() {
@@ -22,6 +23,7 @@ export function AppearancePage() {
         )}>
         <Link className="ds-button ds-button--quiet" href="/dashboard/conta">Voltar a Minha loja</Link>
       </PageHeading>
+      {store ? <MenuLayoutSetting key={`layout-${store.id}`} store={store} canEdit={role === "OWNER"} onSave={save} /> : null}
       {store ? <AppearanceEditor key={store.id} store={store} canEdit={role === "OWNER"} readOnly={role === "STAFF"} onSave={save} />
         : loadError ? (
           <StateMessage title="Aparência indisponível" tone="danger" action={<Button onClick={() => void reload()}>Tentar novamente</Button>}>{loadError}</StateMessage>

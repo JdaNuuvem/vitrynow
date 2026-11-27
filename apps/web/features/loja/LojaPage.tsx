@@ -25,6 +25,7 @@ import { buildOrderSummary, type CheckoutForm, type CheckoutTotals } from "./che
 import { restoreReturnPoint, type ReturnPoint } from "./focusReturn";
 import { useCart } from "./hooks/useCart";
 import { ReelsStrip, ReelsViewer } from "./reels/ReelsFeed";
+import { ReelsMenu } from "./reels/ReelsMenu";
 import { useReels } from "./reels/useReels";
 import { useInView } from "./hooks/useInView";
 import { useRevealOnEnter } from "./hooks/useRevealOnEnter";
@@ -73,6 +74,9 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
   // REELS (cardápio estilo Reels): abre POR CIMA do cardápio; "Pedir" abre o produto aqui mesmo (o carrinho é este). ?reels=1 abre direto.
   const reels = useReels(slug, menu?.store.hasReels === true);
   const [reelsAt, setReelsAt] = useState<number | null>(null);
+  // MODELO REELS: a loja escolheu o cardápio em feed; o cliente pode trocar para a lista nesta visita
+  const [forceList, setForceList] = useState(false);
+  const reelsIndex = useRef(0);
   useEffect(() => {
     if (reels.length && new URLSearchParams(window.location.search).get("reels") === "1") setReelsAt(0);
   }, [reels.length]);
@@ -285,7 +289,11 @@ export function LojaPage({ slug, initialMenu }: { slug: string; initialMenu?: Me
 
     return (
       <main className="loja__page">
-        {tab === "pedidos" ? (
+        {tab === "itens" && store.menuLayout === "REELS" && !forceList ? (
+          <ReelsMenu storeName={store.name} logoUrl={store.logoUrl} categories={visibleCategories} reels={reels} quantityByProduct={cart.quantityByProduct}
+            closed={closed} onAdd={quickAdd} onOpen={(product) => openProduct(product)} onShowList={() => setForceList(true)}
+            startIndex={reelsIndex.current} onIndexChange={(i) => { reelsIndex.current = i; }} />
+        ) : tab === "pedidos" ? (
           <div className="loja__column">
             <OrdersScreen timeZone={store.timezone} orders={history.orders} storeName={store.name} whatsapp={store.whatsapp} pendingPix={order.pendingPix} trackingFor={order.trackingFor} />
           </div>
