@@ -6,7 +6,7 @@
 
 ## O QUE FICOU PARA VOCÊ (resumo)
 1. **Tela nova: importação de produtos por planilha** (§3c) — a API está pronta no main.
-2. **Ligar o catálogo de erros** (§2) — **textos revisados em 27/11/2026**: 240 aprovados (`ok`), 55 ficam com a frase da API (`api`, mais específica), 0 rascunhos (`docs/textos-de-erro-para-revisar.md`). Falta só o `catalogMessage.ts` + 1 linha no `FetchHttpClient` (§2). Até lá a tela mostra o texto da API, que em ~80 casos ainda é técnico ("ação restrita ao dono da loja", "job não encontrado", "envie multipart/form-data").
+2. **Ligar o catálogo de erros** (§2) — **textos revisados em 27/11/2026**: 240 aprovados (`ok`), 55 ficam com a frase da API (`api`, mais específica), 0 rascunhos (`docs/textos-de-erro-para-revisar.md`). **LIGADO em 27/11/2026 (autorizado):** `shared/errors/catalogMessage.ts` (+ teste) e `extractErrorMessage` em `core/http/FetchHttpClient.ts` consulta o catálogo pelo `code` antes de usar o texto da API. Ficou em `extractErrorMessage` (e não só em `toResult`) para valer também nos 5 lugares que a chamam direto (campanha, sangria, lucro, operação, relatórios). O 5xx genérico do Fastify continua com a frase padrão. Teste ajustado em `FetchHttpClient.test.ts` (STORE_UNAVAILABLE agora tem texto aprovado). Conferido no navegador: cadastro com e-mail já usado mostra "Este e-mail já tem cadastro. Entre com ele ou use outro." no lugar de "este e-mail já está cadastrado".
 3. **z-index e breakpoints** (§3) — **APLICADO em 27/11/2026 (autorizado)**: revisar.
 4. **Revisar o que foi aplicado nas suas telas**: §1 (cores), §3b (máscaras/limites e 3 telas).
 5. Opcional: conferir se as telas criadas pelo backend antes da regra (estoque/lucro, mesas, pedidos agendados, relatórios avançados) seguem o seu padrão.

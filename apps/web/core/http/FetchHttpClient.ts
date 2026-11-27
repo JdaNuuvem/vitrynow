@@ -1,4 +1,5 @@
 import { apiFetch } from "@/lib/api";
+import { catalogMessage } from "@/shared/errors/catalogMessage";
 import type { HttpClient, HttpResult, RequestOptions } from "./HttpClient";
 
 const FALLBACK_ERROR = "Não foi possível concluir a ação. Tente de novo.";
@@ -14,6 +15,10 @@ function isGenericServerError(payload: unknown): boolean {
 // { formErrors: string[], fieldErrors: Record<campo, string[]> }.
 export function extractErrorMessage(payload: unknown): string {
   if (isGenericServerError(payload)) return FALLBACK_ERROR;
+  // texto aprovado no catálogo de erros (D6) vence o da API; sem aprovação (ou sem código), fica o da API
+  const code = (payload as { code?: unknown } | null)?.code;
+  const approved = catalogMessage(typeof code === "string" ? code : undefined);
+  if (approved) return approved;
   const error =(payload as { error?: unknown } | null)?.error;
   if (typeof error === "string") return error;
   if (error && typeof error === "object") {
