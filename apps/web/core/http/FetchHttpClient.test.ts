@@ -18,8 +18,16 @@ describe("extractErrorMessage: 5xx genérico da API", () => {
     }
   });
 
+  it("código com texto APROVADO no catálogo (D6) mostra o texto do catálogo no lugar do técnico da API", () => {
+    expect(extractErrorMessage({ error: "ação restrita ao dono da loja", code: "PLATFORM_ROLE_REQUIRED" })).toBe("Só a equipe da plataforma pode fazer isso.");
+    expect(extractErrorMessage({ error: "Loja indisponível no momento.", code: "STORE_UNAVAILABLE" })).toBe("Esta loja não está disponível no momento.");
+    // o 5xx genérico do Fastify continua com a frase padrão, mesmo com código
+    expect(extractErrorMessage({ statusCode: 500, error: "Internal Server Error", code: "STORE_UNAVAILABLE" })).not.toBe("Internal Server Error");
+  });
+
   it("um 5xx com texto PRÓPRIO continua como veio (ex.: loja suspensa, falha transitória do pagamento, rede)", () => {
-    expect(extractErrorMessage({ error: "Loja indisponível no momento.", code: "STORE_UNAVAILABLE" })).toBe("Loja indisponível no momento.");
+    // STORE_SUSPENDED fica com a frase da API no catálogo (api(...)): passa como veio
+    expect(extractErrorMessage({ error: "A loja está suspensa pela plataforma. Fale com o suporte.", code: "STORE_SUSPENDED" })).toBe("A loja está suspensa pela plataforma. Fale com o suporte.");
     expect(extractErrorMessage({ error: "falha transitória" })).toBe("falha transitória");
     expect(extractErrorMessage({ statusCode: 503, error: "Não foi possível conectar ao servidor. Verifique sua internet e tente de novo." })).toBe(
       "Não foi possível conectar ao servidor. Verifique sua internet e tente de novo.",
