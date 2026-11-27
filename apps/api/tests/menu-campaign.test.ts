@@ -1,5 +1,5 @@
 // Campanha principal do cardápio (CONTRATO-CAMPANHA): revisão otimista, publicação por cópia, DTO público, mídia, papel e isolamento entre 2 lojas.
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { isMenuAffectingRoute } from "../src/plugins/menuRevalidation";
 import { login, makeApp, registerStore, resetDb } from "./helpers";
@@ -172,9 +172,12 @@ describe("campanha do cardápio", { timeout: 90_000 }, () => {
     const a = await loja("camp-a", "CA1");
     await put(a.cookie, 0, draftOf({ title: "Titulo secreto de campanha" }));
     await act(a.cookie, "publish", 1);
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    const rows = await prisma.auditLog.findMany({ where: { storeId: a.storeId, action: { startsWith: "store.campaign_" } } });
-    expect(rows.map((r) => r.action).sort()).toEqual(["store.campaign_publish", "store.campaign_save"]);
+    // auditoria gravada sem bloquear a resposta (logAudit): espera as duas aparecerem
+    let rows: Awaited<ReturnType<typeof prisma.auditLog.findMany>> = [];
+    await vi.waitFor(async () => {
+      rows = await prisma.auditLog.findMany({ where: { storeId: a.storeId, action: { startsWith: "store.campaign_" } } });
+      expect(rows.map((r) => r.action).sort()).toEqual(["store.campaign_publish", "store.campaign_save"]);
+    }, { timeout: 10_000, interval: 100 });
     expect(JSON.stringify(rows)).not.toContain("Titulo secreto");
     expect(isMenuAffectingRoute("POST", "/api/store/menu-campaign/publish")).toBe(true);
     expect(isMenuAffectingRoute("POST", "/api/store/menu-campaign/unpublish")).toBe(true);

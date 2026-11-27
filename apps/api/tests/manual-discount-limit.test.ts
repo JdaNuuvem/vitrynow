@@ -1,5 +1,5 @@
 // SEC-15 / RN-B2-06: o limite de desconto manual do STAFF e configurado so pelo OWNER, dentro de 0..100, com auditoria, e vale no pedido manual.
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { makeApp, registerStore, resetDb } from "./helpers";
 
@@ -61,9 +61,11 @@ describe("SEC-15 - limite de desconto manual do STAFF", { timeout: 60_000 }, () 
     const zero = await pedido(l, 1, l.staff);
     expect([zero.statusCode, json(zero).code, json(zero).limitPercent]).toEqual([403, "DISCOUNT_ABOVE_LIMIT", 0]);
     expect((await pedido(l, 50, l.owner)).statusCode).toBe(201); // OWNER sem teto
-    await new Promise((r) => setTimeout(r, 300));
-    const aud = await prisma.auditLog.findMany({ where: { storeId: l.store.id, action: "store.manual_discount_limit_change" }, orderBy: { createdAt: "asc" } });
-    expect(aud.map((a) => a.metadata)).toMatchObject([{ fromPercent: 10, toPercent: 25 }, { fromPercent: 25, toPercent: 0 }]);
+    // auditoria gravada sem bloquear a resposta (logAudit): espera aparecer
+    await vi.waitFor(async () => {
+      const aud = await prisma.auditLog.findMany({ where: { storeId: l.store.id, action: "store.manual_discount_limit_change" }, orderBy: { createdAt: "asc" } });
+      expect(aud.map((a) => a.metadata)).toMatchObject([{ fromPercent: 10, toPercent: 25 }, { fromPercent: 25, toPercent: 0 }]);
+    }, { timeout: 10_000, interval: 100 });
   });
 
   it("valor fora da faixa ou de tipo errado e 400 e nao grava", async () => {
