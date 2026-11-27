@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { OPEN_ORDER_STATUSES, QUEUED_ORDER_STATUSES, STORE_TIMEZONES, isStoreTimezone, updateStoreSettingsSchema } from "@meucardapio/shared-types";
 import { makeApp, registerStore, resetDb } from "./helpers";
@@ -41,7 +41,10 @@ describe("POST /api/store/settings com fuso", () => {
     expect(ok.statusCode).toBe(200);
     expect(ok.json().store.timezone).toBe("America/Manaus");
 
-    const audit = await prisma.auditLog.findFirst({ where: { storeId, action: "store.settings_update" }, orderBy: { createdAt: "desc" } });
-    expect((audit?.metadata as { timezone?: unknown })?.timezone).toEqual({ from: before.timezone, to: "America/Manaus" });
+    // a auditoria é gravada sem bloquear a resposta (logAudit): espera ela aparecer, como nos demais testes de auditoria
+    await vi.waitFor(async () => {
+      const audit = await prisma.auditLog.findFirst({ where: { storeId, action: "store.settings_update" }, orderBy: { createdAt: "desc" } });
+      expect((audit?.metadata as { timezone?: unknown })?.timezone).toEqual({ from: before.timezone, to: "America/Manaus" });
+    }, { timeout: 10_000, interval: 100 });
   });
 });
