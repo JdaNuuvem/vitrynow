@@ -12,3 +12,9 @@
 .equipe__limit { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
 .equipe__limit label { display: grid; gap: 5px; font-size: .875rem; font-weight: 650; }
 .equipe__limit input { box-sizing: border-box; min-height: 44px; width: 120px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; }
+
+/* nome de exibição (editar na linha) */
+.equipe__muted { color: var(--ink-soft); }
+.equipe__error { display: block; color: var(--danger); font-size: var(--ds-text-sm); }
+.equipe__name-edit { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.equipe__name-edit input { min-height: 40px; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--ds-radius-sm); background: var(--surface); color: var(--ink); font: inherit; width: 14ch; }

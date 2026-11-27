@@ -6,7 +6,7 @@ import { IMPORT_MAX_BYTES, IMPORT_MAX_ROWS, IMPORT_COLUMNS, errorMessages, type 
 import { useCurrentRole } from "@/core/session/useCurrentRole";
 import { Button, PageHeading, Panel, StateMessage, StatusBadge } from "@/shared/design/components";
 import { formatCents } from "@/shared/format/money";
-import { detectFormat, importApi, ISSUE_LABEL, type ImportFormat, type ImportGuide, type ImportResult } from "./importApi";
+import { detectFormat, importApi, ISSUE_LABEL, readXlsxAsCsv, type ImportFormat, type ImportGuide, type ImportResult } from "./importApi";
 import "./importacao.css";
 
 // IMPORTAÇÃO DE PRODUTOS (tela nova, API IMP-1): modelo/instruções → enviar ou colar → prévia → publicar.
@@ -43,6 +43,15 @@ export function ImportacaoPage() {
   async function readFile(file: File) {
     setError(null);
     if (file.size > IMPORT_MAX_BYTES) return setError("O arquivo passa de 2 MB. Divida a planilha em partes menores.");
+    if (/\.xlsx$/i.test(file.name)) {
+      try {
+        setText(await readXlsxAsCsv(file)); // Excel vira CSV aqui; a validação é toda no servidor
+        setFileName(file.name.replace(/\.xlsx$/i, ".csv"));
+      } catch {
+        setError("Não conseguimos ler esta planilha. Salve como .xlsx (Excel) ou CSV e tente de novo.");
+      }
+      return;
+    }
     setFileName(file.name);
     setText(await file.text());
   }
@@ -135,8 +144,8 @@ export function ImportacaoPage() {
           </Panel>
 
           <Panel title="Enviar">
-            <label className="importacao__field">Arquivo CSV ou JSON (até 2 MB)
-              <input type="file" accept=".csv,.json,text/csv,application/json,text/plain" onChange={(e) => { const f = e.target.files?.[0]; if (f) void readFile(f); }} />
+            <label className="importacao__field">Arquivo Excel (.xlsx), CSV ou JSON (até 2 MB)
+              <input type="file" accept=".xlsx,.csv,.json,text/csv,application/json,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(e) => { const f = e.target.files?.[0]; if (f) void readFile(f); }} />
             </label>
             <label className="importacao__field">…ou cole o conteúdo aqui
               <textarea rows={10} value={text} onChange={(e) => { setText(e.target.value); setFileName(null); }} placeholder={"categoria,nome,descricao,preco\nPizzas,Pizza Margherita,Molho e muçarela,42.50"} spellCheck={false} />

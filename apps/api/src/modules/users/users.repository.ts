@@ -6,7 +6,7 @@ type Db = typeof prismaClient;
 // O que a API expõe de um usuário (nunca o hash da senha).
 export type TeamMember = Pick<User, "id" | "email" | "role" | "createdAt">;
 
-const memberSelect = { id: true, email: true, role: true, createdAt: true } as const;
+const memberSelect = { id: true, email: true, role: true, displayName: true, createdAt: true } as const;
 
 export interface UsersRepository {
   listByStore(storeId: string): Promise<TeamMember[]>;

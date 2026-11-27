@@ -1,7 +1,8 @@
 import { panelRoleSchema } from "@meucardapio/shared-types";
 import { clientIpOf } from "../../lib/clientIp";
 import type { FastifyPluginAsync } from "fastify";
-import { changePasswordSchema, createStaffUserSchema } from "@meucardapio/shared-types";
+import { changePasswordSchema, createStaffUserSchema, memberDisplayNameSchema } from "@meucardapio/shared-types";
+import { logAudit } from "../../lib/audit";
 import { clientKey } from "../../lib/clientKey";
 import { mfaProofAccepted, requireMfa } from "../../lib/mfaGate";
 import { SESSION_COOKIE, sessionCookieOptions, signSession } from "../../lib/session";
@@ -44,6 +45,17 @@ export function buildUserRoutes(service: UsersService): FastifyPluginAsync {
       },
     );
 
+
+    // Nome de exibição (dono): aparece no salão (garçom) e nas listas do painel. null = volta a usar o e-mail.
+    app.post("/api/users/:id/name", { preHandler: [app.requirePanelAuth, app.requireOwner] }, async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const parsed = memberDisplayNameSchema.safeParse(request.body);
+      if (!parsed.success) return reply.code(400).send({ error: "Nome inválido (até 40 caracteres).", code: "VALIDATION_ERROR" });
+      const result = await prisma.user.updateMany({ where: { id, storeId: request.user.storeId }, data: { displayName: parsed.data.displayName } });
+      if (result.count === 0) return reply.code(404).send({ error: "Pessoa da equipe não encontrada.", code: "USER_NOT_FOUND" });
+      logAudit({ storeId: request.user.storeId, userId: request.user.userId, action: "user.display_name", targetType: "User", targetId: id });
+      return { ok: true };
+    });
     app.post(
       "/api/users/:id/delete",
       { preHandler: [app.requirePanelAuth, app.requireOwner, requireMfa("delete_user")] },

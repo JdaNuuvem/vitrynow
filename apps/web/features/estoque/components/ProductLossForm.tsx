@@ -24,6 +24,10 @@ export function ProductLossForm({ gateway, run, onClose }: {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [productId, setProductId] = useState("");
   const [qty, setQty] = useState("1");
+  const [grams, setGrams] = useState("");
+  // prato vendido por peso (KG/HG): a perda precisa do peso de cada prato, em gramas (a ficha é por quilo)
+  const selected = categories?.flatMap((c) => c.products).find((p) => p.id === productId) as { saleUnit?: string } | undefined;
+  const byWeight = !!selected && (selected.saleUnit ?? "UN") !== "UN";
   const [reason, setReason] = useState<keyof typeof WASTE_REASONS>("CAIU");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -46,11 +50,13 @@ export function ProductLossForm({ gateway, run, onClose }: {
     if (!productId) return setError("Escolha o prato.");
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > PRODUCT_LOSS_MAX) return setError(`Informe uma quantidade de 1 a ${PRODUCT_LOSS_MAX}.`);
     if (reason === "OUTRO" && !note.trim()) return setError("Escreva a observação do motivo Outro.");
+    const weightGrams = Number(grams);
+    if (byWeight && (!Number.isInteger(weightGrams) || weightGrams < 1 || weightGrams > 100_000)) return setError("Informe o peso de cada prato em gramas (ex.: 450).");
     inFlight.current = true;
     setBusy(true);
     setError(null);
     try {
-      const failure = await run(() => gateway.productLoss(productId, { quantity, reason, ...(note.trim() ? { note: note.trim() } : {}) }));
+      const failure = await run(() => gateway.productLoss(productId, { quantity, reason, ...(byWeight ? { weightGrams } : {}), ...(note.trim() ? { note: note.trim() } : {}) }));
       if (failure) setError(failure);
       else onClose();
     } finally {
@@ -82,6 +88,9 @@ export function ProductLossForm({ gateway, run, onClose }: {
         <label>Observação{reason === "OUTRO" ? "" : " (opcional)"}
           <input value={note} maxLength={LOSS_NOTE_MAX} required={reason === "OUTRO"} disabled={busy} onChange={(event) => setNote(event.target.value)} />
         </label>
+        {byWeight && <label>Peso de cada prato (gramas)
+          <input required type="number" inputMode="numeric" min={1} max={100000} placeholder="Ex.: 450" value={grams} disabled={busy} onChange={(event) => setGrams(event.target.value)} />
+        </label>}
         <label>Quantidade de pratos
           <input required type="number" inputMode="numeric" min={1} max={PRODUCT_LOSS_MAX} value={qty} disabled={busy} onChange={(event) => setQty(event.target.value)} />
         </label>

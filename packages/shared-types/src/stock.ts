@@ -80,6 +80,7 @@ export const stockMovementsQuerySchema = z.object({
 // Desfazer um lançamento de perda: o dono desfaz qualquer perda manual; a equipe, só a própria e até 30 min depois.
 export const LOSS_UNDO_STAFF_MINUTES = 30;
 // Alerta de perda alta no lucro: perdas acima deste % do faturamento do período.
-export const LOSS_ALERT_PERCENT = 5;
+export const LOSS_ALERT_PERCENT = 5; // padrão; cada loja ajusta (Store.lossAlertPercent)
+export const lossAlertSettingsSchema = z.object({ lossAlertPercent: z.number().int().min(1).max(100) }).strict();
 // Validade: "vence logo" = até este número de dias.
 export const EXPIRY_SOON_DAYS = 3;

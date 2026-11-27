@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import sharp from "sharp";
 import { prisma } from "@meucardapio/db";
 import { pollDish3dJobs } from "../src/lib/dish3d";
-import { FakeDish3dProvider, isGlb, minimalGlb, setDish3dProvider } from "../src/lib/dish3dProvider";
+import { FakeDish3dProvider, FalRodinProvider, isGlb, minimalGlb, rodinOptions, setDish3dProvider } from "../src/lib/dish3dProvider";
 import { InMemoryObjectStorage, setObjectStorage } from "../src/lib/objectStorage";
 import { resetLimits } from "../src/lib/slidingLimit";
 import { login, makeApp, registerStore, resetDb } from "./helpers";
@@ -24,6 +24,24 @@ function multipart(files: Buffer[]) {
 const photo = () => sharp({ create: { width: 64, height: 64, channels: 3, background: { r: 200, g: 80, b: 40 } } }).jpeg().toBuffer();
 
 describe("prato 3D — regras puras", () => {
+  it("Rodin: qualidade alta por padrão; HighPack só quando ligado; fotos vão como data URI em modo concat", async () => {
+    expect(rodinOptions({})).toEqual({ quality: "high", highPack: false });
+    expect(rodinOptions({ DISH3D_QUALITY: "medium", DISH3D_HIGHPACK: "true" })).toEqual({ quality: "medium", highPack: true });
+    expect(rodinOptions({ DISH3D_QUALITY: "ultra" }).quality).toBe("high"); // valor inválido não passa
+    const sent: { url: string; body: Record<string, unknown> }[] = [];
+    const fakeFetch = (async (url: string, init?: RequestInit) => {
+      sent.push({ url, body: JSON.parse(String(init?.body ?? "{}")) });
+      return new Response(JSON.stringify({ request_id: "req-123" }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const photo = { bytes: Buffer.from([1, 2, 3]), mime: "image/jpeg" as const };
+    await new FalRodinProvider("k", fakeFetch, { quality: "high", highPack: false }).submit([photo, photo]);
+    expect(sent[0].url).toBe("https://queue.fal.run/fal-ai/hyper3d/rodin");
+    expect(sent[0].body).toMatchObject({ quality: "high", condition_mode: "concat", geometry_file_format: "glb", material: "PBR" });
+    expect(sent[0].body).not.toHaveProperty("addons");
+    expect((sent[0].body.input_image_urls as string[])[0]).toMatch(/^data:image\/jpeg;base64,/);
+    await new FalRodinProvider("k", fakeFetch, { quality: "medium", highPack: true }).submit([photo]);
+    expect(sent[1].body).toMatchObject({ quality: "medium", addons: "HighPack" });
+  });
   it("GLB mínimo do Fake é um glTF binário válido", () => {
     const glb = minimalGlb();
     expect(isGlb(glb)).toBe(true);

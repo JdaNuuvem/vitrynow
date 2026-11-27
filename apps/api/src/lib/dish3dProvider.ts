@@ -71,6 +71,14 @@ export class FakeDish3dProvider implements Dish3dProvider {
   }
 }
 
+// Qualidade do Rodin por configuração: DISH3D_QUALITY (padrão high) e DISH3D_HIGHPACK=true (4K, custa 3x).
+export const RODIN_QUALITIES = ["high", "medium", "low", "extra-low"] as const;
+export type RodinQuality = (typeof RODIN_QUALITIES)[number];
+export function rodinOptions(env: NodeJS.ProcessEnv = process.env): { quality: RodinQuality; highPack: boolean } {
+  const q = env.DISH3D_QUALITY as RodinQuality | undefined;
+  return { quality: q && RODIN_QUALITIES.includes(q) ? q : "high", highPack: env.DISH3D_HIGHPACK === "true" };
+}
+
 const FAL_QUEUE = "https://queue.fal.run";
 const FAL_MODEL = "fal-ai/hyper3d/rodin";
 const FAL_APP = "fal-ai/hyper3d"; // as URLs de status/resultado usam só dono/app
@@ -79,7 +87,11 @@ const TIMEOUT_MS = 30_000;
 /** Rodin (Hyper3D) pela fila HTTP do fal.ai. Várias fotos do MESMO prato: condition_mode "concat". */
 export class FalRodinProvider implements Dish3dProvider {
   readonly name = "fal-rodin";
-  constructor(private readonly key: string, private readonly fetchImpl: typeof fetch = fetch) {}
+  constructor(
+    private readonly key: string,
+    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly options: { quality: RodinQuality; highPack: boolean } = rodinOptions(),
+  ) {}
 
   private async call(url: string, init: RequestInit = {}) {
     const res = await this.fetchImpl(url, {
@@ -100,8 +112,9 @@ export class FalRodinProvider implements Dish3dProvider {
       condition_mode: "concat",
       geometry_file_format: "glb",
       material: "PBR",
-      quality: "medium",
+      quality: this.options.quality, // high/medium/low/extra-low: mesmo preço (US$ 0,40)
       tier: "Regular",
+      ...(this.options.highPack ? { addons: "HighPack" } : {}), // texturas 4K + malha densa: 3x o preço (US$ 1,20)
     };
     const data = await this.call(`${FAL_QUEUE}/${FAL_MODEL}`, {
       method: "POST",

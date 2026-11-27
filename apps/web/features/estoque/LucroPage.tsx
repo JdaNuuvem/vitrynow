@@ -11,6 +11,7 @@ import { defaultRange, type DateRange } from "@/features/relatorios/dateRange";
 import { apiFetch } from "@/lib/api";
 import { Button, DataTable, PageHeading, Panel, StateMessage, StatusBadge } from "@/shared/design/components";
 import { useMoney } from "./useMoney";
+import { LossAlertSetting } from "./components/LossAlertSetting";
 import "./estoque.css";
 import { useStoreTimezone } from "@/features/shell/useStoreTimezone";
 
@@ -31,6 +32,7 @@ export function LucroPage() {
   const [error, setError] = useState<string | null>(null);
   const [table, setTable] = useState<(typeof CSV_TABLES)[number]["id"]>("summary");
   const [exporting, setExporting] = useState(false);
+  const [version, setVersion] = useState(0); // recarrega depois de mudar o limite do alerta
 
   useEffect(() => {
     if (role !== "OWNER" || !range.from || !range.to || range.from > range.to) return;
@@ -43,7 +45,7 @@ export function LucroPage() {
       if (m.ok) setMargins(m.data.products);
     });
     return () => { alive = false; };
-  }, [stock, range, role]);
+  }, [stock, range, role, version]);
 
   async function exportCsv() {
     if (exporting) return;
@@ -88,6 +90,7 @@ export function LucroPage() {
       {report.lossAlert?.exceeded && <StateMessage tone="warning" title="Perdas acima do normal">
         As perdas do período passaram de {report.lossAlert.thresholdPercent}% do faturamento. Veja abaixo os motivos, os insumos e quem lançou.
       </StateMessage>}
+      {report.lossAlert && <LossAlertSetting current={report.lossAlert.thresholdPercent} onSaved={() => setVersion((v) => v + 1)} />}
       <section className="estoque__cards" aria-label="Resultado do período">
         <Card label="Faturamento" value={money(report.revenueCents)} note={`${report.orderCount} vendas`} />
         <Card label="Custo dos pratos (CMV)" value={money(report.cogsCents)} note={`${pct(report.cogsPercent)} do faturamento`} />
