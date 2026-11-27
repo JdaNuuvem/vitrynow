@@ -1,6 +1,6 @@
 // ESTOQUE E LUCRO — ficha técnica, baixa ao ACEITAR, estorno no cancelamento/desfazer, custo médio ponderado, perdas, contagem,
 // margem do cardápio e DRE do período. Caso-guia: hambúrguer com 180 g de carne baixa 180 g do estoque de carne.
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { consumptionOf, costCentsOf, unitCostFromTotal, weightedAverage } from "../src/lib/stock";
 import { resetLimits } from "../src/lib/slidingLimit";
@@ -157,7 +157,8 @@ describe("estoque — integração", () => {
     expect([s.statusCode, json(s).code]).toEqual([409, "PRODUCT_NO_RECIPE"]);
     const p = json(await l.call("GET", "/api/stock/profit"));
     expect(p.losses.wasteCents).toBe(3 * 820);
-    expect(await prisma.auditLog.count({ where: { action: "stock.product_loss" } })).toBe(2);
+    // auditoria gravada sem bloquear a resposta (logAudit): espera aparecer
+    await vi.waitFor(async () => expect(await prisma.auditLog.count({ where: { action: "stock.product_loss" } })).toBe(2), { timeout: 10_000, interval: 100 });
   });
 
   it("desfazer perda: volta o saldo; uma vez só; prato desfaz todas as linhas; equipe só a própria; venda não se desfaz", async () => {
@@ -191,7 +192,7 @@ describe("estoque — integração", () => {
     const p = json(await l.call("GET", "/api/stock/profit"));
     expect(p.lossesByReason).toEqual([{ type: "SPOILAGE", reason: "VENCIDO", count: 1, costCents: 400 }]);
     expect(p.losses.totalCents).toBe(400);
-    expect(await prisma.auditLog.count({ where: { action: "stock.loss_undo" } })).toBeGreaterThanOrEqual(1);
+    await vi.waitFor(async () => expect(await prisma.auditLog.count({ where: { action: "stock.loss_undo" } })).toBeGreaterThanOrEqual(1), { timeout: 10_000, interval: 100 });
   });
 
   it("observação: obrigatória no motivo Outro; aparece no histórico de perdas com quem lançou", async () => {
@@ -308,7 +309,7 @@ describe("estoque — integração", () => {
     const movStaff = JSON.stringify(json(await l.call("GET", "/api/stock/movements", undefined, l.staff)));
     expect(listaStaff + movStaff).not.toMatch(/Cost|Value/);
     expect((await l.call("GET", "/api/stock/profit", undefined, l.staff)).statusCode).toBe(403);
-    expect(await prisma.auditLog.count({ where: { action: { in: ["stock.loss", "stock.count"] } } })).toBeGreaterThanOrEqual(3);
+    await vi.waitFor(async () => expect(await prisma.auditLog.count({ where: { action: { in: ["stock.loss", "stock.count"] } } })).toBeGreaterThanOrEqual(3), { timeout: 10_000, interval: 100 });
   });
 
   it("DRE do período: faturamento, CMV, lucro bruto, perdas por motivo e margem real por prato; margem do cardápio", async () => {
@@ -368,7 +369,7 @@ describe("estoque — integração", () => {
     expect((await l.call("GET", "/api/stock/export.csv?table=movements")).body).toContain("Desperdício");
     expect((await l.call("GET", "/api/stock/export.csv?table=nada")).statusCode).toBe(400);
     expect((await l.call("GET", "/api/stock/export.csv", undefined, l.staff)).statusCode).toBe(403);
-    expect(await prisma.auditLog.count({ where: { action: "stock.export" } })).toBeGreaterThanOrEqual(4);
+    await vi.waitFor(async () => expect(await prisma.auditLog.count({ where: { action: "stock.export" } })).toBeGreaterThanOrEqual(4), { timeout: 10_000, interval: 100 });
   });
 
   it("isolamento e integridade: ficha com insumo de outra loja é 404; nome repetido 409; movimentação nunca some (insumo com histórico não se apaga)", async () => {

@@ -1,5 +1,5 @@
 // API-22 — mesa e QR (ADR-0002 nível 1; RN-MB-01/06/09/12; CA-MB-06/07/10/14): cadastro, pedido pelo QR, "Minha mesa" só do aparelho, 404 único, isolamento.
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { resetLimits } from "../src/lib/slidingLimit";
 import { makeApp, registerStore, resetDb } from "./helpers";
@@ -101,8 +101,8 @@ describe("API-22 — mesa e QR", () => {
     expect(novo.qrToken).not.toBe(t.qrToken);
     expect((await app.inject({ method: "GET", url: `/stores/${l.store.slug}/tables/${t.qrToken}/menu` })).statusCode).toBe(404);
     expect((await app.inject({ method: "GET", url: `/stores/${l.store.slug}/tables/${novo.qrToken}/menu` })).statusCode).toBe(200);
-    await new Promise((r) => setTimeout(r, 150));
-    expect(await prisma.auditLog.count({ where: { storeId: l.store.id, action: "table.regenerate_qr" } })).toBe(1);
+    // auditoria gravada sem bloquear a resposta (logAudit): espera aparecer
+    await vi.waitFor(async () => expect(await prisma.auditLog.count({ where: { storeId: l.store.id, action: "table.regenerate_qr" } })).toBe(1), { timeout: 10_000, interval: 100 });
   });
 
   it("RN-MB-01: pedido pelo QR nasce PENDENTE, tipo MESA, origem QR_MESA, preço do banco, com tíquete da cozinha ao chegar (aceite só muda o estado); devolve o token do aparelho UMA vez", async () => {

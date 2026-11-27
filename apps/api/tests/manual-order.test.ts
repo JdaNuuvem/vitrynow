@@ -1,5 +1,5 @@
 // API-13 — pedido lançado no painel (B2, CA-B2-01..10): servidor calcula o preço, nasce CONFIRMADO com tíquete, caixa/desconto/cupom/idempotência/isolamento.
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { techCleanupJob, TECH_RETENTION_MS } from "../src/jobs/techCleanup";
 import { resetLimits } from "../src/lib/slidingLimit";
@@ -117,9 +117,11 @@ describe("API-13 — pedido manual", () => {
     expect([o.discountCents, o.totalCents, o.manualDiscountPercent, o.manualDiscountReason]).toEqual([600, 3400, 15, "ERRO_DO_PEDIDO"]);
     const sem = await novo(l, { discount: { percent: 5, reason: "Maria da Silva pediu" } });
     expect(sem.statusCode).toBe(400);
-    await new Promise((r) => setTimeout(r, 300));
-    const aud = await prisma.auditLog.findFirst({ where: { storeId: l.store.id, action: "order.manual_create", targetId: o.id } });
-    expect(aud?.metadata).toMatchObject({ discountPercent: 15, discountReason: "ERRO_DO_PEDIDO", role: "OWNER" });
+    // auditoria gravada sem bloquear a resposta (logAudit): espera aparecer
+    await vi.waitFor(async () => {
+      const aud = await prisma.auditLog.findFirst({ where: { storeId: l.store.id, action: "order.manual_create", targetId: o.id } });
+      expect(aud?.metadata).toMatchObject({ discountPercent: 15, discountReason: "ERRO_DO_PEDIDO", role: "OWNER" });
+    }, { timeout: 10_000, interval: 100 });
     expect(await orders(l)).toHaveLength(2); // o recusado e o sem motivo não gravaram
   });
 
@@ -210,9 +212,10 @@ describe("API-13 — pedido manual", () => {
     for (const reason of ["CORTESIA", "ERRO_DO_PEDIDO", "CLIENTE_FREQUENTE", "PROMOCAO_DO_DIA", "OUTRO"]) {
       expect((await novo(l, { discount: { percent: 5, reason } })).statusCode, reason).toBe(201);
     }
-    await new Promise((r) => setTimeout(r, 300));
-    const auds = await prisma.auditLog.findMany({ where: { storeId: l.store.id, action: "order.manual_create" } });
-    expect(auds.map((a) => (a.metadata as { discountReason: string }).discountReason).sort()).toEqual(["CLIENTE_FREQUENTE", "CORTESIA", "ERRO_DO_PEDIDO", "OUTRO", "PROMOCAO_DO_DIA"]);
+    await vi.waitFor(async () => {
+      const auds = await prisma.auditLog.findMany({ where: { storeId: l.store.id, action: "order.manual_create" } });
+      expect(auds.map((a) => (a.metadata as { discountReason: string }).discountReason).sort()).toEqual(["CLIENTE_FREQUENTE", "CORTESIA", "ERRO_DO_PEDIDO", "OUTRO", "PROMOCAO_DO_DIA"]);
+    }, { timeout: 10_000, interval: 100 });
   });
 
   it("R2 (Nightingale): limite de 60 pedidos por minuto POR USUÁRIO (cada pedido imprime tíquete): o 61º ⇒ 429; outro usuário e outra loja não são afetados", async () => {

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@meucardapio/db";
 import { IMPORT_COLUMN_KEYS } from "@meucardapio/shared-types";
 import { activateSubscription } from "../src/lib/subscription";
@@ -242,9 +242,12 @@ describe("importação — rotas (e1..e3)", () => {
   it("auditoria só com contagens (sem texto do cardápio)", async () => {
     const { batchId } = json(await previewCsv(CSV));
     await call("POST", `/api/catalog/import/${batchId}/confirm`, {});
-    await new Promise((r) => setTimeout(r, 200));
-    const logs = await prisma.auditLog.findMany({ where: { action: { startsWith: "catalog.import." } } });
-    expect(logs.map((l) => l.action).sort()).toEqual(["catalog.import.confirm", "catalog.import.preview"]);
+    // auditoria gravada sem bloquear a resposta (logAudit): espera as duas aparecerem
+    let logs: Awaited<ReturnType<typeof prisma.auditLog.findMany>> = [];
+    await vi.waitFor(async () => {
+      logs = await prisma.auditLog.findMany({ where: { action: { startsWith: "catalog.import." } } });
+      expect(logs.map((l) => l.action).sort()).toEqual(["catalog.import.confirm", "catalog.import.preview"]);
+    }, { timeout: 10_000, interval: 100 });
     expect(JSON.stringify(logs)).not.toContain("Margherita");
   });
 });
