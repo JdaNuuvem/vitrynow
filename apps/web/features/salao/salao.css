@@ -40,9 +40,9 @@
 .salao-panel {
   position: absolute; inset-block: var(--ds-space-3); inset-inline-end: var(--ds-space-3); width: min(380px, calc(100% - 24px)); overflow: auto;
   display: grid; align-content: start; gap: var(--ds-space-3); padding: var(--ds-space-4); border-radius: var(--ds-radius-lg);
-  background: var(--surface); box-shadow: var(--shadow-float); z-index: 40; /* acima das etiquetas do 3D (zIndexRange 0–20) */
+  background: var(--surface); box-shadow: var(--shadow-float); z-index: var(--z-nav); /* acima das etiquetas do 3D (zIndexRange 0–20) */
 }
-@media (max-width: 720px) {
+@media (max-width: 800px) {
   /* no celular os indicadores ficam numa linha que rola de lado: a cena aparece logo */
   .salao__summary { flex-wrap: nowrap; overflow-x: auto; padding-block-end: 4px; scrollbar-width: none; }
   .salao__chip { flex: none; padding: 4px 10px; }
@@ -74,7 +74,7 @@
 .salao-panel__inline input { width: 90px; }
 .salao-panel__inline--block { display: grid; }
 .salao-panel__inline--block input { width: 100%; }
-.salao-overlay { position: fixed; inset: 0; z-index: 60; background: var(--ds-scrim); display: grid; place-items: center; padding: var(--ds-space-4); }
+.salao-overlay { position: fixed; inset: 0; z-index: var(--z-overlay); background: var(--ds-scrim); display: grid; place-items: center; padding: var(--ds-space-4); }
 .salao-dialog { width: min(100%, 640px); max-height: calc(100dvh - 32px); overflow: auto; display: grid; gap: var(--ds-space-3); padding: clamp(16px, 3vw, 24px); border-radius: var(--ds-radius-lg); background: var(--surface); box-shadow: var(--shadow-float); }
 .salao-dialog__head { display: flex; align-items: center; justify-content: space-between; gap: var(--ds-space-3); }
 .salao-dialog__head h2 { margin: 0; font-size: var(--ds-text-lg); }

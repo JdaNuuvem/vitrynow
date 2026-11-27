@@ -26,5 +26,5 @@
 .campaign-preview__frame--mobile .loja__banner-title { font-size: clamp(1rem, 4cqi, 1.375rem); }
 .campaign-preview__target { color: var(--ink-soft); font-size: .875rem; margin-block-start: 10px; }
 
-@media (max-width: 920px) { .campaign-layout { grid-template-columns: 1fr; } }
+@media (max-width: 1099px) { .campaign-layout { grid-template-columns: 1fr; } }
 @media (max-width: 480px) { .campaign-fields-row { grid-template-columns: 1fr; } }

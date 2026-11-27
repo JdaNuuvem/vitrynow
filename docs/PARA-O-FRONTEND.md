@@ -7,7 +7,7 @@
 ## O QUE FICOU PARA VOCÊ (resumo)
 1. **Tela nova: importação de produtos por planilha** (§3c) — a API está pronta no main.
 2. **Ligar o catálogo de erros** (§2) — quando os textos forem aprovados (`docs/textos-de-erro-para-revisar.md`).
-3. **z-index e breakpoints** (§3) — não levantado ainda.
+3. **z-index e breakpoints** (§3) — **APLICADO em 27/11/2026 (autorizado)**: revisar.
 4. **Revisar o que foi aplicado nas suas telas**: §1 (cores), §3b (máscaras/limites e 3 telas).
 5. Opcional: conferir se as telas criadas pelo backend antes da regra (estoque/lucro, mesas, pedidos agendados, relatórios avançados) seguem o seu padrão.
 
@@ -87,8 +87,13 @@ Depois do build: o subpath precisa do `dist` (`pnpm --filter @meucardapio/shared
 
 ---
 
-## 3. z-index e breakpoints (SSOT D8, não levantado)
-O levantamento foi interrompido antes de começar (o web é do sócio). O que o SSOT já registrava: há **um** `z-index: 100000000` (causa do problema #35) e camadas sem escala; **12 larguras diferentes** de `@media` (proposta do time: 2). Sugestão: tokens de camada em `tokens.css` (ex.: `--z-base`, `--z-sticky`, `--z-drawer`, `--z-modal`, `--z-toast`) e 2 breakpoints documentados; guarda por catraca como na §1.4.
+## 3. z-index e breakpoints (SSOT D8, APLICADO em 27/11/2026, autorizado)
+Antes: um `z-index: 100000000` (causa do #35), camadas soltas (25–80) e **23 larguras diferentes** de `@media`.
+- **Camadas:** tokens em `shared/design/tokens.css`, com os MESMOS valores de antes (ordem visual inalterada): `--z-sticky` 25, `--z-bar` 30, `--z-nav` 40, `--z-cart` 45, `--z-skip-link` 50, `--z-overlay` 60, `--z-fullscreen` 80, `--z-modal` 100 (o `ui-modal`, antes 100000000; continua acima de tudo). Trocados em `loja.css`, `purchase.css`, `reels*.css`, `pedidos-acoes.css`, `pratos3d.css`, `salao.css`, `ui.css`. Número solto só até 20 (empilhar dentro de um componente).
+- **Larguras:** só **340** (celular muito estreito), **480/481** (celular), **800/801** (troca celular/desktop, a mesma do menu) e **1099/1100** (tela larga). Na dúvida, arredondei para o lado que mantém o layout estreito (ex.: Equipe e Campanha empilham até 1099; os painéis de Prato 3D e Reels só abrem 2 colunas a partir de 1100). Exceção registrada: os 3 ajustes de encaixe das abas do topo em `shell/shell.css` (950/1080/1120), que dependem do texto das abas.
+- **Detalhe do produto no cardápio (481–800):** largura `min(36rem, 100%)` para não estourar em celular grande.
+- **Guarda:** `shared/design/layers.test.ts` reprova z-index > 20 fora dos tokens, `var(--z-*)` inexistente e largura fora da lista. `features/loja/motion.test.ts` agora resolve os tokens ao comparar camadas.
+- **Conferido no navegador:** todas as telas do painel no desktop e no celular, e larguras 520/860/1024 (Equipe, Catálogo, Novo pedido, Prato 3D, Reels, cardápio e detalhe): sem estouro horizontal e sem erro.
 
 ---
 

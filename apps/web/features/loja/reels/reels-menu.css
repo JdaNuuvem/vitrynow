@@ -1,5 +1,5 @@
 /* MODELO REELS: ocupa a tela entre o topo e a navegação de baixo (64 px); a barra do carrinho fica por cima. */
-.reels-menu { position: fixed; inset: 0 0 calc(64px + env(safe-area-inset-bottom)) 0; z-index: 30; background: black; color: white; }
+.reels-menu { position: fixed; inset: 0 0 calc(64px + env(safe-area-inset-bottom)) 0; z-index: var(--z-bar); background: black; color: white; }
 .reels-menu--empty { display: grid; place-items: center; padding: 24px; text-align: center; }
 .reels-menu__scroller { height: 100%; overflow-y: auto; scroll-snap-type: y mandatory; overscroll-behavior: contain; scrollbar-width: none; }
 .reels-menu__scroller::-webkit-scrollbar { display: none; }
@@ -45,7 +45,7 @@
 }
 @keyframes reels-menu-bob { 50% { transform: translate(-50%, -6px); } }
 @media (prefers-reduced-motion: reduce) { .reels-menu__hint { animation: none; } }
-@media (min-width: 768px) {
+@media (min-width: 801px) {
   /* no computador o feed fica numa coluna de celular no meio da tela */
   .reels-menu__scroller, .reels-menu__top { width: min(100%, 480px); margin-inline: auto; }
   .reels-menu__top { inset: 0 0 auto 0; }

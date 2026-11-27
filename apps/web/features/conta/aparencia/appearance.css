@@ -378,7 +378,7 @@
   font-size: .75rem;
 }
 
-@media (max-width: 1020px) {
+@media (max-width: 1099px) {
   .appearance__layout {
     grid-template-columns: minmax(0, 1fr);
   }

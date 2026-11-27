@@ -12,11 +12,11 @@
 .reels-panel__info { display: grid; gap: 2px; min-width: 0; }
 .reels-panel__info strong { overflow-wrap: anywhere; }
 .reels-panel__actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
-@media (min-width: 900px) {
+@media (min-width: 1100px) {
   .reels-panel__item { grid-template-columns: 48px minmax(0, 1fr) auto auto; }
   .reels-panel__actions { grid-column: auto; }
 }
-.reels-panel__overlay { position: fixed; inset: 0; z-index: 60; background: var(--ds-scrim); display: grid; place-items: center; padding: var(--ds-space-4); }
+.reels-panel__overlay { position: fixed; inset: 0; z-index: var(--z-overlay); background: var(--ds-scrim); display: grid; place-items: center; padding: var(--ds-space-4); }
 .reels-panel__dialog { width: min(100%, 420px); max-height: calc(100dvh - 32px); overflow: auto; display: grid; gap: var(--ds-space-3); padding: var(--ds-space-4); border-radius: var(--ds-radius-lg); background: var(--surface); box-shadow: var(--shadow-float); }
 .reels-panel__dialog-head { display: flex; align-items: center; justify-content: space-between; gap: var(--ds-space-3); }
 .reels-panel__dialog-head h2 { margin: 0; font-size: var(--ds-text-lg); }

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const strip = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "");
 const lojaCss = strip(readFileSync(join(__dirname, "loja.css"), "utf8"));
+const tokensCss = readFileSync(join(__dirname, "..", "..", "shared", "design", "tokens.css"), "utf8");
 const motionCss = strip(readFileSync(join(__dirname, "motion.css"), "utf8"));
 
 // Conteúdo entre as chaves que abrem em `start` (índice logo após a `{`).
@@ -156,7 +157,10 @@ describe("camadas fixas: a folha fica acima de tudo (visto no clipe da folha)", 
     // String.raw: as barras invertidas valem para o REGEX (num string comum "\\." viraria só ".")
     const escaped = selector.replace(/[.]/g, String.raw`\.`);
     const rule = new RegExp(String.raw`(?:^|\n)` + escaped + String.raw`\s*\{([^}]*)\}`).exec(lojaCss)?.[1] ?? "";
-    return Number(/z-index:\s*(\d+)/.exec(rule)?.[1]);
+    // camadas usam os tokens --z-* de tokens.css (SSOT D8): resolve var(--z-x) para o número
+    const raw = /z-index:\s*([^;]+);/.exec(rule)?.[1].trim() ?? "";
+    const token = /^var\((--z-[a-z-]+)\)$/.exec(raw)?.[1];
+    return Number(token ? new RegExp(String.raw`${token}:\s*(\d+)`).exec(tokensCss)?.[1] : raw);
   };
 
   it("a folha (carrinho/checkout) tem z-index maior que a pílula, a barra inferior, os chips e a barra superior", () => {

@@ -1,4 +1,14 @@
 :root {
+  /* CAMADAS (z-index): escala única do app; use sempre estes tokens (guarda: shared/design/layers.test.ts).
+     Valores pequenos (1–20) só para empilhar dentro de um componente. */
+  --z-sticky: 25;      /* faixas que grudam no topo ao rolar (chips de categoria) */
+  --z-bar: 30;         /* barras fixas e telas cheias do cardápio (topo, tela de produto, modelo Reels) */
+  --z-nav: 40;         /* navegação de baixo, painéis flutuantes */
+  --z-cart: 45;        /* barra do carrinho (acima da navegação) */
+  --z-skip-link: 50;   /* link "pular para o conteúdo" */
+  --z-overlay: 60;     /* gavetas, folhas, diálogos de feature, avisos (toast) */
+  --z-fullscreen: 80;  /* visualizador de vídeos em tela cheia */
+  --z-modal: 100;      /* modal genérico (ui-modal): sempre por cima de tudo */
   color-scheme: light;
   --panel-canvas: #f5f3ed;
   --surface: #fff;

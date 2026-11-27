@@ -241,7 +241,7 @@
 }
 .loja__cover--compact { height: 128px; }
 
-@media (min-width: 768px) {
+@media (min-width: 801px) {
   .loja__cover {
     height: 280px;
   }
@@ -584,7 +584,7 @@
 .loja__banner-action span { flex: none; }
 .loja__banner--text-only { grid-template-columns: minmax(0, 1fr); }
 
-@media (max-width: 599px) {
+@media (max-width: 800px) {
   .loja__banner { grid-template-columns: minmax(0, 1fr); }
   .loja__banner-media {
     height: auto;
@@ -599,7 +599,7 @@
   top: 0;
   left: 0;
   right: 0;
-  z-index: 30;
+  z-index: var(--z-bar);
   height: var(--loja-stick);
   background: var(--loja-glass-solid);
   /* M-02: desce (200 ms, ease-out) quando a identidade sai da tela; escondida, fica fora do Tab e do leitor de tela
@@ -693,7 +693,7 @@
 .loja__chipsbox {
   position: sticky;
   top: 0;
-  z-index: 25;
+  z-index: var(--z-sticky);
   display: flex;
   align-items: center;
   padding-inline: max(0px, calc((100% - var(--loja-col)) / 2));
@@ -778,7 +778,7 @@
 }
 
 /* ≥ 768 px (tablet em pé, spec 12 §5): uma linha só (logo + nome + chips + buscar), sem a barra de 56 */
-@media (min-width: 768px) {
+@media (min-width: 801px) {
   .loja__bar,
   .loja__bar--on {
     display: none;
@@ -1047,7 +1047,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 40;
+  z-index: var(--z-nav);
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   padding: 0 max(0px, calc((100% - var(--loja-col)) / 2)) env(safe-area-inset-bottom);
@@ -1102,7 +1102,7 @@
   position: fixed;
   left: 50%;
   bottom: calc(76px + env(safe-area-inset-bottom));
-  z-index: 45;
+  z-index: var(--z-cart);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1148,7 +1148,7 @@
   right: 0;
   bottom: 0;
   left: 0;
-  z-index: 30;
+  z-index: var(--z-bar);
   display: flex;
   flex-direction: column;
   background: var(--loja-glass-solid);
@@ -1398,7 +1398,7 @@
   bottom: 0;
   left: 0;
   /* acima de TUDO que é fixo (barras, chips, barra inferior, pílula do carrinho): a pílula aparecia por cima da folha */
-  z-index: 60;
+  z-index: var(--z-overlay);
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -1840,7 +1840,7 @@
   position: absolute;
   left: 0.75rem;
   top: 0.75rem;
-  z-index: 50;
+  z-index: var(--z-skip-link);
   transform: translateY(-200%);
   border-radius: 0.5rem;
   background: var(--loja-ink);

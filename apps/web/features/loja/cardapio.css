@@ -27,7 +27,7 @@
 }
 .loja__summary-title { min-width: 0; flex: 1; }
 .loja__store-summary-row .ds-theme-control { flex: none; }
-@media (max-width: 440px) {
+@media (max-width: 480px) {
   .loja__store-summary-row .ds-theme-control {
     position: relative;
     width: 44px;
@@ -350,7 +350,7 @@
   .loja__item--photo-card .loja__item-name { font-size: .9375rem; }
   .loja__banner-copy { padding-inline: 12px; }
 }
-@media (min-width: 768px) {
+@media (min-width: 801px) {
   .loja__menu-hero { margin-inline: var(--loja-gutter); overflow: hidden; border-radius: 16px; }
   .loja__hero-actions { max-width: 540px; bottom: 20px; }
   .loja__list { gap: 12px; }

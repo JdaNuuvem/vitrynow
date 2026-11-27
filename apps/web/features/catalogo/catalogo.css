@@ -360,7 +360,7 @@ a.catalogo__btn { display: inline-flex; align-items: center; justify-content: ce
   }
 }
 
-@media (max-width: 560px) {
+@media (max-width: 800px) {
   .catalogo-group__option { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
   .catalogo-group__limits { grid-template-columns: 1fr; }
   .catalogo-form__actions { flex-wrap: wrap; }

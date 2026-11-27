@@ -135,12 +135,12 @@
 .privacy-check { display: flex; align-items: center; gap: 8px; min-height: 44px; }
 .privacy-check input { min-height: 20px; min-width: 20px; accent-color: var(--color-primary); }
 
-@media (max-width: 900px) {
+@media (max-width: 1099px) {
   .platform-body { grid-template-columns: minmax(0, 1fr); }
   .platform-nav { display: flex; gap: 8px; }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 800px) {
   .platform-filter, .privacy-filter, .platform-grid { grid-template-columns: 1fr; }
   .platform-topbar__inner, .platform-account { gap: 8px; }
   .platform-brand > span:last-child, .platform-account__name { display: none; }
