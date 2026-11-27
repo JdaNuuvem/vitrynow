@@ -52,6 +52,22 @@ describe("salão 3D — opcionais", () => {
     expect((await assign(l.owner, other.staffId)).statusCode).toBe(404);
   });
 
+  it("nome de exibição: o dono define, o salão mostra; sem nome, parte do e-mail; equipe não edita; outra loja = 404", async () => {
+    const l = await loja();
+    await app.inject({ method: "POST", url: `/api/tables/${l.table.id}/waiter`, headers: { cookie: l.owner }, payload: { userId: l.staffId } });
+    expect(((await row(l)).waiter as { name: string }).name).toMatch(/^g-/); // sem nome: parte do e-mail
+    const set = (cookie: string, userId: string, displayName: string | null) => app.inject({ method: "POST", url: `/api/users/${userId}/name`, headers: { cookie }, payload: { displayName } });
+    expect((await set(l.owner, l.staffId, "Ana")).statusCode).toBe(200);
+    expect(await row(l)).toMatchObject({ waiter: { id: l.staffId, name: "Ana" } });
+    const users = json(await app.inject({ method: "GET", url: "/api/users", headers: { cookie: l.owner } })).users as { id: string; displayName: string | null }[];
+    expect(users.find((u) => u.id === l.staffId)?.displayName).toBe("Ana");
+    expect((await set(l.staff, l.staffId, "Outra")).statusCode).toBe(403);
+    expect((await set(l.owner, l.staffId, "x".repeat(41))).statusCode).toBe(400);
+    const other = await loja();
+    expect((await set(other.owner, l.staffId, "Hack")).statusCode).toBe(404);
+    expect((await set(l.owner, l.staffId, null)).statusCode).toBe(200);
+    expect(((await row(l)).waiter as { name: string }).name).toMatch(/^g-/);
+  });
   it("pessoas na mesa: mesa sem pedido fica Ocupada; receber a mesa zera", async () => {
     const l = await loja();
     expect((await app.inject({ method: "POST", url: `/api/tables/${l.table.id}/guests`, headers: { cookie: l.staff }, payload: { guests: 4 } })).statusCode).toBe(200);

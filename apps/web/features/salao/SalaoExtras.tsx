@@ -2,8 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { RESERVATION_STATUS_LABEL } from "@meucardapio/shared-types";
-import type { Category } from "@/core/domain/catalog";
-import { usePanelServices } from "@/core/services/PanelServices";
+import type { Menu, OptionSelection, Product } from "@/core/domain/storefront";
+import { apiFetch } from "@/lib/api";
+import { useStore } from "@/features/shell/StoreProvider";
+import { ProductOptionFields } from "@/features/loja/components/ProductOptionFields";
+import { choiceLabels, editableSelections, optionChoicesValid, startingPrice, unitPriceWithChoices } from "@/features/loja/productOptions";
 import { Button, StateMessage, StatusBadge } from "@/shared/design/components";
 import { formatCents } from "@/shared/format/money";
 import { operationRequest } from "@/features/operacao/storeOperations";
@@ -64,71 +67,137 @@ export function TableCrew({ table, owner, me, team, onChanged }: { table: SalaoT
   );
 }
 
-/** Lança itens na conta da mesa: usa o MESMO pedido do painel (POST /api/orders, tipo MESA); preço e regras ficam no servidor. */
+/** Lança itens na conta da mesa: usa o MESMO pedido do painel (POST /api/orders, tipo MESA); preço e regras ficam no servidor.
+ *  Produtos e opções vêm do cardápio público da loja (o mesmo que o cliente vê); opções são escolhidas com o componente da vitrine. */
+type MenuProduct = Product & { category: string };
+type Line = { key: number; product: MenuProduct; quantity: number; optionSelections: OptionSelection[] };
+
 export function AddOrderDialog({ table, onClose, onDone }: { table: SalaoTable; onClose: () => void; onDone: () => void }) {
-  const { catalog } = usePanelServices();
-  const [categories, setCategories] = useState<Category[] | null>(null);
-  const [cart, setCart] = useState<Record<string, number>>({});
+  const store = useStore();
+  const [products, setProducts] = useState<MenuProduct[] | null>(null);
+  const [lines, setLines] = useState<Line[]>([]);
+  const [choosing, setChoosing] = useState<{ product: MenuProduct; selections: OptionSelection[]; quantity: number } | null>(null);
   const [notes, setNotes] = useState("");
   const [search, setSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const seq = useRef(0);
   const key = useRef(`mesa-${table.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`); // uma chave por abertura (sem pedido duplicado)
 
   useEffect(() => {
-    void catalog.listCategories().then((r) => (r.ok ? setCategories(r.data.categories) : setError(r.error)));
-  }, [catalog]);
+    if (!store?.slug) return;
+    void apiFetch(`/stores/${enc(store.slug)}/menu`)
+      .then(async (r) => (r.ok ? ((await r.json()) as Menu) : Promise.reject(new Error("menu"))))
+      .then((menu) => setProducts(menu.categories.flatMap((c) => c.products.map((p) => ({ ...p, category: c.name })))))
+      .catch(() => setError("Não foi possível carregar o cardápio."));
+  }, [store?.slug]);
 
-  const products = useMemo(() => {
+  const visible = useMemo(() => {
     const term = search.trim().toLocaleLowerCase("pt-BR");
-    return (categories ?? []).flatMap((c) => c.products.filter((p) => p.active && (!term || p.name.toLocaleLowerCase("pt-BR").includes(term))).map((p) => ({ ...p, category: c.name })));
-  }, [categories, search]);
-  const needsOptions = (p: (typeof products)[number]) => (p.optionGroups ?? []).some((g) => g.minSelect > 0);
-  const total = products.reduce((sum, p) => sum + (cart[p.id] ?? 0) * p.priceCents, 0);
-  const items = Object.entries(cart).filter(([, q]) => q > 0).map(([productId, quantity]) => ({ productId, quantity }));
-  const add = (id: string, delta: number) => setCart((c) => ({ ...c, [id]: Math.max(0, Math.min(99, (c[id] ?? 0) + delta)) }));
+    return (products ?? []).filter((p) => !term || p.name.toLocaleLowerCase("pt-BR").includes(term));
+  }, [products, search]);
+  const hasGroups = (p: MenuProduct) => (p.optionGroups ?? []).length > 0;
+  // venda por peso: a API manda `saleUnit` (o tipo da vitrine ainda não o declara); o peso se lança pela tela de Pedidos
+  const byWeight = (p: MenuProduct) => ((p as { saleUnit?: string }).saleUnit ?? "UN") !== "UN";
+  const blocked = (p: MenuProduct) => p.soldOut || p.unavailableByOptions || byWeight(p);
+  const lineTotal = (l: Line) => unitPriceWithChoices(l.product, { additionalIds: [], optionSelections: l.optionSelections }) * l.quantity;
+  const total = lines.reduce((sum, l) => sum + lineTotal(l), 0);
+  const countOf = (id: string) => lines.filter((l) => l.product.id === id).reduce((s, l) => s + l.quantity, 0);
+
+  function pick(product: MenuProduct) {
+    if (hasGroups(product)) return setChoosing({ product, selections: editableSelections(product.optionGroups ?? [], []), quantity: 1 });
+    setLines((all) => {
+      const same = all.find((l) => l.product.id === product.id && l.optionSelections.length === 0);
+      return same ? all.map((l) => (l === same ? { ...l, quantity: Math.min(99, l.quantity + 1) } : l)) : [...all, { key: ++seq.current, product, quantity: 1, optionSelections: [] }];
+    });
+  }
 
   async function send() {
     setSending(true);
     setError(null);
+    const items = lines.map((l) => ({ productId: l.product.id, quantity: l.quantity, ...(l.optionSelections.length ? { optionSelections: l.optionSelections } : {}) }));
     const r = await operationRequest<{ orderId: string; code: string }>("/api/orders", "POST", { type: "MESA", tableId: table.id, items, ...(notes.trim() ? { notes: notes.trim() } : {}) }, { "Idempotency-Key": key.current });
     setSending(false);
     if (!r.ok) return setError(r.error);
     onDone();
   }
 
+  const groups = choosing?.product.optionGroups ?? [];
+  const choiceOk = choosing ? optionChoicesValid(groups, choosing.selections) : false;
+
   return (
     <div className="salao-overlay" role="dialog" aria-modal="true" aria-label={`Adicionar pedido na mesa ${table.label}`}>
       <div className="salao-dialog">
         <div className="salao-dialog__head">
-          <h2>Adicionar pedido · Mesa {table.label}</h2>
-          <Button variant="quiet" onClick={onClose} disabled={sending}>Fechar</Button>
+          <h2>{choosing ? choosing.product.name : `Adicionar pedido · Mesa ${table.label}`}</h2>
+          <Button variant="quiet" onClick={choosing ? () => setChoosing(null) : onClose} disabled={sending}>{choosing ? "Voltar" : "Fechar"}</Button>
         </div>
-        <input type="search" placeholder="Buscar produto" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Buscar produto" />
-        {!categories ? <p className="salao__muted">Carregando cardápio…</p> : null}
-        <ul className="salao-dialog__products">
-          {products.map((p) => (
-            <li key={p.id}>
-              <div>
-                <strong>{p.name}</strong>
-                <span className="salao__muted">{p.category} · {formatCents(p.priceCents)}{needsOptions(p) ? " · tem opções obrigatórias: lance pela tela de Pedidos" : ""}</span>
-              </div>
+
+        {choosing ? (
+          <>
+            {groups.map((group) => (
+              <ProductOptionFields key={group.id} group={group} selections={choosing.selections} onChange={(next) => setChoosing({ ...choosing, selections: next })} />
+            ))}
+            <div className="salao-dialog__actions">
               <div className="salao-dialog__qty">
-                <Button variant="quiet" disabled={!cart[p.id]} onClick={() => add(p.id, -1)} aria-label={`Menos ${p.name}`}>−</Button>
-                <span aria-live="polite">{cart[p.id] ?? 0}</span>
-                <Button variant="quiet" disabled={needsOptions(p) || p.soldOut} onClick={() => add(p.id, 1)} aria-label={`Mais ${p.name}`}>+</Button>
+                <Button variant="quiet" disabled={choosing.quantity <= 1} onClick={() => setChoosing({ ...choosing, quantity: choosing.quantity - 1 })} aria-label="Menos">−</Button>
+                <span aria-live="polite">{choosing.quantity}</span>
+                <Button variant="quiet" disabled={choosing.quantity >= 99} onClick={() => setChoosing({ ...choosing, quantity: choosing.quantity + 1 })} aria-label="Mais">+</Button>
               </div>
-            </li>
-          ))}
-        </ul>
-        <label className="salao-panel__inline salao-panel__inline--block">Observação para a cozinha (opcional)
-          <input type="text" maxLength={500} value={notes} onChange={(e) => setNotes(e.target.value)} />
-        </label>
-        {error ? <StateMessage tone="danger" title="Não foi possível lançar">{error}</StateMessage> : null}
-        <div className="salao-dialog__actions">
-          <span>Itens: <strong>{formatCents(total)}</strong> <span className="salao__muted">(o servidor confere o preço)</span></span>
-          <Button variant="primary" busy={sending} disabled={items.length === 0} onClick={() => void send()}>Enviar para a cozinha</Button>
-        </div>
+              <Button variant="primary" disabled={!choiceOk} onClick={() => {
+                setLines((all) => [...all, { key: ++seq.current, product: choosing.product, quantity: choosing.quantity, optionSelections: editableSelections(groups, choosing.selections) }]);
+                setChoosing(null);
+              }}>
+                Adicionar · {formatCents(unitPriceWithChoices(choosing.product, { additionalIds: [], optionSelections: choosing.selections }) * choosing.quantity)}
+              </Button>
+            </div>
+            {!choiceOk ? <p className="salao__muted">Escolha as opções obrigatórias.</p> : null}
+          </>
+        ) : (
+          <>
+            <input type="search" placeholder="Buscar produto" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Buscar produto" />
+            {!products && !error ? <p className="salao__muted">Carregando cardápio…</p> : null}
+            <ul className="salao-dialog__products">
+              {visible.map((p) => (
+                <li key={p.id}>
+                  <div>
+                    <strong>{p.name}</strong>
+                    <span className="salao__muted">
+                      {p.category} · {startingPrice(p)}{hasGroups(p) ? " · com opções" : ""}
+                      {byWeight(p) ? " · por peso: lance pela tela de Pedidos" : p.soldOut ? " · esgotado" : ""}
+                    </span>
+                  </div>
+                  <div className="salao-dialog__qty">
+                    {countOf(p.id) ? <span aria-label={`${countOf(p.id)} no pedido`}>{countOf(p.id)}</span> : null}
+                    <Button variant="quiet" disabled={blocked(p)} onClick={() => pick(p)} aria-label={`Adicionar ${p.name}`}>+</Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            {lines.length ? (
+              <ul className="salao-dialog__lines" aria-label="Itens do pedido">
+                {lines.map((l) => (
+                  <li key={l.key}>
+                    <span>
+                      {l.quantity}× {l.product.name}
+                      {l.optionSelections.length ? <span className="salao__muted"> · {choiceLabels(l.product, { additionalIds: [], optionSelections: l.optionSelections }).join(", ")}</span> : null}
+                    </span>
+                    <span>{formatCents(lineTotal(l))}</span>
+                    <Button variant="quiet" onClick={() => setLines((all) => all.filter((x) => x.key !== l.key))} aria-label={`Tirar ${l.product.name}`}>✕</Button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <label className="salao-panel__inline salao-panel__inline--block">Observação para a cozinha (opcional)
+              <input type="text" maxLength={500} value={notes} onChange={(e) => setNotes(e.target.value)} />
+            </label>
+            {error ? <StateMessage tone="danger" title="Não foi possível lançar">{error}</StateMessage> : null}
+            <div className="salao-dialog__actions">
+              <span>Itens: <strong>{formatCents(total)}</strong> <span className="salao__muted">(o servidor confere o preço)</span></span>
+              <Button variant="primary" busy={sending} disabled={lines.length === 0} onClick={() => void send()}>Enviar para a cozinha</Button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { Prisma, prisma, type StockMovementType } from "@meucardapio/db";
 import {
-  createIngredientSchema, EXPIRY_SOON_DAYS, LOSS_ALERT_PERCENT, LOSS_UNDO_STAFF_MINUTES, panelRoleSchema, productLossSchema, recipeSchema, stockCountSchema, stockLossSchema, stockMovementsQuerySchema, stockPurchaseSchema, updateIngredientSchema,
+  createIngredientSchema, EXPIRY_SOON_DAYS, lossAlertSettingsSchema, LOSS_UNDO_STAFF_MINUTES, panelRoleSchema, productLossSchema, recipeSchema, stockCountSchema, stockLossSchema, stockMovementsQuerySchema, stockPurchaseSchema, updateIngredientSchema,
 } from "@meucardapio/shared-types";
 import { logAudit } from "../lib/audit";
 import { buildReport, resolveRange } from "../lib/reports";
@@ -310,6 +310,16 @@ const stockRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
+  // Alerta de perda alta: o dono escolhe o % do faturamento que dispara o aviso no Lucro.
+  app.put("/api/stock/settings", owner, async (request, reply) => {
+    const { storeId, userId } = request.user;
+    const parsed = lossAlertSettingsSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Use um número de 1 a 100.", code: "VALIDATION_ERROR" });
+    await prisma.store.update({ where: { id: storeId }, data: { lossAlertPercent: parsed.data.lossAlertPercent } });
+    logAudit({ storeId, userId, action: "stock.loss_alert_percent", targetType: "Store", targetId: storeId, metadata: parsed.data });
+    return parsed.data;
+  });
+
   // DRE simplificado do período: faturamento (mesma definição dos relatórios), CMV das vendas, lucro bruto, perdas (desperdício,
   // estragado, ajuste de contagem) e resultado depois das perdas; mais margem REAL por prato (custo gravado em cada venda).
   app.get("/api/stock/profit", owner, async (request, reply) => {
@@ -404,7 +414,7 @@ const MOVEMENT_LABEL = { PURCHASE: "Compra", SALE: "Venda", SALE_REVERSAL: "Esto
 async function buildProfit(storeId: string, range: ReportRange) {
     const window = Prisma.sql`m."storeId" = ${storeId} AND m."createdAt" >= ${utc(range.fromUtc)} AND m."createdAt" < ${utc(range.toExclusiveUtc)}`;
 
-    const [report, byType, byReason, wastedIngredients, products, purchases, byUser] = await Promise.all([
+    const [report, byType, byReason, wastedIngredients, products, purchases, byUser, storeCfg] = await Promise.all([
       buildReport(storeId, range),
       prisma.$queryRaw<{ type: string; cost: bigint }[]>(Prisma.sql`SELECT m."type"::text AS "type", coalesce(sum(m."costCents"), 0)::bigint AS "cost" FROM "StockMovement" m WHERE ${window} GROUP BY 1`),
       prisma.$queryRaw<{ type: string; reason: string; cost: bigint; count: bigint }[]>(Prisma.sql`
@@ -432,6 +442,7 @@ async function buildProfit(storeId: string, range: ReportRange) {
         SELECT m."userId", max(u."email") AS "email", (-sum(m."costCents"))::bigint AS "cost", count(*) AS "count"
         FROM "StockMovement" m LEFT JOIN "User" u ON u."id" = m."userId"
         WHERE ${window} AND m."type" IN ('WASTE', 'SPOILAGE') AND m."reversalOfId" IS NULL AND NOT EXISTS (SELECT 1 FROM "StockMovement" r WHERE r."reversalOfId" = m."id") GROUP BY 1 ORDER BY 3 DESC LIMIT 20`),
+      prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { lossAlertPercent: true } }),
     ]);
     const sum = (types: string[]) => byType.filter((r) => types.includes(r.type)).reduce((s, r) => s + Number(r.cost), 0);
     const cogsCents = -sum(["SALE", "SALE_REVERSAL"]); // saídas são negativas
@@ -454,7 +465,7 @@ async function buildProfit(storeId: string, range: ReportRange) {
       grossMarginPercent: pct(grossProfitCents),
       losses: { wasteCents, spoilageCents, adjustmentCents, totalCents: lossesCents, percentOfRevenue: pct(lossesCents) },
       resultAfterLossesCents: grossProfitCents - lossesCents,
-      lossAlert: { thresholdPercent: LOSS_ALERT_PERCENT, exceeded: revenueCents > 0 ? (lossesCents * 100) / revenueCents > LOSS_ALERT_PERCENT : lossesCents > 0 },
+      lossAlert: { thresholdPercent: storeCfg.lossAlertPercent, exceeded: revenueCents > 0 ? (lossesCents * 100) / revenueCents > storeCfg.lossAlertPercent : lossesCents > 0 },
       lossesByUser: byUser.map((r) => ({ userId: r.userId, email: r.email, count: Number(r.count), costCents: Number(r.cost) })),
       purchasesCents: Number(purchases[0].cost),
       lossesByReason: byReason.map((r) => ({ type: r.type, reason: r.reason, count: Number(r.count), costCents: Number(r.cost) })),

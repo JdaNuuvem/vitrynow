@@ -5,7 +5,7 @@ import { quoteOrder } from "../lib/quoteOrder";
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 import { Prisma, prisma } from "@meucardapio/db";
-import { createTableOrderSchema, createTableSchema, panelRoleSchema, qrSettingsSchema, receiveTableSchema, floorLayoutSchema, RESERVATION_SOON_AFTER_MIN, RESERVATION_SOON_BEFORE_MIN, tableAlertClearSchema, tableGuestsSchema, tableStatusOf, tableWaiterSchema, updateTableSchema } from "@meucardapio/shared-types";
+import { createTableOrderSchema, createTableSchema, panelRoleSchema, qrSettingsSchema, receiveTableSchema, floorLayoutSchema, RESERVATION_SOON_AFTER_MIN, RESERVATION_SOON_BEFORE_MIN, tableAlertClearSchema, tableGuestsSchema, tableStatusOf, tableWaiterSchema, updateTableSchema, memberName } from "@meucardapio/shared-types";
 import { getRequestEntitlements, requireFeature } from "../lib/subscription";
 import { logAudit } from "../lib/audit";
 import { buildMenuView } from "../lib/menuView";
@@ -59,7 +59,7 @@ const RECEIVES_PER_MINUTE = 60;
 // Conta da mesa (RN-MB-02, virtual): pedidos ACEITOS (CONFIRMADO em diante), não cancelados, ainda não recebidos.
 const accountWhere = (storeId: string, tableId: string) => ({ storeId, tableId, receiptId: null, paidAt: null, awaitingPayment: false, status: { in: [...SALE_STATUSES] } });
 
-type TableRow = { id: string; label: string; qrToken: string; active: boolean; position: number; posX: number; posZ: number; rotation: number; shape: string; seats: number; area: string | null; callWaiterAt: Date | null; askBillAt: Date | null; guests?: number | null; waiterUserId?: string | null; waiter?: { id: string; email: string } | null };
+type TableRow = { id: string; label: string; qrToken: string; active: boolean; position: number; posX: number; posZ: number; rotation: number; shape: string; seats: number; area: string | null; callWaiterAt: Date | null; askBillAt: Date | null; guests?: number | null; waiterUserId?: string | null; waiter?: { id: string; email: string; displayName: string | null } | null };
 const tableView = (t: TableRow, slug: string) => ({
   id: t.id,
   label: t.label,
@@ -72,7 +72,7 @@ const tableView = (t: TableRow, slug: string) => ({
   callWaiterAt: t.callWaiterAt?.toISOString() ?? null,
   askBillAt: t.askBillAt?.toISOString() ?? null,
   guests: t.guests ?? null,
-  waiter: t.waiter ? { id: t.waiter.id, name: t.waiter.email.split("@")[0] } : null, // usuário não tem nome: mostra a parte antes do @
+  waiter: t.waiter ? { id: t.waiter.id, name: memberName(t.waiter) } : null, // nome de exibição ou a parte do e-mail antes do @
 });
 
 const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
@@ -83,7 +83,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     const { storeId } = request.user;
     const [store, tables, pending, account] = await Promise.all([
       prisma.store.findUniqueOrThrow({ where: { id: storeId }, select: { slug: true, qrOrderingEnabled: true, qrOrdersNeedApproval: true, serviceFeePercent: true } }),
-      prisma.table.findMany({ where: { storeId }, orderBy: [{ position: "asc" }, { label: "asc" }], include: { waiter: { select: { id: true, email: true } } } }),
+      prisma.table.findMany({ where: { storeId }, orderBy: [{ position: "asc" }, { label: "asc" }], include: { waiter: { select: { id: true, email: true, displayName: true } } } }),
       prisma.order.groupBy({ by: ["tableId"], where: { storeId, tableId: { not: null }, receiptId: null, status: "PENDENTE" }, _count: { _all: true } }),
       prisma.order.groupBy({ by: ["tableId"], where: { storeId, tableId: { not: null }, receiptId: null, paidAt: null, awaitingPayment: false, status: { in: [...SALE_STATUSES] } }, _count: { _all: true }, _sum: { totalCents: true }, _min: { createdAt: true } }),
     ]);

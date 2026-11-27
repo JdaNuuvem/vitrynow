@@ -220,6 +220,10 @@ describe("estoque — integração", () => {
     expect(json(await l.call("GET", "/api/stock/profit")).lossAlert).toEqual({ thresholdPercent: 5, exceeded: false });
     await l.call("POST", `/api/stock/ingredients/${carne}/loss`, { type: "WASTE", quantity: 30, reason: "PREPARO" }); // 8%
     expect(json(await l.call("GET", "/api/stock/profit")).lossAlert.exceeded).toBe(true);
+    // o dono sobe o limite para 10%: 8% deixa de alertar; valor fora de 1..100 é recusado
+    expect((await l.call("PUT", "/api/stock/settings", { lossAlertPercent: 10 })).statusCode).toBe(200);
+    expect(json(await l.call("GET", "/api/stock/profit")).lossAlert).toEqual({ thresholdPercent: 10, exceeded: false });
+    expect((await l.call("PUT", "/api/stock/settings", { lossAlertPercent: 0 })).statusCode).toBe(400);
   });
 
   it("validade por PEPS: o lote em uso define a data; vencido e vence logo viram alerta", async () => {

@@ -39,8 +39,8 @@ export function EquipePage() {
     {!users && !forbidden && !loadError && <StateMessage title="Carregando equipe" busy />}
     {users && !forbidden && <div className="equipe__grid">
       <Panel title="Membros cadastrados">
-        {users.length ? <DataTable label="Equipe da loja" headers={["E-mail", "Perfil", "Ações"]}>
-          {users.map((user) => <MemberRow key={user.id} user={user} disabled={busy}
+        {users.length ? <DataTable label="Equipe da loja" headers={["E-mail", "Nome", "Perfil", "Ações"]}>
+          {users.map((user) => <MemberRow key={user.id} user={user} disabled={busy} onSaved={() => void reload()}
             onRemove={() => { setFailure(null); setSelected(user); }} />)}
         </DataTable> : <StateMessage title="Nenhum membro cadastrado" />}
       </Panel>

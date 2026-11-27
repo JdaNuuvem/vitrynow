@@ -91,3 +91,6 @@
 .salao-res__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .salao-res__list li { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--ds-radius-sm); font-size: var(--ds-text-sm); }
 .salao-res__list .salao-panel__actions { grid-column: 1 / -1; }
+
+.salao-dialog__lines { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; border-top: 1px solid var(--line); padding-block-start: 8px; }
+.salao-dialog__lines li { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; font-size: var(--ds-text-sm); }

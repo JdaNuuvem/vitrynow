@@ -120,6 +120,8 @@ services:
       DISH3D_PROVIDER: ${DISH3D_PROVIDER:-}
       FAL_KEY: ${FAL_KEY:-}
       DISH3D_CREDITS: ${DISH3D_CREDITS:-300}
+      DISH3D_QUALITY: ${DISH3D_QUALITY:-high}
+      DISH3D_HIGHPACK: ${DISH3D_HIGHPACK:-false}
       # Reels (ADR-0021): desligado por padrão; true liga (além do recurso `reels` no plano)
       REELS_ENABLED: ${REELS_ENABLED:-false}
       STORAGE_LOCAL_DIR: /uploads

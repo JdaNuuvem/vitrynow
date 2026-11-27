@@ -50,3 +50,18 @@ export const ISSUE_LABEL: Record<string, string> = {
   DUPLICATE_IN_FILE: "Repetido na planilha",
   ALREADY_EXISTS: "Já existe no cardápio",
 };
+
+// Planilha Excel (.xlsx): lida NO NAVEGADOR e enviada como CSV (o servidor continua só com CSV/JSON e valida tudo).
+// A primeira aba vale; a biblioteca só carrega quando alguém escolhe um .xlsx.
+export function rowsToCsv(rows: unknown[][]): string {
+  const cell = (v: unknown) => {
+    const s = v === null || v === undefined ? "" : v instanceof Date ? v.toISOString().slice(0, 10) : String(v);
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  return rows.filter((r) => r.some((v) => v !== null && v !== undefined && String(v).trim() !== "")).map((r) => r.map(cell).join(",")).join("\n") + "\n";
+}
+
+export async function readXlsxAsCsv(file: File): Promise<string> {
+  const { default: readXlsxFile } = await import("read-excel-file");
+  return rowsToCsv((await readXlsxFile(file)) as unknown[][]);
+}

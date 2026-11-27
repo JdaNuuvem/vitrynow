@@ -158,6 +158,14 @@ Sugestão: botão "Importar planilha" no Catálogo → enviar arquivo → prévi
 - **Tocado no existente:** `features/loja/LojaPage.tsx` (+13 linhas: hook `useReels`, a faixa abaixo do `MenuBanner` e o visualizador por cima); proxy de DEV `app/media/stores/[storeId]/reels/[file]` (repassa Range).
 - **API:** `GET /stores/:slug/reels` (público, lista vazia se a loja não tem o recurso); `POST /api/reels/:id/publish|unpublish|remove` (só o dono). Liga com `REELS_ENABLED=true` + recurso `reels` (PRO).
 
+## 3g. Melhorias (27/11/2026, autorizado)
+- **Salão — Adicionar pedido:** agora aceita produto COM opções (usa `ProductOptionFields` e `productOptions.ts` da vitrine, sem regra nova); fonte = cardápio público da loja. Venda por peso continua pela tela de Pedidos.
+- **Equipe:** coluna "Nome" com edição na linha (`features/equipe/components/MemberRow.tsx` e `EquipePage.tsx`, tocados); API `POST /api/users/:id/name` (dono). O salão mostra esse nome no garçom (`memberName` no shared-types).
+- **Lucro:** campo "Avisar quando as perdas passarem de X%" (`LucroPage.tsx` tocado + `components/LossAlertSetting.tsx`); API `PUT /api/stock/settings`.
+- **Estoque — Perda de prato:** pede o peso (g) quando o prato é vendido por peso (`ProductLossForm.tsx` tocado).
+- **Importação:** aceita Excel .xlsx (lido no navegador com `read-excel-file@5.8.6` e enviado como CSV).
+- **Prato 3D:** qualidade do Rodin configurável no servidor (`DISH3D_QUALITY`, padrão high; `DISH3D_HIGHPACK`).
+
 ## 4. Mudanças do backend desde a última sincronização (para saber o que a API já oferece)
 - **Tíquete v4** (`printableOrderSchema`): `round`, `requestedBy`, `customerRemoved` — impressos pelo print-client; nada a fazer no web.
 - **Catálogo de erros** (§2) e `docs/textos-de-erro-para-revisar.md`.

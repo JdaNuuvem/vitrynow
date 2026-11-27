@@ -96,3 +96,8 @@ export const reservationsQuerySchema = z.object({ from: isoInstant.optional(), t
 // Garçom responsável (null = ninguém) e pessoas na mesa (null = não informado).
 export const tableWaiterSchema = z.object({ userId: z.string().min(1).max(50).nullable() }).strict();
 export const tableGuestsSchema = z.object({ guests: z.number().int().min(1).max(50).nullable() }).strict();
+// Nome de exibição da equipe (garçom no salão). Fonte única do "nome ou parte do e-mail".
+export const memberDisplayNameSchema = z.object({ displayName: textField({ max: 40, min: 1 }).nullable() }).strict();
+export function memberName(user: { displayName?: string | null; email: string }): string {
+  return user.displayName?.trim() || user.email.split("@")[0];
+}
