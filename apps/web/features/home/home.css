@@ -37,7 +37,7 @@
 .home__demo img { display: block; width: 100%; height: auto; aspect-ratio: 1.28; object-fit: cover; }
 .home__demo span { display: block; padding: 12px 16px; font-size: var(--ds-text-sm); font-weight: 700; }
 
-@media (max-width: 720px) {
+@media (max-width: 800px) {
   .home__layout--demo { grid-template-columns: minmax(0, 1fr); }
   .home__demo img { aspect-ratio: 1.68; }
 }

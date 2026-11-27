@@ -7,7 +7,7 @@
 .equipe-card input { box-sizing: border-box; min-height: 44px; width: 100%; min-width: 0; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-weight: 450; }
 .equipe-card > .ds-button { justify-self: start; }
 .equipe__error { color: var(--danger); font-size: .875rem; }
-@media (max-width: 950px) { .equipe__grid { grid-template-columns: 1fr; } }
+@media (max-width: 1099px) { .equipe__grid { grid-template-columns: 1fr; } }
 
 .equipe__limit { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
 .equipe__limit label { display: grid; gap: 5px; font-size: .875rem; font-weight: 650; }

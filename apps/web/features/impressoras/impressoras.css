@@ -110,7 +110,7 @@
 .print-queue__details { flex: 1 1 160px; }
 .print-queue__details small, .print-settings__alerts small { display: block; font-size: 0.82rem; }
 
-@media (max-width: 760px) {
+@media (max-width: 800px) {
   .impressoras { padding: 24px 16px 100px; }
   .print-settings__grid { grid-template-columns: 1fr; }
 }

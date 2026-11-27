@@ -11,4 +11,4 @@
 .cupons-new__hint { font-size: .8125rem; line-height: 1.45; color: var(--ink-soft); }
 .cupons-new__actions, .cupons-row__actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .cupons-new__actions { justify-content: flex-end; }
-@media (max-width: 660px) { .cupons-new__row { grid-template-columns: 1fr; } }
+@media (max-width: 800px) { .cupons-new__row { grid-template-columns: 1fr; } }

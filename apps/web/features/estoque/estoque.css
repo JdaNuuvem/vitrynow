@@ -43,7 +43,7 @@
 .estoque__card--strong { border-width: 2px; }
 .estoque__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
 
-@media (max-width: 640px) {
+@media (max-width: 800px) {
   .estoque__recipe li { grid-template-columns: 1fr 1fr; }
   .estoque__qty { grid-template-columns: 1fr 80px; }
 }

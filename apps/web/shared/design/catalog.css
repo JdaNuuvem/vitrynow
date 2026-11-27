@@ -11,4 +11,4 @@
 .ds-catalog__swatches code { color: var(--ink-soft); font-size: .7rem; overflow-wrap: anywhere; }
 .ds-catalog__display { font: 780 var(--ds-text-title)/1.1 var(--ds-font-display); }
 .ds-catalog small { color: var(--ink-soft); }
-@media (max-width: 720px) { .ds-catalog__columns { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 800px) { .ds-catalog__columns { grid-template-columns: minmax(0, 1fr); } }

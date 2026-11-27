@@ -72,7 +72,7 @@ Ordem = prioridade (risco ao cliente × custo). **PR = um tema por PR**; dono su
 - **Risco:** `49,90`/`99,90` ou nomes digitados em tela, e-mail ou página de vendas; `planPresentation.ts` com a lista de recursos (**não verificado**).
 - **Correção:** a tela de planos só mostra o que `GET` devolve; guarda: `git grep` por padrão `\d{2},\d{2}` em textos de planos falha. **Ordem 7.**
 
-### D8 — CORES, z-index e breakpoints — **PROPOSTA para o frontend** (docs/PARA-O-FRONTEND.md §1 e §3; o web existente é do sócio)
+### D8 — CORES, z-index e breakpoints — cores, camadas e larguras **APLICADOS** (camadas: tokens `--z-*` em `shared/design/tokens.css`; larguras 340/480/800/1100; guarda `shared/design/layers.test.ts`) (docs/PARA-O-FRONTEND.md §1 e §3; o web existente é do sócio)
 - **Mais (Da Vinci, documento interno do time):** 69 hex soltos só em CSS de feature; camadas de z-index sem escala (1 uso em `100000000`; a causa do #35); **12 larguras de breakpoint diferentes** (proposta: 2); o texto de situação "Em preparo" aparece em 4 arquivos fora de teste (**não verificado** se copiam o texto: ligado a D3). Menu, barra do celular e busca **já** leem UM arquivo (`core/navigation/panelNavigation.ts`): é o exemplo certo de fonte única no web.
 - **Correção:** tokens semânticos (ok/aviso/perigo/info) pelo Da Vinci/sócio (propostas P-01..P-12 a aprovar pelo sócio); cor da loja continua `Store.primaryColor` via `lojaThemeStyle`. Guarda: lint que proíbe hex fora de `tokens.css`/tema da loja. **Ordem 8.**
 

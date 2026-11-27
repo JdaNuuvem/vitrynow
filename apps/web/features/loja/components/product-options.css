@@ -49,7 +49,7 @@
 }
 .product-choice__step button:disabled { opacity: .45; }
 .product-choice__step button:not(:disabled):hover { background: var(--loja-surface-2, var(--surface-soft)); }
-@media (max-width: 440px) {
+@media (max-width: 480px) {
   .product-choice__entry--step { grid-template-columns: minmax(0, 1fr) auto; }
   .product-choice__step { grid-column: 1 / -1; justify-self: end; }
 }

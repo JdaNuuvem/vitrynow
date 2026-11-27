@@ -134,4 +134,4 @@
 .closed-cash { display: grid; gap: 14px; padding: 16px; }
 .closed-cash h2 { font-size: var(--ds-text-md); font-weight: 700; }
 .closed-cash > .ds-button { justify-self: start; }
-@media (max-width: 760px) { .controlecaixa__forms { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 800px) { .controlecaixa__forms { grid-template-columns: minmax(0, 1fr); } }
