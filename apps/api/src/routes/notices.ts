@@ -27,7 +27,7 @@ const noticeRoutes: FastifyPluginAsync = async (app) => {
   app.post("/api/notices/:id/read", { preHandler: app.requirePanelAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const notice = await prisma.notice.findUnique({ where: { id } });
-    if (!notice) return reply.code(404).send({ error: "aviso não encontrado" });
+    if (!notice) return reply.code(404).send({ error: "Aviso não encontrado." });
 
     await prisma.noticeRead.upsert({
       where: { noticeId_userId: { noticeId: id, userId: request.user.userId } },

@@ -37,7 +37,7 @@ export class DeliverersService {
 
   // delivererId null desatribui o entregador do pedido.
   async assignToOrder(storeId: string, orderId: string, delivererId: string | null) {
-    if (!(await this.repo.findOrder(storeId, orderId))) throw new NotFoundError("pedido não encontrado");
+    if (!(await this.repo.findOrder(storeId, orderId))) throw new NotFoundError("Pedido não encontrado.");
     if (delivererId) await this.require(storeId, delivererId);
     await this.repo.setOrderDeliverer(orderId, delivererId);
     this.events.orderUpdated(storeId, orderId);
@@ -45,7 +45,7 @@ export class DeliverersService {
 
   private async require(storeId: string, id: string) {
     const deliverer = await this.repo.find(storeId, id);
-    if (!deliverer) throw new NotFoundError("entregador não encontrado");
+    if (!deliverer) throw new NotFoundError("Entregador não encontrado.");
     return deliverer;
   }
 }

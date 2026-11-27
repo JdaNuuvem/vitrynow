@@ -87,7 +87,7 @@ describe("API-19 — aceitar e acompanhar o pedido", () => {
       await track(l.store.slug, "cnaoexiste000000000000000", p1.headers),
       await track("loja-que-nao-existe", p1.orderId, p1.headers),
     ];
-    for (const r of respostas) expect([r.statusCode, r.body]).toEqual([404, JSON.stringify({ error: "pedido não encontrado" })]);
+    for (const r of respostas) expect([r.statusCode, r.body]).toEqual([404, JSON.stringify({ error: "Pedido não encontrado." })]);
   });
 
   it("PRIVACIDADE: a resposta nunca leva telefone, endereço, nome, observações, ids internos nem dados de pagamento", async () => {

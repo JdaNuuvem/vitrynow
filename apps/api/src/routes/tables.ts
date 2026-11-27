@@ -227,7 +227,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
     for (const part of input.payments ?? [{ method: input.paymentMethod!, changeForCents: input.changeForCents }]) {
       const method = toOrderPaymentMethod(part.method);
       if (!method) return reply.code(400).send({ error: "Forma de pagamento inválida.", code: "PAYMENT_METHOD_REQUIRED" });
-      if (part.changeForCents !== undefined && method !== "DINHEIRO") return reply.code(400).send({ error: "troco só se aplica a pagamento em dinheiro", code: "CHANGE_ONLY_CASH" });
+      if (part.changeForCents !== undefined && method !== "DINHEIRO") return reply.code(400).send({ error: "Troco só vale para pagamento em dinheiro.", code: "CHANGE_ONLY_CASH" });
       parts.push({ method, amountCents: "amountCents" in part ? part.amountCents : undefined, changeForCents: part.changeForCents });
     }
     if (input.payments) {
@@ -270,7 +270,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
       const paid = parts.reduce((sum, p) => sum + (p.amountCents ?? 0), 0);
       if (paid !== totalCents) throw new CodedError(400, "PAYMENTS_MISMATCH", "A soma das formas de pagamento não bate com o total da conta.", { details: { totalCents, paidCents: paid } });
       for (const p of parts) {
-        if (p.changeForCents !== undefined && p.changeForCents < p.amountCents!) throw new CodedError(400, "CHANGE_TOO_LOW", "o valor para troco deve cobrir a parte em dinheiro");
+        if (p.changeForCents !== undefined && p.changeForCents < p.amountCents!) throw new CodedError(400, "CHANGE_TOO_LOW", "O valor para troco precisa cobrir a parte paga em dinheiro.");
       }
       // RN-MB-03/CA-MB-04: dinheiro só com caixa ABERTO. FOR SHARE: o fechamento (FOR UPDATE) espera este recebimento terminar.
       let cashSessionId: string | null = null;
@@ -431,7 +431,7 @@ const tableRoutes: FastifyPluginAsync = async (app: FastifyInstance) => {
 
     const products = await prisma.product.findMany({ where: { storeId: store.id, id: { in: input.items.map((i) => i.productId) } }, include: { additionals: true } });
     if (products.length !== new Set(input.items.map((i) => i.productId)).size) {
-      return reply.code(400).send({ error: "um ou mais produtos não existem nesta loja", code: "PRODUCT_NOT_FOUND" });
+      return reply.code(400).send({ error: "Um ou mais produtos não estão mais no cardápio. Atualize a página.", code: "PRODUCT_NOT_FOUND" });
     }
     const now = new Date();
     const unavailable = products.filter((p) => !p.active || isSoldOutNow(p, now));

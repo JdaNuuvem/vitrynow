@@ -2,7 +2,7 @@ import type { FastifyReply } from "fastify";
 
 // Padrão repetido em quase toda rota de recurso-por-loja: buscar por id+storeId e, se não
 // achar, responder 404. Centraliza isso em vez de repetir o if em cada arquivo de rota.
-// Uso: `const category = await findOwnedOrNotFound(reply, () => prisma.category.findFirst({ where: { id, storeId } }), "categoria não encontrada"); if (!category) return;`
+// Uso: `const category = await findOwnedOrNotFound(reply, () => prisma.category.findFirst({ where: { id, storeId } }), "Categoria não encontrada."); if (!category) return;`
 export async function findOwnedOrNotFound<T>(
   reply: FastifyReply,
   finder: () => Promise<T | null>,

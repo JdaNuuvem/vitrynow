@@ -37,7 +37,7 @@ const deviceAlertRoutes: FastifyPluginAsync = async (app) => {
     },
     async (request, reply) => {
       const parsed = deviceAlertBodySchema.safeParse(request.body);
-      if (!parsed.success) return reply.code(400).send({ error: "corpo inválido", code: "VALIDATION_ERROR" });
+      if (!parsed.success) return reply.code(400).send({ error: "Dados inválidos. Confira os campos.", code: "VALIDATION_ERROR" });
       await deviceAlertService.record({
         storeId: request.deviceStoreId!,
         tokenId: request.deviceTokenId!,
@@ -55,7 +55,7 @@ const deviceAlertRoutes: FastifyPluginAsync = async (app) => {
       // A negativa grava auditoria: balde por USUÁRIO (10/min), como na troca de modo; passando disso, 429 sem gravar mais nada.
       if (limited(`denied-alerts:${request.user.userId}`, 10)) return tooMany(reply);
       prismaAuditLogger.log({ storeId: request.user.storeId, userId: request.user.userId, action: "device_alert.read_denied", targetType: "Store", targetId: request.user.storeId });
-      return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
+      return reply.code(403).send({ error: "Só o dono da loja pode fazer isso.", code: "FORBIDDEN_ROLE" });
     }
     return deviceAlertService.list(request.user.storeId);
   });

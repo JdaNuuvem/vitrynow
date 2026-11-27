@@ -52,7 +52,7 @@ describe("DeliverersService", () => {
 
   it("pedido inexistente é 404 e nada é gravado nem notificado", async () => {
     const { service, log, events } = setup({ deliverers: [deliverer] });
-    await expect(service.assignToOrder("store-1", "nada", "d-1")).rejects.toThrow("pedido não encontrado");
+    await expect(service.assignToOrder("store-1", "nada", "d-1")).rejects.toThrow("Pedido não encontrado.");
     expect(log).toEqual([]);
     expect(events.updated).toEqual([]);
   });

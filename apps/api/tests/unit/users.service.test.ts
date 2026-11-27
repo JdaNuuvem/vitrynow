@@ -57,14 +57,14 @@ describe("UsersService — equipe", () => {
   it("usuário de outra loja ou inexistente é 404", async () => {
     const { service, deleted } = setup([owner, rec<User>({ id: "x", storeId: "store-2", role: "STAFF" })]);
     await expect(service.remove(as("owner-1"), "x")).rejects.toThrow(NotFoundError);
-    await expect(service.remove(as("owner-1"), "nada")).rejects.toThrow("usuário não encontrado");
+    await expect(service.remove(as("owner-1"), "nada")).rejects.toThrow("Pessoa da equipe não encontrada.");
     expect(deleted).toEqual([]);
   });
 
   it("não remove o último dono (409)", async () => {
     const { service, deleted } = setup([owner, rec<User>({ ...owner, id: "owner-x" })].slice(0, 1));
     // só um dono na loja; quem executa é outro papel/usuário qualquer
-    await expect(service.remove(as("staff-1"), "owner-1")).rejects.toThrow("a loja precisa ter pelo menos um dono");
+    await expect(service.remove(as("staff-1"), "owner-1")).rejects.toThrow("A loja precisa ter pelo menos um dono.");
     expect(deleted).toEqual([]);
   });
 

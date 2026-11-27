@@ -48,7 +48,7 @@ export class OptionGroupsService {
       group = await this.repo.updateGroup(actor.storeId, id, input);
     } catch (error) {
       // SEC-10: opção que não é deste grupo (inclusive de outra loja) => 404, nada alterado.
-      if (error instanceof OptionNotInGroupError) throw new NotFoundError("opção não encontrada neste grupo");
+      if (error instanceof OptionNotInGroupError) throw new NotFoundError("Esta opção não pertence a este grupo.");
       throw error;
     }
     this.audit.log({
@@ -87,7 +87,7 @@ export class OptionGroupsService {
     const product = await this.requireProduct(actor.storeId, productId);
     if (new Set(groupIds).size !== groupIds.length) throw new CodedError(400, "DUPLICATE_GROUP", "O mesmo grupo foi enviado mais de uma vez.");
     const found = await this.repo.findGroupsByIds(actor.storeId, groupIds);
-    if (found.length !== groupIds.length) throw new NotFoundError("grupo de opções não encontrado");
+    if (found.length !== groupIds.length) throw new NotFoundError("Grupo de opções não encontrado.");
     found.forEach(assertEditable);
     const ordered = groupIds.map((id) => found.find((g) => g.id === id)!);
     const problems = checkProductGroups(ordered);
@@ -124,7 +124,7 @@ export class OptionGroupsService {
     const ids = [...new Set(input.options.map((o) => o.productId).filter((id): id is string => Boolean(id)))];
     if (ids.length === 0) return;
     const found = await this.repo.findProductKinds(storeId, ids);
-    if (found.length !== ids.length) throw new NotFoundError("produto não encontrado");
+    if (found.length !== ids.length) throw new NotFoundError("Produto não encontrado.");
     if (found.some((p) => p.kind !== "ADICIONAL")) throw new CodedError(400, "OPTION_PRODUCT_NOT_ADDON", "Só um produto do tipo Adicional pode ser ligado a um grupo.");
     if (found.some((p) => p.saleUnit !== "UN")) throw new CodedError(400, "OPTION_PRODUCT_BY_WEIGHT", "Adicional vendido por peso não pode ser opção de grupo.");
     if (input.priceMode === "BASE" && input.options.some((o) => o.productId)) throw new CodedError(400, "OPTION_ADDON_IN_BASE_GROUP", "Adicional não pode ser variação de preço-base.");
@@ -132,13 +132,13 @@ export class OptionGroupsService {
 
   private async requireGroup(storeId: string, id: string) {
     const group = await this.repo.findGroup(storeId, id);
-    if (!group) throw new NotFoundError("grupo de opções não encontrado");
+    if (!group) throw new NotFoundError("Grupo de opções não encontrado.");
     return group;
   }
 
   private async requireProduct(storeId: string, id: string) {
     const product = await this.repo.findProduct(storeId, id);
-    if (!product) throw new NotFoundError("produto não encontrado");
+    if (!product) throw new NotFoundError("Produto não encontrado.");
     return product;
   }
 }

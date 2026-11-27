@@ -79,7 +79,7 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
   app.post("/api/orders/:id/transition", auth, async (request, reply) => {
     const { id } = request.params as { id: string };
     const to = orderStatusSchema.safeParse((request.body as { to?: unknown })?.to);
-    if (!to.success) return reply.code(400).send({ error: "status inválido", code: "INVALID_TRANSITION" });
+    if (!to.success) return reply.code(400).send({ error: "Esta mudança de status não é permitida.", code: "INVALID_TRANSITION" });
     return { order: await orderService.transition(actorOf(request), id, to.data) };
   });
 
@@ -93,7 +93,7 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/api/orders/:id/refund/retry", auth, async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (request.user.role !== panelRoleSchema.enum.OWNER) return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
+    if (request.user.role !== panelRoleSchema.enum.OWNER) return reply.code(403).send({ error: "Só o dono da loja pode fazer isso.", code: "FORBIDDEN_ROLE" });
     if (!(await mfaProofAccepted(request, "refund"))) {
       return reply.code(403).send({ error: "Confirmação de segurança necessária.", code: "MFA_REQUIRED", purpose: "refund" });
     }
@@ -104,7 +104,7 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
   // API-65: registra o estorno que o dono já fez no app do Mercado Pago (RN-B1-08). OWNER + MFA; motivo obrigatório por código.
   app.post("/api/orders/:id/refund/manual", auth, async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (request.user.role !== panelRoleSchema.enum.OWNER) return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
+    if (request.user.role !== panelRoleSchema.enum.OWNER) return reply.code(403).send({ error: "Só o dono da loja pode fazer isso.", code: "FORBIDDEN_ROLE" });
     const code = MANUAL_REFUND_CODES.find((c) => c === (request.body as { code?: unknown } | null)?.code);
     if (!code) return reply.code(400).send({ error: "Informe o motivo.", code: "VALIDATION_ERROR" });
     if (!(await mfaProofAccepted(request, "refund"))) {
@@ -116,7 +116,7 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
   // API-61: encerra o estorno preso SEM devolver por aqui (RN-ABD). OWNER + MFA; motivo por código (+ nota 1..200 fora da auditoria).
   app.post("/api/orders/:id/refund/abandon", auth, async (request, reply) => {
     const { id } = request.params as { id: string };
-    if (request.user.role !== panelRoleSchema.enum.OWNER) return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
+    if (request.user.role !== panelRoleSchema.enum.OWNER) return reply.code(403).send({ error: "Só o dono da loja pode fazer isso.", code: "FORBIDDEN_ROLE" });
     const body = (request.body ?? {}) as { code?: unknown; note?: unknown };
     const code = ABANDON_CODES.find((c) => c === body.code);
     const note = typeof body.note === "string" ? body.note.trim() : undefined;
@@ -138,7 +138,7 @@ const orderRoutes: FastifyPluginAsync = async (app) => {
   app.post("/api/orders/:id/status", auth, async (request, reply) => {
     const { id } = request.params as { id: string };
     const parsed = orderStatusSchema.safeParse((request.body as { status?: unknown })?.status);
-    if (!parsed.success) return reply.code(400).send({ error: "status inválido" });
+    if (!parsed.success) return reply.code(400).send({ error: "Esta mudança de status não é permitida." });
     if (parsed.data === "CANCELADO") {
       // Cancelar pedido pago exige o fluxo explícito (motivo + estorno): a rota legada não estorna por conta própria.
       if (await orderService.needsRefund(request.user.storeId, id)) {

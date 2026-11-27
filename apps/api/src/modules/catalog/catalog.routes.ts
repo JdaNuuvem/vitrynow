@@ -19,7 +19,7 @@ export function buildCatalogRoutes(service: CatalogService): FastifyPluginAsync 
       preHandler: [
         app.requirePanelAuth,
         async (request: FastifyRequest, reply: FastifyReply) => {
-          if (request.user.role !== panelRoleSchema.enum.OWNER) return reply.code(403).send({ error: "ação restrita ao dono da loja", code: "FORBIDDEN_ROLE" });
+          if (request.user.role !== panelRoleSchema.enum.OWNER) return reply.code(403).send({ error: "Só o dono da loja pode fazer isso.", code: "FORBIDDEN_ROLE" });
         },
       ],
     };

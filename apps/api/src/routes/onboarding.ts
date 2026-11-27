@@ -15,7 +15,7 @@ const onboardingRoutes: FastifyPluginAsync = async (app) => {
   // RN-ONB-02: disponibilidade do endereço na hora (público; limitado). Não diferencia "reservado" de "em uso" para quem só quer saber se serve.
   app.get("/auth/slug-availability", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (request, reply) => {
     const slug = String((request.query as { slug?: string }).slug ?? "").trim().toLowerCase();
-    if (!SLUG_PATTERN.test(slug)) return reply.code(400).send({ error: "use apenas letras minúsculas, números e hífen", code: "SLUG_INVALID" });
+    if (!SLUG_PATTERN.test(slug)) return reply.code(400).send({ error: "Use só letras minúsculas, números e hífen no endereço da loja.", code: "SLUG_INVALID" });
     if (isReservedSlug(slug)) return { slug, available: false, reason: "RESERVED" };
     const taken = await prisma.store.findUnique({ where: { slug }, select: { id: true } });
     return { slug, available: !taken, reason: taken ? "IN_USE" : null };

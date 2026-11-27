@@ -44,15 +44,15 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     }
     const { storeName, slug, email, password } = parsed.data;
     // RN-ONB-02: endereço reservado da plataforma. RN-ONB-01: o código da loja não é pedido; o servidor gera.
-    if (isReservedSlug(slug)) return reply.code(400).send({ error: "este endereço é reservado; escolha outro", code: "SLUG_RESERVED" });
+    if (isReservedSlug(slug)) return reply.code(400).send({ error: "Este endereço não pode ser usado. Escolha outro.", code: "SLUG_RESERVED" });
     const code = parsed.data.code ?? (await generateStoreCode());
 
     const existing = await prisma.store.findFirst({ where: { OR: [{ slug }, { code }] } });
     if (existing) {
-      return reply.code(409).send({ error: "slug ou código já em uso", code: "STORE_IN_USE" });
+      return reply.code(409).send({ error: "Este endereço de loja já está em uso. Escolha outro.", code: "STORE_IN_USE" });
     }
     if (await prisma.user.findUnique({ where: { email }, select: { id: true } })) {
-      return reply.code(409).send({ error: "este e-mail já está cadastrado", code: "EMAIL_IN_USE" });
+      return reply.code(409).send({ error: "Este e-mail já tem cadastro. Entre com ele ou use outro.", code: "EMAIL_IN_USE" });
     }
 
     // SEC-34 (R7): o hash vem ANTES de qualquer escrita; se a faixa estiver cheia, 503 e nenhuma loja nem usuário fica pela metade.
@@ -79,8 +79,8 @@ const authRoutes: FastifyPluginAsync = async (app) => {
       // Corrida: dois cadastros iguais passaram pelas checagens acima ao mesmo tempo (B21).
       const target = uniqueTarget(error);
       if (target === null) throw error;
-      if (target.includes("email")) return reply.code(409).send({ error: "este e-mail já está cadastrado", code: "EMAIL_IN_USE" });
-      return reply.code(409).send({ error: "slug ou código já em uso", code: "STORE_IN_USE" });
+      if (target.includes("email")) return reply.code(409).send({ error: "Este e-mail já tem cadastro. Entre com ele ou use outro.", code: "EMAIL_IN_USE" });
+      return reply.code(409).send({ error: "Este endereço de loja já está em uso. Escolha outro.", code: "STORE_IN_USE" });
     }
 
     const user = store.users[0];
@@ -103,7 +103,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
     if (!slot.allowed) {
       reply.header("Retry-After", String(slot.retryAfterSeconds));
       securityEvent(request, "login_locked", { email });
-      return reply.code(429).send({ error: "muitas tentativas de login; tente de novo em alguns minutos", code: "LOGIN_LOCKED" });
+      return reply.code(429).send({ error: "Acesso bloqueado por alguns minutos após várias tentativas. Tente de novo mais tarde.", code: "LOGIN_LOCKED" });
     }
     if (slot.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, slot.delayMs));
 

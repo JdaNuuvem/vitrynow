@@ -41,7 +41,7 @@ export function staffReportView(r: {
 
 
 const RANGE_REPLY = {
-  INVALID_DATE: { error: "datas inválidas", code: undefined },
+  INVALID_DATE: { error: "Datas inválidas. Confira o período.", code: undefined },
   FROM_AFTER_TO: { error: "A data inicial é depois da final.", code: "REPORT_RANGE_INVALID" },
   PERIOD_TOO_LONG: { error: `Escolha um período de no máximo ${REPORT_MAX_WINDOW_DAYS} dias.`, code: "REPORT_WINDOW_TOO_LARGE", details: { maxDays: REPORT_MAX_WINDOW_DAYS } },
 } as const;
@@ -51,7 +51,7 @@ const reportRoutes: FastifyPluginAsync = async (app) => {
   // Devolve o período válido ou já responde 400/422 e devolve null.
   async function periodOrReply(storeId: string, query: { from?: unknown; to?: unknown }, reply: FastifyReply) {
     if ((query.from !== undefined && typeof query.from !== "string") || (query.to !== undefined && typeof query.to !== "string")) {
-      void reply.code(400).send({ error: "datas inválidas" });
+      void reply.code(400).send({ error: "Datas inválidas. Confira o período." });
       return null;
     }
     const range = resolveRange({ from: query.from as string | undefined, to: query.to as string | undefined }, new Date(), await storeTimeZone(storeId));

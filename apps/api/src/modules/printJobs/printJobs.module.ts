@@ -29,7 +29,7 @@ const printJobRoutes: FastifyPluginAsync = async (app) => {
   app.post("/api/device/print-jobs/:id/ack", device, async (request, reply) => {
     const { id } = request.params as { id: string };
     const parsed = printAckSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: "corpo inválido", code: "VALIDATION_ERROR" });
+    if (!parsed.success) return reply.code(400).send({ error: "Dados inválidos. Confira os campos.", code: "VALIDATION_ERROR" });
     return printJobService.ack(request.deviceStoreId!, request.deviceTokenId!, id, parsed.data);
   });
 
@@ -44,12 +44,12 @@ const printJobRoutes: FastifyPluginAsync = async (app) => {
     if (request.user.role === panelRoleSchema.enum.OWNER) return;
     if (limited(`denied:${request.user.userId}`, 10)) return tooMany(reply);
     await printModeService.recordDenied(request.user, (request.body as { mode?: unknown } | null)?.mode);
-    return reply.code(403).send({ error: "ação restrita ao dono da loja" });
+    return reply.code(403).send({ error: "Só o dono da loja pode fazer isso." });
   };
   app.put("/api/store/print-mode", { preHandler: [app.requirePanelAuth, ownerOrRecordDenied] }, async (request, reply) => {
     if (limited(`mode:${request.user.storeId}`, 10)) return tooMany(reply); // balde da LOJA (10 trocas por minuto)
     const parsed = setPrintModeSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: "modo inválido", code: "VALIDATION_ERROR" });
+    if (!parsed.success) return reply.code(400).send({ error: "Modo de impressão inválido.", code: "VALIDATION_ERROR" });
     return printModeService.set({ storeId: request.user.storeId, userId: request.user.userId }, parsed.data.mode);
   });
 

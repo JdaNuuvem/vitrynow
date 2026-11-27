@@ -71,7 +71,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
     if (!slot.allowed) {
       reply.header("Retry-After", String(slot.retryAfterSeconds));
       securityEvent(request, "platform_login_locked", { email });
-      return reply.code(429).send({ error: "muitas tentativas; tente de novo em alguns minutos", code: "LOGIN_LOCKED" });
+      return reply.code(429).send({ error: "Acesso bloqueado por alguns minutos após várias tentativas. Tente de novo mais tarde.", code: "LOGIN_LOCKED" });
     }
     if (slot.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, slot.delayMs));
 
@@ -106,20 +106,20 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
     const challenge = await prisma.mfaChallenge.findUnique({ where: { id: challengeId } });
     if (!challenge || challenge.purpose !== "platform_login") {
       securityEvent(request, "platform_mfa_failed", { reason: "MFA_INVALID" });
-      return reply.code(400).send({ error: "código inválido", code: "MFA_INVALID" });
+      return reply.code(400).send({ error: "Código incorreto. Confira e tente de novo.", code: "MFA_INVALID" });
     }
     const outcome = await verifyChallenge(challenge.userId, challengeId, code);
     if (outcome === "locked") {
       securityEvent(request, "platform_mfa_failed", { reason: "MFA_LOCKED" });
-      return reply.code(429).send({ error: "muitas tentativas; peça um código novo", code: "MFA_LOCKED" });
+      return reply.code(429).send({ error: "Código bloqueado após várias tentativas. Peça um código novo.", code: "MFA_LOCKED" });
     }
     if (outcome === "expired") {
       securityEvent(request, "platform_mfa_failed", { reason: "MFA_EXPIRED" });
-      return reply.code(400).send({ error: "código expirado", code: "MFA_EXPIRED" });
+      return reply.code(400).send({ error: "O código expirou. Peça um novo.", code: "MFA_EXPIRED" });
     }
     if (outcome !== "ok") {
       securityEvent(request, "platform_mfa_failed", { reason: "MFA_INVALID" });
-      return reply.code(400).send({ error: "código inválido", code: "MFA_INVALID" });
+      return reply.code(400).send({ error: "Código incorreto. Confira e tente de novo.", code: "MFA_INVALID" });
     }
 
     const admin = await prisma.platformAdmin.findUnique({ where: { id: challenge.userId } });
@@ -162,15 +162,15 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
     const outcome = await verifyChallenge(request.platformAdmin!.id, parsed.data.challengeId, parsed.data.code);
     if (outcome === "locked") {
       securityEvent(request, "platform_mfa_failed", { reason: "MFA_LOCKED" });
-      return reply.code(429).send({ error: "muitas tentativas; peça um código novo", code: "MFA_LOCKED" });
+      return reply.code(429).send({ error: "Código bloqueado após várias tentativas. Peça um código novo.", code: "MFA_LOCKED" });
     }
     if (outcome === "expired") {
       securityEvent(request, "platform_mfa_failed", { reason: "MFA_EXPIRED" });
-      return reply.code(400).send({ error: "código expirado", code: "MFA_EXPIRED" });
+      return reply.code(400).send({ error: "O código expirou. Peça um novo.", code: "MFA_EXPIRED" });
     }
     if (outcome !== "ok") {
       securityEvent(request, "platform_mfa_failed", { reason: "MFA_INVALID" });
-      return reply.code(400).send({ error: "código inválido", code: "MFA_INVALID" });
+      return reply.code(400).send({ error: "Código incorreto. Confira e tente de novo.", code: "MFA_INVALID" });
     }
     return { ok: true };
   });
@@ -299,7 +299,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
     if (changed === 1) return { ok: true };
     const exists = await prisma.store.findUnique({ where: { id }, select: { id: true } });
     if (!exists) return reply.code(404).send({ error: "loja não encontrada" });
-    return reply.code(409).send({ error: "a loja já está suspensa", code: "ALREADY_SUSPENDED" });
+    return reply.code(409).send({ error: "A loja já está suspensa.", code: "ALREADY_SUSPENDED" });
   });
 
   app.post("/api/platform/stores/:id/reactivate", guard, async (request, reply) => {
@@ -314,7 +314,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
     if (changed === 1) return { ok: true };
     const exists = await prisma.store.findUnique({ where: { id }, select: { id: true } });
     if (!exists) return reply.code(404).send({ error: "loja não encontrada" });
-    return reply.code(409).send({ error: "a loja não está suspensa", code: "NOT_SUSPENDED" });
+    return reply.code(409).send({ error: "A loja não está suspensa.", code: "NOT_SUSPENDED" });
   });
 
   app.post("/api/platform/stores/:id/extend-trial", guard, async (request, reply) => {
@@ -336,7 +336,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
     if ("error" in outcome) {
       return outcome.error === 404
         ? reply.code(404).send({ error: "assinatura não encontrada" })
-        : reply.code(409).send({ error: "só é possível estender o período de teste de uma loja em teste", code: "NOT_IN_TRIAL" });
+        : reply.code(409).send({ error: "Só dá para estender o teste de uma loja que está em teste.", code: "NOT_IN_TRIAL" });
     }
     return { ok: true, trialEndsAt: outcome.trialEndsAt };
   });
@@ -378,7 +378,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
       if (result.count === 1) await platformAudit({ adminId: request.platformAdmin!.id, action: "notice.delete", metadata: { noticeId: id } }, tx);
       return result.count;
     });
-    if (removed === 0) return reply.code(404).send({ error: "aviso não encontrado" });
+    if (removed === 0) return reply.code(404).send({ error: "Aviso não encontrado." });
     return { ok: true };
   });
 
@@ -434,7 +434,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
       if (error instanceof ServerBusyError) return sendServerBusy(reply);
       throw error;
     }
-    if (!passwordOk) return reply.code(403).send({ error: "senha incorreta", code: "REAUTH_FAILED" });
+    if (!passwordOk) return reply.code(403).send({ error: "Senha incorreta.", code: "REAUTH_FAILED" });
     const challengeId = request.headers["x-mfa-challenge"];
     if (typeof challengeId !== "string" || !(await spendProof(admin.id, challengeId, "platform_credit_grant"))) {
       return reply.code(403).send({ error: "Confirmação de segurança necessária.", code: "MFA_REQUIRED", purpose: "platform_credit_grant" });
@@ -468,7 +468,7 @@ const platformRoutes: FastifyPluginAsync = async (app) => {
         return created;
       });
     } catch (error) {
-      if (error instanceof CreditNegative) return reply.code(409).send({ error: "o ajuste deixaria o saldo negativo", code: "CREDIT_NEGATIVE_BALANCE" });
+      if (error instanceof CreditNegative) return reply.code(409).send({ error: "O ajuste deixaria o saldo de créditos negativo.", code: "CREDIT_NEGATIVE_BALANCE" });
       if ((error as { code?: string })?.code === "P2002") {
         const existing = await prisma.aiCreditLedger.findUnique({ where: { storeId_idempotencyKey: { storeId, idempotencyKey: input.idempotencyKey } } });
         if (existing) return reply.code(200).send({ entry: ledgerView(existing), balance: await balanceOf(storeId), idempotent: true });

@@ -32,7 +32,7 @@ const deviceRoutes: FastifyPluginAsync = async (app) => {
     const { id } = request.params as { id: string };
     if ((await loadPrintMode(prisma, storeId)) === "QUEUE") return reply.code(409).send({ error: "Esta loja imprime pela fila.", code: "MODE_QUEUE" });
     const order = await prisma.order.findFirst({ where: { id, storeId } });
-    if (!order) return reply.code(404).send({ error: "pedido não encontrado" });
+    if (!order) return reply.code(404).send({ error: "Pedido não encontrado." });
 
     const printable = await buildPrintableOrder(id);
     return { order: printable };
@@ -42,7 +42,7 @@ const deviceRoutes: FastifyPluginAsync = async (app) => {
     const storeId = request.deviceStoreId!;
     const { id } = request.params as { id: string };
     const order = await prisma.order.findFirst({ where: { id, storeId }, select: { id: true } });
-    if (!order) return reply.code(404).send({ error: "pedido não encontrado" });
+    if (!order) return reply.code(404).send({ error: "Pedido não encontrado." });
 
     if ((await loadPrintMode(prisma, storeId)) === "QUEUE") {
       // ACK TARDIO (ADR-0004 §8 item 14): a impressora legada imprimiu e só agora confirma, depois da virada. Se NINGUÉM está com o

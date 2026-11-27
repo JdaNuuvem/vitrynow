@@ -75,6 +75,6 @@ describe("CatalogService", () => {
 
   it("editar produto inexistente é 404", async () => {
     const { service } = setup();
-    await expect(service.updateProduct("store-1", "nada", { name: "x" })).rejects.toThrow("produto não encontrado");
+    await expect(service.updateProduct("store-1", "nada", { name: "x" })).rejects.toThrow("Produto não encontrado.");
   });
 });

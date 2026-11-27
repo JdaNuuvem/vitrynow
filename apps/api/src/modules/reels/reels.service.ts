@@ -322,7 +322,7 @@ export class ReelsService {
   async removeFiles(storeId: string, reelId: string): Promise<boolean> {
     const reel = await this.db.reel.findFirst({ where: { id: reelId, storeId } });
     if (!reel) return true;
-    if (!reel.keyBase.startsWith(storeKeyPrefix(storeId))) throw new CodedError(400, "KEY_OUTSIDE_STORE", "chave fora do prefixo da loja");
+    if (!reel.keyBase.startsWith(storeKeyPrefix(storeId))) throw new CodedError(400, "KEY_OUTSIDE_STORE", "Este arquivo não é da sua loja.");
     try {
       await this.storage.delete(`${reel.keyBase}.mp4`);
       await this.storage.delete(`${reel.keyBase}-poster.webp`);

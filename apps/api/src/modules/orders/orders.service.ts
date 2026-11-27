@@ -199,7 +199,7 @@ export class OrderService {
     const text = note === null ? null : note.trim() || null;
     if (text && text.length > INTERNAL_NOTE_MAX) throw err(400, "NOTE_TOO_LONG", `A observação pode ter até ${INTERNAL_NOTE_MAX} caracteres.`);
     const updated = await this.db.$executeRaw`UPDATE "Order" SET "internalNote" = ${text} WHERE "id" = ${orderId} AND "storeId" = ${actor.storeId}`;
-    if (updated !== 1) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
+    if (updated !== 1) throw err(404, "ORDER_NOT_FOUND", "Pedido não encontrado.");
     this.audit.log({ storeId: actor.storeId, userId: actor.userId, action: "order.internal_note", targetType: "Order", targetId: orderId, metadata: { length: text?.length ?? 0 } });
     return { internalNote: text };
   }
@@ -209,7 +209,7 @@ export class OrderService {
       where: { id: orderId, storeId: actor.storeId },
       include: { items: true, deliverer: true, payment: true, statusHistory: { orderBy: { seq: "desc" }, take: 3 } },
     });
-    if (!order) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
+    if (!order) throw err(404, "ORDER_NOT_FOUND", "Pedido não encontrado.");
     const { statusHistory, ...rest } = order;
     const roles = await this.rolesOf(statusHistory.map((h) => h.userId));
     return this.decorate(rest, statusHistory, actor.role, roles);
@@ -222,7 +222,7 @@ export class OrderService {
       where: { id: orderId, storeId: actor.storeId },
       include: { items: { include: { additionals: true, options: true } }, deliverer: true, payment: true, statusHistory: { orderBy: { seq: "desc" }, take: 3 } },
     });
-    if (!order) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
+    if (!order) throw err(404, "ORDER_NOT_FOUND", "Pedido não encontrado.");
     const { statusHistory, ...rest } = order;
     const roles = await this.rolesOf(statusHistory.map((h) => h.userId));
     const closedAt = statusHistory[0]?.createdAt ?? null;
@@ -325,7 +325,7 @@ export class OrderService {
       where: { id: orderId, storeId: actor.storeId },
       include: { payment: true, statusHistory: { orderBy: { seq: "desc" }, take: 2 } },
     });
-    if (!order) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
+    if (!order) throw err(404, "ORDER_NOT_FOUND", "Pedido não encontrado.");
     if (order.status === "CANCELADO" || order.status === "CONCLUIDO") throw err(409, "INVALID_TRANSITION", "Este pedido não pode ser desfeito.");
     if (order.payment?.status === "ESTORNO_PENDENTE") throw err(409, "REFUND_PENDING", "Há um estorno em andamento neste pedido.");
 
@@ -402,7 +402,7 @@ export class OrderService {
       await lockPrintMode(tx, actor.storeId);
       const rows = await tx.$queryRaw<{ status: OrderStatus; cashRefundMovementId: string | null }[]>`SELECT "status", "cashRefundMovementId" FROM "Order" WHERE "id" = ${order.id} AND "storeId" = ${actor.storeId} FOR UPDATE`;
       const locked = rows[0];
-      if (!locked) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
+      if (!locked) throw err(404, "ORDER_NOT_FOUND", "Pedido não encontrado.");
       if (locked.cashRefundMovementId) return false; // já cancelado e devolvido: inofensivo
       if ((FINAL_STATUSES as readonly string[]).includes(locked.status)) throw err(409, "INVALID_TRANSITION", "Este pedido já foi finalizado ou cancelado.");
       const open = await tx.$queryRaw<{ id: string }[]>`SELECT "id" FROM "CashSession" WHERE "storeId" = ${actor.storeId} AND "closedAt" IS NULL ORDER BY "openedAt" DESC LIMIT 1 FOR UPDATE`;
@@ -838,7 +838,7 @@ export class OrderService {
 
   private async load(storeId: string, orderId: string): Promise<OrderWithPayment> {
     const order = await this.db.order.findFirst({ where: { id: orderId, storeId }, include: { payment: true } });
-    if (!order) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
+    if (!order) throw err(404, "ORDER_NOT_FOUND", "Pedido não encontrado.");
     return order;
   }
 }

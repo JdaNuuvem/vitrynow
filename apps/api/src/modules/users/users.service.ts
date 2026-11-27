@@ -20,20 +20,20 @@ export class UsersService {
   // `laneKey`: a origem do pedido (`clientKey(ip)`), para a faixa de hash (SEC-34). O hash vem ANTES de qualquer escrita: 503 não deixa nada pela metade.
   async invite(storeId: string, input: CreateStaffUserInput, laneKey: string) {
     if (await this.repo.findByEmail(input.email)) {
-      throw new ConflictError("já existe um usuário com este e-mail");
+      throw new ConflictError("Já existe alguém da equipe com este e-mail.");
     }
     const passwordHash = await this.hasher.hash(input.password, laneKey);
     return this.repo.create({ storeId, email: input.email, passwordHash, role: input.role ?? panelRoleSchema.enum.STAFF });
   }
 
   async remove(actor: Actor, id: string) {
-    if (id === actor.userId) throw new BadRequestError("você não pode remover a si mesmo");
+    if (id === actor.userId) throw new BadRequestError("Você não pode remover o seu próprio acesso.");
 
     const target = await this.repo.findInStore(actor.storeId, id);
-    if (!target) throw new NotFoundError("usuário não encontrado");
+    if (!target) throw new NotFoundError("Pessoa da equipe não encontrada.");
 
     if (target.role === panelRoleSchema.enum.OWNER && (await this.repo.countOwners(actor.storeId)) <= 1) {
-      throw new ConflictError("a loja precisa ter pelo menos um dono");
+      throw new ConflictError("A loja precisa ter pelo menos um dono.");
     }
 
     await this.repo.delete(id);

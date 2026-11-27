@@ -44,7 +44,7 @@ const paymentRoutes: FastifyPluginAsync = async (app) => {
   app.post("/api/orders/:id/payment/check", { preHandler: app.requirePanelAuth }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const order = await prisma.order.findFirst({ where: { id, storeId: request.user.storeId }, select: { id: true, payment: { select: { id: true, status: true, providerPaymentId: true } } } });
-    if (!order) return reply.code(404).send({ error: "pedido não encontrado", code: "ORDER_NOT_FOUND" });
+    if (!order) return reply.code(404).send({ error: "Pedido não encontrado.", code: "ORDER_NOT_FOUND" });
     const payment = order.payment;
     if (!payment) return reply.code(409).send({ error: "Este pedido não tem pagamento online.", code: "NOT_AWAITING_PAYMENT" });
     if (payment.status === "APROVADO") return { result: "PAID" as const };

@@ -64,7 +64,7 @@ export class FakeMercadoPagoOAuth implements MercadoPagoOAuth {
   async exchangeCode({ code }: { code: string; redirectUri: string }) {
     if (this.unavailable) throw new OAuthError("provedor indisponível", "unavailable");
     const match = /^fake:([A-Za-z0-9_-]{1,40})$/.exec(code);
-    if (!match) throw new OAuthError("código inválido", "invalid_code");
+    if (!match) throw new OAuthError("Código incorreto. Confira e tente de novo.", "invalid_code");
     return this.issue(match[1]);
   }
 

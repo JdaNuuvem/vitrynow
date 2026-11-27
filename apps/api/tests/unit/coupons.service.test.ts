@@ -46,7 +46,7 @@ describe("CouponsService", () => {
   it("atualizar ou excluir cupom inexistente é 404", async () => {
     const { service, deleted } = setup([coupon]);
     await expect(service.update(owner("store-1"), "nada", { active: false })).rejects.toThrow(NotFoundError);
-    await expect(service.delete(owner(actor.storeId), "nada")).rejects.toThrow("cupom não encontrado");
+    await expect(service.delete(owner(actor.storeId), "nada")).rejects.toThrow("Cupom não encontrado.");
     expect(deleted).toEqual([]);
   });
 

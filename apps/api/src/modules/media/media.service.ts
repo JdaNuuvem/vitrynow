@@ -93,7 +93,7 @@ export class MediaService {
   }
 
   private async removeObjects(image: { storeId: string; keyBase: string; widths: number[] }): Promise<void> {
-    if (!image.keyBase.startsWith(storeKeyPrefix(image.storeId))) throw new BadRequestError("chave fora do prefixo da loja");
+    if (!image.keyBase.startsWith(storeKeyPrefix(image.storeId))) throw new BadRequestError("Este arquivo não é da sua loja.");
     for (const width of image.widths) {
       await this.storage.delete(`${image.keyBase}-${width}.webp`);
     }

@@ -131,18 +131,18 @@ export class PrintJobService {
   private async toClaimed(storeId: string, row: ClaimRow, remaining: number): Promise<ClaimedJob> {
     const base = { id: row.id, kind: row.kind, attempt: row.attempts, leaseSeconds: remaining };
     if (row.kind === "TEST") return { ...base, ticket: buildTestTicket(row.id, this.now()) };
-    if (!row.orderId) throw err(500, "PRINT_JOB_WITHOUT_ORDER", "job sem pedido");
+    if (!row.orderId) throw err(500, "PRINT_JOB_WITHOUT_ORDER", "Esta impressão não tem pedido ligado.");
 
     if (row.kind === "ORDER_CANCEL_NOTICE") {
       const original = await this.originalPrintedAt(storeId, row.orderId);
       const ticket = await buildPrintableOrder(row.orderId, { cancelNotice: true, printedAtOriginal: original });
-      if (!ticket) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
+      if (!ticket) throw err(404, "ORDER_NOT_FOUND", "Pedido não encontrado.");
       return { ...base, ticket };
     }
     const reprintCount = row.kind === "ORDER_REPRINT" ? (row.reprintNumber ?? 1) : 0;
     const original = row.kind === "ORDER_REPRINT" ? await this.originalPrintedAt(storeId, row.orderId) : null;
     const ticket = await buildPrintableOrder(row.orderId, { reprintCount, printedAtOriginal: original });
-    if (!ticket) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
+    if (!ticket) throw err(404, "ORDER_NOT_FOUND", "Pedido não encontrado.");
     return { ...base, ticket };
   }
 
@@ -206,7 +206,7 @@ export class PrintJobService {
   // o que já valeu) ou 409 (lease vencida / outro dono). O cliente descarta o 409 e NÃO reimprime ("pelo menos uma vez").
   private async ackRejected(storeId: string, tokenId: string, jobId: string, requested: "PRINTED" | "FAILED"): Promise<{ ok: true }> {
     const job = await this.db.printJob.findFirst({ where: { id: jobId, storeId } });
-    if (!job) throw err(404, "PRINT_JOB_NOT_FOUND", "job não encontrado"); // idêntico para inexistente e de outra loja
+    if (!job) throw err(404, "PRINT_JOB_NOT_FOUND", "Esta impressão não existe mais."); // idêntico para inexistente e de outra loja
 
     const sameOwner = job.claimedByTokenId === tokenId;
     if (sameOwner && job.ackStatus === requested && (job.status === "PRINTED" || job.status === "PENDING" || job.status === "FAILED")) {
@@ -237,7 +237,7 @@ export class PrintJobService {
       where: { id: orderId, storeId: actor.storeId },
       select: { id: true, status: true, awaitingPayment: true, customerPhone: true, address: true },
     });
-    if (!found) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
+    if (!found) throw err(404, "ORDER_NOT_FOUND", "Pedido não encontrado.");
     // Recusas por estado ANTES do rastro de contato: não se registra acesso a contato que nem vai ser entregue (R-1, Nightingale).
     if (found.status === "CANCELADO") throw err(409, "ORDER_CANCELED", "Pedido cancelado: não há o que reimprimir.");
     if (found.awaitingPayment) throw err(409, "ORDER_AWAITING_PAYMENT", "Pedido aguardando pagamento: ainda não foi para a cozinha.");
@@ -253,7 +253,7 @@ export class PrintJobService {
         // Trava a linha do pedido: dois cliques simultâneos numeram 2ª via 1 e 2, nunca duas "1".
         await tx.$queryRaw`SELECT "id" FROM "Order" WHERE "id" = ${orderId} AND "storeId" = ${actor.storeId} FOR UPDATE`;
         const order = await tx.order.findFirst({ where: { id: orderId, storeId: actor.storeId }, select: { id: true, status: true, awaitingPayment: true } });
-        if (!order) throw err(404, "ORDER_NOT_FOUND", "pedido não encontrado");
+        if (!order) throw err(404, "ORDER_NOT_FOUND", "Pedido não encontrado.");
         if (order.status === "CANCELADO") throw err(409, "ORDER_CANCELED", "Pedido cancelado: não há o que reimprimir.");
         if (order.awaitingPayment) throw err(409, "ORDER_AWAITING_PAYMENT", "Pedido aguardando pagamento: ainda não foi para a cozinha.");
         const count = await tx.printJob.count({ where: { storeId: actor.storeId, orderId, kind: "ORDER_REPRINT" } });
@@ -281,13 +281,13 @@ export class PrintJobService {
   async printNow(actor: { storeId: string; userId: string; role: PanelRole }, jobId: string) {
     await this.requireQueueMode(actor.storeId);
     const job = await this.db.printJob.findFirst({ where: { id: jobId, storeId: actor.storeId }, select: { id: true, kind: true, orderId: true } });
-    if (!job) throw err(404, "PRINT_JOB_NOT_FOUND", "job não encontrado"); // idêntico para inexistente e de outra loja
+    if (!job) throw err(404, "PRINT_JOB_NOT_FOUND", "Esta impressão não existe mais."); // idêntico para inexistente e de outra loja
     if (job.orderId) {
       const found = await this.db.order.findFirst({
         where: { id: job.orderId, storeId: actor.storeId },
         select: { id: true, status: true, customerPhone: true, address: true },
       });
-      if (!found) throw err(404, "PRINT_JOB_NOT_FOUND", "job não encontrado");
+      if (!found) throw err(404, "PRINT_JOB_NOT_FOUND", "Esta impressão não existe mais.");
       if (found.status === "CANCELADO" && job.kind !== "ORDER_CANCEL_NOTICE") throw err(409, "ORDER_CANCELED", "Pedido cancelado: não há o que imprimir.");
       const closing = await this.db.orderStatusHistory.findFirst({ where: { orderId: job.orderId }, orderBy: { seq: "desc" }, select: { createdAt: true } });
       const decision = await authorizeContactView({ db: this.db, audit: this.audit, now: this.now }, actor, found, closing?.createdAt ?? null);
@@ -299,7 +299,7 @@ export class PrintJobService {
         await lockPrintMode(tx, actor.storeId);
         if (job.orderId) {
           const [row] = await tx.$queryRaw<{ status: string }[]>`SELECT "status"::text AS "status" FROM "Order" WHERE "id" = ${job.orderId} AND "storeId" = ${actor.storeId} FOR UPDATE`;
-          if (!row) throw err(404, "PRINT_JOB_NOT_FOUND", "job não encontrado");
+          if (!row) throw err(404, "PRINT_JOB_NOT_FOUND", "Esta impressão não existe mais.");
           if (row.status === "CANCELADO" && job.kind !== "ORDER_CANCEL_NOTICE") throw err(409, "ORDER_CANCELED", "Pedido cancelado: não há o que imprimir.");
         }
         const rows = await tx.$queryRaw<{ id: string }[]>`

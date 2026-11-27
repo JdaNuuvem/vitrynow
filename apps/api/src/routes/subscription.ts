@@ -33,11 +33,11 @@ const subscriptionRoutes: FastifyPluginAsync = async (app) => {
       const { storeId, userId } = request.user;
       const { feature } = (request.body ?? {}) as { feature?: unknown };
       if (typeof feature !== "string" || !isFeature(feature)) {
-        return reply.code(400).send({ error: "recurso desconhecido", code: "VALIDATION_ERROR", details: { field: "feature" } });
+        return reply.code(400).send({ error: "Recurso desconhecido.", code: "VALIDATION_ERROR", details: { field: "feature" } });
       }
       // Recurso do BASICO (ex.: QR de mesa) já é do plano do lojista: não há o que "ser avisado" sobre upgrade.
       if (!isProFeature(feature) || (await getEntitlements(storeId)).features.includes(feature)) {
-        return reply.code(409).send({ error: "seu plano já inclui esse recurso", code: "FEATURE_ALREADY_AVAILABLE" });
+        return reply.code(409).send({ error: "Seu plano já inclui este recurso.", code: "FEATURE_ALREADY_AVAILABLE" });
       }
 
       const existing = await prisma.featureInterest.findUnique({ where: { storeId_feature: { storeId, feature } } });
