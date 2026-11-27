@@ -18,8 +18,8 @@
 .salao__area select { width: auto; }
 .salao__editbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: var(--ds-space-2) var(--ds-space-3); border: 1px dashed var(--line-strong); border-radius: var(--ds-radius-md); }
 
-.salao__stage { position: relative; }
-.salao-canvas { display: block; width: 100%; height: min(72vh, 760px); min-height: 380px; border-radius: var(--ds-radius-lg); background: var(--surface-soft); overflow: hidden; touch-action: none; }
+.salao__stage { position: relative; height: min(74vh, 780px); min-height: 460px; }
+.salao-canvas { display: block; width: 100%; height: 100%; border-radius: var(--ds-radius-lg); background: var(--surface-soft); overflow: hidden; touch-action: none; }
 .salao-canvas--loading { display: grid; place-items: center; color: var(--ink-soft); }
 
 /* etiqueta sobre a mesa (HTML sobreposto ao 3D) */
@@ -40,9 +40,15 @@
 .salao-panel {
   position: absolute; inset-block: var(--ds-space-3); inset-inline-end: var(--ds-space-3); width: min(380px, calc(100% - 24px)); overflow: auto;
   display: grid; align-content: start; gap: var(--ds-space-3); padding: var(--ds-space-4); border-radius: var(--ds-radius-lg);
-  background: var(--surface); box-shadow: var(--shadow-float); z-index: 2;
+  background: var(--surface); box-shadow: var(--shadow-float); z-index: 40; /* acima das etiquetas do 3D (zIndexRange 0–20) */
 }
 @media (max-width: 720px) {
+  /* no celular os indicadores ficam numa linha que rola de lado: a cena aparece logo */
+  .salao__summary { flex-wrap: nowrap; overflow-x: auto; padding-block-end: 4px; scrollbar-width: none; }
+  .salao__chip { flex: none; padding: 4px 10px; }
+  .salao__chip--money { margin-inline-start: 0; }
+  .salao__stage { height: auto; min-height: 0; }
+  .salao-canvas { height: 60vh; min-height: 320px; }
   .salao-panel { position: static; width: auto; margin-block-start: var(--ds-space-3); }
 }
 .salao-panel__head { display: grid; grid-template-columns: auto 1fr auto; gap: var(--ds-space-3); align-items: start; }
