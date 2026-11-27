@@ -37,6 +37,7 @@ export type Product = {
   priceCents: number;
   featured?: boolean;
   soldOut?: boolean;
+  model3dUrl?: string | null; // PRATO 3D: GLB publicado pelo dono (null/ausente = sem 3D)
   additionals: Additional[];
 } & ProductOptions;
 

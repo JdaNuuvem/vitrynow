@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import sharp from "sharp";
 import { prisma } from "@meucardapio/db";
 import { pollDish3dJobs } from "../src/lib/dish3d";
+import { isMenuAffectingRoute } from "../src/plugins/menuRevalidation";
 import { FakeDish3dProvider, FalRodinProvider, isGlb, minimalGlb, rodinOptions, setDish3dProvider } from "../src/lib/dish3dProvider";
 import { InMemoryObjectStorage, setObjectStorage } from "../src/lib/objectStorage";
 import { resetLimits } from "../src/lib/slidingLimit";
@@ -24,6 +25,20 @@ function multipart(files: Buffer[]) {
 const photo = () => sharp({ create: { width: 64, height: 64, channels: 3, background: { r: 200, g: 80, b: 40 } } }).jpeg().toBuffer();
 
 describe("prato 3D — regras puras", () => {
+  it("publicar/tirar/remover o 3D e os Reels avisa a vitrine (revalidação do cardápio); gerar não", () => {
+    for (const a of ["publish", "unpublish", "remove"]) {
+      expect(isMenuAffectingRoute("POST", `/api/products/:id/3d/${a}`)).toBe(true);
+      expect(isMenuAffectingRoute("POST", `/api/reels/:id/${a}`)).toBe(true);
+    }
+    expect(isMenuAffectingRoute("POST", "/api/products/:id/3d")).toBe(false); // gerar ainda é rascunho
+  });
+  it("Rodin: conta sem saldo (403 'Exhausted balance') vira PROVIDER_NO_BALANCE, não chave errada", async () => {
+    const locked = (async () => new Response(JSON.stringify({ detail: "User is locked. Reason: Exhausted balance." }), { status: 403 })) as unknown as typeof fetch;
+    const denied = (async () => new Response(JSON.stringify({ detail: "Invalid key" }), { status: 401 })) as unknown as typeof fetch;
+    const photo = { bytes: Buffer.from([1]), mime: "image/jpeg" as const };
+    await expect(new FalRodinProvider("k", locked).submit([photo])).rejects.toMatchObject({ code: "PROVIDER_NO_BALANCE" });
+    await expect(new FalRodinProvider("k", denied).submit([photo])).rejects.toMatchObject({ code: "PROVIDER_AUTH" });
+  });
   it("Rodin: qualidade alta por padrão; HighPack só quando ligado; fotos vão como data URI em modo concat", async () => {
     expect(rodinOptions({})).toEqual({ quality: "high", highPack: false });
     expect(rodinOptions({ DISH3D_QUALITY: "medium", DISH3D_HIGHPACK: "true" })).toEqual({ quality: "medium", highPack: true });
