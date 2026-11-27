@@ -183,9 +183,10 @@ const ElementObject = memo(function ElementObject({ el, index, selected, editing
 function bounds(tables: SalaoTable[], elements: FloorElement[]) {
   const xs = [...tables.map((t) => t.layout.posX), ...elements.map((e) => e.posX)];
   const zs = [...tables.map((t) => t.layout.posZ), ...elements.map((e) => e.posZ)];
-  if (!xs.length) return { cx: 0, cz: 0, size: 12 };
+  if (!xs.length) return { cx: 0, cz: 0, size: 8 };
   const [minX, maxX, minZ, maxZ] = [Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)];
-  return { cx: (minX + maxX) / 2, cz: (minZ + maxZ) / 2, size: Math.max(10, maxX - minX + 6, maxZ - minZ + 6) };
+  // tamanho do salão = o que está ocupado + 2 m de cada lado (mínimo 8 m)
+  return { cx: (minX + maxX) / 2, cz: (minZ + maxZ) / 2, size: Math.max(8, maxX - minX + 4, maxZ - minZ + 4) };
 }
 
 export default function SalaoCanvas({ tables, elements, selection, editing, onSelect, onMoveTable, onMoveElement }: Props) {
@@ -211,7 +212,7 @@ export default function SalaoCanvas({ tables, elements, selection, editing, onSe
       frameloop="demand"
       shadows={!mobile}
       dpr={mobile ? [1, 1.5] : [1, 2]}
-      camera={{ position: [frame.cx + frame.size * 0.55, frame.size * 0.85, frame.cz + frame.size * 0.85], fov: 45, near: 0.1, far: 500 }}
+      camera={{ position: [frame.cx + frame.size * 0.35, frame.size * 0.6, frame.cz + frame.size * 0.75], fov: 45, near: 0.1, far: 500 }}
       onPointerMissed={() => onSelect(null)}
     >
       <ambientLight intensity={0.65} />
@@ -241,10 +242,10 @@ export default function SalaoCanvas({ tables, elements, selection, editing, onSe
         onPointerUp={() => setDrag(null)}
         onPointerLeave={() => setDrag(null)}
       >
-        <planeGeometry args={[frame.size * 2, frame.size * 2]} />
+        <planeGeometry args={[frame.size * 1.6, frame.size * 1.6]} />
         <meshStandardMaterial color={MATERIALS.floor} />
       </mesh>
-      <gridHelper args={[frame.size * 2, frame.size * 2, MATERIALS.floorLine, MATERIALS.floorLine]} position={[frame.cx, 0.005, frame.cz]} />
+      <gridHelper args={[Math.round(frame.size * 1.6), Math.round(frame.size * 1.6), MATERIALS.floorLine, MATERIALS.floorLine]} position={[frame.cx, 0.005, frame.cz]} />
       {elements.map((el, i) => (
         <ElementObject key={el.id ?? `new-${i}`} el={el} index={i} editing={editing} selected={selection?.kind === "element" && selection.index === i} onPick={pickElement} />
       ))}

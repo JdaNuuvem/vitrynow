@@ -119,10 +119,10 @@ export function SalaoPage() {
                 <Button variant="primary" busy={saving} disabled={!dirty} onClick={() => void save()}>Salvar salão</Button>
               </div>
             ) : (
-              <div className="salao__toolbar"><Button onClick={() => setShowReservations(true)}>Reservas</Button><Button onClick={() => { setEditing(true); setMessage(null); }}>Organizar salão</Button></div>
+              <div className="salao__toolbar"><Button onClick={() => { setSelection(null); setShowReservations(true); }}>Reservas</Button><Button onClick={() => { setEditing(true); setMessage(null); }}>Organizar salão</Button></div>
             )
           ) : (
-            <Button onClick={() => setShowReservations(true)}>Reservas</Button>
+            <Button onClick={() => { setSelection(null); setShowReservations(true); }}>Reservas</Button>
           )
         }
       />
@@ -154,7 +154,11 @@ export function SalaoPage() {
           <span className="salao__muted">Arraste mesas e elementos no piso. Adicionar:</span>
           {(Object.keys(NEW_ELEMENT) as FloorElementKind[]).map((k) => (
             <Button key={k} onClick={() => {
-              setElements((all) => [...all, { ...NEW_ELEMENT[k], posX: 0, posZ: 0, area: area || null }]);
+              // nasce numa área livre: atrás da última fileira de mesas (o dono arrasta para o lugar)
+              const zs = (tables ?? []).map((t) => t.layout.posZ);
+              const xs = (tables ?? []).map((t) => t.layout.posX);
+              const spot = { posX: xs.length ? (Math.min(...xs) + Math.max(...xs)) / 2 : 0, posZ: (zs.length ? Math.max(...zs) : 0) + 2.5 + elements.length * 0.5 };
+              setElements((all) => [...all, { ...NEW_ELEMENT[k], ...spot, area: area || null }]);
               setSelection({ kind: "element", index: elements.length });
               setDirty(true);
             }}>{ELEMENT_LABEL[k]}</Button>
@@ -174,7 +178,7 @@ export function SalaoPage() {
             elements={visibleElements.map(({ e }) => e)}
             selection={selection?.kind === "element" ? { kind: "element", index: visibleElements.findIndex(({ i }) => i === selection.index) } : selection}
             editing={editing}
-            onSelect={(s) => setSelection(s?.kind === "element" ? { kind: "element", index: visibleElements[s.index]?.i ?? -1 } : s)}
+            onSelect={(s) => { if (s) setShowReservations(false); setSelection(s?.kind === "element" ? { kind: "element", index: visibleElements[s.index]?.i ?? -1 } : s); }}
             onMoveTable={(id, posX, posZ) => updateTable(id, { posX, posZ })}
             onMoveElement={(index, posX, posZ) => {
               const real = visibleElements[index]?.i;
