@@ -398,3 +398,8 @@
 .appearance__layout-option > span { display: grid; gap: 2px; font-size: var(--ds-text-sm); color: var(--ink-soft); }
 .appearance__layout-option strong { color: var(--ink); font-size: var(--ds-text-base); }
 .appearance__layout-choice .ds-button { justify-self: start; }
+
+/* PRÉVIA NO MODELO REELS: o feed (position: fixed no cardápio) fica preso dentro da moldura da prévia */
+.appearance-preview__reels { position: relative; height: clamp(480px, 70vh, 640px); overflow: hidden; border-radius: inherit; }
+.appearance-preview__reels .reels-menu { position: absolute; inset: 0; z-index: auto; }
+.appearance-preview__reels .reels-menu__info { padding-bottom: 24px; }

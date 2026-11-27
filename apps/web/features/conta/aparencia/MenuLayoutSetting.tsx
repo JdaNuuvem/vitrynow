@@ -10,8 +10,10 @@ const OPTIONS = [
   { id: "REELS", title: "Reels", text: "Um prato por tela, deslizando como no Instagram. Vídeo quando o prato tiver; foto com movimento quando não." },
 ] as const;
 
-export function MenuLayoutSetting({ store, canEdit, onSave }: { store: StoreSettings; canEdit: boolean; onSave: (input: StoreSettingsInput) => Promise<SaveMessage> }) {
-  const [value, setValue] = useState<"CLASSIC" | "REELS">(store.menuLayout ?? "CLASSIC");
+export type MenuLayout = "CLASSIC" | "REELS";
+
+export function MenuLayoutSetting({ store, canEdit, onSave, onChange }: { store: StoreSettings; canEdit: boolean; onSave: (input: StoreSettingsInput) => Promise<SaveMessage>; onChange?: (layout: MenuLayout) => void }) {
+  const [value, setValue] = useState<MenuLayout>(store.menuLayout ?? "CLASSIC");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<SaveMessage | null>(null);
   const saved = store.menuLayout ?? "CLASSIC";
@@ -30,7 +32,7 @@ export function MenuLayoutSetting({ store, canEdit, onSave }: { store: StoreSett
       <div className="appearance__layout-options" role="radiogroup" aria-labelledby="appearance-layout">
         {OPTIONS.map((o) => (
           <label key={o.id} className="appearance__layout-option" data-selected={value === o.id}>
-            <input type="radio" name="menuLayout" value={o.id} checked={value === o.id} disabled={!canEdit || busy} onChange={() => { setValue(o.id); setMessage(null); }} />
+            <input type="radio" name="menuLayout" value={o.id} checked={value === o.id} disabled={!canEdit || busy} onChange={() => { setValue(o.id); setMessage(null); onChange?.(o.id); }} />
             <span><strong>{o.title}</strong><span>{o.text}</span></span>
           </label>
         ))}
