@@ -7,7 +7,9 @@ import { useBrokenImage } from "../hooks/useBrokenImage";
 import { InfoIcon, MinusIcon, PlusIcon } from "../icons";
 import { editableSelections, lineChoicesValid, startingPrice, unitPriceWithChoices } from "../productOptions";
 import { ProductOptionFields } from "./ProductOptionFields";
+import { Dish3dViewer } from "@/shared/dish3d/Dish3dViewer";
 import "../purchase.css";
+import "./hero3d.css";
 
 // Tela cheia de detalhe do produto: foto, descrição, adicionais, observação e a barra fixa
 // com quantidade + Adicionar. Não conhece carrinho — só devolve o que o cliente escolheu.
@@ -35,6 +37,8 @@ export function ProductDetailScreen({
   const titleRef = useRef<HTMLHeadingElement>(null);
   const photo = useBrokenImage(product.imageUrl);
   const logo = useBrokenImage(logoUrl);
+  // PRATO 3D: com modelo publicado, a foto vira um botão "Ver em 3D" (gira com o dedo; "Ver na mesa" = realidade aumentada).
+  const [show3d, setShow3d] = useState(false);
 
   // Tela nova: o foco entra no título (o leitor de tela anuncia o produto) em vez de ficar no body.
   useEffect(() => {
@@ -71,11 +75,18 @@ export function ProductDetailScreen({
 
       <div className="loja__screen-body">
         <div className="loja__hero">
-          {product.imageUrl && !photo.failed ? (
+          {show3d && product.model3dUrl ? (
+            <Dish3dViewer src={product.model3dUrl} alt={`${product.name} em 3D`} poster={product.imageUrl} />
+          ) : product.imageUrl && !photo.failed ? (
             <img ref={photo.ref} src={product.imageUrl} onError={photo.onError} alt={product.name} width={390} height={390} />
           ) : (
             <Icon name="products" size={64} />
           )}
+          {product.model3dUrl ? (
+            <button type="button" className="loja__hero-3d" aria-pressed={show3d} onClick={() => setShow3d((v) => !v)}>
+              {show3d ? "Ver foto" : "Ver em 3D"}
+            </button>
+          ) : null}
         </div>
 
         <div className="loja__detail-content">

@@ -139,7 +139,7 @@ Sugestão: botão "Importar planilha" no Catálogo → enviar arquivo → prévi
 ## 3d. Prato 3D (26/11/2026, autorizado): tela NOVA + 2 toques no existente
 - **Novo:** `/dashboard/pratos-3d` (`features/pratos3d/`), `shared/dish3d/Dish3dViewer.tsx` (usa `@google/model-viewer@4.0.0`, carregado só no navegador), `core/gateways/http/dish3d.ts`, `core/domain/dish3d.ts`.
 - **Tocado no existente:** `core/navigation/panelNavigation.ts` (item "Pratos 3D") e `app/media/stores/[storeId]/[file]/route.ts` (proxy de DEV aceita também `3d-<uuid>.glb`).
-- **Proposta para você (cardápio público):** o produto público agora tem `model3dUrl` (null se não publicado). Sugestão: no detalhe do produto, quando houver `model3dUrl`, mostrar `<Dish3dViewer src={model3dUrl} alt={nome} poster={imageUrl} />` com o botão "Ver na mesa" (AR). Não apliquei no cardápio.
+- **Cardápio público (APLICADO 27/11, autorizado):** `features/loja/components/ProductDetailScreen.tsx` tocado: com `model3dUrl`, botão "Ver em 3D" sobre a foto troca a foto pelo `Dish3dViewer` (girar + "Ver na mesa"); estilos em `components/hero3d.css`; tipo `Product.model3dUrl` em `core/domain/storefront.ts`. Publicar/tirar/remover 3D e Reels agora revalidam o cardápio (`plugins/menuRevalidation.ts`).
 - Fluxo: dono envia 1–4 fotos → gera em 2–5 min (créditos de IA da loja; devolve se falhar) → rascunho → "Publicar no cardápio".
 
 ## 3e. Salão 3D (26/11/2026, autorizado): tela NOVA + 3 toques no existente

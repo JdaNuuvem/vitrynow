@@ -99,7 +99,11 @@ export class FalRodinProvider implements Dish3dProvider {
       headers: { Authorization: `Key ${this.key}`, "Content-Type": "application/json", ...(init.headers ?? {}) },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
-    if (res.status === 401 || res.status === 403) throw new Dish3dProviderError("PROVIDER_AUTH");
+    if (res.status === 401 || res.status === 403) {
+      // a fal.ai devolve 403 "User is locked. Reason: Exhausted balance" quando a conta fica sem saldo: não é chave errada
+      const detail = await res.text().catch(() => "");
+      throw new Dish3dProviderError(/balance/i.test(detail) ? "PROVIDER_NO_BALANCE" : "PROVIDER_AUTH");
+    }
     if (res.status === 402) throw new Dish3dProviderError("PROVIDER_NO_BALANCE");
     if (res.status === 429) throw new Dish3dProviderError("PROVIDER_BUSY");
     if (!res.ok) throw new Dish3dProviderError("PROVIDER_HTTP", `fal ${res.status}`);

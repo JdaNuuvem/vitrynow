@@ -1,0 +1,9 @@
+/* PRATO 3D no detalhe do produto: o modelo ocupa o lugar da foto; botão por cima, na cor da loja. */
+.loja__hero { position: relative; }
+.loja__hero .dish3d-viewer { width: 100%; height: 100%; max-height: none; aspect-ratio: auto; border-radius: 0; background: var(--loja-surface-2, transparent); }
+.loja__hero .dish3d-viewer__ar { background: var(--loja-accent, black); color: var(--loja-accent-on, white); }
+.loja__hero-3d {
+  position: absolute; z-index: 2; top: 12px; right: 12px; min-height: 40px; padding: 0 14px; border: 0; border-radius: 999px;
+  background: rgba(0, 0, 0, .62); color: white; font: inherit; font-size: .875rem; font-weight: 700; cursor: pointer;
+}
+.loja__hero-3d[aria-pressed="true"] { background: var(--loja-accent, black); color: var(--loja-accent-on, white); }
