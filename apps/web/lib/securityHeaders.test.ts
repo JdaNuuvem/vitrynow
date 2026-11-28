@@ -23,8 +23,8 @@ describe("CSP do web (NG-07)", () => {
     expect(directive(csp, "default-src")).toBe("default-src 'self'");
   });
 
-  it("connect-src: o site, a API e o WebSocket da API — e mais nada", () => {
-    expect(directive(csp, "connect-src")).toBe("connect-src 'self' https://pedidos.exemplo.com.br wss://pedidos.exemplo.com.br");
+  it("connect-src: o site, blob: da própria página (texturas do 3D), a API e o WebSocket da API — e mais nada", () => {
+    expect(directive(csp, "connect-src")).toBe("connect-src 'self' blob: https://pedidos.exemplo.com.br wss://pedidos.exemplo.com.br");
   });
 
   it("imagens: https livre (URL do lojista), data: do QR do PIX; nada de http puro", () => {
@@ -43,8 +43,8 @@ describe("CSP do web (NG-07)", () => {
   });
 
   it("URL da API inválida ou ausente não quebra a política: cai para o próprio site", () => {
-    expect(directive(buildCsp({ apiUrl: "lixo" }), "connect-src")).toBe("connect-src 'self'");
-    expect(directive(buildCsp({}), "connect-src")).toBe("connect-src 'self'");
+    expect(directive(buildCsp({ apiUrl: "lixo" }), "connect-src")).toBe("connect-src 'self' blob:");
+    expect(directive(buildCsp({}), "connect-src")).toBe("connect-src 'self' blob:");
   });
 
   it("nenhuma diretiva carrega curinga solto de script ou de conexão", () => {
@@ -58,7 +58,7 @@ describe("CSP do web (NG-07)", () => {
     const withCaptcha: string = buildCsp({ apiUrl: API, turnstile: true });
     expect(directive(withCaptcha, "script-src")).toBe("script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com");
     expect(directive(withCaptcha, "frame-src")).toBe("frame-src https://challenges.cloudflare.com");
-    expect(directive(withCaptcha, "connect-src")).toBe("connect-src 'self' https://pedidos.exemplo.com.br wss://pedidos.exemplo.com.br https://challenges.cloudflare.com");
+    expect(directive(withCaptcha, "connect-src")).toBe("connect-src 'self' blob: https://pedidos.exemplo.com.br wss://pedidos.exemplo.com.br https://challenges.cloudflare.com");
     expect(directive(withCaptcha, "frame-ancestors")).toBe("frame-ancestors 'none'"); // o painel continua não embutível
   });
 });

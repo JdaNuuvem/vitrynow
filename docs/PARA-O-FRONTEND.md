@@ -177,6 +177,11 @@ Sugestão: botão "Importar planilha" no Catálogo → enviar arquivo → prévi
 - **API:** `Store.menuLayout` (CLASSIC|REELS) em `POST /api/store/settings` e no cardápio público (`store.menuLayout`). Migração `20261127200000_cardapio_reels`.
 - **Prévia da Aparência no modelo Reels (feito, autorizado):** `AppearancePage.tsx` guarda o modelo escolhido (mesmo antes de salvar) e passa `layout` para `AppearanceEditor.tsx` → `components/StoreIdentityPreview.tsx`, que no modelo Reels mostra o próprio `ReelsMenu` com os pratos ativos (fotos; vídeos só no cardápio). `MenuLayoutSetting.tsx` ganhou `onChange`; `appearance.css` ganhou `.appearance-preview__reels` (prende o feed, que é `position: fixed`, dentro da moldura). Teste: `StoreIdentityPreview.test.tsx`.
 
+## 3i. Texturas do prato 3D bloqueadas pela CSP (28/11/2026, corrigido)
+- **Defeito achado no teste com um modelo real:** o `.glb` traz as texturas embutidas e o model-viewer/three as lê com `fetch()` de um `blob:` da própria página. A CSP só liberava `blob:` em `img-src`, então o `connect-src` bloqueava e **o prato aparecia branco** (valeria também para os modelos da fal.ai).
+- **Tocado:** `lib/securityHeaders.mjs` (`connect-src` ganha `blob:`) e `lib/securityHeaders.test.ts`. `blob:` só aponta para dados criados na mesma página: não abre conexão para fora.
+- **Conferido no navegador (celular emulado):** textura carrega, girar com o dedo funciona, "Ver na mesa" (AR) ligado, nenhum erro de CSP no console.
+
 ## 4. Mudanças do backend desde a última sincronização (para saber o que a API já oferece)
 - **Tíquete v4** (`printableOrderSchema`): `round`, `requestedBy`, `customerRemoved` — impressos pelo print-client; nada a fazer no web.
 - **Catálogo de erros** (§2) e `docs/textos-de-erro-para-revisar.md`.
