@@ -28,7 +28,9 @@ export const TURNSTILE_ORIGIN = "https://challenges.cloudflare.com";
 export function buildCsp({ apiUrl, dev = false, turnstile = false } = {}) {
   const api = origin(apiUrl);
   const captcha = turnstile ? [TURNSTILE_ORIGIN] : [];
-  const connect = ["'self'", api, wsOrigin(api), ...captcha].filter(Boolean);
+  // `blob:`: o visualizador 3D (model-viewer/three) lê as texturas embutidas no .glb por fetch() de um blob: criado na
+  // própria página; sem isso o prato aparece branco. blob: só aponta para dados da mesma página (não abre saída externa).
+  const connect = ["'self'", "blob:", api, wsOrigin(api), ...captcha].filter(Boolean);
   const directives = {
     "default-src": ["'self'"],
     "script-src": ["'self'", "'unsafe-inline'", ...(dev ? ["'unsafe-eval'"] : []), ...captcha],
