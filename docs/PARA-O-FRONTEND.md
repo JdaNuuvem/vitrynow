@@ -182,6 +182,14 @@ Sugestão: botão "Importar planilha" no Catálogo → enviar arquivo → prévi
 - **Tocado:** `lib/securityHeaders.mjs` (`connect-src` ganha `blob:`) e `lib/securityHeaders.test.ts`. `blob:` só aponta para dados criados na mesma página: não abre conexão para fora.
 - **Conferido no navegador (celular emulado):** textura carrega, girar com o dedo funciona, "Ver na mesa" (AR) ligado, nenhum erro de CSP no console.
 
+## 3j. Prato 3D em TAMANHO REAL (28/11/2026, autorizado)
+- **Objetivo:** o cliente toca em "Ver na mesa em tamanho real", a câmera abre e o prato aparece na mesa **do tamanho de verdade**; chegar o celular perto ou pôr a mão do lado não muda o tamanho.
+- **Como:** o dono informa a largura real (cm) no painel; a API reescreve o `.glb` nessa medida, em metros, apoiado na superfície. Na câmera a escala é fixa (`ar-scale="fixed"` → Scene Viewer `resizable=false`, Quick Look sem escala). Sem medida, não publica e o cardápio não oferece câmera.
+- **Tocado no existente:** `features/loja/components/ProductDetailScreen.tsx` (passa `realWidthMm` ao visualizador) e `components/hero3d.css` (botão da câmera acima do cartão, que sobe 30 px sobre a foto). `core/domain/storefront.ts` ganha `model3dWidthMm`.
+- **Um toque abre a câmera:** botão "Ver na mesa em tamanho real" sobre a FOTO do detalhe. Android: link do Scene Viewer `mode=ar_only&resizable=false` no próprio toque (`shared/dish3d/ar.ts`); iPhone: carrega o 3D e abre o Quick Look ao carregar (`openArOnLoad`); computador: sem botão. Sem o app de AR, o Android volta com `#sem-camera` e o detalhe mostra o 3D girando com aviso.
+- **Novo/meu:** `shared/dish3d/Dish3dViewer.tsx` (+ teste), `features/pratos3d/Pratos3dPage.tsx` (campo "Tamanho real do prato"; "Informar tamanho" no lugar de publicar).
+- **API:** `POST /api/products/:id/3d/size` `{ widthCm }` (3 a 80, meio cm); `model3dWidthMm` no produto público; migração `20261128100000_prato_3d_tamanho_real`.
+
 ## 4. Mudanças do backend desde a última sincronização (para saber o que a API já oferece)
 - **Tíquete v4** (`printableOrderSchema`): `round`, `requestedBy`, `customerRemoved` — impressos pelo print-client; nada a fazer no web.
 - **Catálogo de erros** (§2) e `docs/textos-de-erro-para-revisar.md`.

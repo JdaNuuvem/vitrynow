@@ -36,3 +36,7 @@
 .pratos3d__tips { margin: 0; padding-inline-start: 1.2em; display: grid; gap: 4px; font-size: var(--ds-text-sm); color: var(--ink-soft); }
 .pratos3d__previews { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--ds-space-2); }
 .pratos3d__previews img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: var(--ds-radius-sm); }
+.pratos3d__size { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: var(--ds-space-2) var(--ds-space-3); margin-block: var(--ds-space-3); }
+.pratos3d__size label { display: grid; gap: 4px; font-weight: 650; font-size: var(--ds-text-sm); }
+.pratos3d__size input { min-height: var(--ds-control); padding: 0 var(--ds-space-3); border: 1px solid var(--line-strong); border-radius: var(--ds-radius-sm); font: inherit; }
+.pratos3d__size p { grid-column: 1 / -1; margin: 0; }

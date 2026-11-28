@@ -13,7 +13,7 @@ export const PUBLIC_STORE_HOURS_KEYS = ["openNow", "nextOpensAt", "hoursText"] a
 // Modo ocupado (g1): `busyUntil` (ISO|null) e `reason` (motivo fechado de `hours.reason`; null quando aberta). `accepting` já existe: NÃO há `acceptingNow`. `busyStartedAt`/`busyExtraMinutes` não vazam.
 export const PUBLIC_STORE_BUSY_KEYS = ["busyUntil", "reason"] as const;
 export const PUBLIC_CATEGORY_KEYS = ["id", "name", "icon", "products"] as const;
-export const PUBLIC_PRODUCT_KEYS = ["id", "name", "description", "imageUrl", "priceCents", "featured", "soldOut", "additionals", "optionGroups", "unavailable", "unavailableByOptions", "fromPriceCents", "tags", "promoCents", "promoEndsAt", "saleUnit", "minGrams", "stepGrams", "maxGrams", "portionGrams", "serves", "isSingleDish", "sellAlone", "model3dUrl"] as const;
+export const PUBLIC_PRODUCT_KEYS = ["id", "name", "description", "imageUrl", "priceCents", "featured", "soldOut", "additionals", "optionGroups", "unavailable", "unavailableByOptions", "fromPriceCents", "tags", "promoCents", "promoEndsAt", "saleUnit", "minGrams", "stepGrams", "maxGrams", "portionGrams", "serves", "isSingleDish", "sellAlone", "model3dUrl", "model3dWidthMm"] as const;
 export const PUBLIC_ADDITIONAL_KEYS = ["id", "name", "priceCents"] as const;
 // API-15 parte 3 (B8): grupos de opcoes REAIS (MANUAL) do produto. Sem `source`, `active`, `position` nem ids de loja. So opcoes ATIVAS.
 export const PUBLIC_OPTION_GROUP_KEYS = ["id", "name", "helpText", "minSelect", "maxSelect", "maxPerOption", "priceMode", "options"] as const;
@@ -79,6 +79,7 @@ export const publicProduct = (p: PublicProductInput) => ({
   isSingleDish: p.isSingleDish,
   sellAlone: p.sellAlone,
   model3dUrl: p.model3dPublished ? p.model3dUrl : null, // PRATO 3D: rascunho nunca é público
+  model3dWidthMm: p.model3dPublished ? p.model3dWidthMm : null, // PRATO 3D: largura real (cm x 10) que o AR usa; sem medida, sem AR
   unavailable: p.unavailable, // RN-B8-05: grupo obrigatorio sem opcao ativa => nao da para pedir (calculado pela rota)
 });
 

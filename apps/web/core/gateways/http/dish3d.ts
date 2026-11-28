@@ -14,5 +14,7 @@ export const dish3dApi = {
   },
   publish: (productId: string) => http.post<Dish3dDetail>(`/api/products/${enc(productId)}/3d/publish`, {}),
   unpublish: (productId: string) => http.post<Dish3dDetail>(`/api/products/${enc(productId)}/3d/unpublish`, {}),
+  /** TAMANHO REAL: largura do prato em cm (3 a 80, aceita meio cm) */
+  setSize: (productId: string, widthCm: number) => http.post<Dish3dDetail>(`/api/products/${enc(productId)}/3d/size`, { widthCm }),
   remove: (productId: string) => http.post<Dish3dDetail>(`/api/products/${enc(productId)}/3d/remove`, {}),
 };

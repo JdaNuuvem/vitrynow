@@ -12,7 +12,7 @@ const MENU_AFFECTING: RegExp[] = [
   /^\/api\/catalog\//, // categorias, produtos, adicionais, grupos de opções, esgotado, ordem
   /^\/api\/store\/(settings|availability|hours|status|prep-times)$/, // dados da loja, horário, pausa, prazo de preparo
   /^\/api\/store\/menu-campaign\/(publish|unpublish)$/, // campanha: só publicar/retirar muda o que o cliente vê (salvar rascunho não)
-  /^\/api\/products\/:id\/3d\/(publish|unpublish|remove)$/, // PRATO 3D: o modelo entra/sai do produto público
+  /^\/api\/products\/:id\/3d\/(publish|unpublish|remove|size)$/, // PRATO 3D: o modelo entra/sai do produto público
   /^\/api\/reels\/:id\/(publish|unpublish|remove)$/, // REELS: muda o `hasReels` do cardápio e a faixa de vídeos
 ];
 

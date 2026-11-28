@@ -40,6 +40,46 @@ export function minimalGlb(): Buffer {
   return Buffer.concat([header, chunkHeader, jsonChunk]);
 }
 
+/**
+ * Caixa de teste (o fake devolve isto): uma malha de verdade, numa escala ARBITRÁRIA como a do Rodin (2 x 0,8 x 1,6 unidades),
+ * para o fluxo de tamanho real ter o que medir. Só posições + índices (sem textura).
+ */
+export function fakeBoxGlb(): Buffer {
+  const [x, y, z] = [1, 0.8, 0.8];
+  const v = [[-x, 0, -z], [x, 0, -z], [x, y, -z], [-x, y, -z], [-x, 0, z], [x, 0, z], [x, y, z], [-x, y, z]];
+  const positions = Buffer.alloc(v.length * 12);
+  v.forEach((p, i) => p.forEach((c, k) => positions.writeFloatLE(c, i * 12 + k * 4)));
+  const faces = [0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2, 0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5];
+  const indices = Buffer.alloc(faces.length * 2);
+  faces.forEach((f, i) => indices.writeUInt16LE(f, i * 2));
+  const bin = Buffer.concat([positions, indices, Buffer.alloc((4 - ((positions.length + indices.length) % 4)) % 4)]);
+  const json = Buffer.from(JSON.stringify({
+    asset: { version: "2.0", generator: "vitry-fake" },
+    scene: 0,
+    scenes: [{ nodes: [0] }],
+    nodes: [{ mesh: 0 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1 }] }],
+    buffers: [{ byteLength: bin.length }],
+    bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: positions.length, target: 34962 }, { buffer: 0, byteOffset: positions.length, byteLength: indices.length, target: 34963 }],
+    accessors: [
+      { bufferView: 0, componentType: 5126, count: v.length, type: "VEC3", min: [-x, 0, -z], max: [x, y, z] },
+      { bufferView: 1, componentType: 5123, count: faces.length, type: "SCALAR" },
+    ],
+  }));
+  const jsonChunk = Buffer.concat([json, Buffer.alloc((4 - (json.length % 4)) % 4, 0x20)]);
+  const header = Buffer.alloc(12);
+  header.write("glTF", 0, "ascii");
+  header.writeUInt32LE(2, 4);
+  header.writeUInt32LE(12 + 8 + jsonChunk.length + 8 + bin.length, 8);
+  const jsonHeader = Buffer.alloc(8);
+  jsonHeader.writeUInt32LE(jsonChunk.length, 0);
+  jsonHeader.write("JSON", 4, "ascii");
+  const binHeader = Buffer.alloc(8);
+  binHeader.writeUInt32LE(bin.length, 0);
+  binHeader.write("BIN\0", 4, "ascii");
+  return Buffer.concat([header, jsonHeader, jsonChunk, binHeader, bin]);
+}
+
 export function isGlb(buf: Buffer): boolean {
   return buf.length >= 12 && buf.toString("ascii", 0, 4) === "glTF" && buf.readUInt32LE(4) === 2;
 }
@@ -67,7 +107,7 @@ export class FakeDish3dProvider implements Dish3dProvider {
   }
 
   async download(_url: string, _maxBytes: number) {
-    return minimalGlb();
+    return fakeBoxGlb();
   }
 }
 

@@ -3,13 +3,13 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DISH3D_FAILURE_LABELS, DISH3D_MAX_PHOTO_BYTES, DISH3D_MAX_PHOTOS } from "@meucardapio/shared-types";
+import { DISH3D_FAILURE_LABELS, DISH3D_MAX_PHOTO_BYTES, DISH3D_MAX_PHOTOS, DISH3D_SIZE_MAX_CM, DISH3D_SIZE_MIN_CM } from "@meucardapio/shared-types";
 import type { Dish3dList, Dish3dProductRow } from "@/core/domain/dish3d";
 import { dish3dApi } from "@/core/gateways/http/dish3d";
 import type { HttpResult } from "@/core/http/HttpClient";
 import { useCurrentRole } from "@/core/session/useCurrentRole";
 import { Button, PageHeading, Panel, StateMessage, StatusBadge } from "@/shared/design/components";
-import { Dish3dViewer } from "@/shared/dish3d/Dish3dViewer";
+import { Dish3dViewer, formatRealSize } from "@/shared/dish3d/Dish3dViewer";
 import "./pratos3d.css";
 
 // PRATO 3D (tela nova): o dono envia 1 a 4 fotos do prato, a geração roda em segundo plano (~2 a 5 min),
@@ -128,13 +128,16 @@ export function Pratos3dPage() {
                   <div className="pratos3d__thumb">{p.imageUrl ? <img src={p.imageUrl} alt="" loading="lazy" /> : <span aria-hidden="true">🍽</span>}</div>
                   <div className="pratos3d__info">
                     <strong>{p.name}</strong>
-                    <span className="pratos3d__muted">{p.category ?? "Sem categoria"}</span>
+                    <span className="pratos3d__muted">{p.category ?? "Sem categoria"}{p.model3dUrl && p.widthMm ? ` · tamanho real ${formatRealSize(p.widthMm)}` : ""}</span>
                     {p.lastError && !p.generating && !p.model3dUrl ? <span className="pratos3d__error">{DISH3D_FAILURE_LABELS[p.lastError] ?? "A geração falhou."} Os créditos foram devolvidos.</span> : null}
                   </div>
                   <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
                   <div className="pratos3d__actions">
                     {p.model3dUrl ? <Button onClick={() => setViewing(p)}>Ver 3D</Button> : null}
-                    {p.model3dUrl && !p.published ? (
+                    {p.model3dUrl && !p.published && !p.widthMm ? (
+                      <Button variant="primary" onClick={() => setViewing(p)}>Informar tamanho</Button>
+                    ) : null}
+                    {p.model3dUrl && !p.published && p.widthMm ? (
                       <Button variant="primary" busy={rowBusy} onClick={() => void act(p.id, () => dish3dApi.publish(p.id))}>Publicar no cardápio</Button>
                     ) : null}
                     {p.model3dUrl && p.published ? <Button busy={rowBusy} onClick={() => void act(p.id, () => dish3dApi.unpublish(p.id))}>Tirar do cardápio</Button> : null}
@@ -183,12 +186,55 @@ export function Pratos3dPage() {
               <h2>{viewing.name}</h2>
               <Button variant="quiet" onClick={() => setViewing(null)}>Fechar</Button>
             </div>
-            <Dish3dViewer src={viewing.model3dUrl} alt={`Prato ${viewing.name} em 3D`} poster={viewing.imageUrl} />
+            <Dish3dViewer key={viewing.model3dUrl} src={viewing.model3dUrl} alt={`Prato ${viewing.name} em 3D`} poster={viewing.imageUrl} ar={false} realWidthMm={viewing.widthMm} />
+            <RealSizeForm
+              product={viewing}
+              onSaved={async (row) => {
+                setViewing(row);
+                await reload();
+              }}
+            />
             <p className="pratos3d__muted">{viewing.published ? "Este 3D está no cardápio." : "Rascunho: confira antes de publicar. Se não ficou bom, gere de novo com fotos melhores."}</p>
           </div>
         </div>
       ) : null}
     </main>
+  );
+}
+
+// TAMANHO REAL: o cliente vê o prato pela câmera, em cima da mesa, do tamanho de verdade. A medida é a LARGURA (maior medida
+// vista de cima); a altura acompanha a proporção do modelo. Sem a medida, o 3D não vai ao cardápio.
+function RealSizeForm({ product, onSaved }: { product: Dish3dProductRow; onSaved: (row: Dish3dProductRow) => Promise<void> }) {
+  const [value, setValue] = useState(product.widthMm ? String(product.widthMm / 10).replace(".", ",") : "");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const cm = Number(value.replace(",", "."));
+  const changed = value.trim() !== "" && Math.round(cm * 10) !== product.widthMm;
+
+  async function save() {
+    if (!Number.isFinite(cm) || cm < DISH3D_SIZE_MIN_CM || cm > DISH3D_SIZE_MAX_CM) return setError(`Informe de ${DISH3D_SIZE_MIN_CM} a ${DISH3D_SIZE_MAX_CM} cm.`);
+    setSaving(true);
+    setError(null);
+    const result = await dish3dApi.setSize(product.id, cm);
+    setSaving(false);
+    if (!result.ok) return setError(result.error);
+    const model = result.data.model;
+    await onSaved({ ...product, model3dUrl: model?.url ?? product.model3dUrl, widthMm: model?.widthMm ?? null, heightMm: model?.heightMm ?? null });
+  }
+
+  return (
+    <form className="pratos3d__size" onSubmit={(e) => { e.preventDefault(); void save(); }}>
+      <label>
+        Tamanho real do prato (cm)
+        <input inputMode="decimal" value={value} onChange={(e) => { setValue(e.target.value); setError(null); }} placeholder="Ex.: 18" aria-describedby="pratos3d-size-help" disabled={saving} />
+      </label>
+      <Button type="submit" variant="primary" busy={saving} disabled={!changed}>Salvar tamanho</Button>
+      <p id="pratos3d-size-help" className="pratos3d__muted">
+        Meça a <strong>largura</strong> do prato servido (a maior medida, vista de cima). Na câmera, o cliente vê o prato exatamente desse tamanho em cima da mesa.
+        {product.widthMm && product.heightMm ? ` Agora: ${formatRealSize(product.widthMm)} de largura e ${formatRealSize(product.heightMm)} de altura.` : ""}
+      </p>
+      {error ? <p className="pratos3d__error" role="alert">{error}</p> : null}
+    </form>
   );
 }
 

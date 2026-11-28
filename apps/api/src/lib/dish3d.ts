@@ -7,6 +7,7 @@ import { MAX_INPUT_PIXELS, sniffImageType } from "./imagePipeline";
 import { getObjectStorage, storeKeyPrefix } from "./objectStorage";
 import { DISH3D_MAX_MODEL_BYTES, DISH3D_TIMEOUT_MS, dish3dCredits, Dish3dProviderError, getDish3dProvider, isGlb, type Dish3dPhoto } from "./dish3dProvider";
 import { CodedError } from "../shared/errors";
+import { GlbRealSizeError, rescaleGlbToRealWidth } from "./glbRealSize";
 
 // PRATO 3D: fotos do prato -> modelo GLB (provedor externo) -> rascunho no produto -> o dono publica no cardápio.
 // Custo: créditos de IA da loja (AiCreditLedger). RESERVE ao enviar; RELEASE se a geração falhar. Sem saldo = recusa (fail-closed).
@@ -108,12 +109,12 @@ function jobView(job: { id: string; status: string; error: string | null; create
 }
 
 export async function getDish3d(storeId: string, productId: string) {
-  const product = await prisma.product.findFirst({ where: { id: productId, storeId }, select: { id: true, model3dUrl: true, model3dPublished: true } });
+  const product = await prisma.product.findFirst({ where: { id: productId, storeId }, select: { id: true, model3dUrl: true, model3dPublished: true, model3dWidthMm: true, model3dHeightMm: true } });
   if (!product) throw new CodedError(404, "PRODUCT_NOT_FOUND", "Produto não encontrado.");
   const job = await prisma.dish3dJob.findFirst({ where: { storeId, productId }, orderBy: { createdAt: "desc" } });
   return {
     available: getDish3dProvider() !== null,
-    model: product.model3dUrl ? { url: product.model3dUrl, published: product.model3dPublished } : null,
+    model: product.model3dUrl ? { url: product.model3dUrl, published: product.model3dPublished, widthMm: product.model3dWidthMm, heightMm: product.model3dHeightMm } : null,
     job: jobView(job),
     credits: { cost: dish3dCredits(), balance: await creditBalance(storeId) },
   };
@@ -124,7 +125,7 @@ export async function listDish3d(storeId: string) {
   const products = await prisma.product.findMany({
     where: { storeId },
     orderBy: [{ position: "asc" }, { name: "asc" }],
-    select: { id: true, name: true, imageUrl: true, model3dUrl: true, model3dPublished: true, category: { select: { name: true } } },
+    select: { id: true, name: true, imageUrl: true, model3dUrl: true, model3dPublished: true, model3dWidthMm: true, model3dHeightMm: true, category: { select: { name: true } } },
   });
   // última geração de cada produto (andamento ou falha)
   const latest = await prisma.dish3dJob.findMany({ where: { storeId }, distinct: ["productId"], orderBy: [{ productId: "asc" }, { createdAt: "desc" }], select: { productId: true, status: true, error: true } });
@@ -139,6 +140,8 @@ export async function listDish3d(storeId: string) {
       imageUrl: p.imageUrl,
       model3dUrl: p.model3dUrl,
       published: p.model3dPublished,
+      widthMm: p.model3dWidthMm,
+      heightMm: p.model3dHeightMm,
       generating: lastJob.get(p.id)?.status === "RUNNING",
       lastError: lastJob.get(p.id)?.status === "FAILED" ? lastJob.get(p.id)!.error : null,
     })),
@@ -146,9 +149,11 @@ export async function listDish3d(storeId: string) {
 }
 
 export async function setDish3dPublished(actor: Actor, productId: string, published: boolean) {
-  const product = await prisma.product.findFirst({ where: { id: productId, storeId: actor.storeId }, select: { model3dUrl: true } });
+  const product = await prisma.product.findFirst({ where: { id: productId, storeId: actor.storeId }, select: { model3dUrl: true, model3dWidthMm: true } });
   if (!product) throw new CodedError(404, "PRODUCT_NOT_FOUND", "Produto não encontrado.");
   if (published && !product.model3dUrl) throw new CodedError(409, "DISH3D_NO_MODEL", "Gere o modelo 3D antes de publicar.");
+  // o 3D serve para o cliente ver o prato no TAMANHO REAL na mesa: sem a medida, não vai ao cardápio
+  if (published && !product.model3dWidthMm) throw new CodedError(409, "DISH3D_SIZE_REQUIRED", "Informe o tamanho real do prato antes de publicar.");
   await prisma.product.update({ where: { id: productId }, data: { model3dPublished: published } });
   logAudit({ storeId: actor.storeId, userId: actor.id, action: published ? "product.dish3d_publish" : "product.dish3d_unpublish", targetType: "Product", targetId: productId });
   return getDish3d(actor.storeId, productId);
@@ -157,8 +162,43 @@ export async function setDish3dPublished(actor: Actor, productId: string, publis
 export async function removeDish3d(actor: Actor, productId: string) {
   const product = await prisma.product.findFirst({ where: { id: productId, storeId: actor.storeId }, select: { model3dUrl: true } });
   if (!product) throw new CodedError(404, "PRODUCT_NOT_FOUND", "Produto não encontrado.");
-  await prisma.product.update({ where: { id: productId }, data: { model3dUrl: null, model3dPublished: false } });
+  await prisma.product.update({ where: { id: productId }, data: { model3dUrl: null, model3dPublished: false, model3dWidthMm: null, model3dHeightMm: null } });
   logAudit({ storeId: actor.storeId, userId: actor.id, action: "product.dish3d_remove", targetType: "Product", targetId: productId });
+  return getDish3d(actor.storeId, productId);
+}
+
+/** Chave do .glb a partir da URL pública, só se for desta loja (defesa: nunca lê arquivo de outra loja). */
+function modelKeyOf(storeId: string, url: string | null): string | null {
+  const key = url?.match(/stores\/[A-Za-z0-9_-]{1,64}\/3d-[a-f0-9-]{36}\.glb$/)?.[0] ?? null;
+  return key && key.startsWith(storeKeyPrefix(storeId)) ? key : null;
+}
+
+const MODEL_CACHE = "public, max-age=31536000, immutable";
+
+/**
+ * TAMANHO REAL: o dono informa a largura do prato (maior medida vista de cima). O .glb é reescrito nessa medida, em metros,
+ * e salvo numa chave NOVA (o arquivo é imutável no cache). O AR mostra o prato com esse tamanho, sem o cliente poder mudar.
+ */
+export async function setDish3dSize(actor: Actor, productId: string, widthMm: number) {
+  const product = await prisma.product.findFirst({ where: { id: productId, storeId: actor.storeId }, select: { model3dUrl: true, model3dWidthMm: true } });
+  if (!product) throw new CodedError(404, "PRODUCT_NOT_FOUND", "Produto não encontrado.");
+  const oldKey = modelKeyOf(actor.storeId, product.model3dUrl);
+  if (!oldKey) throw new CodedError(409, "DISH3D_NO_MODEL", "Gere o modelo 3D antes de informar o tamanho.");
+  const storage = getObjectStorage();
+  let resized: ReturnType<typeof rescaleGlbToRealWidth>;
+  try {
+    resized = rescaleGlbToRealWidth(await storage.get(oldKey), widthMm);
+  } catch (error) {
+    if (error instanceof GlbRealSizeError) throw new CodedError(422, "DISH3D_MODEL_UNMEASURABLE", "Não foi possível medir este modelo. Gere o 3D de novo.");
+    throw error;
+  }
+  const newKey = `${storeKeyPrefix(actor.storeId)}3d-${randomUUID()}.glb`;
+  await storage.put(newKey, resized.glb, { contentType: "model/gltf-binary", cacheControl: MODEL_CACHE });
+  await prisma.product.update({ where: { id: productId }, data: { model3dUrl: storage.publicUrl(newKey), model3dWidthMm: resized.size.widthMm, model3dHeightMm: resized.size.heightMm } });
+  // o original do gerador (modelKey da tarefa) fica guardado; só apaga cópias de medidas anteriores
+  const original = await prisma.dish3dJob.findFirst({ where: { storeId: actor.storeId, productId, modelKey: oldKey }, select: { id: true } });
+  if (!original) await storage.delete(oldKey).catch(() => undefined);
+  logAudit({ storeId: actor.storeId, userId: actor.id, action: "product.dish3d_size", targetType: "Product", targetId: productId, metadata: { fromMm: product.model3dWidthMm, toMm: resized.size.widthMm } });
   return getDish3d(actor.storeId, productId);
 }
 
@@ -205,11 +245,30 @@ export async function pollDish3dJobs(now: Date, limit: number, db: PrismaClient 
       }
       const key = `${storeKeyPrefix(job.storeId)}3d-${job.id}.glb`;
       const storage = getObjectStorage();
-      await storage.put(key, glb, { contentType: "model/gltf-binary", cacheControl: "public, max-age=31536000, immutable" });
+      await storage.put(key, glb, { contentType: "model/gltf-binary", cacheControl: MODEL_CACHE });
+      // gerou de novo um prato que já tinha medida: o modelo novo já sai no mesmo tamanho real
+      const sized = await db.product.findFirst({ where: { id: job.productId, storeId: job.storeId }, select: { model3dWidthMm: true } });
+      let publicKey = key;
+      let size: { widthMm: number; heightMm: number } | null = null;
+      if (sized?.model3dWidthMm) {
+        try {
+          const resized = rescaleGlbToRealWidth(glb, sized.model3dWidthMm);
+          publicKey = `${storeKeyPrefix(job.storeId)}3d-${randomUUID()}.glb`;
+          await storage.put(publicKey, resized.glb, { contentType: "model/gltf-binary", cacheControl: MODEL_CACHE });
+          size = { widthMm: resized.size.widthMm, heightMm: resized.size.heightMm };
+        } catch (error) {
+          if (!(error instanceof GlbRealSizeError)) throw error; // sem geometria medível: fica sem medida (o painel pede de novo)
+        }
+      }
       await db.$transaction(async (tx) => {
         const done = await tx.dish3dJob.updateMany({ where: { id: job.id, status: "RUNNING" }, data: { status: "SUCCEEDED", modelKey: key, modelBytes: glb.length, finishedAt: now } });
         // modelo novo entra como RASCUNHO: o dono confere antes de ir ao cardápio
-        if (done.count === 1) await tx.product.updateMany({ where: { id: job.productId, storeId: job.storeId }, data: { model3dUrl: storage.publicUrl(key), model3dPublished: false } });
+        if (done.count === 1) {
+          await tx.product.updateMany({
+            where: { id: job.productId, storeId: job.storeId },
+            data: { model3dUrl: storage.publicUrl(publicKey), model3dPublished: false, model3dWidthMm: size?.widthMm ?? null, model3dHeightMm: size?.heightMm ?? null },
+          });
+        }
       });
       processed += 1;
     } catch (error) {

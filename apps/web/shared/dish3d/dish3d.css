@@ -5,3 +5,7 @@
   position: absolute; inset-block-end: var(--ds-space-3); inset-inline-end: var(--ds-space-3); min-height: 44px; padding: 0 var(--ds-space-4);
   border: 0; border-radius: 999px; background: var(--color-primary); color: var(--on-primary); font: inherit; font-weight: 650; cursor: pointer;
 }
+.dish3d-viewer__size {
+  position: absolute; inset-block-start: var(--ds-space-3); inset-inline-start: 50%; transform: translateX(-50%); padding: 4px var(--ds-space-3);
+  border-radius: 999px; background: var(--surface); color: var(--ink); font-size: var(--ds-text-sm); font-weight: 650; box-shadow: var(--shadow-float); pointer-events: none; white-space: nowrap;
+}

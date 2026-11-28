@@ -31,6 +31,9 @@ describe("Reels: publicar e feed do cardápio", () => {
   });
 
   const json = (res: { body: string }) => JSON.parse(res.body);
+  // a tarefa nasce com a hora do BANCO (availableAt = now() do Postgres); se o relógio do banco estiver alguns ms à frente
+  // do processo de teste, rodar a fila "agora" não a pega. Folga de 1 s (em produção a fila pega na rodada seguinte).
+  const runQueue = () => reelsService.runNext(new Date(Date.now() + 1000));
   async function ctx() {
     const { cookie, response } = await registerStore(app);
     const store = json(response).store as { id: string; slug: string };
@@ -53,7 +56,7 @@ describe("Reels: publicar e feed do cardápio", () => {
     expect(early.statusCode).toBe(409);
     expect(json(early).code).toBe("VIDEO_NOT_READY");
 
-    expect(await reelsService.runNext()).toBe(true);
+    expect(await runQueue()).toBe(true);
     expect(await feed(store.slug)).toEqual([]); // pronto, mas não publicado
     expect(json(await app.inject({ method: "GET", url: `/stores/${store.slug}/menu` })).store.hasReels).toBe(false);
 
@@ -85,7 +88,7 @@ describe("Reels: publicar e feed do cardápio", () => {
   it("só o dono publica/remove; outra loja não acha o vídeo; vídeo retirado por denúncia não volta", async () => {
     const a = await ctx();
     const reelId = json(await upload(a.cookie, a.productId)).reelId as string;
-    await reelsService.runNext();
+    await runQueue();
 
     const email = `staff-${Math.random().toString(36).slice(2, 7)}@t.com`;
     await app.inject({ method: "POST", url: "/api/users", headers: { cookie: a.cookie }, payload: { email, password: "senha-forte-123" } });

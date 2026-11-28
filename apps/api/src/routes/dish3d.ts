@@ -1,7 +1,7 @@
 import multipart from "@fastify/multipart";
 import type { FastifyPluginAsync } from "fastify";
-import { DISH3D_MAX_PHOTO_BYTES, DISH3D_MAX_PHOTOS } from "@meucardapio/shared-types";
-import { getDish3d, listDish3d, removeDish3d, setDish3dPublished, startDish3d } from "../lib/dish3d";
+import { DISH3D_MAX_PHOTO_BYTES, DISH3D_MAX_PHOTOS, dish3dSizeSchema } from "@meucardapio/shared-types";
+import { getDish3d, listDish3d, removeDish3d, setDish3dPublished, setDish3dSize, startDish3d } from "../lib/dish3d";
 import { requireFeature } from "../lib/subscription";
 import { CodedError, useDomainErrors } from "../shared/errors";
 
@@ -41,6 +41,14 @@ const dish3dRoutes: FastifyPluginAsync = async (app) => {
   app.post("/api/products/:id/3d/unpublish", owner, async (request) => {
     const { id } = request.params as { id: string };
     return setDish3dPublished(actorOf(request.user), id, false);
+  });
+
+  // TAMANHO REAL: a largura do prato em cm; o modelo é reescrito nessa medida (o AR mostra o prato do tamanho de verdade)
+  app.post("/api/products/:id/3d/size", owner, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsed = dish3dSizeSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "Informe a largura do prato em cm.", code: "VALIDATION_ERROR" });
+    return setDish3dSize(actorOf(request.user), id, Math.round(parsed.data.widthCm * 10));
   });
 
   app.post("/api/products/:id/3d/remove", owner, async (request) => {

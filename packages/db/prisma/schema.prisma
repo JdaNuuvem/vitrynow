@@ -414,6 +414,9 @@ model Product {
   // PRATO 3D: modelo GLB gerado (rascunho até o dono publicar; o cardápio só mostra com model3dPublished)
   model3dUrl       String?
   model3dPublished Boolean @default(false)
+  // TAMANHO REAL do prato (o .glb é reescrito nessa medida, em metros): a largura é a maior medida vista de cima
+  model3dWidthMm   Int?
+  model3dHeightMm  Int?
   dish3dJobs       Dish3dJob[]
   orderItems  OrderItem[]
   createdAt   DateTime     @default(now())

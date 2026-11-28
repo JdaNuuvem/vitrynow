@@ -145,6 +145,7 @@ export const PANEL_ROUTE_POLICY: Record<string, PanelPolicy> = {
   "POST /api/products/:id/3d/publish": "blocked",
   "POST /api/products/:id/3d/unpublish": "blocked",
   "POST /api/products/:id/3d/remove": "blocked",
+  "POST /api/products/:id/3d/size": "blocked", // PRATO 3D: tamanho real do prato (reescreve o modelo do cardápio)
   "POST /api/reels/:id/publish": "blocked", // REEL-2: publicar no cardápio
   "POST /api/reels/:id/unpublish": "allowed", // REEL-2: tirar do cardápio (sempre pode, mesmo na Consulta)
   "POST /api/reels/:id/remove": "allowed", // REEL-2: remover libera espaço (sempre pode)
