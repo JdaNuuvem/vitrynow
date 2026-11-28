@@ -8,6 +8,9 @@ export type Dish3dProductRow = {
   imageUrl: string | null;
   model3dUrl: string | null;
   published: boolean;
+  /** TAMANHO REAL: largura do prato em mm (null = ainda não informada; sem ela não publica) */
+  widthMm: number | null;
+  heightMm: number | null;
   generating: boolean;
   lastError: string | null;
 };
@@ -16,4 +19,4 @@ export type Dish3dList = { available: boolean; credits: Dish3dCredits; products:
 
 export type Dish3dJob = { id: string; status: "RUNNING" | "SUCCEEDED" | "FAILED"; error: string | null; credits: number; photoCount: number; createdAt: string; finishedAt: string | null };
 
-export type Dish3dDetail = { available: boolean; model: { url: string; published: boolean } | null; job: Dish3dJob | null; credits: Dish3dCredits };
+export type Dish3dDetail = { available: boolean; model: { url: string; published: boolean; widthMm: number | null; heightMm: number | null } | null; job: Dish3dJob | null; credits: Dish3dCredits };

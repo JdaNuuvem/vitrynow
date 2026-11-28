@@ -70,6 +70,8 @@ export const errorMessages = {
   DISH3D_ALREADY_RUNNING: ok("Este prato já está sendo gerado. Aguarde terminar.", "painel"),
   DISH3D_PROVIDER_ERROR: ok("O serviço de 3D não respondeu. Seus créditos foram devolvidos; tente de novo.", "painel"),
   DISH3D_NO_MODEL: ok("Gere o modelo 3D antes de publicar.", "painel"),
+  DISH3D_SIZE_REQUIRED: ok("Informe o tamanho real do prato antes de publicar.", "painel"),
+  DISH3D_MODEL_UNMEASURABLE: ok("Não foi possível medir este modelo. Gere o 3D de novo.", "painel"),
   AI_CREDITS_INSUFFICIENT: ok("Você não tem créditos suficientes para gerar o prato 3D.", "painel"),
   PRODUCT_NO_RECIPE: ok("Este produto não tem ficha técnica. Monte a ficha ou lance a perda por insumo.", "painel"),
   CASH_ALREADY_OPEN: ok("Já existe um caixa aberto.", "painel"),

@@ -8,6 +8,7 @@ import { InfoIcon, MinusIcon, PlusIcon } from "../icons";
 import { editableSelections, lineChoicesValid, startingPrice, unitPriceWithChoices } from "../productOptions";
 import { ProductOptionFields } from "./ProductOptionFields";
 import { Dish3dViewer } from "@/shared/dish3d/Dish3dViewer";
+import { arPlatform, NO_CAMERA_HASH, openSceneViewer, type ArPlatform } from "@/shared/dish3d/ar";
 import "../purchase.css";
 import "./hero3d.css";
 
@@ -39,6 +40,25 @@ export function ProductDetailScreen({
   const logo = useBrokenImage(logoUrl);
   // PRATO 3D: com modelo publicado, a foto vira um botão "Ver em 3D" (gira com o dedo; "Ver na mesa" = realidade aumentada).
   const [show3d, setShow3d] = useState(false);
+  // TAMANHO REAL: um toque abre a câmera com o prato na mesa (Android: Scene Viewer na hora; iPhone: Quick Look quando o 3D carrega)
+  const [platform, setPlatform] = useState<ArPlatform>(null);
+  const [arOnLoad, setArOnLoad] = useState(false);
+  const [noCamera, setNoCamera] = useState(false);
+  useEffect(() => {
+    setPlatform(arPlatform());
+    if (window.location.hash === NO_CAMERA_HASH) {
+      setNoCamera(true); // voltou do Android sem o app de AR: mostra girando na tela
+      setShow3d(true);
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+    }
+  }, []);
+  const realSize = product.model3dUrl && product.model3dWidthMm ? product.model3dWidthMm : null;
+  function openCamera() {
+    if (!product.model3dUrl) return;
+    if (platform === "android") return openSceneViewer(product.model3dUrl, product.name);
+    setArOnLoad(true);
+    setShow3d(true);
+  }
 
   // Tela nova: o foco entra no título (o leitor de tela anuncia o produto) em vez de ficar no body.
   useEffect(() => {
@@ -76,17 +96,23 @@ export function ProductDetailScreen({
       <div className="loja__screen-body">
         <div className="loja__hero">
           {show3d && product.model3dUrl ? (
-            <Dish3dViewer src={product.model3dUrl} alt={`${product.name} em 3D`} poster={product.imageUrl} />
+            <Dish3dViewer src={product.model3dUrl} alt={`${product.name} em 3D`} poster={product.imageUrl} realWidthMm={realSize} openArOnLoad={arOnLoad} />
           ) : product.imageUrl && !photo.failed ? (
             <img ref={photo.ref} src={product.imageUrl} onError={photo.onError} alt={product.name} width={390} height={390} />
           ) : (
             <Icon name="products" size={64} />
           )}
           {product.model3dUrl ? (
-            <button type="button" className="loja__hero-3d" aria-pressed={show3d} onClick={() => setShow3d((v) => !v)}>
+            <button type="button" className="loja__hero-3d" aria-pressed={show3d} onClick={() => { setArOnLoad(false); setShow3d((v) => !v); }}>
               {show3d ? "Ver foto" : "Ver em 3D"}
             </button>
           ) : null}
+          {realSize && platform && !show3d ? (
+            <button type="button" className="loja__hero-camera" onClick={openCamera}>
+              Ver na mesa em tamanho real
+            </button>
+          ) : null}
+          {noCamera ? <p className="loja__hero-note" role="status">Este celular não abriu a câmera 3D. Gire o prato na tela.</p> : null}
         </div>
 
         <div className="loja__detail-content">

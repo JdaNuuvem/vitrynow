@@ -38,6 +38,7 @@ export type Product = {
   featured?: boolean;
   soldOut?: boolean;
   model3dUrl?: string | null; // PRATO 3D: GLB publicado pelo dono (null/ausente = sem 3D)
+  model3dWidthMm?: number | null; // PRATO 3D: largura real do prato (o .glb já está nessa medida); sem ela, sem câmera
   additionals: Additional[];
 } & ProductOptions;
 

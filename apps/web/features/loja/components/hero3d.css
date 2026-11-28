@@ -6,4 +6,13 @@
   position: absolute; z-index: 2; top: 12px; right: 12px; min-height: 40px; padding: 0 14px; border: 0; border-radius: 999px;
   background: rgba(0, 0, 0, .62); color: white; font: inherit; font-size: .875rem; font-weight: 700; cursor: pointer;
 }
-.loja__hero-3d[aria-pressed="true"] { background: var(--loja-accent, black); color: var(--loja-accent-on, white); }
+.loja__hero-3d[aria-pressed="true"] { background: var(--loja-accent, black); color: var(--loja-accent-on, white); }/* TAMANHO REAL: o cartão do produto sobe 30 px sobre a foto (purchase.css); o botão da câmera fica acima dele, centralizado */
+.loja__hero .dish3d-viewer__ar { inset-block-end: 42px; inset-inline: 50% auto; transform: translateX(-50%); white-space: nowrap; box-shadow: var(--shadow-float); }
+/* um toque abre a câmera (mesmo lugar do botão do visualizador, acima do cartão) */
+.loja__hero-camera {
+  position: absolute; z-index: 2; inset-block-end: 42px; inset-inline-start: 50%; transform: translateX(-50%); min-height: 44px; padding: 0 18px;
+  border: 0; border-radius: 999px; background: var(--loja-accent, black); color: var(--loja-accent-on, white); font: inherit; font-weight: 700; white-space: nowrap; cursor: pointer; box-shadow: var(--shadow-float);
+}
+.loja__hero-note {
+  position: absolute; z-index: 2; inset-block-end: 42px; inset-inline: 12px; margin: 0; padding: 8px 12px; border-radius: 12px; background: var(--surface); color: var(--ink); font-size: .875rem; text-align: center; box-shadow: var(--shadow-float);
+}
